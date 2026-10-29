@@ -1,7 +1,9 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.application.RegionCatalog;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.GasPressureBoundary;
 import mmm.fluid.air.AirNetwork;
 import mmm.fluid.air.GasAuditLedger;
@@ -110,7 +112,7 @@ public final class RegionDiagnosticsReport {
 					worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off", takeoverLock,
 					operations.issues().isEmpty() ? "" : " | persistence issues " + operations.issues().size());
 		}
-		FluidDomain.StepStats lastStats = region.lastStats();
+		FluidDomainContracts.StepStats lastStats = region.lastStats();
 		if (region.deviceResident()) return residentStatus(region);
 		String stats = lastStats == null
 				? "尚未步进"
@@ -118,11 +120,11 @@ public final class RegionDiagnosticsReport {
 						region.lastStepMilliseconds(),lastStats.substeps(),lastStats.pressureIterations(),lastStats.pressureResidual(),lastStats.mechanicalCorrection().signedJoules(),lastStats.mechanicalCorrection().absoluteJoules(),
 					lastStats.mechanicalCorrection().liquidForceJoules()+lastStats.mechanicalCorrection().granularForceJoules(),
 					lastStats.mechanicalCorrection().transportPotentialJoules(),lastStats.mechanicalCorrection().gasCounterWorkJoules());
-		FluidDomain domain = region.domain();
+		HostFluidState domain = region.hostSnapshot();
 		BlockPos origin = region.origin();
 		double cellVolumes = domain.totalVolumeExact();
-		FluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
-		FluidDomain.SolidDistribution solids = domain.solidDistribution();
+		FluidDomainContracts.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
+		FluidDomainContracts.SolidDistribution solids = domain.solidDistribution();
 		FluidRegion.CollisionStats collision = region.lastCollisionStats();
 		FluidRegion.EntityCouplingStats entityCoupling = region.lastEntityCoupling();
 		FluidRegionFootprint footprint = region.footprint();
@@ -191,7 +193,7 @@ public final class RegionDiagnosticsReport {
 		return text.toString();
 	}
 
-	private static String viscousStressSummary(FluidDomain.StepStats lastStats) {
+	private static String viscousStressSummary(FluidDomainContracts.StepStats lastStats) {
 		if (lastStats == null || lastStats.viscosity().stressRows() == 0) return "";
 		var stats = lastStats.viscosity();
 		return String.format(" | viscosity bound %.3g /s, dissipated %.3g J, wall impulse [%.3g,%.3g,%.3g] kg·m/s",
@@ -200,9 +202,9 @@ public final class RegionDiagnosticsReport {
 	}
 
 	/** Extrapolated constitutive samples from the last successful step. */
-	private static String carrierViscositySummary(FluidDomain.StepStats lastStats) {
+	private static String carrierViscositySummary(FluidDomainContracts.StepStats lastStats) {
 		if (lastStats == null) return "";
-		FluidDomain.CarrierViscosityStats stats = lastStats.carrierViscosity();
+		FluidDomainContracts.CarrierViscosityStats stats = lastStats.carrierViscosity();
 		if (!stats.extrapolated()) return "";
 		return String.format(" | carrier-viscosity extrapolated %d cells (%s)", stats.extrapolatedCells(), stats.sample());
 	}
@@ -210,11 +212,12 @@ public final class RegionDiagnosticsReport {
 	public String chemistryInventory(ServerLevel level) {
 		if (!world.hasCapability(WorldCapability.CHEMISTRY)) return "化学功能门本次启动未开启";
 		FluidRegion region = selectedRegionIn(level);
-		if (region == null || !region.solverLoaded() || !region.domain().hasChemistryState()) {
+		var host = region == null || !region.solverLoaded() ? null : region.hostSnapshot();
+		if (host == null || !host.hasChemistryState()) {
 			return "当前维度没有已加载且选中的化学区域";
 		}
-		var snapshot=region.domain().exportLiquidCellState();
-		long[] totals=new long[region.domain().chemistry().registry().species().size()];long totalQuanta=0,residualUnits=0;
+		var snapshot=host.exportLiquidCellState();
+		long[] totals=new long[host.chemistry().registry().species().size()];long totalQuanta=0,residualUnits=0;
 		for(var row:snapshot.rows())for(var stock:row)if(stock.mixture()!=null){
 			var mixture=stock.mixture();residualUnits=Math.addExact(residualUnits,mixture.massResidualUnits());
 			for(int entry=0;entry<mixture.entryCount();entry++){
@@ -231,18 +234,19 @@ public final class RegionDiagnosticsReport {
 		for (int handle = 0; handle < totals.length; handle++) if (totals[handle] != 0L) {
 			text.append('\n').append(world.chemicalRegistry().species(handle).id()).append('=').append(totals[handle]);
 		}
-		text.append("\nexternalSourceQuanta=").append(region.domain().chemistry().externalSource().totalQuanta())
-				.append(" escapedSinkQuanta=").append(region.domain().chemistry().escapedSink().totalQuanta());
+		text.append("\nexternalSourceQuanta=").append(host.chemistry().externalSource().totalQuanta())
+				.append(" escapedSinkQuanta=").append(host.chemistry().escapedSink().totalQuanta());
 		return text.toString();
 	}
 
 	public String granularInventory(ServerLevel level) {
 		if (!world.hasCapability(WorldCapability.GRANULAR)) return "颗粒功能门本次启动未开启";
 		FluidRegion region = selectedRegionIn(level);
-		if (region == null || !region.solverLoaded() || !region.domain().hasGranularState()) {
+		var host = region == null || !region.solverLoaded() ? null : region.hostSnapshot();
+		if (host == null || !host.hasGranularState()) {
 			return "当前维度没有已加载且选中的颗粒区域";
 		}
-		var snapshot = region.domain().exportGranularState();
+		var snapshot = host.exportGranularState();
 		long[] materialSvq = new long[snapshot.materialPalette().size()];
 		double[] materialMass = new double[materialSvq.length];
 		for (var parcel : snapshot.activeParcels()) {
@@ -267,9 +271,9 @@ public final class RegionDiagnosticsReport {
 				.append(" depositGroups ").append(snapshot.depositGroups().size())
 				.append(" sourceSvq ").append(sourceSvq).append(" sinkSvq ").append(sinkSvq)
 				.append(" boundaryImpulse=[")
-				.append(region.domain().lastGranularBoundaryImpulseX()).append(',')
-				.append(region.domain().lastGranularBoundaryImpulseY()).append(',')
-				.append(region.domain().lastGranularBoundaryImpulseZ()).append(']');
+				.append(host.lastGranularBoundaryImpulseX()).append(',')
+				.append(host.lastGranularBoundaryImpulseY()).append(',')
+				.append(host.lastGranularBoundaryImpulseZ()).append(']');
 		for (int material = 0; material < materialSvq.length; material++) if (materialSvq[material] > 0L) {
 			text.append('\n').append(snapshot.materialPalette().get(material)).append(" svq=")
 					.append(materialSvq[material]).append(" mass=").append(materialMass[material]);
@@ -280,7 +284,7 @@ public final class RegionDiagnosticsReport {
 		return text.toString();
 	}
 
-	private String thermalSummary(FluidRegion region, FluidDomain domain) {
+	private String thermalSummary(FluidRegion region, HostFluidState domain) {
 		if (!domain.hasThermalState()) return "thermal missing";
 		ThermalAuditLedger audit = domain.thermalAudit();
 		ThermalActivity activity = region.thermalActivity();
@@ -295,8 +299,8 @@ public final class RegionDiagnosticsReport {
 		String temperature = minimumQ == Integer.MAX_VALUE ? "empty"
 				: minimumQ == maximumQ ? String.format("%.2f K", minimumQ / 16.0)
 				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
-		FluidDomain.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
-		FluidDomain.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
+		FluidDomainContracts.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
+		FluidDomainContracts.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
 		int phaseBudget = maximumPhaseOperationsPerStep.getAsInt();
 		String phase = condensed.operations() == 0 && gas.operations() == 0 ? "idle"
 				: String.format("solid=%d gas=%d%s (boil %d/condense %d cells)",
@@ -312,7 +316,7 @@ public final class RegionDiagnosticsReport {
 					audit.acceptsInventory(domain.exactInternalEnergy()) ? "closed" : "FAILED");
 	}
 
-	private static String gasSummary(FluidDomain domain) {
+	private static String gasSummary(HostFluidState domain) {
 		GasPressureBoundary network = domain.gasBoundary();
 		List<Integer> ids = network.nodeIds();
 		if (ids.isEmpty()) return "";

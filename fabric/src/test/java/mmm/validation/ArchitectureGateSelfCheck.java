@@ -17,17 +17,17 @@ final class ArchitectureGateSelfCheck {
 				persistence("RegionCodecFixture", "mmm.simulation.FluidRegion"),
 				persistence("RegionWildcardFixture", "mmm.simulation.*"),
 				persistence("RegionCleanFixture", "mmm.simulation.FluidProtocolServer"),
-				adapter("SolverImportFixture", "mmm.fluid.FluidDomain"),
+				adapter("SolverImportFixture", "mmm.fluid.HostFluidState"),
 				adapter("SolverCleanFixture", "mmm.fluid.AirNetwork"),
 				adapter("ServiceImportFixture", "mmm.simulation.FluidSimulationService"),
 				application("PayloadImportFixture", "mmm.network.ControllerSummaryPayload"),
-				gpuProbeAdapter("ProbeHostBypassFixture", "mmm.network.FluidProtocolServer"));
+				gpuKernel("ProbeHostBypassFixture", "mmm.network.FluidProtocolServer"));
 		List<String> violations = new ArrayList<>();
 		ArchitectureDependencyValidation.checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		ArchitectureDependencyValidation.checkAdaptersDoNotReferenceSolverDomain(sources, violations);
 		ArchitectureDependencyValidation.checkAdaptersDoNotImportSimulationService(sources, violations);
 		ArchitectureDependencyValidation.checkApplicationPurity(sources, violations);
-		ArchitectureDependencyValidation.checkGpuProbeAdapterHostBoundary(sources, violations);
+		ArchitectureDependencyValidation.checkGpuKernel(sources, violations);
 
 		List<String> expected = List.of(
 				"persistence references live runtime type: RegionCodecFixture",
@@ -35,7 +35,7 @@ final class ArchitectureGateSelfCheck {
 				"adapter imports solver mutable domain: SolverImportFixture",
 				"source imports removed simulation god service: ServiceImportFixture",
 				"application imports Minecraft adapter type: PayloadImportFixture",
-				"gpu-probe adapter bypasses host integration: ProbeHostBypassFixture");
+				"GPU kernel imports integration type: ProbeHostBypassFixture");
 		if (violations.size() != expected.size()) {
 			throw new AssertionError("Architecture gate self-check expected " + expected.size()
 					+ " fixture violations but found " + violations.size() + ": " + violations);
@@ -66,9 +66,9 @@ final class ArchitectureGateSelfCheck {
 				"mmm.application", 10, List.of(imported), false);
 	}
 
-	private static ArchitectureDependencyValidation.SourceFile gpuProbeAdapter(
+	private static ArchitectureDependencyValidation.SourceFile gpuKernel(
 			String simpleName, String imported) {
-		return new ArchitectureDependencyValidation.SourceFile("gpu-probe/src/main/java", simpleName,
-				"mmm.gpuprobe", 10, List.of(imported), false);
+		return new ArchitectureDependencyValidation.SourceFile("gpu-kernel/src/main/java", simpleName,
+				"mmm.gpu", 10, List.of(imported), false);
 	}
 }

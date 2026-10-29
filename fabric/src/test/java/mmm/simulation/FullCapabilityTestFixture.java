@@ -3,7 +3,7 @@ package mmm.simulation;
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FlipMaterialParticleState;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
@@ -15,7 +15,7 @@ public final class FullCapabilityTestFixture {
 	private FullCapabilityTestFixture() { }
 
 	/** Set a resolved pure composition within the stock's actual mass. */
-	public static void assignPureSpecies(FluidDomain domain, int ordinal, String species) {
+	public static void assignPureSpecies(HostFluidState domain, int ordinal, String species) {
 		var registry = domain.chemistry().registry();
 		long mass = domain.exportLiquidCellState().physicalStocks().get(ordinal).massUnits();
 		var mixture = mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(registry, java.util.Map.of(), species, mass);
@@ -40,7 +40,7 @@ public final class FullCapabilityTestFixture {
 								2 * segment.dynamicViscosityPascalSecondsAtMaximum())).toList())).toList(), baseline.pairTensions());
 	}
 
-	public static FluidMaterialRegistry bindEmptyMaterialState(FluidDomain domain, FluidMaterialRegistry liquids) {
+	public static FluidMaterialRegistry bindEmptyMaterialState(HostFluidState domain, FluidMaterialRegistry liquids) {
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				domain.sizeX(), domain.sizeY(), domain.sizeZ(), domain.config().cellSize(),
 				0, 0.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(0.0), liquids.materials(), new float[0], new float[0],
@@ -49,7 +49,7 @@ public final class FullCapabilityTestFixture {
 	}
 
 	public static void bindFull(
-			FluidDomain domain, Registries registries, double initialTemperatureK, int maximumThermalSubsteps
+			HostFluidState domain, Registries registries, double initialTemperatureK, int maximumThermalSubsteps
 	) {
 		FluidMaterialRegistry liquids = domain.materialRegistry() == null
 				? bindEmptyMaterialState(domain, registries.liquids()) : domain.materialRegistry();

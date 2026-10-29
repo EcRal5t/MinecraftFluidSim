@@ -45,7 +45,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
 				capture.solverGeneration(), capture.stateAccess(), command.movingBodies(),
 				command.phaseChangeEnabled(), command.maximumPhaseOperations(), command.mechanicalAuditEnabled(),
-				command.pendingPhaseSettlementOnly()));
+				command.pendingPhaseSettlementOnly(), command.activeCells()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
 				candidate.candidateGeneration(), candidate.layout());
 		if (invalid != null) { candidate.close(); return MotionStepResult.rejected(invalid); }
@@ -69,7 +69,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 		}
 		FluidThermalStepCandidate candidate = solverBackend.evaluateThermal(new FluidThermalStepRequest(
 				capture.solverGeneration(), capture.stateAccess(), command.phaseChangeEnabled(),
-				command.maximumPhaseOperations()));
+				command.maximumPhaseOperations(), command.activeCells()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
 				candidate.candidateGeneration(), candidate.layout());
 		if (invalid != null) { candidate.close(); return ThermalStepResult.rejected(invalid); }

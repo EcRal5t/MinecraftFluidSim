@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import java.nio.file.Files;
 import java.util.EnumSet;
 import java.util.List;
@@ -9,7 +11,7 @@ import mmm.application.RegionApplicationService;
 import mmm.application.RegionRuntime;
 import mmm.application.RegionTickUseCase;
 import mmm.application.command.MotionStepCommand;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.simulation.persistence.WorldCapabilityBundleStore;
 import mmm.worldprofile.WorldCapability;
 import net.minecraft.core.BlockPos;
@@ -26,7 +28,7 @@ public final class GpuProductionDemoValidation {
 	private static double bulkGasTemperatureK, hottestGasTemperatureK, hottestGasMassFraction;
 	private static long reactionWaterQuanta;
 	private static FluidRegionOperations phaseRestoreOperations;
-	private static FluidDomain phaseRestoreCandidate;
+	private static HostFluidState phaseRestoreCandidate;
 	private static boolean phaseRestoreCompleted;
 	private static List<mmm.inventory.LiquidCellInventory.Stock> firstTensionStocks;
 	private static String liquidDiagnosticRecipe = "";
@@ -100,7 +102,7 @@ public final class GpuProductionDemoValidation {
 		require(manager.addAndSelect(region).accepted(), "Demo region admission failed");
 		System.out.println("stage=collision-input scenario=" + scenario);
 		captureCollisions(region, scenario);
-		domain = region.domain();
+		domain = region.editableHost();
 		if (scenario.startsWith("tension")) {
 			int angle = scenario.equals("tension30") ? 30 : 120;
 			var material = DebugScenarioInitialization.tensionDefinitions(world.materialRegistry(), angle);
@@ -133,6 +135,7 @@ public final class GpuProductionDemoValidation {
 				world.granularRegistry(), world.thermalRegistry());
 		try (var backend = MmmRuntimeFactory.createSolverBackend()) {
 			MmmRuntimeFactory.prepareSolverBackend(backend, startup, world);
+            manager.solverBackend(backend);
 			require(backend.id().equals("mmm:vulkan-resident"), "Production Vulkan backend was not selected: " + backend.id());
 			System.out.println("stage=backend " + backend.executionDescription());
 			var application = new RegionApplicationService(backend, new FluidRegionRepository(manager), operations);
@@ -143,7 +146,8 @@ public final class GpuProductionDemoValidation {
 				prepareAvailability(region);
 				require(motion.step(region, List.of()).accepted(), "Air topology initialization rejected");
 				System.out.printf("stage=air-prime-motion cold_import_scope_ms=%.3f%n", (System.nanoTime() - coldStart) / 1e6);
-				var editable = region.domain();
+				long editGeneration = region.solverGeneration();
+				var editable = region.beginHostEdit();
 				var gas = editable.gasBoundary();
 				require(gas.nodeCount() > 0, "Air scaffold did not create a sealed gas chamber");
 				var pressurePreset = switch (scenario) {
@@ -160,16 +164,17 @@ public final class GpuProductionDemoValidation {
 				require(scenario.equals("vacuum") ? pressure < 0 : scenario.equals("air") ? pressure > 0
 						: Math.abs(pressure) < 5000, "Gas preset has wrong pressure direction");
 				initialMass = editable.totalMassUnits();
+				region.commitHostEdit(editGeneration, editable);
 				System.out.println("stage=air-preset pressure_pa=" + pressure);
 			}
 			System.out.println("stage=initial-snapshot");
 			snapshots.createDispatch(region);
 			checkScenario(region, scenario, true);
-			var initialState = region.domain().captureAuthoritativeState();
+			var initialState = region.hostSnapshot().captureAuthoritativeState();
 			double initialLiquidVolume = initialState.liquid().physicalStocks().stream().mapToDouble(s -> s.volumeFraction()).sum();
 			if (scenario.startsWith("droplet")) require(initialMass == 1, "Droplet must carry one integer mass unit");
 			if (scenario.startsWith("tension")) {
-				require(region.domain().maximumParticleSpeed() == 0, "Wetting scenario initial liquid must be stationary");
+				require(region.hostSnapshot().maximumParticleSpeed() == 0, "Wetting scenario initial liquid must be stationary");
 				var stocks = initialState.liquid().physicalStocks();
 				if (firstTensionStocks == null) firstTensionStocks = stocks;
 				else require(firstTensionStocks.equals(stocks), "Wetting angles must start from identical liquid inventories");
@@ -184,13 +189,13 @@ public final class GpuProductionDemoValidation {
 				require(motion.step(region, List.of()).accepted(), "Command motion rejected");
 				System.out.printf("stage=command-motion import_scope_ms=%.3f%n", (System.nanoTime() - coldStart) / 1e6);
 				checkResident(region, snapshots, initialMass, scenario, "command-motion");
-				region.domain();
+				region.discardTransient();
 				return;
 			}
 			var ticks = new RegionTickUseCase(application, RegionTickUseCase.Policy.production());
 			verifyPauseRun(region, ticks);
 			scheduledAdvance(startup, region, snapshots, ticks, steps, initialMass, scenario);
-			if (stop.equals("scheduled")) { region.domain(); return; }
+			if (stop.equals("scheduled")) { region.discardTransient(); return; }
 			System.out.println("stage=export-restore-edit");
 			long residentMass = region.inventorySummary().liquidMassUnits();
 			var checkpoint = new MinecraftRegionCheckpointSource(region);
@@ -198,7 +203,7 @@ public final class GpuProductionDemoValidation {
 					&& checkpoint.hasThermalState() && checkpoint.gasState(world.gasRegistry().fingerprint()) != null
 					&& checkpoint.thermalState() != null && region.deviceResident(),
 					"Checkpoint source lost a capability or displaced the device state");
-			var restored = FluidDomain.restoreAuthoritativeState(checkpoint.authoritativeState());
+			var restored = HostFluidState.restoreAuthoritativeState(checkpoint.authoritativeState());
 			require(restored.totalMassUnits() == residentMass, "Export/restore changed liquid mass");
 			System.out.println("stage=physical-outcome scenario=" + scenario);
 			lastOutcome = measure(checkpoint.authoritativeState(), scenario);
@@ -211,28 +216,30 @@ public final class GpuProductionDemoValidation {
 			}
 			verifyManualSteps(region, ticks, motion, snapshots, initialMass, scenario);
 			residentMass = region.inventorySummary().liquidMassUnits();
-			var editable = region.domain();
+			var editable = region.beginHostEdit();
 			require(editable.totalMassUnits() == residentMass, "Materialization changed liquid mass");
 			if (editable.hasPendingPhaseMotionWork()) {
 				System.out.println("stage=edit-settle-pending-phase-work");
 				motion.settlePendingPhaseWork(region);
-				editable = region.domain();
+				editable = region.beginHostEdit();
 				residentMass = editable.totalMassUnits();
 			}
+			long editGeneration = region.solverGeneration();
 			var inserted = insertWaterAtAvailableCell(editable, world);
 			require(inserted.transferred() && editable.totalMassUnits() == Math.addExact(residentMass, inserted.massUnits()),
 					"Exact water edit did not publish its complete mass");
+			region.commitHostEdit(editGeneration, editable);
 			long editedMass = editable.totalMassUnits();
 			massBaseline = baselineMass(editable.captureAuthoritativeState());
 			System.out.println("stage=post-edit-motion");
 			require(motion.step(region, List.of()).accepted(), "Post-edit motion rejected");
 			checkResident(region, snapshots, editedMass, scenario, "post-edit-motion");
-			region.domain(); // Release the retained device generation before closing its backend.
+			region.discardTransient();
 		}
 		System.out.println("stage=complete scenario=" + scenario);
 	}
 
-	private static FluidDomain.ExactVolumeTransfer insertWaterAtAvailableCell(FluidDomain domain, CommittedWorldRegistries world) {
+	private static FluidDomainContracts.ExactVolumeTransfer insertWaterAtAvailableCell(HostFluidState domain, CommittedWorldRegistries world) {
 		float volume = 0.125f;
 		int water = domain.materialRegistry().handle("mmm:water");
 		long mass = domain.unitScale().massUnitsForNormalized(volume * domain.materialRegistry().material(water).referenceDensity());
@@ -270,14 +277,15 @@ public final class GpuProductionDemoValidation {
 				"Controller initial durable state is not empty");
 		System.out.println("stage=controller-pour-wal");
 		fixture.pour();
-		long mass = region.domain().totalMassUnits();
+		long mass = region.hostSnapshot().totalMassUnits();
 		require(mass > 0, "Controller pour contains no liquid mass");
-		massBaseline = baselineMass(region.domain().captureAuthoritativeState());
+		massBaseline = baselineMass(region.hostSnapshot().captureAuthoritativeState());
 		var snapshots = new FluidSnapshotPublisher(world.profile(), world.chemicalRegistry(), world.granularRegistry(), world.thermalRegistry());
 		snapshots.createDispatch(region);
 		if (stop.equals("initial")) return;
 		try (var backend = MmmRuntimeFactory.createSolverBackend()) {
 			MmmRuntimeFactory.prepareSolverBackend(backend, startup, world);
+            manager.solverBackend(backend);
 			require(backend.id().equals("mmm:vulkan-resident"), "Controller did not select GPU backend");
 			var application = new RegionApplicationService(backend, new FluidRegionRepository(manager), operations);
 			var ticks = new RegionTickUseCase(application, RegionTickUseCase.Policy.production());
@@ -287,18 +295,19 @@ public final class GpuProductionDemoValidation {
 			if (!stop.equals("motion") && !stop.equals("scheduled")) {
 				verifyManualSteps(region, ticks, motion, snapshots, mass, "controller");
 				motion.settlePendingPhaseWork(region);
-				long beforeScoop = region.domain().totalMassUnits();
+				long beforeScoop = region.hostSnapshot().totalMassUnits();
 				System.out.println("stage=controller-scoop-wal");
 				fixture.scoop();
-				long afterScoop = region.domain().totalMassUnits();
+				long afterScoop = region.hostSnapshot().totalMassUnits();
 				require(afterScoop < beforeScoop, "Controller scoop did not transfer liquid");
-				massBaseline = baselineMass(region.domain().captureAuthoritativeState());
+				massBaseline = baselineMass(region.hostSnapshot().captureAuthoritativeState());
 				prepareAvailability(region);
 				require(motion.step(region, List.of()).accepted(), "Controller post-scoop motion rejected");
 				checkResident(region, snapshots, afterScoop, "controller", "controller-post-scoop-motion");
 				operations.checkpoint(region);
 			}
-			region.domain();
+			long saved = operations.checkpoint(region);
+			require(region.releaseSolverAfterCheckpoint(saved), "Controller solver release failed");
 		}
 		System.out.println("stage=complete scenario=controller");
 	}
@@ -320,6 +329,7 @@ public final class GpuProductionDemoValidation {
 		var snapshots = new FluidSnapshotPublisher(world.profile(), world.chemicalRegistry(), world.granularRegistry(), world.thermalRegistry());
 		try (var backend = MmmRuntimeFactory.createSolverBackend()) {
 			MmmRuntimeFactory.prepareSolverBackend(backend, startup, world);
+            manager.solverBackend(backend);
 			var application = new RegionApplicationService(backend, new FluidRegionRepository(manager), operations);
 			var motion = new MinecraftMotionExecutor(application, world, new MinecraftRuntimePolicy(startup, manager));
 			var ticks = new RegionTickUseCase(application, RegionTickUseCase.Policy.production());
@@ -328,18 +338,18 @@ public final class GpuProductionDemoValidation {
 				if (precipitation && recipe == DemoTankOperations.Recipe.ACID_BASE
 						&& Boolean.getBoolean("mmm.demoPhaseRestore")) phaseRestoreOperations = operations;
 				region.setPaused(true);
-				if (region.domain().hasPendingPhaseMotionWork()) motion.settlePendingPhaseWork(region);
+				if (region.hostSnapshot().hasPendingPhaseMotionWork()) motion.settlePendingPhaseWork(region);
 				if (recipe == DemoTankOperations.Recipe.ACID_BASE) {
-					long priorMass = region.domain().totalMassUnits(), priorGeneration = region.checkpointGeneration();
-					var priorEnergy = region.domain().exactInternalEnergy();
-					var priorGas = region.domain().gasBoundary().sealedInventory();
+					long priorMass = region.hostSnapshot().totalMassUnits(), priorGeneration = region.checkpointGeneration();
+					var priorEnergy = region.hostSnapshot().exactInternalEnergy();
+					var priorGas = region.hostSnapshot().gasBoundary().sealedInventory();
 					try {
 						DemoTankOperations.prepareCandidate(world, region, recipe, null);
 						throw new AssertionError("Invalid tank port was accepted");
 					} catch (IllegalArgumentException expected) {
-						require(priorMass > 0 && region.domain().totalMassUnits() == priorMass
-								&& region.domain().exactInternalEnergy().equals(priorEnergy)
-								&& region.domain().gasBoundary().sealedInventory().equals(priorGas)
+						require(priorMass > 0 && region.hostSnapshot().totalMassUnits() == priorMass
+								&& region.hostSnapshot().exactInternalEnergy().equals(priorEnergy)
+								&& region.hostSnapshot().gasBoundary().sealedInventory().equals(priorGas)
 								&& region.checkpointGeneration() == priorGeneration,
 								"Failed private recipe changed the live inventory or checkpoint");
 					}
@@ -348,24 +358,24 @@ public final class GpuProductionDemoValidation {
 				long target = commitTankCandidate(operations, region, candidate);
 				require(region.id().equals(id) && region.checkpointGeneration() == target,
 						"Tank recipe replaced the region or failed to advance its checkpoint");
-				var current = region.domain().captureAuthoritativeState();
-				long mass = region.domain().totalMassUnits();
+				var current = region.hostSnapshot().captureAuthoritativeState();
+				long mass = region.hostSnapshot().totalMassUnits();
 				if (recipe == DemoTankOperations.Recipe.WATER) {
 					require(mass == mmm.units.Mass.fromKilograms(2000)
-							&& Math.abs(region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) - 2.0) < 1e-6,
+							&& Math.abs(region.hostSnapshot().unitScale().cubicMeters(region.hostSnapshot().totalVolumeExact()) - 2.0) < 1e-6,
 							"Water demo did not insert two buckets");
-					var gas = region.domain().gasBoundary();
+					var gas = region.hostSnapshot().gasBoundary();
 					require(!gas.nodeIds().isEmpty(), "Water demo lost its finite air chamber");
 					require(gas.nodeIds().stream().anyMatch(node -> gas.standardVolumeNanos(node) > 0),
 							"Water demo lost its air inventory");
 				} else {
 					double expectedVolume = recipe == DemoTankOperations.Recipe.OIL_WATER ? 4.0 : 2.0;
-					require(Math.abs(region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) - expectedVolume) < 1e-6,
+					require(Math.abs(region.hostSnapshot().unitScale().cubicMeters(region.hostSnapshot().totalVolumeExact()) - expectedVolume) < 1e-6,
 							"Tank recipe did not insert the full buckets");
 					if (recipe == DemoTankOperations.Recipe.OIL_WATER) {
 						var stocks = current.liquid().physicalStocks();
-						require(stocks.stream().anyMatch(s -> s.key().material() == region.domain().materialRegistry().handle("mmm:water"))
-								&& stocks.stream().anyMatch(s -> s.key().material() == region.domain().materialRegistry().handle("mmm:oil")),
+						require(stocks.stream().anyMatch(s -> s.key().material() == region.hostSnapshot().materialRegistry().handle("mmm:water"))
+								&& stocks.stream().anyMatch(s -> s.key().material() == region.hostSnapshot().materialRegistry().handle("mmm:oil")),
 								"Tank recipe lost water or oil");
 						require(mass == Math.multiplyExact(2L, Math.addExact(mmm.units.Mass.fromKilograms(1000),
 								mmm.units.Mass.fromKilograms(world.resolveMaterial("mmm:oil").referenceDensity()))),
@@ -401,7 +411,7 @@ public final class GpuProductionDemoValidation {
 				if (precipitation && recipe == DemoTankOperations.Recipe.ACID_BASE) {
 					verifyManualSteps(region, ticks, motion, snapshots, mass, "tank");
 					var saved = new MinecraftRegionCheckpointSource(region).authoritativeState();
-					commitTankCandidate(operations, region, FluidDomain.restoreAuthoritativeState(saved));
+					commitTankCandidate(operations, region, HostFluidState.restoreAuthoritativeState(saved));
 					prepareAvailability(region);
 					require(motion.step(region, List.of()).accepted(), "Precipitate checkpoint continuation rejected");
 					checkResident(region, snapshots, mass, "tank", "precipitate-restored-motion");
@@ -414,7 +424,7 @@ public final class GpuProductionDemoValidation {
 				motion.settlePendingPhaseWork(region);
 				commitTankCandidate(operations, region, DemoTankOperations.prepareCandidate(
 						world, region, DemoTankOperations.Recipe.WATER, fixture.portCell));
-				var cleared = baselineMass(region.domain().captureAuthoritativeState());
+				var cleared = baselineMass(region.hostSnapshot().captureAuthoritativeState());
 				require(cleared.liquid() == mmm.units.Mass.fromKilograms(2000) && cleared.granular() == 0 && cleared.coherent() == 0,
 						"Water reset lost its buckets or retained precipitate");
 				massBaseline = cleared;
@@ -422,13 +432,14 @@ public final class GpuProductionDemoValidation {
 				require(motion.step(region, List.of()).accepted(), "Water reset after precipitation rejected");
 				checkResident(region, snapshots, mmm.units.Mass.fromKilograms(2000), "tank", "precipitate-reset-motion");
 			}
-			region.domain();
+			long saved = operations.checkpoint(region);
+			require(region.releaseSolverAfterCheckpoint(saved), "Tank solver release failed");
 		}
 		System.out.println("stage=complete scenario=" + (precipitation ? "precipitation" : "tank"));
 	}
 
 	private static long commitTankCandidate(FluidRegionOperations operations, FluidRegion region,
-			FluidDomain candidate) throws Exception {
+			HostFluidState candidate) throws Exception {
 		long base = region.checkpointGeneration(), target = base + 1;
 		var staged = operations.stageLifecycleCheckpoint(region, candidate, target);
 		require(operations.commitStagedLifecycleCheckpoint(staged) == target, "Tank candidate checkpoint failed");
@@ -560,9 +571,9 @@ public final class GpuProductionDemoValidation {
 		var region = fixture.region();
 		try {
 		captureCollisions(region, scenario);
-		var initial = region.domain().captureAuthoritativeState();
+		var initial = region.hostSnapshot().captureAuthoritativeState();
 		massBaseline = baselineMass(initial);
-		long mass = region.domain().totalMassUnits();
+		long mass = region.hostSnapshot().totalMassUnits();
 		var snapshots = new FluidSnapshotPublisher(world.profile(), world.chemicalRegistry(), world.granularRegistry(), world.thermalRegistry());
 		snapshots.createDispatch(region);
 		fixture.verifyCaptured();
@@ -570,6 +581,7 @@ public final class GpuProductionDemoValidation {
 			if (stop.equals("initial")) return;
 			try (var backend = MmmRuntimeFactory.createSolverBackend()) {
 				MmmRuntimeFactory.prepareSolverBackend(backend, startup, world);
+            manager.solverBackend(backend);
 				require(backend.id().equals("mmm:vulkan-resident"), "Capture did not select GPU backend");
 				var application = new RegionApplicationService(backend, new FluidRegionRepository(manager), operations);
 				var motion = new MinecraftMotionExecutor(application, world, new MinecraftRuntimePolicy(startup, manager));
@@ -584,7 +596,7 @@ public final class GpuProductionDemoValidation {
 					verifyManualSteps(region, ticks, motion, snapshots, mass, scenario);
 					fixture.verifyCaptured();
 				}
-				region.domain();
+				region.discardTransient();
 			}
 		} finally {
 			fixture.restore();
@@ -670,7 +682,7 @@ public final class GpuProductionDemoValidation {
 		if (phaseRestoreOperations == null || phaseRestoreCompleted || phaseRestoreCandidate != null
 				|| state.pendingPhaseMotion() == null || state.pendingPhaseMotion().isEmpty()
 				|| baselineMass(state).granular() == 0) return;
-		var restored = FluidDomain.restoreAuthoritativeState(state);
+		var restored = HostFluidState.restoreAuthoritativeState(state);
 		var volumes = new double[state.sizeX() * state.sizeY() * state.sizeZ()];
 		for (var stock : state.liquid().physicalStocks()) volumes[stock.key().cell()] += stock.volumeFraction();
 		double maximumExcess = 0;
@@ -933,10 +945,10 @@ public final class GpuProductionDemoValidation {
 			}
 		}
 		if (scenario.startsWith("tension")) {
-			var domain = FluidDomain.restoreAuthoritativeState(state);
+			var domain = HostFluidState.restoreAuthoritativeState(state);
 			double h = domain.config().cellSize();
-			var floor = new FluidDomain.WaterContactFace(1, 2 * h, 0, sz * h, 0, sx * h, 1);
-			wetArea = domain.waterContacts(List.of(floor)).stream().mapToDouble(FluidDomain.WaterContact::areaSquareMetres).sum();
+			var floor = new FluidDomainContracts.WaterContactFace(1, 2 * h, 0, sz * h, 0, sx * h, 1);
+			wetArea = domain.waterContacts(List.of(floor)).stream().mapToDouble(FluidDomainContracts.WaterContact::areaSquareMetres).sum();
 		}
 		return new PhysicalObservation(volume[0] == 0 ? 0 : xmoment[0] / volume[0],
 				volume[1] == 0 ? 0 : xmoment[1] / volume[1], volume[0] == 0 ? 0 : ymoment[0] / volume[0],

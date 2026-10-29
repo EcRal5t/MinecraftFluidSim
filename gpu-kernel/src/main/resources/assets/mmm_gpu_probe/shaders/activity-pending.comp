@@ -1,0 +1,10 @@
+#version 450
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(push_constant) uniform Params { int cells; int activity; int pending; int summary; } p;
+void main() {
+    int cell = int(gl_GlobalInvocationID.x);
+    if (cell >= p.cells) return;
+    if (words[p.activity + cell] != 0u) words[p.pending + cell] = 0u;
+    else if (words[p.pending + cell] != 0u) atomicOr(words[p.summary], 1u);
+}

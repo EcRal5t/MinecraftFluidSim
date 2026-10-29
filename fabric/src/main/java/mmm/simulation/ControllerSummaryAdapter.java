@@ -1,9 +1,11 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.api.RegionAvailabilityReason;
 import mmm.application.port.ControllerSummaryPort;
 import mmm.controller.ControllerSummary;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.air.GasLimits;
 import mmm.granular.GranularLimits;
 import mmm.simulation.controller.FluidRegionFootprint;
@@ -53,7 +55,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 		FluidRegionFootprint footprint = region.footprint();
 		boolean live = region.solverLoaded();
 		var device = live ? region.inventorySummary() : null;
-		FluidDomain domain = live && device == null ? region.domain() : null;
+		HostFluidState domain = live && device == null ? region.hostSnapshot() : null;
 		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
 		ControllerSummary.Inventory inventory = live
@@ -63,7 +65,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 		boolean phaseWorkPending = live && region.hasPendingPhaseMotionWork();
 		boolean checkpointAllowed = authoritativeWritesReady.getAsBoolean() && live
 				&& region.availabilityFailure() == null && ownershipLock == null && !containerWalPending;
-		FluidDomain.StepStats stats = region.lastStats();
+		FluidDomainContracts.StepStats stats = region.lastStats();
 		ThermalActivity thermal = region.thermalActivity();
 		String availabilityFailure = bounded(region.availabilityFailure());
 		String numericalFailure = region.availabilityReason() == RegionAvailabilityReason.NUMERICAL_PAUSE
@@ -108,7 +110,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
             device.gasStandardVolumeNanos(),mmm.units.Mass.kilograms(device.gasMassUnits()),device.thermalBound(),device.totalInternalEnergyJoules(),range);
     }
 
-	private ControllerSummary.Inventory liveInventory(FluidRegion region, FluidDomain domain) {
+	private ControllerSummary.Inventory liveInventory(FluidRegion region, HostFluidState domain) {
 		long gasNanos = 0L;
 		double gasMass = 0.0;
 		double minimumTemperature = Double.POSITIVE_INFINITY;

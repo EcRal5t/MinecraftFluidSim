@@ -10,7 +10,7 @@ import java.util.List;
 final class PhysicalActivityGroups {
 	private static final int QUIET_STEPS = 200;
 	private static final double QUIET_SPEED = 2.5E-3;
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	private Snapshot previous = Snapshot.EMPTY;
 	private List<int[]> connections = List.of();
 	private List<int[]> thermalConnections = List.of();
@@ -47,7 +47,7 @@ final class PhysicalActivityGroups {
 		}
 	}
 
-	PhysicalActivityGroups(FluidDomain domain) { this.domain=domain; }
+	PhysicalActivityGroups(HostFluidState domain) { this.domain=domain; }
 
 	void restore(Snapshot state) {
 		previous=state; connections=state.connections; thermalConnections=state.thermalConnections;
@@ -87,7 +87,7 @@ final class PhysicalActivityGroups {
     boolean worldCellAvailable(int cell) {return cell>=0&&cell<domain.cellCount&&(worldAvailable==null||worldAvailable[cell]);}
     boolean groupAvailable(int cell) {int r=root(cell);return worldCellAvailable(cell)&&(r<0||!blocked[r]);}
     boolean hasAvailableGroups(){if(worldAvailable==null)return true;for(int cell=0;cell<domain.cellCount;cell++)if(root(cell)>=0&&groupAvailable(cell))return true;return false;}
-    boolean parcelAvailable(int index){return groupAvailable(domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(index)));}
+    boolean parcelAvailable(int index){return groupAvailable(domain.domainInventoryGeometry.granularParcelCell(domain.granularState.parcels.parcel(index)));}
     boolean bodyAvailable(mmm.world.MovingBodyFluidCoupling.Bounds bounds) {
         if (worldAvailable == null) return true;
         for (int cell : bodyCells(bounds)) if (!groupAvailable(cell)) return false;
@@ -301,7 +301,7 @@ final class PhysicalActivityGroups {
 			values[group.cell()]=31*values[group.cell()]+Double.doubleToLongBits(group.internalEnergy())+group.massUnits();
 		if(domain.granularState!=null) {
 			for(int i=0;i<domain.granularState.parcels.count();i++) {
-				var parcel=domain.granularState.parcels.parcel(i);int cell=domain.domainStep.granularParcelCell(parcel);
+				var parcel=domain.granularState.parcels.parcel(i);int cell=domain.domainInventoryGeometry.granularParcelCell(parcel);
 				values[cell]=31*values[cell]+parcel.massUnits()+parcel.solidVolumeSvq();
 				if(domain.thermalState!=null)values[cell]+=Double.doubleToLongBits(domain.thermalState.granularColumn().activeEnergy(i));
 			}
@@ -324,8 +324,8 @@ final class PhysicalActivityGroups {
 		return node<=chambers.size()?chambers.get(node-1).minimumPiece()/8:-1;
 	}
 
-	FluidDomain.ActivityStats stats() {
-		if(parent.length==0)return new FluidDomain.ActivityStats(0,0,0,domain.cellCount);
+	FluidDomainContracts.ActivityStats stats() {
+		if(parent.length==0)return new FluidDomainContracts.ActivityStats(0,0,0,domain.cellCount);
 		int groups=0,sleeping=0,sleepingCells=0,active=0,blockedGroups=0,blockedCells=0;
 		for(int cell=0;cell<parent.length;cell++)if(parent[cell]>=0) {
 			int r=root(cell);
@@ -334,6 +334,6 @@ final class PhysicalActivityGroups {
 			if(r==cell){groups++;if(asleep)sleeping++;}
 			if(asleep)sleepingCells++;else active++;
 		}
-		return new FluidDomain.ActivityStats(groups,sleeping,sleepingCells,active,blockedGroups,blockedCells);
+		return new FluidDomainContracts.ActivityStats(groups,sleeping,sleepingCells,active,blockedGroups,blockedCells);
 	}
 }

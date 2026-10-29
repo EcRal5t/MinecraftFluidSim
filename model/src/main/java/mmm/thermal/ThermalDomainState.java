@@ -478,9 +478,6 @@ public final class ThermalDomainState {
 	/** Publishes an already validated all-node gas-energy removal using assignments only. */
 	public void commitGasVent(GasEnergyStore.GasVentPlan plan) { gasState.commitVent(plan); }
 
-	public AirNetwork.TransferCommit planGasFlow(AirNetwork.FlowBatch batch, AirNetwork network) {
-		return gasState.planFlow(batch, network);
-	}
 	public GasEnergyStore.InventoryEnergyPlan planGasInventoryEnergy(AirNetwork network, List<Integer> nodes,
 	                                                              List<GasInventory> inventories, double[] energies,
 	                                                              SignedDyadic internalTransfer) {
@@ -652,11 +649,6 @@ public final class ThermalDomainState {
 	/** Rebuilds the derived LTE grid once before a phase scan over many cells. */
 	public void preparePhaseScan(ThermalCarrierContext markers) {
 		cellOperations.preparePhaseScan(markers, thermalRevision());
-	}
-	/** Shares the final conduction sample while no intervening reaction changed its owner revision. */
-	public void preparePhaseScanAfterConduction(ThermalCarrierContext markers,ThermalCarrierTransport.Batch sample,Revision source){
-		var current=thermalRevision();
-		cellOperations.preparePhaseScan(markers,current,sample!=null&&current.equals(source)?sample:null);
 	}
 
 	/** Rebuilds a read-only spatial caloric observation without changing the phase/transport LTE grid. */
@@ -925,21 +917,6 @@ public final class ThermalDomainState {
 
 	public ThermalTransport.Stats lastTransport() { return lastTransport; }
 	public int maximumTransportSubsteps() { return maximumTransportSubsteps; }
-
-	/** Finite conduction on real carrier contacts supplied by the spatial discretization. */
-	public ThermalTransport.Stats stepCarrierConduction(
-			ThermalCarrierTransport.Batch batch, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
-	) {
-		var result = ThermalCarrierTransport.solve(batch, contacts, dtSeconds, maximumTransportSubsteps);
-		var physicalDelta=batch.commit();
-		result=new ThermalTransport.Stats(result.substeps(),result.evaluatedContacts(),result.maximumTemperatureChangeK(),
-				result.maximumAbsoluteTransferJ(),physicalDelta.subtract(result.reservoirExchange()),result.reservoirExchange());
-		var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange()).withRoundoff(result.roundoffResidual());
-		auditState.replace(ledger);
-		spatialObservationPrepared = false;
-		lastTransport = result;
-		return result;
-	}
 
 	// ---- finite device delegation ----
 

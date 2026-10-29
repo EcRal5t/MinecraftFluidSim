@@ -1,7 +1,9 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.chemistry.ChemicalTransferLedger;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.GasTopologyBlockedException;
 import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.units.SignedDyadic;
@@ -55,12 +57,12 @@ final class FluidRegionWorldInteraction {
 		int blockSizeY = region.sizeY() / cellsPerBlock;
 		int blockSizeZ = region.sizeZ() / cellsPerBlock;
 		List<PlannedBlock> plannedBlocks = new ArrayList<>();
-		List<FluidDomain.CollisionEdit> allEdits = new ArrayList<>();
+		List<FluidDomainContracts.CollisionEdit> allEdits = new ArrayList<>();
 
 		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
 			for (int blockY = 0; blockY < blockSizeY; blockY++) {
 				for (int blockX = 0; blockX < blockSizeX; blockX++) {
-					List<FluidDomain.CollisionEdit> blockEdits = new ArrayList<>();
+					List<FluidDomainContracts.CollisionEdit> blockEdits = new ArrayList<>();
 
 					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
 						for (int localY = 0; localY < cellsPerBlock; localY++) {
@@ -70,7 +72,7 @@ final class FluidRegionWorldInteraction {
 								int cellZ = blockZ * cellsPerBlock + localZ;
 								int desired = collisionField.microMask(cellX, cellY, cellZ);
 								if (region.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
-								FluidDomain.CollisionEdit edit = new FluidDomain.CollisionEdit(
+								FluidDomainContracts.CollisionEdit edit = new FluidDomainContracts.CollisionEdit(
 										cellX, cellY, cellZ, desired);
 								blockEdits.add(edit);
 								allEdits.add(edit);
@@ -87,23 +89,22 @@ final class FluidRegionWorldInteraction {
 		}
 		if (allEdits.isEmpty()) return FluidRegion.CollisionStats.EMPTY;
 
-		FluidDomain original = region.domain();
 		long baseGeneration = region.solverGeneration();
 		try {
-			FluidDomain domain = FluidDomain.restoreAuthoritativeState(original.captureAuthoritativeState());
+			HostFluidState domain = region.beginHostEdit();
 			FluidRegion.CollisionStats stats = applyEdits(domain, allEdits, plannedBlocks);
-			region.adoptCollisionCandidate(original, baseGeneration, domain);
+			region.adoptCollisionCandidate(baseGeneration, domain);
 			return stats;
 		} catch (GasTopologyBlockedException blocked) {
-			throw new FluidDomain.CollisionEditBlockedException(
+			throw new FluidDomainContracts.CollisionEditBlockedException(
 					"World collision leaves closed gas without a valid cavity", blocked);
 		}
 	}
 
 	private static FluidRegion.CollisionStats applyEdits(
-			FluidDomain domain, List<FluidDomain.CollisionEdit> allEdits, List<PlannedBlock> plannedBlocks
+			HostFluidState domain, List<FluidDomainContracts.CollisionEdit> allEdits, List<PlannedBlock> plannedBlocks
 	) {
-		FluidDomain.CollisionEditPlan plan = domain.planCollisionEdits(allEdits);
+		FluidDomainContracts.CollisionEditPlan plan = domain.planCollisionEdits(allEdits);
 		domain.beginCollisionEdits(plan);
 		int changedCells = 0;
 		float displaced = 0.0F;
@@ -118,18 +119,18 @@ final class FluidRegionWorldInteraction {
 			long[] displacedMaterialMass = displacedMaterialVolume == null ? null
 					: new long[displacedMaterialVolume.length];
 			SignedDyadic displacedEnergy = SignedDyadic.ZERO;
-			for (FluidDomain.CollisionEdit edit : block.edits()) {
+			for (FluidDomainContracts.CollisionEdit edit : block.edits()) {
 				if (domain.hasChemistryState()) {
-					FluidDomain.ChemicalDisplacement chemical = domain.setSolidMicroMaskChemical(
+					FluidDomainContracts.ChemicalDisplacement chemical = domain.setSolidMicroMaskChemical(
 							edit.x(), edit.y(), edit.z(), edit.mask());
 					displacedInBlock += chemical.volume();
 					displacedChemistry = displacedChemistry.plus(chemical.ledger());
 					displacedEnergy = displacedEnergy.add(SignedDyadic.of(chemical.internalEnergy()));
 				} else if (displacedMaterialVolume != null) {
-					FluidDomain.MaterialDisplacement material = domain.setSolidMicroMaskMaterial(
+					FluidDomainContracts.MaterialDisplacement material = domain.setSolidMicroMaskMaterial(
 							edit.x(), edit.y(), edit.z(), edit.mask());
 					displacedInBlock += material.volume();
-					for (FluidDomain.MaterialPortion portion : material.portions()) {
+					for (FluidDomainContracts.MaterialPortion portion : material.portions()) {
 						displacedMaterialVolume[portion.materialHandle()] += portion.volume();
 						displacedMaterialMass[portion.materialHandle()] = Math.addExact(displacedMaterialMass[portion.materialHandle()], portion.massUnits());
 					}
@@ -141,11 +142,11 @@ final class FluidRegionWorldInteraction {
 			}
 			if (displacedInBlock <= 0.0F) continue;
 			displaced += displacedInBlock;
-			List<FluidDomain.MaterialPortion> displacedMaterials = new ArrayList<>();
+			List<FluidDomainContracts.MaterialPortion> displacedMaterials = new ArrayList<>();
 			if (displacedMaterialVolume != null) for (int material = 0;
 					material < displacedMaterialVolume.length; material++) {
 				if (displacedMaterialVolume[material] > 0.0) {
-					displacedMaterials.add(new FluidDomain.MaterialPortion(material,
+					displacedMaterials.add(new FluidDomainContracts.MaterialPortion(material,
 							displacedMaterialVolume[material], displacedMaterialMass[material]));
 				}
 			}
@@ -154,7 +155,7 @@ final class FluidRegionWorldInteraction {
 		}
 		for (Displacement request : restorations) {
 			if (domain.hasChemistryState()) {
-				FluidDomain.ExactChemicalTransfer restoration = domain.hasThermalState()
+				FluidDomainContracts.ExactChemicalTransfer restoration = domain.hasThermalState()
 						? domain.tryInsertExactChemical(request.centerX(), request.centerY(), request.centerZ(),
 								request.chemistry(), 8, false, request.internalEnergy())
 						: domain.tryInsertExactChemical(request.centerX(), request.centerY(), request.centerZ(),
@@ -164,7 +165,7 @@ final class FluidRegionWorldInteraction {
 					domain.chemistry().recordEscapedSink(request.chemistry());
 				}
 			} else if (domain.hasMaterialState()) {
-				FluidDomain.ExactMixtureTransfer restoration = domain.hasThermalState()
+				FluidDomainContracts.ExactMixtureTransfer restoration = domain.hasThermalState()
 						? domain.tryInsertExactMixture(request.centerX(), request.centerY(), request.centerZ(),
 								request.materials(), 8, false, request.internalEnergy())
 						: domain.tryInsertExactMixture(request.centerX(), request.centerY(), request.centerZ(),
@@ -173,7 +174,7 @@ final class FluidRegionWorldInteraction {
 					escaped += request.volume();
 				}
 			} else {
-				FluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(
+				FluidDomainContracts.VolumeAddition restoration = domain.addVolumeNearBudgeted(
 						request.centerX(), request.centerY(), request.centerZ(), request.volume(), 8
 				);
 				escaped += request.volume() - restoration.addedVolume();
@@ -198,9 +199,9 @@ final class FluidRegionWorldInteraction {
 
 	private record Displacement(
 			int centerX, int centerY, int centerZ, float volume, ChemicalTransferLedger chemistry,
-			List<FluidDomain.MaterialPortion> materials, double internalEnergy
+			List<FluidDomainContracts.MaterialPortion> materials, double internalEnergy
 	) { }
 
 	private record PlannedBlock(int centerX, int centerY, int centerZ,
-	                            List<FluidDomain.CollisionEdit> edits) { }
+	                            List<FluidDomainContracts.CollisionEdit> edits) { }
 }

@@ -1,182 +1,292 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
-layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
-layout(binding=2,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; int count; } p;
-const int COUNTS=0,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,
-          MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,SPECIES_AMOUNTS=13;
-const int R_DESCRIPTORS=0,R_MASS=1,R_ENERGY=2,R_MIXTURE=3,
-          R_SPECIES_AMOUNTS=4,R_SOURCE_OFFSETS=5,R_SLOTS=6,R_SOURCE_MASKS=8;
-int h(int index) { return int(candidateWords[p.header+index]); }
-int src(int field) { return h(16+field); }
-int route(int field) { return h(35+field); }
-int routeIndex(int stock,int part){int first=int(candidateWords[route(R_SOURCE_OFFSETS)+stock]);return first+part<int(candidateWords[route(R_SOURCE_OFFSETS)+stock+1])?first+part:-1;}
-uint readWord(int bank,int index) { return bank==0?sourceWords[index]:candidateWords[index]; }
-int64_t readLong(int bank,int index) { return int64_t(uint64_t(readWord(bank,index))|(uint64_t(readWord(bank,index+1))<<32)); }
-double readDouble(int bank,int index) { return packDouble2x32(uvec2(readWord(bank,index),readWord(bank,index+1))); }
-void putLong(int index,int64_t value) { candidateWords[index]=uint(value);candidateWords[index+1]=uint(uint64_t(value)>>32); }
-void putDouble(int index,double value) { uvec2 bits=unpackDouble2x32(value);candidateWords[index]=bits.x;candidateWords[index+1]=bits.y; }
-bool finite(double value) { return !isnan(value)&&!isinf(value); }
-struct Volume { int bank; int begin; int count; int exponent; };
-uint limb(Volume value,int index) { return index<0||index>=value.count?0u:readWord(value.bank,value.begin+index); }
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) readonly buffer Source {
+    uint sourceWords[];
+};
+layout(binding = 1, std430) buffer Candidate {
+    uint candidateWords[];
+};
+layout(binding = 2, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+}
+p;
+// HOST_LAYOUT
+
+int h(int index) {
+    return int(candidateWords[p.header + index]);
+}
+int src(int field) {
+    return h(SOURCE_FIELDS + field);
+}
+int route(int field) {
+    return h(ROUTE_FIELDS + field);
+}
+int routeIndex(int stock, int part) {
+    int first = int(candidateWords[route(ROUTE_SOURCE_OFFSETS) + stock]);
+    return first + part < int(candidateWords[route(ROUTE_SOURCE_OFFSETS) + stock + 1]) ? first + part : -1;
+}
+uint readWord(int bank, int index) {
+    return bank == 0 ? sourceWords[index] : candidateWords[index];
+}
+int64_t readLong(int bank, int index) {
+    return int64_t(uint64_t(readWord(bank, index)) | (uint64_t(readWord(bank, index + 1)) << 32));
+}
+double readDouble(int bank, int index) {
+    return packDouble2x32(uvec2(readWord(bank, index), readWord(bank, index + 1)));
+}
+void putLong(int index, int64_t value) {
+    candidateWords[index] = uint(value);
+    candidateWords[index + 1] = uint(uint64_t(value) >> 32);
+}
+void putDouble(int index, double value) {
+    uvec2 bits = unpackDouble2x32(value);
+    candidateWords[index] = bits.x;
+    candidateWords[index + 1] = bits.y;
+}
+bool finite(double value) {
+    return !isnan(value) && !isinf(value);
+}
+struct Volume {
+    int bank;
+    int begin;
+    int count;
+    int exponent;
+};
+uint limb(Volume value, int index) {
+    return index < 0 || index >= value.count ? 0u : readWord(value.bank, value.begin + index);
+}
 Volume sourceVolume(int stock) {
-    int first=int(sourceWords[src(VOLUME_OFFSETS)+stock]),count=int(sourceWords[src(VOLUME_COUNTS)+stock]);
-    return Volume(0,src(VOLUME_LIMBS)+first,count,int(sourceWords[src(VOLUME_EXPONENTS)+stock]));
+    int first = int(sourceWords[src(STOCK_VOLUME_OFFSETS) + stock]),
+        count = int(sourceWords[src(STOCK_VOLUME_COUNTS) + stock]);
+    return Volume(0, src(STOCK_VOLUME_LIMBS) + first, count, int(sourceWords[src(STOCK_VOLUME_EXPONENTS) + stock]));
 }
 Volume routeVolume(int entry) {
-    int at=route(R_DESCRIPTORS)+5*entry;
-    return Volume(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),int(candidateWords[at+3]));
+    int at = route(ROUTE_VOLUME_DESCRIPTORS) + 5 * entry;
+    return Volume(int(candidateWords[at]), int(candidateWords[at + 1]), int(candidateWords[at + 2]),
+                  int(candidateWords[at + 3]));
 }
-int64_t highest(Volume value) { return int64_t(value.exponent)+int64_t(32*(value.count-1)+findMSB(limb(value,value.count-1))); }
-uint aligned(Volume value,int index,int minimum) {
-    int64_t shift=int64_t(value.exponent)-int64_t(minimum);
-    int relative=index-int(shift>>5),bits=int(shift&int64_t(31));
-    uint result=limb(value,relative)<<bits;
-    if(bits!=0)result|=limb(value,relative-1)>>(32-bits);
+int64_t highest(Volume value) {
+    return int64_t(value.exponent) + int64_t(32 * (value.count - 1) + findMSB(limb(value, value.count - 1)));
+}
+uint aligned(Volume value, int index, int minimum) {
+    int64_t shift = int64_t(value.exponent) - int64_t(minimum);
+    int relative = index - int(shift >> 5), bits = int(shift & int64_t(31));
+    uint result = limb(value, relative) << bits;
+    if (bits != 0)
+        result |= limb(value, relative - 1) >> (32 - bits);
     return result;
 }
-bool greaterVolume(Volume left,Volume right) {
-    int64_t a=highest(left),b=highest(right);
-    if(a!=b)return a>b;
-    int minimum=min(left.exponent,right.exponent),top=int((a-int64_t(minimum))>>5);
-    for(int i=top;i>=0;i--) {
-        uint x=aligned(left,i,minimum),y=aligned(right,i,minimum);
-        if(x!=y)return x>y;
+bool greaterVolume(Volume left, Volume right) {
+    int64_t a = highest(left), b = highest(right);
+    if (a != b)
+        return a > b;
+    int minimum = min(left.exponent, right.exponent), top = int((a - int64_t(minimum)) >> 5);
+    for (int i = top; i >= 0; i--) {
+        uint x = aligned(left, i, minimum), y = aligned(right, i, minimum);
+        if (x != y)
+            return x > y;
     }
     return false;
 }
 double normalizedHead(Volume value) {
-    return double(limb(value,value.count-1))+double(limb(value,value.count-2))*2.3283064365386962890625e-10LF
-            +double(limb(value,value.count-3))*5.4210108624275221700372640043497e-20LF;
+    return double(limb(value, value.count - 1)) +
+           double(limb(value, value.count - 2)) * 2.3283064365386962890625e-10LF +
+           double(limb(value, value.count - 3)) * 5.4210108624275221700372640043497e-20LF;
 }
-double volumeFraction(Volume part,Volume whole) {
-    int64_t power=int64_t(part.exponent)-int64_t(whole.exponent)+int64_t(32*(part.count-whole.count));
-    if(power<int64_t(-1106))return 0.0;
-    if(power>int64_t(1106))return 1.0;
-    return clamp(ldexp(normalizedHead(part)/normalizedHead(whole),int(power)),0.0LF,1.0LF);
+double volumeFraction(Volume part, Volume whole) {
+    int64_t power = int64_t(part.exponent) - int64_t(whole.exponent) + int64_t(32 * (part.count - whole.count));
+    if (power < int64_t(-1106))
+        return 0.0;
+    if (power > int64_t(1106))
+        return 1.0;
+    return clamp(ldexp(normalizedHead(part) / normalizedHead(whole), int(power)), 0.0LF, 1.0LF);
 }
 
-int volumeFractions(int stock,out double fractions[7],out bool enabled[7]) {
-    Volume whole=sourceVolume(stock);int owner=-1;
-    if(whole.count==0)return -1;
-    for(int i=0;i<7;i++) {
-        int entry=routeIndex(stock,i),sign=entry<0?0:int(candidateWords[route(R_DESCRIPTORS)+5*entry+4]);
-        enabled[i]=sign>0;fractions[i]=0.0;
-        if(sign<0)atomicOr(errors,32u);
-        if(enabled[i]) {
-            Volume part=routeVolume(entry);
-            if(owner<0||greaterVolume(part,routeVolume(routeIndex(stock,owner))))owner=i;
-            fractions[i]=volumeFraction(part,whole);
+int volumeFractions(int stock, out double fractions[7], out bool enabled[7]) {
+    Volume whole = sourceVolume(stock);
+    int owner = -1;
+    if (whole.count == 0)
+        return -1;
+    for (int i = 0; i < 7; i++) {
+        int entry = routeIndex(stock, i),
+            sign = entry < 0 ? 0 : int(candidateWords[route(ROUTE_VOLUME_DESCRIPTORS) + 5 * entry + 4]);
+        enabled[i] = sign > 0;
+        fractions[i] = 0.0;
+        if (sign < 0)
+            atomicOr(errors, 32u);
+        if (enabled[i]) {
+            Volume part = routeVolume(entry);
+            if (owner < 0 || greaterVolume(part, routeVolume(routeIndex(stock, owner))))
+                owner = i;
+            fractions[i] = volumeFraction(part, whole);
         }
     }
-    if(owner<0)atomicOr(errors,32u);
+    if (owner < 0)
+        atomicOr(errors, 32u);
     return owner;
 }
 
-int64_t share(int64_t total,double fraction,int64_t remaining) {
-    precise double amount=double(total)*fraction;
-    if(amount>=9223372036854775808.0LF)return remaining;
-    return min(remaining,int64_t(max(0.0LF,amount)));
+int64_t share(int64_t total, double fraction, int64_t remaining) {
+    precise double amount = double(total) * fraction;
+    if (amount >= 9223372036854775808.0LF)
+        return remaining;
+    return min(remaining, int64_t(max(0.0LF, amount)));
 }
-void distribute(int64_t total,double fractions[7],int owner,out int64_t amounts[7]) {
-    int64_t remaining=total;
-    for(int i=0;i<7;i++)if(i!=owner){amounts[i]=share(total,fractions[i],remaining);remaining-=amounts[i];}
-    amounts[owner]=remaining;
+void distribute(int64_t total, double fractions[7], int owner, out int64_t amounts[7]) {
+    int64_t remaining = total;
+    for (int i = 0; i < 7; i++)
+        if (i != owner) {
+            amounts[i] = share(total, fractions[i], remaining);
+            remaining -= amounts[i];
+        }
+    amounts[owner] = remaining;
 }
 
-int massFractions(int stock,int volumeOwner,double volumeShares[7],bool enabled[7],
-                  out int64_t masses[7],out double fractions[7]) {
-    int64_t total=readLong(0,src(MASS_UNITS)+2*stock);
-    if(total<int64_t(0)){atomicOr(errors,32u);return -1;}
-    distribute(total,volumeShares,volumeOwner,masses);
-    int owner=volumeOwner;
-    if(total>int64_t(0))for(int i=0;i<7;i++)if(masses[i]>masses[owner])owner=i;
-    for(int i=0;i<7;i++) {
-        fractions[i]=total==int64_t(0)?volumeShares[i]:double(masses[i])/double(total);
-        if(routeIndex(stock,i)>=0) {
-            putLong(route(R_MASS)+2*(routeIndex(stock,i)),masses[i]);
-            candidateWords[route(R_MIXTURE)+routeIndex(stock,i)]=enabled[i]?sourceWords[src(MIXTURE_PRESENT)+stock]:0u;
+int massFractions(int stock, int volumeOwner, double volumeShares[7], bool enabled[7], out int64_t masses[7],
+                  out double fractions[7]) {
+    int64_t total = readLong(0, src(STOCK_MASS_UNITS) + 2 * stock);
+    if (total < int64_t(0)) {
+        atomicOr(errors, 32u);
+        return -1;
+    }
+    distribute(total, volumeShares, volumeOwner, masses);
+    int owner = volumeOwner;
+    if (total > int64_t(0))
+        for (int i = 0; i < 7; i++)
+            if (masses[i] > masses[owner])
+                owner = i;
+    for (int i = 0; i < 7; i++) {
+        fractions[i] = total == int64_t(0) ? volumeShares[i] : double(masses[i]) / double(total);
+        if (routeIndex(stock, i) >= 0) {
+            putLong(route(ROUTE_MASS_UNITS) + 2 * (routeIndex(stock, i)), masses[i]);
+            candidateWords[route(ROUTE_MIXTURE_PRESENT) + routeIndex(stock, i)] =
+                enabled[i] ? sourceWords[src(STOCK_MIXTURE_PRESENT) + stock] : 0u;
         }
     }
     return owner;
 }
 
 // Grow an ascending, nonoverlapping expansion using error-free TwoSum; at most eight inputs are added.
-void expand(inout double terms[8],inout int count,double value) {
-    precise double current=value;int nextCount=0;
-    for(int i=0;i<count;i++) {
-        precise double other=terms[i];precise double next=current+other;
-        precise double virtualValue=next-current;
-        precise double error=(current-(next-virtualValue))+(other-virtualValue);
-        if(error!=0.0)terms[nextCount++]=error;
-        current=next;
+void expand(inout double terms[8], inout int count, double value) {
+    precise double current = value;
+    int nextCount = 0;
+    for (int i = 0; i < count; i++) {
+        precise double other = terms[i];
+        precise double next = current + other;
+        precise double virtualValue = next - current;
+        precise double error = (current - (next - virtualValue)) + (other - virtualValue);
+        if (error != 0.0)
+            terms[nextCount++] = error;
+        current = next;
     }
-    if(current!=0.0)terms[nextCount++]=current;
-    count=nextCount;
+    if (current != 0.0)
+        terms[nextCount++] = current;
+    count = nextCount;
 }
 
 void writeQuantities(int stock) {
-    for(int i=0;i<8;i++)putDouble(h(7)+16*stock+2*i,0.0);
-    uint required=7u*sourceWords[src(COUNTS)+1];if(stock==0)candidateWords[h(6)]=required;
-    if(required>uint(h(2))){atomicOr(errors,64u);return;}
-    if(uint(stock)>=sourceWords[src(COUNTS)])return;
-    double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
-    int volumeOwner=volumeFractions(stock,volumeShares,enabled);if(volumeOwner<0)return;
-    int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions);if(owner<0)return;
-    int64_t totalMass=readLong(0,src(MASS_UNITS)+2*stock);
-    int material=int(sourceWords[src(MATERIALS)+stock]);
-    double materialReference=readDouble(1,h(3)+2*material);
-    precise double sourceReference=double(totalMass)*1e-10LF*materialReference;
+    for (int i = 0; i < 8; i++)
+        putDouble(h(H_ENERGY_REMAINDERS) + 16 * stock + 2 * i, 0.0);
+    uint required = 7u * sourceWords[src(STOCK_COUNTS) + 1];
+    if (stock == 0)
+        candidateWords[h(H_SPECIES_REQUIRED)] = required;
+    if (required > uint(h(H_SPECIES_CAPACITY))) {
+        atomicOr(errors, 64u);
+        return;
+    }
+    if (uint(stock) >= sourceWords[src(STOCK_COUNTS)])
+        return;
+    double volumeShares[7], fractions[7];
+    bool enabled[7];
+    int64_t masses[7];
+    int volumeOwner = volumeFractions(stock, volumeShares, enabled);
+    if (volumeOwner < 0)
+        return;
+    int owner = massFractions(stock, volumeOwner, volumeShares, enabled, masses, fractions);
+    if (owner < 0)
+        return;
+    int64_t totalMass = readLong(0, src(STOCK_MASS_UNITS) + 2 * stock);
+    int material = int(sourceWords[src(STOCK_MATERIALS) + stock]);
+    double materialReference = readDouble(1, h(H_MATERIAL_REFERENCE) + 2 * material);
+    precise double sourceReference = double(totalMass) * 1e-10LF * materialReference;
     precise double references[7];
-    for(int i=0;i<7;i++) {
-        references[i]=double(masses[i])*1e-10LF*materialReference;
-
+    for (int i = 0; i < 7; i++) {
+        references[i] = double(masses[i]) * 1e-10LF * materialReference;
     }
-    int begin=int(sourceWords[src(SPECIES_OFFSETS)+stock]),end=int(sourceWords[src(SPECIES_OFFSETS)+stock+1]);
-    for(int entry=begin;entry<end;entry++) {
-        int handle=int(sourceWords[src(SPECIES_HANDLES)+entry]);
-        int64_t total=readLong(0,src(SPECIES_AMOUNTS)+2*entry);
-        if(total<int64_t(0)){atomicOr(errors,32u);return;}
-        int64_t amounts[7];distribute(total,fractions,owner,amounts);
-        double reference=readDouble(1,h(4)+2*(material*h(5)+handle));
-        sourceReference+=double(total)*reference;
-        uint mask=candidateWords[route(R_SOURCE_MASKS)+stock];
-        for(int dir=0;dir<7;dir++)if((mask&(1u<<dir))==0u)putLong(route(R_SPECIES_AMOUNTS)+2*(7*entry+dir),0l);
+    int begin = int(sourceWords[src(STOCK_SPECIES_OFFSETS) + stock]),
+        end = int(sourceWords[src(STOCK_SPECIES_OFFSETS) + stock + 1]);
+    for (int entry = begin; entry < end; entry++) {
+        int handle = int(sourceWords[src(STOCK_SPECIES_HANDLES) + entry]);
+        int64_t total = readLong(0, src(STOCK_SPECIES_AMOUNTS) + 2 * entry);
+        if (total < int64_t(0)) {
+            atomicOr(errors, 32u);
+            return;
+        }
+        int64_t amounts[7];
+        distribute(total, fractions, owner, amounts);
+        double reference = readDouble(1, h(H_SPECIES_REFERENCE) + 2 * (material * h(H_SPECIES_STRIDE) + handle));
+        sourceReference += double(total) * reference;
+        uint mask = candidateWords[route(ROUTE_SOURCE_MASKS) + stock];
+        for (int dir = 0; dir < 7; dir++)
+            if ((mask & (1u << dir)) == 0u)
+                putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * entry + dir), 0l);
         // i is a compact volume part; fixed species amounts are indexed by its real spatial direction.
-        for(int i=0;i<7;i++){
-            int part=routeIndex(stock,i);if(part<0)continue;int dir=int(candidateWords[route(R_SLOTS)+part]);
-            putLong(route(R_SPECIES_AMOUNTS)+2*(7*entry+dir),amounts[i]);
-            if(amounts[i]>int64_t(0))references[i]+=double(amounts[i])*reference;
+        for (int i = 0; i < 7; i++) {
+            int part = routeIndex(stock, i);
+            if (part < 0)
+                continue;
+            int dir = int(candidateWords[route(ROUTE_SLOTS) + part]);
+            putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * entry + dir), amounts[i]);
+            if (amounts[i] > int64_t(0))
+                references[i] += double(amounts[i]) * reference;
         }
     }
-    double sourceEnergy=readDouble(0,src(ENERGY_BITS)+2*stock);
-    precise double sensible=sourceEnergy-sourceReference;
-    precise double energies[7];for(int i=0;i<7;i++)energies[i]=0.0;
-    if(totalMass>int64_t(0)) {
-        precise double sum=0.0,error=0.0;
-        for(int i=0;i<7;i++)if(i!=owner) {
-            if(masses[i]>int64_t(0))energies[i]=references[i]+sensible*fractions[i];
-            precise double corrected=energies[i]-error,next=sum+corrected;
-            error=(next-sum)-corrected;sum=next;
-        }
-        energies[owner]=sourceEnergy-sum;
+    double sourceEnergy = readDouble(0, src(STOCK_ENERGY_BITS) + 2 * stock);
+    precise double sensible = sourceEnergy - sourceReference;
+    precise double energies[7];
+    for (int i = 0; i < 7; i++)
+        energies[i] = 0.0;
+    if (totalMass > int64_t(0)) {
+        precise double sum = 0.0, error = 0.0;
+        for (int i = 0; i < 7; i++)
+            if (i != owner) {
+                if (masses[i] > int64_t(0))
+                    energies[i] = references[i] + sensible * fractions[i];
+                precise double corrected = energies[i] - error, next = sum + corrected;
+                error = (next - sum) - corrected;
+                sum = next;
+            }
+        energies[owner] = sourceEnergy - sum;
     }
-    bool valid=finite(sourceEnergy)&&finite(sourceReference);
-    for(int i=0;i<7;i++) {
-        valid=valid&&finite(energies[i]);if(routeIndex(stock,i)>=0)putDouble(route(R_ENERGY)+2*routeIndex(stock,i),energies[i]);
+    bool valid = finite(sourceEnergy) && finite(sourceReference);
+    for (int i = 0; i < 7; i++) {
+        valid = valid && finite(energies[i]);
+        if (routeIndex(stock, i) >= 0)
+            putDouble(route(ROUTE_ENERGY_BITS) + 2 * routeIndex(stock, i), energies[i]);
     }
-    if(!valid){atomicOr(errors,32u);return;}
-    precise double remainders[8];int count=0;
-    for(int i=0;i<7;i++)expand(remainders,count,energies[i]);
-    expand(remainders,count,-sourceEnergy);
-    for(int i=0;i<8;i++)putDouble(h(7)+16*stock+2*i,i<count?remainders[i]:0.0);
+    if (!valid) {
+        atomicOr(errors, 32u);
+        return;
+    }
+    precise double remainders[8];
+    int count = 0;
+    for (int i = 0; i < 7; i++)
+        expand(remainders, count, energies[i]);
+    expand(remainders, count, -sourceEnergy);
+    for (int i = 0; i < 8; i++)
+        putDouble(h(H_ENERGY_REMAINDERS) + 16 * stock + 2 * i, i < count ? remainders[i] : 0.0);
 }
 
 void main() {
-    int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(index>=p.count||errors!=0u)return;
+    int index = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if (index >= p.count || errors != 0u)
+        return;
     writeQuantities(index);
 }

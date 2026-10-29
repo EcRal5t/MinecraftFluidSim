@@ -12,6 +12,6 @@
 
 `build/` 中的临时 Java、patch、数值快照和研究报告可能只在本地存在。长期维护的测试与工具分别放入对应模块的 `src/test/` 与 `pytool/`。
 
-根项目使用 Gradle `base` 插件，根 `clean` 清理根 `build/`。执行不限定模块的 `clean` 还会选择子项目任务；清理单个模块使用 `:模块名:clean`。主模组与 GPU probe 的部署产物分别位于 `fabric/build/libs/` 和 `gpu-probe/build/libs/`。
+根项目使用 Gradle `base` 插件，根 `clean` 清理根 `build/`。执行不限定模块的 `clean` 还会选择子项目任务；清理单个模块使用 `:模块名:clean`。主模组部署产物位于 `fabric/build/libs/`。
 
 新实验按主题使用一个独立输出目录；每轮运行重复使用该目录或在结束后清理。需要保存的原始记录、复现源码和结论压缩至 `artifacts/research/`，附校验清单，并在相应资料索引中登记。JFR 事件 JSON 可按需导出，长期保存原始 JFR。

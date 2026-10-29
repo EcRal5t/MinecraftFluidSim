@@ -16,7 +16,7 @@ public final class SectionLoadingRuntimeValidation {
 	public static void validate(Path root, FluidRegion source) throws Exception {
 		var repository = new RegionRepositoryAdapter(root, TestProfiles.pure(), null, null, null, null, TestProfiles.materialRegistry());
 		repository.checkpoint(source);
-		var expected = source.domain().captureAuthoritativeState();
+		var expected = source.editableHost().captureAuthoritativeState();
 		var manager = manager();
 		require(repository.loadMetadata(manager).isEmpty(), "Manifest discovery rejected complete metadata");
 		var target = manager.regions().getFirst();
@@ -35,7 +35,7 @@ public final class SectionLoadingRuntimeValidation {
 			require(progress.loadedSections() == section + 1 && progress.restored() == complete
 					&& target.solverLoaded() == complete, "Runtime adopted an incomplete section collection");
 		}
-		FluidDomainStateAssertions.assertSameDurableState(expected, target.domain().captureAuthoritativeState(), "Runtime incremental restore");
+		FluidDomainStateAssertions.assertSameDurableState(expected, target.editableHost().captureAuthoritativeState(), "Runtime incremental restore");
 
 		Path regionPath = root.resolve("mmm/region-state").resolve(source.id().toString());
 		var head = NbtIo.readCompressed(regionPath.resolve("HEAD.nbt"), NbtAccounter.unlimitedHeap());
@@ -59,7 +59,7 @@ public final class SectionLoadingRuntimeValidation {
 		Files.write(missing, saved);
 		for (int tick = 0; tick < first.totalSections(); tick++) repository.restoreIncrementally(retained, 300 + tick, 1);
 		require(retained.solverLoaded(), "Repaired sections could not resume from retained metadata");
-		FluidDomainStateAssertions.assertSameDurableState(expected, retained.domain().captureAuthoritativeState(), "Repaired runtime section restore");
+		FluidDomainStateAssertions.assertSameDurableState(expected, retained.editableHost().captureAuthoritativeState(), "Repaired runtime section restore");
 		require(new RegionGenerationStore(root).discoverValidated().manifests().size() == 1,
 				"Complete resumed generation failed strict discovery");
 	}

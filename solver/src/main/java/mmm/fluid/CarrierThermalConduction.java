@@ -10,7 +10,7 @@ final class CarrierThermalConduction {
 	private CarrierThermalConduction() { }
 	/** Physical cell faces; contact ordinals are linear cell indices. */
 	static List<mmm.thermal.FiniteThermalExchange.Contact> finitePorts(
-			FluidDomain domain, List<FluidDomain.ThermalPortRequest> requests) {
+			HostFluidState domain, List<FluidDomainContracts.ThermalPortRequest> requests) {
 		domain.domainFlowFields.preparePhysicalState();
 		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		var access = domain.thermalState.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext());
@@ -72,7 +72,7 @@ final class CarrierThermalConduction {
 	private static int family(mmm.thermal.ThermalMaterialDefinition material) {
 		return switch (material.carrierKind()) { case LIQUID -> 0; case GAS -> 1; default -> 2; };
 	}
-	static List<ThermalCarrierTransport.Contact> contacts(FluidDomain domain, ThermalCarrierTransport.Batch owners) {
+	static List<ThermalCarrierTransport.Contact> contacts(HostFluidState domain, ThermalCarrierTransport.Batch owners) {
 		if (domain.thermalState == null || owners.conductionBelowResolution(domain.thermalBoundaryTemperatureK)) return List.of();
 		int count=owners.carrierCount(),liquids=domain.liquidCells.physicalSize();
 		var head=new int[domain.cellCount];var next=new int[count];var support=new int[count];Arrays.fill(head,-1);
@@ -124,7 +124,7 @@ final class CarrierThermalConduction {
 			active.add(contacts.firstOwner(i),contacts.secondOwner(i),contacts.conductance(i),contacts.reservoirTemperatureK(i));
 		return active;
 	}
-	private static void add(FluidDomain domain,ThermalCarrierTransport.Batch owners,ThermalCarrierContacts contacts,
+	private static void add(HostFluidState domain,ThermalCarrierTransport.Batch owners,ThermalCarrierContacts contacts,
 			int first,int second,double conductance,double reservoir) {
 		int cell=owners.cell(first);
 		if(second>=0) domain.activityGroups.coupleThermalCells(cell,owners.cell(second));

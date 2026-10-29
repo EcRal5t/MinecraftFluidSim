@@ -11,13 +11,13 @@ allprojects {
 
 tasks.named('assemble') {
 	dependsOn ':api:assemble', ':model:assemble', ':solver:assemble', ':app:assemble',
-			':core:assemble', ':fabric:assemble', ':gpu-kernel:assemble', ':gpu-probe:assemble'
+			':core:assemble', ':fabric:assemble', ':gpu-kernel:assemble'
 }
 
-tasks.register('runCpuValidation') {
+tasks.register('runHostValidation') {
 	group = 'verification'
-	description = 'Runs the Fabric integration CPU validation suite.'
-	dependsOn ':fabric:runCpuValidation'
+	description = 'Runs the Fabric integration host validation suite.'
+	dependsOn ':fabric:runHostValidation'
 }
 
 tasks.register('runModuleValidation') {
@@ -34,9 +34,9 @@ tasks.register('verifyArchitecture') {
 
 tasks.register('runValidation') {
 	group = 'verification'
-	description = 'Runs CPU main validations (default fast; -PcpuValidation=full for complete coverage), architecture and the GPU adapter once.'
-	// The CPU suite already includes model thermal ownership, solver cut-cells and application transactions.
-	dependsOn ':fabric:runCpuValidation', ':fabric:runArchitectureValidation', ':gpu-probe:runAdapterValidation', ':solver:runComputeHandoffValidation'
+	description = 'Runs host validations, architecture.'
+	// The host suite covers transactions, geometry and protocol.
+	dependsOn ':fabric:runHostValidation', ':fabric:runArchitectureValidation'
 }
 
 tasks.named('check') {

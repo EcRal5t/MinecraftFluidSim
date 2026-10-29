@@ -1,7 +1,9 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.units.SolverUnitScale;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.transfer.ContainerFluidLedger;
 import mmm.transfer.ChemicalContents;
 import mmm.transfer.FluidMixture;
@@ -41,7 +43,7 @@ final class MinecraftContainerTransferOperations {
 			int maxRadius, int materialHandle, boolean externalSource, ThermalContents thermalContents
 	) {
 		if (volumeNanos <= 0L) return null;
-		FluidDomain domain = region.domain();
+		HostFluidState domain = region.editableHost();
 		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), Math.min(volumeNanos, maximumNanos));
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "容器余量小于 solver 可表示体积，未能注入");
@@ -54,7 +56,7 @@ final class MinecraftContainerTransferOperations {
 				: thermalContents.splitHomogeneousEnergy(plannedNanos, volumeNanos);
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
-		FluidDomain.ExactVolumeTransfer inserted = thermalSplit == null
+		FluidDomainContracts.ExactVolumeTransfer inserted = thermalSplit == null
 				? domain.tryInsertExactVolume(cell[0], cell[1], cell[2], requestedCellVolume, maxRadius,
 						materialHandle, externalSource)
 				: domain.tryInsertExactVolume(cell[0], cell[1], cell[2], requestedCellVolume, maxRadius,
@@ -80,13 +82,13 @@ final class MinecraftContainerTransferOperations {
 			int maxRadius, int materialHandle, ThermalContents baseThermal
 	) {
 		if (capacityNanos <= 0L) return null;
-		FluidDomain domain = region.domain();
+		HostFluidState domain = region.editableHost();
 		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), capacityNanos);
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "容器余量小于 solver 可表示体积");
 		}
 		SignedDyadic energyBefore = domain.hasThermalState() ? domain.exactInternalEnergy() : null;
-		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
+		FluidDomainContracts.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
@@ -125,8 +127,8 @@ final class MinecraftContainerTransferOperations {
 			int maxRadius, boolean externalSource, ThermalContents thermalContents
 	) {
 		if (mixture == null) return null;
-		FluidDomain domain = region.domain();
-		java.util.List<FluidDomain.MaterialPortion> portions;
+		HostFluidState domain = region.editableHost();
+		java.util.List<FluidDomainContracts.MaterialPortion> portions;
 		try {
 			portions = planMaterialInsertion(domain, mixture, maximumNanos);
 		} catch (IllegalArgumentException unknownMaterial) {
@@ -140,7 +142,7 @@ final class MinecraftContainerTransferOperations {
 						plannedSettlement.inserted(), plannedSettlement.remaining());
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
-		FluidDomain.ExactMixtureTransfer inserted = thermalSplit == null
+		FluidDomainContracts.ExactMixtureTransfer inserted = thermalSplit == null
 				? domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource)
 				: domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource,
 						thermalSplit.selectedEnergy());
@@ -177,7 +179,7 @@ final class MinecraftContainerTransferOperations {
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, ChemicalContents contents, long maximumNanos,
 			int maxRadius, boolean externalSource, ThermalContents thermalContents
 	) {
-		FluidDomain domain = region.domain();
+		HostFluidState domain = region.editableHost();
 		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "该区域不是化学区域");
 		try {
 			contents.validateAgainst(domain.chemistry().registry());
@@ -201,7 +203,7 @@ final class MinecraftContainerTransferOperations {
 							split.inserted(), split.remaining());
 			Double coupledEnergy = thermalSplit == null ? null
 					: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
-			FluidDomain.ExactChemicalTransfer inserted = thermalSplit == null
+			FluidDomainContracts.ExactChemicalTransfer inserted = thermalSplit == null
 					? domain.tryInsertExactChemical(cell[0], cell[1], cell[2], requested, maxRadius, externalSource)
 					: domain.tryInsertExactChemical(cell[0], cell[1], cell[2], requested, maxRadius,
 							externalSource, thermalSplit.selectedEnergy());
@@ -229,13 +231,13 @@ final class MinecraftContainerTransferOperations {
 			mmm.chemistry.ChemicalRegistry registry
 	) {
 		if (capacityNanos <= 0L) return null;
-		FluidDomain domain = region.domain();
+		HostFluidState domain = region.editableHost();
 		float requested = nanosToCellVolumeAtMost(domain.unitScale(), capacityNanos);
 		if (requested <= 0.0F) return new TransferOutcome(false, false,
 				new ItemStack(MmmItems.MATERIAL_BUCKET), "容器余量小于 solver 可表示体积");
 		ChemicalContents[] plannedContents = new ChemicalContents[1];
 		long[] plannedNanos = new long[1];
-		FluidDomain.ExactChemicalTransfer extracted = domain.tryExtractExactChemical(
+		FluidDomainContracts.ExactChemicalTransfer extracted = domain.tryExtractExactChemical(
 				cell[0], cell[1], cell[2], requested, maxRadius, ledger -> {
 					try {
 						plannedNanos[0] = settledNanos(domain.unitScale(), ledger.totalNormalizedVolume(), capacityNanos);
@@ -264,13 +266,13 @@ final class MinecraftContainerTransferOperations {
 			long capacityNanos, int maxRadius
 	) {
 		if (capacityNanos <= 0L) return null;
-		FluidDomain domain = region.domain();
+		HostFluidState domain = region.editableHost();
 		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), capacityNanos);
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
 					"容器余量小于 solver 可表示体积");
 		}
-		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+		FluidDomainContracts.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius);
 		if (!extracted.transferred() || extracted.portions().isEmpty()) {
 			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
@@ -317,8 +319,8 @@ final class MinecraftContainerTransferOperations {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"颗粒容器 registry、组成或热状态无法表示本次分量：" + invalid.getMessage());
 		}
-		var domain = region.domain();
-		FluidDomain.GranularInsertion inserted = energies == null
+		var domain = region.editableHost();
+		FluidDomainContracts.GranularInsertion inserted = energies == null
 				? domain.tryInsertExactGranular(cell[0], cell[1], cell[2], ledger, maxRadius, externalSource)
 				: domain.tryInsertExactGranular(cell[0], cell[1], cell[2], ledger, maxRadius, externalSource, energies.selectedEnergy());
 		if (!inserted.inserted()) {
@@ -347,7 +349,7 @@ final class MinecraftContainerTransferOperations {
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, long capacitySvq, int maxRadius
 	) {
 		GranularContents[] planned = new GranularContents[1];
-		FluidDomain.GranularExtraction extracted = region.domain().tryExtractExactGranular(
+		FluidDomainContracts.GranularExtraction extracted = region.editableHost().tryExtractExactGranular(
 				cell[0], cell[1], cell[2], capacitySvq, maxRadius, false, ledger -> {
 					try {
 						planned[0] = GranularContents.fromLedger(ledger, world.granularRegistry(),
@@ -364,7 +366,7 @@ final class MinecraftContainerTransferOperations {
 		long taken = extracted.ledger().totalSolidVolumeSvq();
 		if (taken != planned[0].totalSolidVolumeSvq()) throw new IllegalStateException("颗粒舀取 SVQ 账本不一致");
 		ItemStack after = ContainerItemStacks.toStack(planned[0]);
-		Double carriedEnergy = region.domain().hasThermalState() ? extracted.internalEnergy() : null;
+		Double carriedEnergy = region.editableHost().hasThermalState() ? extracted.internalEnergy() : null;
 		if (carriedEnergy != null) {
 			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), carriedEnergy);
 			region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
@@ -377,16 +379,16 @@ final class MinecraftContainerTransferOperations {
 
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
 	static FluidMixture mixtureFromExtraction(
-			FluidDomain domain, java.util.List<FluidDomain.MaterialPortion> portions, long capacityNanos
+			HostFluidState domain, java.util.List<FluidDomainContracts.MaterialPortion> portions, long capacityNanos
 	) {
 		double totalVolume = 0.0;
-		for (FluidDomain.MaterialPortion portion : portions) totalVolume += portion.volume();
+		for (FluidDomainContracts.MaterialPortion portion : portions) totalVolume += portion.volume();
 		long totalNanos = settledNanos(domain.unitScale(), totalVolume, capacityNanos);
 		long remainingNanos = totalNanos;
 		double remainingVolume = totalVolume;
 		java.util.List<FluidMixture.Component> components = new java.util.ArrayList<>(portions.size());
 		for (int i = 0; i < portions.size(); i++) {
-			FluidDomain.MaterialPortion portion = portions.get(i);
+			FluidDomainContracts.MaterialPortion portion = portions.get(i);
 			int componentsLeft = portions.size() - i;
 			long nanos = componentsLeft == 1 ? remainingNanos
 					: Math.max(1L, Math.min(remainingNanos - (componentsLeft - 1L),
@@ -400,14 +402,14 @@ final class MinecraftContainerTransferOperations {
 		return new FluidMixture(components);
 	}
 
-	static java.util.List<FluidDomain.MaterialPortion> planMaterialInsertion(
-			FluidDomain domain, FluidMixture mixture
+	static java.util.List<FluidDomainContracts.MaterialPortion> planMaterialInsertion(
+			HostFluidState domain, FluidMixture mixture
 	) {
 		return planMaterialInsertion(domain, mixture, mixture.totalVolumeNanos());
 	}
 
-	static java.util.List<FluidDomain.MaterialPortion> planMaterialInsertion(
-			FluidDomain domain, FluidMixture mixture, long maximumNanos
+	static java.util.List<FluidDomainContracts.MaterialPortion> planMaterialInsertion(
+			HostFluidState domain, FluidMixture mixture, long maximumNanos
 	) {
 		long selected = Math.min(maximumNanos, mixture.totalVolumeNanos());
 		double[] weights = mixture.components().stream().mapToDouble(FluidMixture.Component::volumeNanos).toArray();
@@ -415,7 +417,7 @@ final class MinecraftContainerTransferOperations {
 		for (int i = 0; i < ids.length; i++) ids[i] = i;
 		long[] nanos = mmm.chemistry.BinaryVolumeAllocator.allocate(selected, weights, ids);
 		int index = 0;
-		java.util.List<FluidDomain.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
+		java.util.List<FluidDomainContracts.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
 		for (FluidMixture.Component component : mixture.components()) {
 			int handle = domain.materialRegistry().handle(component.materialId());
 			float plannedVolume = nanosToCellVolumeAtMost(domain.unitScale(), nanos[index++]);
@@ -423,15 +425,15 @@ final class MinecraftContainerTransferOperations {
 			if (plannedNanos <= 0L) throw new IllegalArgumentException(
 					"材料组分小于 solver 可表示体积：" + component.materialId());
 			long plannedMassUnits = mmm.units.Mass.portion(component.massUnits(), plannedNanos, component.volumeNanos());
-			portions.add(new FluidDomain.MaterialPortion(
+			portions.add(new FluidDomainContracts.MaterialPortion(
 					handle, plannedVolume, plannedMassUnits));
 		}
 		return java.util.List.copyOf(portions);
 	}
 
 	static MaterialInsertionSettlement settleMaterialInsertion(
-			FluidDomain domain, FluidMixture sourceMixture,
-			java.util.List<FluidDomain.MaterialPortion> insertedPortions
+			HostFluidState domain, FluidMixture sourceMixture,
+			java.util.List<FluidDomainContracts.MaterialPortion> insertedPortions
 	) {
 		if (insertedPortions.size() != sourceMixture.components().size()) {
 			throw new IllegalStateException("材料注入返回的组分数与请求不一致");
@@ -441,7 +443,7 @@ final class MinecraftContainerTransferOperations {
 		long insertedNanos = 0L;
 		for (int i = 0; i < sourceMixture.components().size(); i++) {
 			FluidMixture.Component source = sourceMixture.components().get(i);
-			FluidDomain.MaterialPortion actual = insertedPortions.get(i);
+			FluidDomainContracts.MaterialPortion actual = insertedPortions.get(i);
 			long componentNanos = settledNanos(domain.unitScale(), actual.volume(), source.volumeNanos());
 			insertedNanos = Math.addExact(insertedNanos, componentNanos);
 			long remainingNanos = source.volumeNanos() - componentNanos;
@@ -484,7 +486,7 @@ final class MinecraftContainerTransferOperations {
 		} catch (RuntimeException invalid) {
 			return "容器热状态损坏或与物质库存不一致；转移保持不变";
 		}
-		if (!region.domain().hasThermalState()) {
+		if (!region.hasThermalState()) {
 			return contents == null ? null : "带热真值的容器不能转入未启用热状态的区域";
 		}
 		boolean sourceRequired = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR || kind == TransferKind.GRANULAR_POUR
@@ -574,7 +576,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static long extractableNanos(
-			FluidDomain domain, int[] cell, long capacityNanos, int maxRadius, int materialHandle
+			HostFluidState domain, int[] cell, long capacityNanos, int maxRadius, int materialHandle
 	) {
 		if (capacityNanos <= 0L) return 0L;
 		double availableCellVolume = domain.containerExtractableVolumeNear(

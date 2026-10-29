@@ -16,14 +16,14 @@ import java.util.List;
  * coordinator. Every fallible audit check happens during planning.
  */
 final class CondensedInventoryClearPlanner {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	CondensedInventoryClearPlanner(FluidDomain domain) {
+	CondensedInventoryClearPlanner(HostFluidState domain) {
 		this.domain = domain;
 	}
 
 	/** Completes every fallible liquid-clear audit check without changing marker truth. */
-	FluidDomain.WaterClearPlan planWater() {
+	FluidDomainContracts.WaterClearPlan planWater() {
 		ChemicalTransferLedger drained = ChemicalTransferLedger.EMPTY;
 		if (domain.chemistry != null) {
 			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(domain.chemistry.registry());
@@ -32,7 +32,7 @@ final class CondensedInventoryClearPlanner {
 					stock.volumeFraction(), stock.massUnits(), stock.mixture());
 			drained = builder.build();
 		}
-		return new FluidDomain.WaterClearPlan(domain.liquidCells.size(),
+		return new FluidDomainContracts.WaterClearPlan(domain.liquidCells.size(),
 				Double.doubleToRawLongBits(domain.totalVolumeExact()),
 				domain.totalMassUnits(), drained,
 				domain.thermalState == null ? SignedDyadic.ZERO
@@ -42,8 +42,8 @@ final class CondensedInventoryClearPlanner {
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
-	FluidDomain.CondensedClearPlan planCondensed() {
-		FluidDomain.WaterClearPlan liquid = planWater();
+	FluidDomainContracts.CondensedClearPlan planCondensed() {
+		FluidDomainContracts.WaterClearPlan liquid = planWater();
 		List<CoherentPhaseStore.Group> groups = domain.thermalState == null
 				? List.of() : domain.thermalState.coherentPhases().snapshot();
 		ChemicalTransferLedger coherentChemistry = ChemicalTransferLedger.EMPTY;
@@ -68,7 +68,7 @@ final class CondensedInventoryClearPlanner {
 				? SignedDyadic.ZERO : domain.thermalState.coherentPhases().exactEnergy();
 		long coherentSvq = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalOccupiedSvq();
 		long coherentMass = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalMassUnits();
-		return new FluidDomain.CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
+		return new FluidDomainContracts.CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
 				coherentMass,
 				domain.domainFlowFields.carrierMutationRevision(),
 				domain.chemistry == null ? null : domain.chemistry.planAuditExchange(ChemicalTransferLedger.EMPTY,drained));

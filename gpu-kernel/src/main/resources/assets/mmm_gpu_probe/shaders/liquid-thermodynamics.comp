@@ -1,75 +1,157 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) buffer Candidate { uint words[]; };
-layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int count; int stage; } p;
-int h(int i){return int(words[p.header+i]);}
-int field(int i){return h(16+i);}
-double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
-int64_t quantity(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
-void store(int at,double x){if(isnan(x)||isinf(x))atomicOr(errors,16384u);uvec2 bits=unpackDouble2x32(x);words[at]=bits.x;words[at+1]=bits.y;}
-void stockState(int stock){
-    store(h(10)+2*stock,0.0);store(h(11)+2*stock,0.0);store(h(12)+2*stock,0.0);
-    bool live=stock<h(40)?stock<int(words[field(0)]):h(41)>=0&&stock-h(40)<int(words[h(41)]);
-    if(!live)return;
-    double mass=double(quantity(field(8)+2*stock))*1e-10;
-    if(mass==0.0)return;
-    int material=int(words[field(2)+stock]);if(mass<0.0||material<0||material>=h(1)){atomicOr(errors,16384u);return;}
-    double base=mass*value(h(3)+2*material),energy=value(field(9)+2*stock);
-    for(int item=int(words[field(11)+stock]);item<int(words[field(11)+stock+1]);item++){
-        int species=int(words[field(12)+item]);if(species<0||species>=h(2)){atomicOr(errors,16384u);return;}
-        base+=double(quantity(field(13)+2*item))*value(h(4)+2*(material*h(2)+species));
-    }
-    int first=int(words[h(5)+material]),last=int(words[h(5)+material+1])-1,segment=first;
-    if(last<first||isnan(base)||isinf(base)){atomicOr(errors,16384u);return;}
-    double temperature=value(h(8)+2*material),remaining=energy-base,capacity=0.0;
-    while(segment<last&&temperature>=value(h(6)+2*segment))segment++;
-    if(remaining>=0.0){
-        for(;;segment++){
-            capacity=mass*value(h(7)+2*segment);double upper=value(h(6)+2*segment),span=(upper-temperature)*capacity;
-            if(segment==last||remaining<span){temperature+=remaining/capacity;break;}
-            remaining-=span;temperature=upper;
-        }
-    }else{
-        remaining=-remaining;
-        for(;;segment--){
-            capacity=mass*value(h(7)+2*segment);double lower=segment==first?0.0:value(h(6)+2*(segment-1)),span=(temperature-lower)*capacity;
-            if(segment==first||remaining<=span){temperature-=remaining/capacity;break;}
-            remaining-=span;temperature=lower;
-        }
-    }
-    double minimum=value(p.header+44);
-    if(temperature<minimum-1e-7||capacity<=0.0){atomicOr(errors,16384u);return;}
-    store(h(10)+2*stock,max(minimum,temperature));store(h(11)+2*stock,capacity);
-    store(h(12)+2*stock,min(energy,fma(mass,value(h(9)+2*material),base)));
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Candidate {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int count;
+    int stage;
 }
-void cellState(int cell){
-    int begin=int(words[field(1)+cell]),end=int(words[field(1)+cell+1]);
-    double remaining=0.0,temperature=value(p.header+44),capacity=0.0;
-    for(int stock=begin;stock<end;stock++)if(quantity(field(8)+2*stock)>int64_t(0))
-        remaining+=value(field(9)+2*stock)-value(h(12)+2*stock);
-    if(begin==end){store(h(13)+2*cell,0.0);store(h(14)+2*cell,0.0);return;}
+p;
+// HOST_LAYOUT
+int h(int i) {
+    return int(words[p.header + i]);
+}
+double value(int at) {
+    return packDouble2x32(uvec2(words[at], words[at + 1]));
+}
+int64_t quantity(int at) {
+    return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32));
+}
+void store(int at, double x) {
+    if (isnan(x) || isinf(x))
+        atomicOr(errors, 16384u);
+    uvec2 bits = unpackDouble2x32(x);
+    words[at] = bits.x;
+    words[at + 1] = bits.y;
+}
+void stockState(int stock) {
+    store(h(CAL_TEMPERATURES) + 2 * stock, 0.0);
+    store(h(CAL_HEAT_CAPACITIES) + 2 * stock, 0.0);
+    store(h(CAL_COLD_ENERGIES) + 2 * stock, 0.0);
+    bool live =
+        stock < h(CAL_SECONDARY_BEGIN)
+            ? stock < int(words[h(CAL_COUNTS)])
+            : h(CAL_SECONDARY_COUNTS) >= 0 && stock - h(CAL_SECONDARY_BEGIN) < int(words[h(CAL_SECONDARY_COUNTS)]);
+    if (!live)
+        return;
+    double mass = double(quantity(h(CAL_MASSES) + 2 * stock)) * 1e-10;
+    if (mass == 0.0)
+        return;
+    int material = int(words[h(CAL_MATERIALS) + stock]);
+    if (mass < 0.0 || material < 0 || material >= h(CAL_MATERIAL_COUNT)) {
+        atomicOr(errors, 16384u);
+        return;
+    }
+    double base = mass * value(h(CAL_MATERIAL_REFERENCE) + 2 * material), energy = value(h(CAL_ENERGIES) + 2 * stock);
+    for (int item = int(words[h(CAL_SPECIES_OFFSETS) + stock]); item < int(words[h(CAL_SPECIES_OFFSETS) + stock + 1]);
+         item++) {
+        int species = int(words[h(CAL_SPECIES_HANDLES) + item]);
+        if (species < 0 || species >= h(CAL_SPECIES_STRIDE)) {
+            atomicOr(errors, 16384u);
+            return;
+        }
+        base += double(quantity(h(CAL_SPECIES_AMOUNTS) + 2 * item)) *
+                value(h(CAL_SPECIES_REFERENCE) + 2 * (material * h(CAL_SPECIES_STRIDE) + species));
+    }
+    int first = int(words[h(CAL_SEGMENT_OFFSETS) + material]),
+        last = int(words[h(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
+    if (last < first || isnan(base) || isinf(base)) {
+        atomicOr(errors, 16384u);
+        return;
+    }
+    double temperature = value(h(CAL_REFERENCE_TEMPERATURE) + 2 * material), remaining = energy - base, capacity = 0.0;
+    while (segment < last && temperature >= value(h(CAL_SEGMENT_UPPER) + 2 * segment))
+        segment++;
+    if (remaining >= 0.0) {
+        for (;; segment++) {
+            capacity = mass * value(h(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            double upper = value(h(CAL_SEGMENT_UPPER) + 2 * segment), span = (upper - temperature) * capacity;
+            if (segment == last || remaining < span) {
+                temperature += remaining / capacity;
+                break;
+            }
+            remaining -= span;
+            temperature = upper;
+        }
+    } else {
+        remaining = -remaining;
+        for (;; segment--) {
+            capacity = mass * value(h(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            double lower = segment == first ? 0.0 : value(h(CAL_SEGMENT_UPPER) + 2 * (segment - 1)),
+                   span = (temperature - lower) * capacity;
+            if (segment == first || remaining <= span) {
+                temperature -= remaining / capacity;
+                break;
+            }
+            remaining -= span;
+            temperature = lower;
+        }
+    }
+    double minimum = value(p.header + CAL_MINIMUM_TEMPERATURE);
+    if (temperature < minimum - 1e-7 || capacity <= 0.0) {
+        atomicOr(errors, 16384u);
+        return;
+    }
+    store(h(CAL_TEMPERATURES) + 2 * stock, max(minimum, temperature));
+    store(h(CAL_HEAT_CAPACITIES) + 2 * stock, capacity);
+    store(h(CAL_COLD_ENERGIES) + 2 * stock, min(energy, fma(mass, value(h(CAL_COLD_SENSIBLE) + 2 * material), base)));
+}
+void cellState(int cell) {
+    int begin = int(words[h(CAL_CELL_OFFSETS) + cell]), end = int(words[h(CAL_CELL_OFFSETS) + cell + 1]);
+    double remaining = 0.0, temperature = value(p.header + CAL_MINIMUM_TEMPERATURE), capacity = 0.0;
+    for (int stock = begin; stock < end; stock++)
+        if (quantity(h(CAL_MASSES) + 2 * stock) > int64_t(0))
+            remaining += value(h(CAL_ENERGIES) + 2 * stock) - value(h(CAL_COLD_ENERGIES) + 2 * stock);
+    if (begin == end) {
+        store(h(CAL_CELL_TEMPERATURES) + 2 * cell, 0.0);
+        store(h(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, 0.0);
+        return;
+    }
     // Each pass crosses one of the actual material knots; terminal segments extend upward.
-    for(;;){
-        capacity=0.0;double next=1.7976931348623157e308;
-        for(int stock=begin;stock<end;stock++){
-            double mass=double(quantity(field(8)+2*stock))*1e-10;if(mass<=0.0)continue;
-            int material=int(words[field(2)+stock]),first=int(words[h(5)+material]),last=int(words[h(5)+material+1])-1,segment=first;
-            while(segment<last&&temperature>=value(h(6)+2*segment))segment++;
-            capacity+=mass*value(h(7)+2*segment);
-            if(segment<last)next=min(next,value(h(6)+2*segment));
+    for (;;) {
+        capacity = 0.0;
+        double next = 1.7976931348623157e308;
+        for (int stock = begin; stock < end; stock++) {
+            double mass = double(quantity(h(CAL_MASSES) + 2 * stock)) * 1e-10;
+            if (mass <= 0.0)
+                continue;
+            int material = int(words[h(CAL_MATERIALS) + stock]), first = int(words[h(CAL_SEGMENT_OFFSETS) + material]),
+                last = int(words[h(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
+            while (segment < last && temperature >= value(h(CAL_SEGMENT_UPPER) + 2 * segment))
+                segment++;
+            capacity += mass * value(h(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            if (segment < last)
+                next = min(next, value(h(CAL_SEGMENT_UPPER) + 2 * segment));
         }
-        if(capacity<=0.0){store(h(13)+2*cell,0.0);store(h(14)+2*cell,0.0);return;}
-        double span=(next-temperature)*capacity;
-        if(next==1.7976931348623157e308||remaining<span){temperature+=remaining/capacity;break;}
-        remaining-=span;temperature=next;
+        if (capacity <= 0.0) {
+            store(h(CAL_CELL_TEMPERATURES) + 2 * cell, 0.0);
+            store(h(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, 0.0);
+            return;
+        }
+        double span = (next - temperature) * capacity;
+        if (next == 1.7976931348623157e308 || remaining < span) {
+            temperature += remaining / capacity;
+            break;
+        }
+        remaining -= span;
+        temperature = next;
     }
-    store(h(13)+2*cell,temperature);store(h(14)+2*cell,capacity);
+    store(h(CAL_CELL_TEMPERATURES) + 2 * cell, temperature);
+    store(h(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, capacity);
 }
-void main(){
-    int item=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(item>=p.count||errors!=0u)return;
-    if(p.stage==0)stockState(item);else cellState(item);
+void main() {
+    int item = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if (item >= p.count || errors != 0u)
+        return;
+    if (p.stage == 0)
+        stockState(item);
+    else
+        cellState(item);
 }

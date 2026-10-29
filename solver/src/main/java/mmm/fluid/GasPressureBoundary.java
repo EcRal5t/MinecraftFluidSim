@@ -12,9 +12,9 @@ import java.util.List;
  * knob stays a domain method that books its own audit.
  */
 public final class GasPressureBoundary {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	GasPressureBoundary(FluidDomain domain) {
+	GasPressureBoundary(HostFluidState domain) {
 		this.domain = domain;
 	}
 

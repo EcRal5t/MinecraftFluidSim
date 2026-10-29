@@ -6,7 +6,7 @@ import mmm.application.RegionCatalog;
 import mmm.application.port.RegionCheckpointPort;
 import mmm.application.result.CheckpointRegionResult;
 import mmm.chemistry.ChemicalRegistry;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
 import mmm.granular.GranularRegistry;
@@ -118,12 +118,12 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		return persistence.stageCheckpoint(region, target);
 	}
 	RegionRepositoryAdapter.StagedCheckpoint stageLifecycleCheckpoint(
-			FluidRegion region, FluidDomain candidateDomain, long target
+			FluidRegion region, HostFluidState candidateDomain, long target
 	) throws IOException {
 		return persistence.stageLifecycleCheckpoint(region, candidateDomain, target);
 	}
 	RegionRepositoryAdapter.StagedCheckpoint stageContainerCheckpoint(
-			FluidRegion region, FluidDomain candidateDomain, long target, boolean operatorPaused
+			FluidRegion region, HostFluidState candidateDomain, long target, boolean operatorPaused
 	) throws IOException {
 		return persistence.stageCandidateCheckpoint(region, candidateDomain, target, operatorPaused);
 	}
@@ -256,13 +256,14 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 							"正在加载已提交 section：" + progress.loadedSections() + "/" + progress.totalSections());
 					return false;
 				}
+				if (!prepareDeviceState(region)) return false;
 				MinecraftGroupAvailability.prepare(level, region);
 				collisionRefresher.refresh(level, region);
 				region.markCollisionRefreshed();
 				retryAt.remove(region.id());
 				checkpointFailures.remove(region.id());
 				MmmMod.LOGGER.info("Restored controller region {} from checkpoint {} with {} markers",
-						region.id(), region.checkpointGeneration(), region.domain().particleCount());
+						region.id(), region.checkpointGeneration(), region.liquidRowCount());
 				snapshotSender.send(level, region);
 			} catch (mmm.simulation.persistence.RegionGenerationStore.StaleReadViewException changed) {
 				region.setAvailabilityFailure(RegionAvailabilityReason.SECTION_LOADING,
@@ -277,9 +278,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				return false;
 			}
 		}
+        if (!prepareDeviceState(region)) return false;
         boolean anyAvailable=MinecraftGroupAvailability.prepare(level, region);
         if(!anyAvailable) {
-            region.setAvailabilityFailure(RegionAvailabilityReason.CHUNK_MISSING,"All physical groups are waiting for world chunks");
+            region.setAvailabilityFailure(RegionAvailabilityReason.CHUNK_MISSING,"Region is waiting for world chunks");
             return false;
         }
 		if (region.checkpointGeneration() == 0L) {
@@ -300,6 +302,11 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		if (region.collisionRefreshRequired()) {
 			collisionRefresher.refresh(level, region);
 			region.markCollisionRefreshed();
+			if (!MinecraftGroupAvailability.prepare(level, region)) {
+				region.setAvailabilityFailure(RegionAvailabilityReason.CHUNK_MISSING,
+						"Region is waiting for world chunks after collision changes");
+				return false;
+			}
 		}
 		if (numericalPaused) region.setAvailabilityFailure(
 				RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
@@ -307,6 +314,18 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
 		else region.setAvailabilityFailure(null);
 		return true;
+	}
+
+	/** Import saved geometry so partial availability can be resolved before world collision edits. */
+	private static boolean prepareDeviceState(FluidRegion region) {
+		try {
+			region.ensureDeviceResident();
+			return !region.pauseForUnavailableDevice();
+		} catch (RuntimeException failure) {
+			if (!region.pauseForUnavailableDevice())
+				region.blockNumerical("Vulkan 区域导入失败：" + failure.getMessage());
+			return false;
+		}
 	}
 
 	void unloadForFailure(

@@ -157,7 +157,7 @@ public final class MinecraftRegionActivation {
 				candidate -> {
 					regionTick.refreshRegionInputs(level, candidate);
 					if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
-					world.bindConfiguredState(candidate.domain(), maximumThermalSubstepsPerStep);
+					world.bindConfiguredState(candidate.editableHost(), maximumThermalSubstepsPerStep);
 					regionTick.initializeThermalBoundary(level, candidate);
 				}, candidate -> {
 					if (!creationPlan.profileFingerprint().equals(world.profile().profileFingerprint())

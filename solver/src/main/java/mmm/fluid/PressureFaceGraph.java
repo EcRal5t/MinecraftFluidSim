@@ -5,7 +5,7 @@ import java.util.Arrays;
 /** Prepares wet supports, hydrostatic contact loads and sparse face incidence from committed geometry. */
 final class PressureFaceGraph {
 	interface SideConsumer { void accept(int row, double weight, double fixedPressure); }
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	final int[] offsets;
 	final int faceCount;
 	final int[] firstCell, secondCell, axis, localFace, start, pressureSupports;
@@ -33,7 +33,7 @@ final class PressureFaceGraph {
 	private final SideConsumer assemblySide = (row, weight, fixed) ->
 			add(assemblyFace, row, assemblyCoefficient * weight, fixed);
 
-	PressureFaceGraph(FluidDomain domain, boolean[] anchored) {
+	PressureFaceGraph(HostFluidState domain, boolean[] anchored) {
 		this.domain = domain;
 		var incidence=domain.geometry.cutCells.snapshot().faceIncidence();
 		offsets=incidence.offsets;faceCount=incidence.faceCount;

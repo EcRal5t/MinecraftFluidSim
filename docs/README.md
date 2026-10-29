@@ -27,6 +27,8 @@
 | 世界归属、容器载荷、WAL 与恢复分类 | [事务参考](architecture/world-ownership-and-containers.md) |
 | 外部查询、提交事件、线程和单位 | [接口参考](architecture/external-api.md) |
 | 后续玩家能力、产品阶段与范围 | [长期产品路线](roadmap/product-roadmap.md) |
+| 下一轮 GPU 单一实现、编辑／恢复迁移及 CPU 路径删除 | [GPU 执行链主线化计划](roadmap/gpu-mainline-execution-plan.md) |
+| GPU 主线化之后的基础物理、热传质、化学与组合工艺交付 | [仿真能力补全计划](roadmap/simulation-capability-completion-plan.md) |
 | 范围扩张与完整 GPU 后端要求 | [后端扩展参考](roadmap/performance-and-backends.md) |
 | GPU 重设计的固定方法原则、调研依据与换轨条件 | [GPU 完整步重设计只读备忘录](architecture/gpu-execution-principles.md) |
 | 发布检查与部署 | [验收与发布](roadmap/acceptance-and-release.md) |

@@ -1,6 +1,8 @@
 package mmm.simulation;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidDomainContracts;
+
+import mmm.fluid.HostFluidState;
 import mmm.fluid.GasTopologyBlockedException;
 import mmm.granular.GranularMechanics;
 import net.minecraft.core.BlockPos;
@@ -92,19 +94,19 @@ public final class MinecraftRegionOperatorActions {
 		if (!availability.ensure(level, region)) return -1;
 		try {
 			stepRegion(region, count, motion);
-		} catch (FluidDomain.PressureSolveBlockedException blocked) {
+		} catch (FluidDomainContracts.PressureSolveBlockedException blocked) {
 			regionTick.blockNumerical(level, region, blocked);
 			return -1;
 		} catch (GasTopologyBlockedException blocked) {
 			regionTick.blockGasTopology(level, region, blocked);
 			return -1;
-		} catch (FluidDomain.ThermalTransportBlockedException blocked) {
+		} catch (FluidDomainContracts.ThermalTransportBlockedException blocked) {
 			regionTick.blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
-		} catch (FluidDomain.GasThermalBlockedException blocked) {
+		} catch (FluidDomainContracts.GasThermalBlockedException blocked) {
 			regionTick.blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
-		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
+		} catch (FluidDomainContracts.ThermalPhaseBlockedException blocked) {
 			regionTick.blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return -1;
 		} catch (GranularMechanics.ValidityExceededException invalid) {
@@ -135,12 +137,17 @@ public final class MinecraftRegionOperatorActions {
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, false);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
-		float requested = (float) region.domain().unitScale().normalizedVolume(buckets);
-		FluidDomain.VolumeAddition addition = region.domain().addVolumeNearBudgeted(
+		long generation = region.solverGeneration();
+		HostFluidState edit = region.beginHostEdit();
+		float requested = (float) edit.unitScale().normalizedVolume(buckets);
+		FluidDomainContracts.VolumeAddition addition = edit.addVolumeNearBudgeted(
 				target.x(), target.y(), target.z(), requested, 6);
-		if (addition.addedVolume() > 0.0F) region.wakeForActivity();
+		if (addition.addedVolume() > 0.0F) {
+			region.commitHostEdit(generation, edit);
+			region.wakeForActivity();
+		}
 		sendSnapshot(player.level());
-		return new WaterEditResult(true, target, buckets, region.domain().unitScale().cubicMeters(addition.addedVolume()),
+		return new WaterEditResult(true, target, buckets, edit.unitScale().cubicMeters(addition.addedVolume()),
 				addition.markerBudgetLimited(), null);
 	}
 
@@ -154,11 +161,16 @@ public final class MinecraftRegionOperatorActions {
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, true);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
-		float requested = (float) region.domain().unitScale().normalizedVolume(buckets);
-		float changed = region.domain().removeVolumeNear(target.x(), target.y(), target.z(), requested, 6);
-		if (changed > 0.0F) region.wakeForActivity();
+		long generation = region.solverGeneration();
+		HostFluidState edit = region.beginHostEdit();
+		float requested = (float) edit.unitScale().normalizedVolume(buckets);
+		float changed = edit.removeVolumeNear(target.x(), target.y(), target.z(), requested, 6);
+		if (changed > 0.0F) {
+			region.commitHostEdit(generation, edit);
+			region.wakeForActivity();
+		}
 		sendSnapshot(player.level());
-		return new WaterEditResult(true, target, buckets, region.domain().unitScale().cubicMeters(changed), false, null);
+		return new WaterEditResult(true, target, buckets, edit.unitScale().cubicMeters(changed), false, null);
 	}
 
 	public CollisionRefreshResult refreshCollisions(ServerLevel level) {
@@ -168,7 +180,7 @@ public final class MinecraftRegionOperatorActions {
 		if (availability.ensure(level, region)) {
 			try {
 				stats = regionTick.refreshRegionInputs(level, region);
-			} catch (FluidDomain.CollisionEditBlockedException blocked) {
+			} catch (FluidDomainContracts.CollisionEditBlockedException blocked) {
 				regionTick.blockCollisionEdit(level, region, blocked);
 				throw blocked;
 			}
@@ -210,27 +222,29 @@ public final class MinecraftRegionOperatorActions {
 			return "清空失败：流体域当前不可用：" + region.availabilityFailure();
 		}
 		if (availability.hasPending(region.id())) return "清空失败：区域存在未完成或不可识别的跨域事务 WAL";
-		FluidDomain domain = region.domain();
+		long generation = region.solverGeneration();
+		HostFluidState domain = region.beginHostEdit();
 		if (domain.hasPendingPhaseMotionWork()) return "清空失败：区域相变后尚未完成下一次机械推进";
 		double beforeCubicMeters = domain.unitScale().cubicMeters(domain.totalVolumeExact());
 		int beforeParticles = domain.particleCount();
-		FluidDomain.OperatorClearPlan clearPlan;
+		FluidDomainContracts.OperatorClearPlan clearPlan;
 		try {
 			clearPlan = domain.planOperatorClear();
 		} catch (RuntimeException failure) {
 			return "清空失败：联合液体/coherent/颗粒预检未通过，活动库存未改变：" + failure.getMessage();
 		}
-		FluidDomain.OperatorClear cleared;
+		FluidDomainContracts.OperatorClear cleared;
 		try {
 			cleared = domain.commitOperatorClear(clearPlan);
+			region.commitHostEdit(generation, domain);
 		} catch (RuntimeException failure) {
 			region.setPaused(true);
 			region.setAvailabilityFailure("empty 联合提交违反已预检不变量：" + failure.getMessage());
 			return "清空联合提交失败；区域已暂停：" + failure.getMessage();
 		}
 		region.wakeForActivity();
-		FluidDomain.CondensedClear condensed = cleared.condensed();
-		FluidDomain.GranularClear granular = cleared.granular();
+		FluidDomainContracts.CondensedClear condensed = cleared.condensed();
+		FluidDomainContracts.GranularClear granular = cleared.granular();
 		sendSnapshot(level, region);
 		return String.format("已清空区域：%s 液体（%d 个 marker），%d SVQ coherent（%d groups），%d SVQ 颗粒（active %d，deposit groups %d）",
 				mmm.units.UnitFormat.volume(beforeCubicMeters), beforeParticles, condensed.coherentVolumeSvq(), condensed.coherentGroups(),

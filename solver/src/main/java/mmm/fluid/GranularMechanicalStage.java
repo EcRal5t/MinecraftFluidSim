@@ -5,9 +5,9 @@ import mmm.granular.SolidVolume;
 
 /** Moves the jointly pressure-projected solid velocity through the collision-resolved position endpoint. */
 final class GranularMechanicalStage {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	private boolean collisionPending;
-	GranularMechanicalStage(FluidDomain domain) { this.domain = domain; }
+	GranularMechanicalStage(HostFluidState domain) { this.domain = domain; }
 
 	private void addBoundaryImpulse(FlipGranularCollision.BoundaryImpulse impulse) {
 		domain.lastGranularBoundaryImpulseX += impulse.x();
@@ -62,12 +62,12 @@ final class GranularMechanicalStage {
 		domain.granularCollision.preview(state.parcels, state.registry, dt, domain.activityGroups::parcelAvailable);
 		domain.granularNextCoupling.rebuild(state.parcels, state.deposits,
 				domain.granularCollision::previewPosition);
-		if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
+		if (!domain.domainInventoryGeometry.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
 			domain.granularCollision.resolveCapacity(state.parcels, domain.granularCoupling,
 					cell -> Math.max(0, SolidVolume.fromCellVolumeExact(domain.geometry.cutCells.openCellVolume(cell)) - domain.entityBodyCoupling.occupied(cell)));
 				domain.granularNextCoupling.rebuild(state.parcels, state.deposits,
 					domain.granularCollision::previewPosition);
-			if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
+			if (!domain.domainInventoryGeometry.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
 				throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
 			}
 		}

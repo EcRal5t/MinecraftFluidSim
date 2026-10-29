@@ -30,12 +30,13 @@ import mmm.granular.SolidCompositionPool;
 import mmm.thermal.FiniteThermalExchange;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalDisplaySnapshot;
-import static mmm.fluid.FluidDomain.*;
+import static mmm.fluid.HostFluidState.*;
+import static mmm.fluid.FluidDomainContracts.*;
 
 /** Binds chemistry and thermal capabilities and exposes their actual inventory owners. */
 final class DomainCapabilities {
-	private final FluidDomain domain;
-	DomainCapabilities(FluidDomain domain) { this.domain = domain; }
+	private final HostFluidState domain;
+	DomainCapabilities(HostFluidState domain) { this.domain = domain; }
 	public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 	public RegionChemistry chemistry() {
 		if (domain.chemistry == null) throw new IllegalStateException("Chemistry is not bound");
@@ -332,21 +333,6 @@ final class DomainCapabilities {
 		domain.thermalBoundaryTemperatureK = temperaturesK.clone();
 		return true;
 	}
-	public ThermalTransport.Stats stepThermalOnly(double dtSeconds) {
-		return domain.thermochemistryPipeline.stepTransport(dtSeconds);
-	}
-	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
-		return domain.condensedPhaseChangeStage.step(maximumOperations);
-	}
-	public GasThermalPhaseStats stepGasPhaseChangeOnly(int maximumOperations) {
-		return domain.gasLiquidPhaseChangeStage.step(maximumOperations);
-	}
-	static long minimumPhaseBatchesForCapacity(
-			long occupiedSvq, long capacitySvq, long signedVolumeSvqPerBatch
-	) {
-		return CondensedPhaseChangeStage.minimumBatchesForCapacity(
-				occupiedSvq, capacitySvq, signedVolumeSvqPerBatch);
-	}
 	ThermalCarrierContext thermalMarkerContext() { return domain.thermalMarkers; }
 	ThermalCarrierContext createThermalMarkerContext() {
 		return new ThermalCarrierContext() {
@@ -402,7 +388,7 @@ final class DomainCapabilities {
 				return domain.granularState == null ? 0 : domain.granularState.parcels.count();
 			}
 			@Override public int activeParcelCell(int ordinal) {
-				return domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(ordinal));
+				return domain.domainInventoryGeometry.granularParcelCell(domain.granularState.parcels.parcel(ordinal));
 			}
 			@Override public int activeParcelMaterial(int ordinal) {
 				return domain.granularState.parcels.parcel(ordinal).materialHandle();

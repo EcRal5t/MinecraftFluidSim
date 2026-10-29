@@ -1,263 +1,888 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) buffer Arena { uint words[]; };
-layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header;int stage;int count;int color;double cellSize;double duration;double gravity; } p;
-const int CT=0,CC=1,CO=2,CU=3,CE=4,MODE=5,TARGET=6,MV=7,MM=8,POS=9,HEAT=10,BULK=11,BM=12,SURFACE=13,
- HK=14,HC=15,HO=16,AC=17,AO=18,DEST=19,RC=20,RO=21,RU=22,RE=23,SC=24,MAT=25,SCAN=26,SOLID=27,AVAILABLE=28,IMPULSE=29,LIFT=30,FINAL_ENERGY=31;
-int h(int i){return int(words[p.header+i]);}int dst(int f){return h(24+f);}int src(int f){return h(48+f);}int at(int f){return h(72+f);}
-int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int v){words[at(f)+i]=uint(v);}
-int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-void outint(int a,int64_t x){words[a]=uint(x);words[a+1]=uint(uint64_t(x)>>32);}
-double num(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
-void outnum(int a,double x){uvec2 q=unpackDouble2x32(x);words[a]=q.x;words[a+1]=q.y;}
-double read(int f,int i){return num(at(f)+2*i);}void write(int f,int i,double x){outnum(at(f)+2*i,x);}
-int64_t qty(int f,int i){return integer(at(f)+2*i);}void outqty(int f,int i,int64_t x){outint(at(f)+2*i,x);}
-double material(int m,int k){return num(at(MAT)+2*(7*m+k));}
-dvec3 vec(int a,int i){return dvec3(num(a+6*i),num(a+6*i+2),num(a+6*i+4));}
-void outvec(int a,int i,dvec3 v){for(int k=0;k<3;k++)outnum(a+6*i+2*k,v[k]);}
-ivec3 dims(){return ivec3(h(0),h(1),h(2));}int cell(ivec3 c){return (c.z*h(1)+c.y)*h(0)+c.x;}
-ivec3 coord(int c){return ivec3(c%h(0),c/h(0)%h(1),c/(h(0)*h(1)));}
-ivec3 location(dvec3 x){return clamp(ivec3(floor(x/p.cellSize)),ivec3(0),dims()-1);}
-int columnOf(int c){return c%h(0)+c/(h(0)*h(1))*h(0);}
-int activeCount(){return int(words[src(0)]);}int depositCount(){return int(words[src(0)+1]);}
-bool live(int row){return (row<h(3)?row<activeCount():row-h(3)<depositCount())&&integer(src(4)+2*row)>0l;}
-int sourceCell(int row){return row<h(3)?cell(location(vec(src(1),row))):int(words[src(16)+row-h(3)]);}
-int columnRow(int e){return get(CE,e);}
-double mass(int row){return double(integer(src(5)+2*row))*1e-10;}
-int64_t volume(int row){return integer(src(4)+2*row);}
-int materialOf(int row){return int(words[src(3)+row]);}
-double porosity(int row){return double(uintBitsToFloat(words[src(17)+row-h(3)]));}
-double bulkPortion(int row,int64_t amount){return double(amount)/(1.0-(row<h(3)?material(materialOf(row),2):porosity(row)));}
-int64_t portion(int64_t amount,int64_t n,int64_t d){return (amount/d)*n+((amount%d)*n)/d;}
-bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,8388608u);}
-double sphereRadius(int64_t svq){return p.cellSize*clamp(double(pow(float(3.0*double(svq)/16777216.0/(4.0*3.141592653589793)),1.0/3.0)),.02,.20);}
-double openSvq(int c){return double(bitCount((~words[h(11)+c])&255u))*2097152.0;}
-double bedHeight(int c,double b){uint mask=(~words[h(11)+c])&255u;double low=double(bitCount(mask&0x33u))*2097152.0,high=double(bitCount(mask&0xccu))*2097152.0;
- double y=b<=low?(low>0.0?.5*b/low:0.0):.5+(high>0.0?.5*(b-low)/high:0.0);return (double(coord(c).y)+clamp(y,0.0,1.0))*p.cellSize;}
-double bedCenter(int c,double b){if(b<=0.0)return double(coord(c).y)*p.cellSize;
- uint mask=(~words[h(11)+c])&255u;double low=double(bitCount(mask&0x33u))*2097152.0,high=double(bitCount(mask&0xccu))*2097152.0;
- double a=min(b,low),v=max(0.0,b-low),moment=(low>0.0?a*.25*a/low:0.0)+(high>0.0?v*(.5+.25*v/high):0.0);
- return (double(coord(c).y)+moment/b)*p.cellSize;}
-int surface(int column){int x=column%h(0),z=column/h(0);for(int y=h(1)-1;y>=0;y--){int c=cell(ivec3(x,y,z));if(read(BULK,c)>0.0)return c;}return -1;}
-bool sphereFits(dvec3 position,double radius,int exclude){
- if(any(lessThan(position,dvec3(radius)))||any(greaterThan(position,dvec3(dims())*p.cellSize-radius)))return false;
- ivec3 low=location(position-radius),high=location(position+radius);
- for(int z=low.z;z<=high.z;z++)for(int y=low.y;y<=high.y;y++)for(int x=low.x;x<=high.x;x++){
-  ivec3 c=ivec3(x,y,z);uint mask=words[h(11)+cell(c)];for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))!=0u){
-   dvec3 lo=(dvec3(c)+.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1))*p.cellSize,hi=lo+.5*p.cellSize;
-   if(length(position-clamp(position,lo,hi))<radius-1e-7*p.cellSize)return false;}
- }
- // The source spatial list remains immutable. Conservative rejection near an old active sphere
- // avoids simultaneous release overlap across independently processed columns.
- for(int z=max(0,low.z-1);z<=min(h(2)-1,high.z+1);z++)for(int x=max(0,low.x-1);x<=min(h(0)-1,high.x+1);x++){
-  int col=z*h(0)+x;for(int e=get(CO,col);e<get(CO,col+1);e++){int row=columnRow(e);if(row>=h(3)||row==exclude)continue;
-   if(length(position-vec(src(1),row))<radius+sphereRadius(volume(row))-1e-7*p.cellSize)return false;}
- }return true;
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Arena {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+    int color;
+    double cellSize;
+    double duration;
+    double gravity;
 }
-bool bedFits(int c,double b,int excluded){
- if(b>read(AVAILABLE,c)+1e-6)return false;ivec3 q=coord(c);double top=bedHeight(c,b);
- for(int z=max(0,q.z-1);z<=min(h(2)-1,q.z+1);z++)for(int x=max(0,q.x-1);x<=min(h(0)-1,q.x+1);x++){
-  int col=z*h(0)+x;for(int e=get(CO,col);e<get(CO,col+1);e++){
-   int row=columnRow(e);if(row>=h(3)||row==excluded)continue;dvec3 pos=vec(src(1),row);double r=sphereRadius(volume(row));
-   dvec3 lo=dvec3(q)*p.cellSize,hi=lo+p.cellSize;hi.y=top;
-   if(top>lo.y&&length(pos-clamp(pos,lo,hi))<r-1e-7*p.cellSize)return false;
-  }
- }return true;
+p;
+// HOST_LAYOUT
+int h(int i) {
+    return int(words[p.header + i]);
 }
-bool pathOpen(dvec3 a,dvec3 b,double radius){
- // Walk the fixed microboxes intersected by the swept sphere's axis-aligned enclosure.
- ivec3 low=location(min(a,b)-radius),high=location(max(a,b)+radius);dvec3 delta=b-a;
- for(int z=low.z;z<=high.z;z++)for(int y=low.y;y<=high.y;y++)for(int x=low.x;x<=high.x;x++){
-  ivec3 c=ivec3(x,y,z);uint mask=words[h(11)+cell(c)];for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))!=0u){
-   dvec3 lo=(dvec3(c)+.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1))*p.cellSize-radius,hi=lo+.5*p.cellSize+2.0*radius;
-   double near=0.0,far=1.0;bool hit=true;for(int axis=0;axis<3;axis++){
-    if(delta[axis]==0.0){if(a[axis]<lo[axis]||a[axis]>hi[axis])hit=false;}
-    else{double t0=(lo[axis]-a[axis])/delta[axis],t1=(hi[axis]-a[axis])/delta[axis];near=max(near,min(t0,t1));far=min(far,max(t0,t1));}
-   }if(hit&&near<far-1e-9&&far>1e-9&&near<1.0-1e-9)return false;
-  }
- }return true;
+int dst(int f) {
+    return h(TARGET_FIELDS + f);
 }
-void cellState(int c,double bulk,double kilograms,double solid){write(BULK,c,max(0.0,bulk));write(BM,c,max(0.0,kilograms));write(SOLID,c,max(0.0,solid));}
-void settleColumn(int col){
- bool changed=false;int x=col%h(0),z=col/h(0);
- for(int e=get(CO,col);e<get(CO,col+1);e++){
-  int row=columnRow(e);if(row>=h(3))continue;dvec3 pos=vec(src(1),row),velocity=vec(src(2),row);double radius=sphereRadius(volume(row));
-  double support=0.0;int sy=int(floor(pos.y/p.cellSize));
-  for(int y=0;y<=min(sy,h(1)-1);y++){int c=cell(ivec3(x,y,z));if(read(BULK,c)>0.0)support=max(support,bedHeight(c,read(BULK,c)));
-   uint mask=words[h(11)+c];for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))!=0u){
-    double top=(double(y)+.5*double((bit>>1)&1)+.5)*p.cellSize;
-    dvec2 lo=(dvec2(x,z)+.5*dvec2(bit&1,(bit>>2)&1))*p.cellSize;
-    if(top<=pos.y+1e-6*p.cellSize&&length(pos.xz-clamp(pos.xz,lo,lo+.5*p.cellSize))<radius)support=max(support,top);
-   }
-  }
-  bool supported=abs(pos.y-radius-support)<=1e-5*p.cellSize&&velocity.y<=1e-5*p.cellSize/p.duration;
-  int age=supported?min(2147483646,int(words[src(12)+row]))+1:0;words[src(12)+row]=uint(age);words[src(13)+row]=supported?1u:0u;
-  if(!supported||age<3)continue;
-  for(int y=0;y<=min(sy,h(1)-1);y++){
-   int c=cell(ivec3(x,y,z));double before=read(BULK,c),after=before+bulkPortion(row,volume(row));
-   if(!bedFits(c,after,row))continue;double center=bedCenter(c,after),oldCenter=bedCenter(c,before),m=mass(row),oldMass=read(BM,c);
-   double potential=p.gravity*(oldMass*(center-oldCenter)+m*(center-pos.y));if(potential>0.0)continue;
-   dvec3 destination=dvec3(pos.x,max(center+radius,double(y)*p.cellSize+radius),pos.z);
-   if(!pathOpen(pos,destination,radius))continue;
-   put(MODE,row,1);put(TARGET,row,c);write(HEAT,row,.5*m*dot(velocity,velocity)-potential);
-   outvec(at(IMPULSE),row,m*velocity);
-   cellState(c,after,oldMass+m,read(SOLID,c)+double(volume(row)));changed=true;atomicAdd(words[at(CT)+3],1u);break;
-  }
- }
- words[dst(19)+col]=changed?0u:min(20u,words[src(19)+col]+1u);put(SURFACE,col,surface(col));
+int src(int f) {
+    return h(SOURCE_FIELDS + f);
 }
-int exposed(int col,int c){int best=-1;for(int e=get(CO,col);e<get(CO,col+1);e++){int row=columnRow(e);
- if(row<h(3)||get(MODE,row)!=2||sourceCell(row)!=c)continue;if(best<0||volume(row)>volume(best)||volume(row)==volume(best)&&row<best)best=row;}return best;}
-void relaxPair(int col){
- int axis=p.color/2,parity=p.color%2;ivec2 a=ivec2(col%h(0),col/h(0));if((a[axis]&1)!=parity)return;
- ivec2 b=a;b[axis]++;if(b.x>=h(0)||b.y>=h(2))return;int other=b.y*h(0)+b.x;
- int ca=surface(col),cb=surface(other);double ha=ca<0?0.0:bedHeight(ca,read(BULK,ca)),hb=cb<0?0.0:bedHeight(cb,read(BULK,cb));
- int from=ha>=hb?col:other,to=ha>=hb?other:col,sourceCellIndex=ha>=hb?ca:cb;if(sourceCellIndex<0)return;
- int row=exposed(from,sourceCellIndex);if(row<0)return;int mat=materialOf(row);if(abs(ha-hb)<=p.cellSize*material(mat,3))return;
- int64_t take=min(volume(row),1048576l);if(words[src(6)+row]!=0u&&take!=volume(row))return;
- int64_t takenMass=portion(integer(src(5)+2*row),take,volume(row));if(takenMass<=0l)return;
- ivec3 sourceCoord=coord(sourceCellIndex);ivec2 targetColumn=ivec2(to%h(0),to/h(0));int targetCell=-1;
- for(int y=0;y<=sourceCoord.y;y++){int c=cell(ivec3(targetColumn.x,y,targetColumn.y));if(read(BULK,c)+bulkPortion(row,take)<=read(AVAILABLE,c)){targetCell=c;break;}}
- if(targetCell<0)return;
- double oldA=read(BULK,sourceCellIndex),oldB=read(BULK,targetCell),bulk=bulkPortion(row,take),m=double(takenMass)*1e-10;
- double newA=max(0.0,oldA-bulk),newB=oldB+bulk,ma=read(BM,sourceCellIndex),mb=read(BM,targetCell);
- double potential=p.gravity*((ma-m)*bedCenter(sourceCellIndex,newA)+(mb+m)*bedCenter(targetCell,newB)-ma*bedCenter(sourceCellIndex,oldA)-mb*bedCenter(targetCell,oldB));
- if(potential>0.0||!bedFits(targetCell,newB,-1))return;
- double r=sphereRadius(take);dvec3 start=(dvec3(sourceCoord)+.5)*p.cellSize,end=(dvec3(coord(targetCell))+.5)*p.cellSize;
- start.y=bedHeight(sourceCellIndex,oldA)+r;end.y=bedHeight(targetCell,newB)+r;if(!pathOpen(start,end,r))return;
- put(MODE,row,4);put(TARGET,row,targetCell);outqty(MV,row,take);outqty(MM,row,takenMass);write(HEAT,row,-potential);
- cellState(sourceCellIndex,newA,ma-m,read(SOLID,sourceCellIndex)-double(take));cellState(targetCell,newB,mb+m,read(SOLID,targetCell)+double(take));
- words[dst(19)+from]=0u;words[dst(19)+to]=0u;atomicAdd(words[at(CT)+5],1u);
+int at(int f) {
+    return h(WORK_FIELDS + f);
 }
-int nx(){return (h(0)+1)*h(1)*h(2);}int ny(){return h(0)*(h(1)+1)*h(2);}
-int faceAt(int axis,ivec3 c){ivec3 d=dims();d[axis]++;return (axis==0?0:axis==1?nx():nx()+ny())+(c.z*d.y+c.y)*d.x+c.x;}
-double face(int f,int k){return num(h(13)+2*(4*f+k));}void outface(int f,int k,double x){outnum(h(13)+2*(4*f+k),x);}
-double liquid(int c,int k){return num(h(12)+2*(4*c+k));}
-double expDouble(double x){int e=int(round(x/.6931471805599453094LF));double r=x-double(e)*.6931471805599453094LF,t=1.0,result=1.0;
- for(int k=1;k<=18;k++){t*=r/double(k);result+=t;}return ldexp(result,e);}
-double logDouble(double x){int e;double m=frexp(x,e);if(m<.7071067811865475244LF){m*=2.0;e--;}double z=(m-1.0)/(m+1.0),s=z*z,t=z,r=z;
- for(int k=3;k<=25;k+=2){t*=s;r+=t/double(k);}return 2.0*r+double(e)*.6931471805599453094LF;}
-double shearStress(double speed,double distance,double density,double viscosity){
- double re=speed*distance*density/viscosity;if(re<1e-8)return viscosity*speed/distance;double low=0.0,high=sqrt(re);
- if(re>1.0)high=min(high,(logDouble(re)+logDouble(9.8))/.41+1.0);
- for(int k=0;k<56;k++){double u=.5*(low+high),a=.41*u,tail;
-  if(a<1.0){double term=a*a*a*a/24.0;tail=term;for(int n=5;n<=18;n++){term*=a/double(n);tail+=term;}}
-  else tail=expDouble(a)-1.0-a-a*a/2.0-a*a*a/6.0;
-  if(u*(u+tail/9.8)>re)high=u;else low=u;
- }double friction=speed/(.5*(low+high));return density*friction*friction;
+int get(int f, int i) {
+    return int(words[at(f) + i]);
 }
-void wakeColumn(int col){
- ivec2 xy=ivec2(col%h(0),col/h(0));if((xy.x&1)+2*(xy.y&1)!=p.color)return;
- int c=surface(col);if(c<0)return;ivec3 q=coord(c);if(q.y+1>=h(1))return;int row=exposed(col,c);if(row<0)return;
- int mat=materialOf(row),sampleCell=cell(q+ivec3(0,1,0));double v=liquid(sampleCell,0);if(v<=0.0||liquid(c,0)<=0.0)return;
- double bed=bedHeight(c,read(BULK,c)),sampleY=(double(q.y)+1.5)*p.cellSize;if(sampleY<=bed)return;
- double vx=.5*(face(faceAt(0,q+ivec3(0,1,0)),1)+face(faceAt(0,q+ivec3(1,1,0)),1));
- double vz=.5*(face(faceAt(2,q+ivec3(0,1,0)),1)+face(faceAt(2,q+ivec3(0,1,1)),1));double speed=length(dvec2(vx,vz));if(speed==0.0)return;
- double density=liquid(sampleCell,1)/(v*p.cellSize*p.cellSize*p.cellSize),mu=num(h(14)+2*sampleCell);if(!(density>0.0&&mu>0.0)){invalid();return;}
- double stress=shearStress(speed,sampleY-bed,density,mu)*min(1.0,v/max(liquid(sampleCell,2),1e-300));
- double weight=max(0.0,material(mat,0)-density)*p.gravity*material(mat,1),critical=material(mat,4),shields=weight>0.0?stress/weight:1e300;
- if(shields<=critical)return;double excess=critical>0.0?shields/critical-1.0:1e300;
- double proposed=min(double(volume(row)),min(material(mat,6),floor(material(mat,5)*p.duration*excess)));if(proposed<1.0)return;
- int64_t take=int64_t(proposed);if(words[src(6)+row]!=0u&&take!=volume(row))return;
- int64_t takenMass=portion(integer(src(5)+2*row),take,volume(row));if(takenMass<=0l||take<volume(row)&&takenMass==integer(src(5)+2*row))return;
- double m=double(takenMass)*1e-10,radius=sphereRadius(take);dvec3 position=dvec3((double(q.x)+.5)*p.cellSize,bed+radius+p.cellSize*1e-5,(double(q.z)+.5)*p.cellSize);
- position=dvec3(vec3(position));
- if(!sphereFits(position,radius,-1))return;
- double oldBulk=read(BULK,c),newBulk=max(0.0,oldBulk-bulkPortion(row,take)),oldMass=read(BM,c);
- double work=p.gravity*((oldMass-m)*bedCenter(c,newBulk)+m*position.y-oldMass*bedCenter(c,oldBulk));
- int faces[8];double kinetic=0.0;for(int y=0;y<2;y++)for(int axis=0;axis<2;axis++)for(int side=0;side<2;side++){
-  ivec3 fc=q+ivec3(0,y,0);int a=axis==0?0:2;fc[a]+=side;int index=4*y+2*axis+side,f=faceAt(a,fc);faces[index]=f;
-  if(face(f,0)>0.0&&face(f,2)>0.0)kinetic+=.5*face(f,0)*face(f,1)*face(f,1);
- }
- if(work>kinetic||kinetic==0.0&&work<0.0)return;double scale=kinetic==0.0?1.0:sqrt(max(0.0,1.0-work/kinetic));
- dvec3 impulse=dvec3(0.0);for(int i=0;i<8;i++){int f=faces[i];if(face(f,0)<=0.0||face(f,2)<=0.0)continue;double before=face(f,1),velocity=before*scale;outface(f,1,velocity);
-  write(LIFT,17*row+i,.5*face(f,0)*before*before);write(LIFT,17*row+8+i,.5*face(f,0)*velocity*velocity);
-  int axis=i%4<2?0:2,local=f-(axis==0?0:nx()+ny());outnum((axis==0?h(15):h(16))+2*local,face(f,0)*velocity);
-  impulse[axis]+=face(f,0)*(before-velocity);
- }
- outvec(at(IMPULSE),row,impulse);
- write(LIFT,17*row+16,work);
- put(MODE,row,3);outqty(MV,row,take);outqty(MM,row,takenMass);outvec(at(POS),row,position);
- cellState(c,newBulk,oldMass-m,read(SOLID,c)-double(take));words[dst(19)+col]=0u;atomicAdd(words[at(CT)+4],1u);
+void put(int f, int i, int v) {
+    words[at(f) + i] = uint(v);
 }
-int hashSlot(int key,bool insert){uint mixed=uint(key)*2654435761u;for(int probe=0;probe<h(10);probe++){
- int slot=int((mixed+uint(probe))&uint(h(10)-1));uint found=insert?atomicCompSwap(words[at(HK)+slot],0xffffffffu,uint(key)):words[at(HK)+slot];
- if(found==uint(key)||insert&&found==0xffffffffu)return slot;if(!insert&&found==0xffffffffu)break;
- }invalid();return -1;}
-bool activeRoute(int r){return r<h(3)?get(MODE,r)==0:get(MODE,r)==3;}
-int destinationCell(int r,int part){if(r<h(3))return get(TARGET,r);return part==1?get(TARGET,r):sourceCell(r);}
-int64_t transferredVolume(int r,int part){return part==1?qty(MV,r):volume(r)-qty(MV,r);}
-bool isActive(int r,int part){return r<h(3)?get(MODE,r)==0:part==1&&get(MODE,r)==3;}
-int target(int r,int part){if(transferredVolume(r,part)==0l)return -1;
- if(isActive(r,part))return get(AO,r);int slot=hashSlot(destinationCell(r,part)*h(8)+materialOf(r),false);return slot<0?-1:h(3)+get(HO,slot);}
-int64_t split(int f,int r,int part){int64_t all=integer(src(f)+2*r),moved=portion(all,qty(MV,r),volume(r));return part==1?moved:all-moved;}
-int64_t speciesPart(int entry,int r,int part){int64_t all=integer(src(10)+2*entry),moved=portion(all,qty(MV,r),volume(r));return part==1?moved:all-moved;}
-int sourceOfEntry(int e){return e<2*h(5)?e/2:h(5)+(e-2*h(5));}
-int64_t amountFor(int e,int species){int r=sourceOfEntry(e);int part=e%2;int64_t result=0l;
- for(int s=int(words[src(8)+r]);s<int(words[src(8)+r+1]);s++)if(int(words[src(9)+s])==species)result+=e<2*h(5)?speciesPart(s,r,part):integer(src(10)+2*s);return result;}
-bool actualRow(int row){if(row<h(3))return row<int(words[dst(0)]);if(row<h(3)+h(4))return row-h(3)<int(words[dst(0)+1]);return true;}
-void gatherRow(int row,bool speciesWrite){
- if(!actualRow(row))return;int begin=get(RO,row),end=get(RO,row+1);if(begin==end)return;
- if(speciesWrite){int offset=int(words[dst(8)+row]);for(int species=0;species<h(9);species++){
-  int64_t amount=0l;for(int j=begin;j<end;j++)amount+=amountFor(get(RE,j),species);
-  if(amount>0l){words[dst(9)+offset]=uint(species);outint(dst(10)+2*offset,amount);offset++;}
- }return;}
- int64_t vol=0l,massUnits=0l,residual=0l;double energy=0.0;int mat=-1,mixture=0,first=-1,firstPart=0;int c=-1;
- for(int j=begin;j<end;j++){
-  int entry=get(RE,j),r=sourceOfEntry(entry),part=entry%2;bool audit=entry>=2*h(5);if(first<0){first=r;firstPart=part;}
-  mat=int(words[src(3)+r]);mixture|=int(words[src(6)+r]);
-  if(audit){vol+=integer(src(4)+2*r);massUnits+=integer(src(5)+2*r);residual+=integer(src(7)+2*r);energy+=num(src(11)+2*r);}
-  else{
-   vol+=transferredVolume(r,part);int64_t movedMass=qty(MM,r),partMass=part==1?movedMass:integer(src(5)+2*r)-movedMass;massUnits+=partMass;residual+=split(7,r,part);
-   double allEnergy=num(src(11)+2*r),movedEnergy=allEnergy*(double(movedMass)/double(integer(src(5)+2*r)));
-   energy+=part==1?movedEnergy:allEnergy-movedEnergy;
-   if(get(MODE,r)==1&&part==0||get(MODE,r)==4&&part==1)energy+=read(HEAT,r);
-   if(!isActive(r,part))c=destinationCell(r,part);
-  }
- }
- if(vol<=0l||massUnits<=0l||!finite(energy)){invalid();return;}
- words[dst(3)+row]=uint(mat);words[dst(6)+row]=uint(mixture);outint(dst(4)+2*row,vol);outint(dst(5)+2*row,massUnits);outint(dst(7)+2*row,residual);outnum(dst(11)+2*row,energy);
- if(row<h(3)){
-  if(first<h(3)){outvec(dst(1),row,vec(src(1),first));outvec(dst(2),row,vec(src(2),first));
-   words[dst(12)+row]=words[src(12)+first];words[dst(13)+row]=words[src(13)+first];
-  }else{outvec(dst(1),row,vec(at(POS),first));outvec(dst(2),row,dvec3(0.0));words[dst(12)+row]=0u;words[dst(13)+row]=0u;}
- }else if(row<h(3)+h(4)){
-  words[dst(16)+row-h(3)]=uint(c);double phi=read(BULK,c)>0.0?1.0-read(SOLID,c)/read(BULK,c):0.0;
-  words[dst(17)+row-h(3)]=floatBitsToUint(float(clamp(phi,0.0,.999999)));
- }
- int count=0;for(int species=0;species<h(9);species++){int64_t amount=0l;for(int j=begin;j<end;j++)amount+=amountFor(get(RE,j),species);if(amount>0l)count++;}put(SC,row,count);
+int64_t integer(int a) {
+    return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
 }
-void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128+gl_LocalInvocationID.x);if(id>=p.count||errors!=0u)return;
- if(p.stage==0){
-  if(id<12)put(CT,id,0);if(id<h(0)*h(2)){put(CC,id,0);put(CU,id,0);put(SURFACE,id,-1);}
-  if(id<h(5)){put(MODE,id,-1);put(AC,id,0);put(TARGET,id,-1);outqty(MV,id,0l);outqty(MM,id,0l);write(HEAT,id,0.0);outvec(at(IMPULSE),id,dvec3(0.0));put(DEST,2*id,-1);put(DEST,2*id+1,-1);
-   for(int k=0;k<17;k++)write(LIFT,17*id+k,0.0);if(!live(id))outnum(src(11)+2*id,0.0);}
-  if(id<h(10)){put(HK,id,-1);put(HC,id,0);}if(id<h(6)){put(RC,id,0);put(RU,id,0);put(SC,id,0);}return;
- }
- if(p.stage==1){if(!live(id))return;int c=sourceCell(id),col=columnOf(c);put(MODE,id,id<h(3)?0:2);put(TARGET,id,c);atomicAdd(words[at(CC)+col],1u);return;}
- if(p.stage==2){if(!live(id))return;int col=columnOf(sourceCell(id)),slot=int(atomicAdd(words[at(CU)+col],1u));put(CE,get(CO,col)+slot,id);return;}
- if(p.stage==3){double bulk=0.0,m=0.0,solid=0.0;int col=columnOf(id);for(int e=get(CO,col);e<get(CO,col+1);e++){
-  int r=columnRow(e);if(r>=h(3)&&sourceCell(r)==id){bulk+=bulkPortion(r,volume(r));m+=mass(r);solid+=double(volume(r));}}
-  cellState(id,bulk,m,solid);write(AVAILABLE,id,max(0.0,openSvq(id)-max(0.0,double(integer(h(19)+2*id))-solid)));return;}
- if(p.stage==4){settleColumn(id);return;}if(p.stage==5){relaxPair(id);return;}if(p.stage==6){wakeColumn(id);return;}
- if(p.stage==7){if(!live(id))return;put(AC,id,activeRoute(id)?1:0);return;}
- if(p.stage==8){if(!live(id))return;for(int part=0;part<2;part++)if(transferredVolume(id,part)>0l&&!isActive(id,part))hashSlot(destinationCell(id,part)*h(8)+materialOf(id),true);return;}
- if(p.stage==9){put(HC,id,get(HK,id)<0?0:1);return;}
- if(p.stage==10){int pa=get(AO,h(5)),pd=get(HO,h(10));put(CT,0,pa);put(CT,1,pd);
-  if(pa>h(3)||pd>h(4)){atomicOr(errors,64u);return;}words[dst(0)]=uint(pa);words[dst(0)+1]=uint(pd);return;}
- if(p.stage==11||p.stage==12){
-  if(id<h(5)){if(!live(id))return;for(int part=0;part<2;part++){
-   int row=p.stage==11?target(id,part):get(DEST,2*id+part);if(row<0)continue;
-   if(p.stage==11){put(DEST,2*id+part,row);atomicAdd(words[at(RC)+row],1u);}
-   else{int slot=int(atomicAdd(words[at(RU)+row],1u));put(RE,get(RO,row)+slot,2*id+part);}
-  }}else{int row=id;if(integer(src(4)+2*row)<=0l)return;if(p.stage==11)atomicAdd(words[at(RC)+row],1u);
-   else{int slot=int(atomicAdd(words[at(RU)+row],1u));put(RE,get(RO,row)+slot,2*h(5)+id-h(5));}
-  }return;
- }
- if(p.stage==13){outint(dst(4)+2*id,0l);outint(dst(5)+2*id,0l);outint(dst(7)+2*id,0l);outnum(dst(11)+2*id,0.0);words[dst(6)+id]=0u;gatherRow(id,false);write(FINAL_ENERGY,id,num(dst(11)+2*id));return;}
- if(p.stage==14){int species=int(words[dst(8)+h(6)]);put(CT,2,species);if(species>h(7)){atomicOr(errors,64u);return;}words[dst(0)+2]=uint(species);outint(dst(18),integer(src(18))+(p.duration>0.0?1l:0l));return;}
- if(p.stage==15)gatherRow(id,true);
+void outint(int a, int64_t x) {
+    words[a] = uint(x);
+    words[a + 1] = uint(uint64_t(x) >> 32);
+}
+double num(int a) {
+    return packDouble2x32(uvec2(words[a], words[a + 1]));
+}
+void outnum(int a, double x) {
+    uvec2 q = unpackDouble2x32(x);
+    words[a] = q.x;
+    words[a + 1] = q.y;
+}
+double read(int f, int i) {
+    return num(at(f) + 2 * i);
+}
+void write(int f, int i, double x) {
+    outnum(at(f) + 2 * i, x);
+}
+int64_t qty(int f, int i) {
+    return integer(at(f) + 2 * i);
+}
+void outqty(int f, int i, int64_t x) {
+    outint(at(f) + 2 * i, x);
+}
+double material(int m, int k) {
+    return num(at(FIELD_MATERIALS) + 2 * (7 * m + k));
+}
+dvec3 vec(int a, int i) {
+    return dvec3(num(a + 6 * i), num(a + 6 * i + 2), num(a + 6 * i + 4));
+}
+void outvec(int a, int i, dvec3 v) {
+    for (int k = 0; k < 3; k++)
+        outnum(a + 6 * i + 2 * k, v[k]);
+}
+ivec3 dims() {
+    return ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+}
+int cell(ivec3 c) {
+    return (c.z * h(H_SIZE_Y) + c.y) * h(H_SIZE_X) + c.x;
+}
+ivec3 coord(int c) {
+    return ivec3(c % h(H_SIZE_X), c / h(H_SIZE_X) % h(H_SIZE_Y), c / (h(H_SIZE_X) * h(H_SIZE_Y)));
+}
+ivec3 location(dvec3 x) {
+    return clamp(ivec3(floor(x / p.cellSize)), ivec3(0), dims() - 1);
+}
+int columnOf(int c) {
+    return c % h(H_SIZE_X) + c / (h(H_SIZE_X) * h(H_SIZE_Y)) * h(H_SIZE_X);
+}
+int activeCount() {
+    return int(words[src(GRANULAR_COUNTS)]);
+}
+int depositCount() {
+    return int(words[src(GRANULAR_COUNTS) + 1]);
+}
+bool live(int row) {
+    return (row < h(H_PARTICLE_CAPACITY) ? row < activeCount() : row - h(H_PARTICLE_CAPACITY) < depositCount()) &&
+           integer(src(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row) > 0l;
+}
+int sourceCell(int row) {
+    return row < h(H_PARTICLE_CAPACITY) ? cell(location(vec(src(GRANULAR_POSITION), row)))
+                                        : int(words[src(GRANULAR_DEPOSIT_CELL) + row - h(H_PARTICLE_CAPACITY)]);
+}
+bool activeCell(int cellIndex) {
+    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cellIndex] != 0u;
+}
+int columnRow(int e) {
+    return get(FIELD_COLUMN_ENTRIES, e);
+}
+double mass(int row) {
+    return double(integer(src(GRANULAR_MASS_UNITS) + 2 * row)) * 1e-10;
+}
+int64_t volume(int row) {
+    return integer(src(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row);
+}
+int materialOf(int row) {
+    return int(words[src(GRANULAR_MATERIAL) + row]);
+}
+double porosity(int row) {
+    return double(uintBitsToFloat(words[src(GRANULAR_DEPOSIT_POROSITY) + row - h(H_PARTICLE_CAPACITY)]));
+}
+double bulkPortion(int row, int64_t amount) {
+    return double(amount) / (1.0 - (row < h(H_PARTICLE_CAPACITY) ? material(materialOf(row), 2) : porosity(row)));
+}
+int64_t portion(int64_t amount, int64_t n, int64_t d) {
+    return (amount / d) * n + ((amount % d) * n) / d;
+}
+bool finite(double x) {
+    return !isnan(x) && !isinf(x);
+}
+void invalid() {
+    atomicOr(errors, 8388608u);
+}
+double sphereRadius(int64_t svq) {
+    return p.cellSize *
+           clamp(double(pow(float(3.0 * double(svq) / 16777216.0 / (4.0 * 3.141592653589793)), 1.0 / 3.0)), .02, .20);
+}
+double openSvq(int c) {
+    return double(bitCount((~words[h(H_MASKS) + c]) & 255u)) * 2097152.0;
+}
+double bedHeight(int c, double b) {
+    uint mask = (~words[h(H_MASKS) + c]) & 255u;
+    double low = double(bitCount(mask & 0x33u)) * 2097152.0, high = double(bitCount(mask & 0xccu)) * 2097152.0;
+    double y = b <= low ? (low > 0.0 ? .5 * b / low : 0.0) : .5 + (high > 0.0 ? .5 * (b - low) / high : 0.0);
+    return (double(coord(c).y) + clamp(y, 0.0, 1.0)) * p.cellSize;
+}
+double bedCenter(int c, double b) {
+    if (b <= 0.0)
+        return double(coord(c).y) * p.cellSize;
+    uint mask = (~words[h(H_MASKS) + c]) & 255u;
+    double low = double(bitCount(mask & 0x33u)) * 2097152.0, high = double(bitCount(mask & 0xccu)) * 2097152.0;
+    double a = min(b, low), v = max(0.0, b - low),
+           moment = (low > 0.0 ? a * .25 * a / low : 0.0) + (high > 0.0 ? v * (.5 + .25 * v / high) : 0.0);
+    return (double(coord(c).y) + moment / b) * p.cellSize;
+}
+int surface(int column) {
+    int x = column % h(H_SIZE_X), z = column / h(H_SIZE_X);
+    for (int y = h(H_SIZE_Y) - 1; y >= 0; y--) {
+        int c = cell(ivec3(x, y, z));
+        if (read(FIELD_CELL_BULK, c) > 0.0)
+            return c;
+    }
+    return -1;
+}
+bool sphereFits(dvec3 position, double radius, int exclude) {
+    if (any(lessThan(position, dvec3(radius))) || any(greaterThan(position, dvec3(dims()) * p.cellSize - radius)))
+        return false;
+    ivec3 low = location(position - radius), high = location(position + radius);
+    for (int z = low.z; z <= high.z; z++)
+        for (int y = low.y; y <= high.y; y++)
+            for (int x = low.x; x <= high.x; x++) {
+                ivec3 c = ivec3(x, y, z);
+                uint mask = words[h(H_MASKS) + cell(c)];
+                for (int bit = 0; bit < 8; bit++)
+                    if ((mask & (1u << bit)) != 0u) {
+                        dvec3 lo = (dvec3(c) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize,
+                              hi = lo + .5 * p.cellSize;
+                        if (length(position - clamp(position, lo, hi)) < radius - 1e-7 * p.cellSize)
+                            return false;
+                    }
+            }
+    // The source spatial list remains immutable. Conservative rejection near an old active sphere
+    // avoids simultaneous release overlap across independently processed columns.
+    for (int z = max(0, low.z - 1); z <= min(h(H_SIZE_Z) - 1, high.z + 1); z++)
+        for (int x = max(0, low.x - 1); x <= min(h(H_SIZE_X) - 1, high.x + 1); x++) {
+            int col = z * h(H_SIZE_X) + x;
+            for (int e = get(FIELD_COLUMN_OFFSETS, col); e < get(FIELD_COLUMN_OFFSETS, col + 1); e++) {
+                int row = columnRow(e);
+                if (row >= h(H_PARTICLE_CAPACITY) || row == exclude)
+                    continue;
+                if (length(position - vec(src(GRANULAR_POSITION), row)) <
+                    radius + sphereRadius(volume(row)) - 1e-7 * p.cellSize)
+                    return false;
+            }
+        }
+    return true;
+}
+bool bedFits(int c, double b, int excluded) {
+    if (b > read(FIELD_AVAILABLE_BULK, c) + 1e-6)
+        return false;
+    ivec3 q = coord(c);
+    double top = bedHeight(c, b);
+    for (int z = max(0, q.z - 1); z <= min(h(H_SIZE_Z) - 1, q.z + 1); z++)
+        for (int x = max(0, q.x - 1); x <= min(h(H_SIZE_X) - 1, q.x + 1); x++) {
+            int col = z * h(H_SIZE_X) + x;
+            for (int e = get(FIELD_COLUMN_OFFSETS, col); e < get(FIELD_COLUMN_OFFSETS, col + 1); e++) {
+                int row = columnRow(e);
+                if (row >= h(H_PARTICLE_CAPACITY) || row == excluded)
+                    continue;
+                dvec3 pos = vec(src(GRANULAR_POSITION), row);
+                double r = sphereRadius(volume(row));
+                dvec3 lo = dvec3(q) * p.cellSize, hi = lo + p.cellSize;
+                hi.y = top;
+                if (top > lo.y && length(pos - clamp(pos, lo, hi)) < r - 1e-7 * p.cellSize)
+                    return false;
+            }
+        }
+    return true;
+}
+bool pathOpen(dvec3 a, dvec3 b, double radius) {
+    // Walk the fixed microboxes intersected by the swept sphere's axis-aligned enclosure.
+    ivec3 low = location(min(a, b) - radius), high = location(max(a, b) + radius);
+    dvec3 delta = b - a;
+    for (int z = low.z; z <= high.z; z++)
+        for (int y = low.y; y <= high.y; y++)
+            for (int x = low.x; x <= high.x; x++) {
+                ivec3 c = ivec3(x, y, z);
+                uint mask = words[h(H_MASKS) + cell(c)];
+                for (int bit = 0; bit < 8; bit++)
+                    if ((mask & (1u << bit)) != 0u) {
+                        dvec3 lo = (dvec3(c) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize -
+                                   radius,
+                              hi = lo + .5 * p.cellSize + 2.0 * radius;
+                        double near = 0.0, far = 1.0;
+                        bool hit = true;
+                        for (int axis = 0; axis < 3; axis++) {
+                            if (delta[axis] == 0.0) {
+                                if (a[axis] < lo[axis] || a[axis] > hi[axis])
+                                    hit = false;
+                            } else {
+                                double t0 = (lo[axis] - a[axis]) / delta[axis], t1 = (hi[axis] - a[axis]) / delta[axis];
+                                near = max(near, min(t0, t1));
+                                far = min(far, max(t0, t1));
+                            }
+                        }
+                        if (hit && near < far - 1e-9 && far > 1e-9 && near < 1.0 - 1e-9)
+                            return false;
+                    }
+            }
+    return true;
+}
+void cellState(int c, double bulk, double kilograms, double solid) {
+    write(FIELD_CELL_BULK, c, max(0.0, bulk));
+    write(FIELD_CELL_MASS, c, max(0.0, kilograms));
+    write(FIELD_CELL_SOLID, c, max(0.0, solid));
+}
+void settleColumn(int col) {
+    bool changed = false;
+    int x = col % h(H_SIZE_X), z = col / h(H_SIZE_X);
+    for (int e = get(FIELD_COLUMN_OFFSETS, col); e < get(FIELD_COLUMN_OFFSETS, col + 1); e++) {
+        int row = columnRow(e);
+        if (row >= h(H_PARTICLE_CAPACITY) || !activeCell(sourceCell(row)))
+            continue;
+        dvec3 pos = vec(src(GRANULAR_POSITION), row), velocity = vec(src(GRANULAR_VELOCITY), row);
+        double radius = sphereRadius(volume(row));
+        double support = 0.0;
+        int sy = int(floor(pos.y / p.cellSize));
+        for (int y = 0; y <= min(sy, h(H_SIZE_Y) - 1); y++) {
+            int c = cell(ivec3(x, y, z));
+            if (read(FIELD_CELL_BULK, c) > 0.0)
+                support = max(support, bedHeight(c, read(FIELD_CELL_BULK, c)));
+            uint mask = words[h(H_MASKS) + c];
+            for (int bit = 0; bit < 8; bit++)
+                if ((mask & (1u << bit)) != 0u) {
+                    double top = (double(y) + .5 * double((bit >> 1) & 1) + .5) * p.cellSize;
+                    dvec2 lo = (dvec2(x, z) + .5 * dvec2(bit & 1, (bit >> 2) & 1)) * p.cellSize;
+                    if (top <= pos.y + 1e-6 * p.cellSize &&
+                        length(pos.xz - clamp(pos.xz, lo, lo + .5 * p.cellSize)) < radius)
+                        support = max(support, top);
+                }
+        }
+        bool supported =
+            abs(pos.y - radius - support) <= 1e-5 * p.cellSize && velocity.y <= 1e-5 * p.cellSize / p.duration;
+        int age = supported ? min(2147483646, int(words[src(GRANULAR_CONTACT_AGE) + row])) + 1 : 0;
+        words[src(GRANULAR_CONTACT_AGE) + row] = uint(age);
+        words[src(GRANULAR_FLAGS) + row] = supported ? 1u : 0u;
+        if (!supported || age < 3)
+            continue;
+        for (int y = 0; y <= min(sy, h(H_SIZE_Y) - 1); y++) {
+            int c = cell(ivec3(x, y, z));
+            if (!activeCell(c))
+                continue;
+            double before = read(FIELD_CELL_BULK, c), after = before + bulkPortion(row, volume(row));
+            if (!bedFits(c, after, row))
+                continue;
+            double center = bedCenter(c, after), oldCenter = bedCenter(c, before), m = mass(row),
+                   oldMass = read(FIELD_CELL_MASS, c);
+            double potential = p.gravity * (oldMass * (center - oldCenter) + m * (center - pos.y));
+            if (potential > 0.0)
+                continue;
+            dvec3 destination = dvec3(pos.x, max(center + radius, double(y) * p.cellSize + radius), pos.z);
+            if (!pathOpen(pos, destination, radius))
+                continue;
+            put(FIELD_MODE, row, 1);
+            put(FIELD_TARGET, row, c);
+            write(FIELD_HEAT, row, .5 * m * dot(velocity, velocity) - potential);
+            outvec(at(FIELD_REACTION_IMPULSE), row, m * velocity);
+            cellState(c, after, oldMass + m, read(FIELD_CELL_SOLID, c) + double(volume(row)));
+            changed = true;
+            atomicAdd(words[at(FIELD_CONTROL) + 3], 1u);
+            break;
+        }
+    }
+    bool allActive = true;
+    for (int y = 0; y < h(H_SIZE_Y); y++)
+        allActive = allActive && activeCell(cell(ivec3(x, y, z)));
+    words[dst(GRANULAR_STABLE_AGE) + col] = allActive
+                                                ? (changed ? 0u : min(20u, words[src(GRANULAR_STABLE_AGE) + col] + 1u))
+                                                : words[src(GRANULAR_STABLE_AGE) + col];
+    put(FIELD_SURFACE, col, surface(col));
+}
+int exposed(int col, int c) {
+    int best = -1;
+    for (int e = get(FIELD_COLUMN_OFFSETS, col); e < get(FIELD_COLUMN_OFFSETS, col + 1); e++) {
+        int row = columnRow(e);
+        if (row < h(H_PARTICLE_CAPACITY) || get(FIELD_MODE, row) != 2 || sourceCell(row) != c)
+            continue;
+        if (best < 0 || volume(row) > volume(best) || volume(row) == volume(best) && row < best)
+            best = row;
+    }
+    return best;
+}
+void relaxPair(int col) {
+    int axis = p.color / 2, parity = p.color % 2;
+    ivec2 a = ivec2(col % h(H_SIZE_X), col / h(H_SIZE_X));
+    if ((a[axis] & 1) != parity)
+        return;
+    ivec2 b = a;
+    b[axis]++;
+    if (b.x >= h(H_SIZE_X) || b.y >= h(H_SIZE_Z))
+        return;
+    int other = b.y * h(H_SIZE_X) + b.x;
+    int ca = surface(col), cb = surface(other);
+    double ha = ca < 0 ? 0.0 : bedHeight(ca, read(FIELD_CELL_BULK, ca)),
+           hb = cb < 0 ? 0.0 : bedHeight(cb, read(FIELD_CELL_BULK, cb));
+    int from = ha >= hb ? col : other, to = ha >= hb ? other : col, sourceCellIndex = ha >= hb ? ca : cb;
+    if (sourceCellIndex < 0)
+        return;
+    int row = exposed(from, sourceCellIndex);
+    if (row < 0 || !activeCell(sourceCellIndex))
+        return;
+    int mat = materialOf(row);
+    if (abs(ha - hb) <= p.cellSize * material(mat, 3))
+        return;
+    int64_t take = min(volume(row), 1048576l);
+    if (words[src(GRANULAR_MIXTURE_PRESENT) + row] != 0u && take != volume(row))
+        return;
+    int64_t takenMass = portion(integer(src(GRANULAR_MASS_UNITS) + 2 * row), take, volume(row));
+    if (takenMass <= 0l)
+        return;
+    ivec3 sourceCoord = coord(sourceCellIndex);
+    ivec2 targetColumn = ivec2(to % h(H_SIZE_X), to / h(H_SIZE_X));
+    int targetCell = -1;
+    for (int y = 0; y <= sourceCoord.y; y++) {
+        int c = cell(ivec3(targetColumn.x, y, targetColumn.y));
+        if (activeCell(c) && read(FIELD_CELL_BULK, c) + bulkPortion(row, take) <= read(FIELD_AVAILABLE_BULK, c)) {
+            targetCell = c;
+            break;
+        }
+    }
+    if (targetCell < 0)
+        return;
+    double oldA = read(FIELD_CELL_BULK, sourceCellIndex), oldB = read(FIELD_CELL_BULK, targetCell),
+           bulk = bulkPortion(row, take), m = double(takenMass) * 1e-10;
+    double newA = max(0.0, oldA - bulk), newB = oldB + bulk, ma = read(FIELD_CELL_MASS, sourceCellIndex),
+           mb = read(FIELD_CELL_MASS, targetCell);
+    double potential =
+        p.gravity * ((ma - m) * bedCenter(sourceCellIndex, newA) + (mb + m) * bedCenter(targetCell, newB) -
+                     ma * bedCenter(sourceCellIndex, oldA) - mb * bedCenter(targetCell, oldB));
+    if (potential > 0.0 || !bedFits(targetCell, newB, -1))
+        return;
+    double r = sphereRadius(take);
+    dvec3 start = (dvec3(sourceCoord) + .5) * p.cellSize, end = (dvec3(coord(targetCell)) + .5) * p.cellSize;
+    start.y = bedHeight(sourceCellIndex, oldA) + r;
+    end.y = bedHeight(targetCell, newB) + r;
+    if (!pathOpen(start, end, r))
+        return;
+    put(FIELD_MODE, row, 4);
+    put(FIELD_TARGET, row, targetCell);
+    outqty(FIELD_MOVED_VOLUME, row, take);
+    outqty(FIELD_MOVED_MASS, row, takenMass);
+    write(FIELD_HEAT, row, -potential);
+    cellState(sourceCellIndex, newA, ma - m, read(FIELD_CELL_SOLID, sourceCellIndex) - double(take));
+    cellState(targetCell, newB, mb + m, read(FIELD_CELL_SOLID, targetCell) + double(take));
+    words[dst(GRANULAR_STABLE_AGE) + from] = 0u;
+    words[dst(GRANULAR_STABLE_AGE) + to] = 0u;
+    atomicAdd(words[at(FIELD_CONTROL) + 5], 1u);
+}
+int nx() {
+    return (h(H_SIZE_X) + 1) * h(H_SIZE_Y) * h(H_SIZE_Z);
+}
+int ny() {
+    return h(H_SIZE_X) * (h(H_SIZE_Y) + 1) * h(H_SIZE_Z);
+}
+int faceAt(int axis, ivec3 c) {
+    ivec3 d = dims();
+    d[axis]++;
+    return (axis == 0 ? 0 : axis == 1 ? nx() : nx() + ny()) + (c.z * d.y + c.y) * d.x + c.x;
+}
+double face(int f, int k) {
+    return num(h(H_FACES) + 2 * (4 * f + k));
+}
+void outface(int f, int k, double x) {
+    outnum(h(H_FACES) + 2 * (4 * f + k), x);
+}
+double liquid(int c, int k) {
+    return num(h(H_CELLS) + 2 * (4 * c + k));
+}
+double expDouble(double x) {
+    int e = int(round(x / .6931471805599453094LF));
+    double r = x - double(e) * .6931471805599453094LF, t = 1.0, result = 1.0;
+    for (int k = 1; k <= 18; k++) {
+        t *= r / double(k);
+        result += t;
+    }
+    return ldexp(result, e);
+}
+double logDouble(double x) {
+    int e;
+    double m = frexp(x, e);
+    if (m < .7071067811865475244LF) {
+        m *= 2.0;
+        e--;
+    }
+    double z = (m - 1.0) / (m + 1.0), s = z * z, t = z, r = z;
+    for (int k = 3; k <= 25; k += 2) {
+        t *= s;
+        r += t / double(k);
+    }
+    return 2.0 * r + double(e) * .6931471805599453094LF;
+}
+double shearStress(double speed, double distance, double density, double viscosity) {
+    double re = speed * distance * density / viscosity;
+    if (re < 1e-8)
+        return viscosity * speed / distance;
+    double low = 0.0, high = sqrt(re);
+    if (re > 1.0)
+        high = min(high, (logDouble(re) + logDouble(9.8)) / .41 + 1.0);
+    for (int k = 0; k < 56; k++) {
+        double u = .5 * (low + high), a = .41 * u, tail;
+        if (a < 1.0) {
+            double term = a * a * a * a / 24.0;
+            tail = term;
+            for (int n = 5; n <= 18; n++) {
+                term *= a / double(n);
+                tail += term;
+            }
+        } else
+            tail = expDouble(a) - 1.0 - a - a * a / 2.0 - a * a * a / 6.0;
+        if (u * (u + tail / 9.8) > re)
+            high = u;
+        else
+            low = u;
+    }
+    double friction = speed / (.5 * (low + high));
+    return density * friction * friction;
+}
+void wakeColumn(int col) {
+    ivec2 xy = ivec2(col % h(H_SIZE_X), col / h(H_SIZE_X));
+    if ((xy.x & 1) + 2 * (xy.y & 1) != p.color)
+        return;
+    int c = surface(col);
+    if (c < 0)
+        return;
+    ivec3 q = coord(c);
+    if (q.y + 1 >= h(H_SIZE_Y))
+        return;
+    int row = exposed(col, c);
+    if (row < 0)
+        return;
+    int mat = materialOf(row), sampleCell = cell(q + ivec3(0, 1, 0));
+    if (!activeCell(c) || !activeCell(sampleCell))
+        return;
+    double v = liquid(sampleCell, 0);
+    if (v <= 0.0 || liquid(c, 0) <= 0.0)
+        return;
+    double bed = bedHeight(c, read(FIELD_CELL_BULK, c)), sampleY = (double(q.y) + 1.5) * p.cellSize;
+    if (sampleY <= bed)
+        return;
+    double vx = .5 * (face(faceAt(0, q + ivec3(0, 1, 0)), 1) + face(faceAt(0, q + ivec3(1, 1, 0)), 1));
+    double vz = .5 * (face(faceAt(2, q + ivec3(0, 1, 0)), 1) + face(faceAt(2, q + ivec3(0, 1, 1)), 1));
+    double speed = length(dvec2(vx, vz));
+    if (speed == 0.0)
+        return;
+    double density = liquid(sampleCell, 1) / (v * p.cellSize * p.cellSize * p.cellSize),
+           mu = num(h(H_VISCOSITY) + 2 * sampleCell);
+    if (!(density > 0.0 && mu > 0.0)) {
+        invalid();
+        return;
+    }
+    double stress = shearStress(speed, sampleY - bed, density, mu) * min(1.0, v / max(liquid(sampleCell, 2), 1e-300));
+    double weight = max(0.0, material(mat, 0) - density) * p.gravity * material(mat, 1), critical = material(mat, 4),
+           shields = weight > 0.0 ? stress / weight : 1e300;
+    if (shields <= critical)
+        return;
+    double excess = critical > 0.0 ? shields / critical - 1.0 : 1e300;
+    double proposed = min(double(volume(row)), min(material(mat, 6), floor(material(mat, 5) * p.duration * excess)));
+    if (proposed < 1.0)
+        return;
+    int64_t take = int64_t(proposed);
+    if (words[src(GRANULAR_MIXTURE_PRESENT) + row] != 0u && take != volume(row))
+        return;
+    int64_t takenMass = portion(integer(src(GRANULAR_MASS_UNITS) + 2 * row), take, volume(row));
+    if (takenMass <= 0l || take < volume(row) && takenMass == integer(src(GRANULAR_MASS_UNITS) + 2 * row))
+        return;
+    double m = double(takenMass) * 1e-10, radius = sphereRadius(take);
+    dvec3 position =
+        dvec3((double(q.x) + .5) * p.cellSize, bed + radius + p.cellSize * 1e-5, (double(q.z) + .5) * p.cellSize);
+    position = dvec3(vec3(position));
+    if (!sphereFits(position, radius, -1))
+        return;
+    double oldBulk = read(FIELD_CELL_BULK, c), newBulk = max(0.0, oldBulk - bulkPortion(row, take)),
+           oldMass = read(FIELD_CELL_MASS, c);
+    double work =
+        p.gravity * ((oldMass - m) * bedCenter(c, newBulk) + m * position.y - oldMass * bedCenter(c, oldBulk));
+    int faces[8];
+    double kinetic = 0.0;
+    for (int y = 0; y < 2; y++)
+        for (int axis = 0; axis < 2; axis++)
+            for (int side = 0; side < 2; side++) {
+                ivec3 fc = q + ivec3(0, y, 0);
+                int a = axis == 0 ? 0 : 2;
+                fc[a] += side;
+                int index = 4 * y + 2 * axis + side, f = faceAt(a, fc);
+                faces[index] = f;
+                if (face(f, 0) > 0.0 && face(f, 2) > 0.0)
+                    kinetic += .5 * face(f, 0) * face(f, 1) * face(f, 1);
+            }
+    if (work > kinetic || kinetic == 0.0 && work < 0.0)
+        return;
+    double scale = kinetic == 0.0 ? 1.0 : sqrt(max(0.0, 1.0 - work / kinetic));
+    dvec3 impulse = dvec3(0.0);
+    for (int i = 0; i < 8; i++) {
+        int f = faces[i];
+        if (face(f, 0) <= 0.0 || face(f, 2) <= 0.0)
+            continue;
+        double before = face(f, 1), velocity = before * scale;
+        outface(f, 1, velocity);
+        write(FIELD_LIFT_TERMS, 17 * row + i, .5 * face(f, 0) * before * before);
+        write(FIELD_LIFT_TERMS, 17 * row + 8 + i, .5 * face(f, 0) * velocity * velocity);
+        int axis = i % 4 < 2 ? 0 : 2, local = f - (axis == 0 ? 0 : nx() + ny());
+        outnum((axis == 0 ? h(H_MOMENTUM_X) : h(H_MOMENTUM_Z)) + 2 * local, face(f, 0) * velocity);
+        impulse[axis] += face(f, 0) * (before - velocity);
+    }
+    outvec(at(FIELD_REACTION_IMPULSE), row, impulse);
+    write(FIELD_LIFT_TERMS, 17 * row + 16, work);
+    put(FIELD_MODE, row, 3);
+    outqty(FIELD_MOVED_VOLUME, row, take);
+    outqty(FIELD_MOVED_MASS, row, takenMass);
+    outvec(at(FIELD_POSITION), row, position);
+    cellState(c, newBulk, oldMass - m, read(FIELD_CELL_SOLID, c) - double(take));
+    words[dst(GRANULAR_STABLE_AGE) + col] = 0u;
+    atomicAdd(words[at(FIELD_CONTROL) + 4], 1u);
+}
+int hashSlot(int key, bool insert) {
+    uint mixed = uint(key) * 2654435761u;
+    for (int probe = 0; probe < h(H_HASH_SIZE); probe++) {
+        int slot = int((mixed + uint(probe)) & uint(h(H_HASH_SIZE) - 1));
+        uint found = insert ? atomicCompSwap(words[at(FIELD_HASH_KEYS) + slot], 0xffffffffu, uint(key))
+                            : words[at(FIELD_HASH_KEYS) + slot];
+        if (found == uint(key) || insert && found == 0xffffffffu)
+            return slot;
+        if (!insert && found == 0xffffffffu)
+            break;
+    }
+    invalid();
+    return -1;
+}
+bool activeRoute(int r) {
+    return r < h(H_PARTICLE_CAPACITY) ? get(FIELD_MODE, r) == 0 : get(FIELD_MODE, r) == 3;
+}
+int destinationCell(int r, int part) {
+    if (r < h(H_PARTICLE_CAPACITY))
+        return get(FIELD_TARGET, r);
+    return part == 1 ? get(FIELD_TARGET, r) : sourceCell(r);
+}
+int64_t transferredVolume(int r, int part) {
+    return part == 1 ? qty(FIELD_MOVED_VOLUME, r) : volume(r) - qty(FIELD_MOVED_VOLUME, r);
+}
+bool isActive(int r, int part) {
+    return r < h(H_PARTICLE_CAPACITY) ? get(FIELD_MODE, r) == 0 : part == 1 && get(FIELD_MODE, r) == 3;
+}
+int target(int r, int part) {
+    if (transferredVolume(r, part) == 0l)
+        return -1;
+    if (isActive(r, part))
+        return get(FIELD_ACTIVE_OFFSETS, r);
+    int slot = hashSlot(destinationCell(r, part) * h(H_MATERIAL_COUNT) + materialOf(r), false);
+    return slot < 0 ? -1 : h(H_PARTICLE_CAPACITY) + get(FIELD_HASH_OFFSETS, slot);
+}
+int64_t split(int f, int r, int part) {
+    int64_t all = integer(src(f) + 2 * r), moved = portion(all, qty(FIELD_MOVED_VOLUME, r), volume(r));
+    return part == 1 ? moved : all - moved;
+}
+int64_t speciesPart(int entry, int r, int part) {
+    int64_t all = integer(src(GRANULAR_SPECIES_AMOUNTS) + 2 * entry),
+            moved = portion(all, qty(FIELD_MOVED_VOLUME, r), volume(r));
+    return part == 1 ? moved : all - moved;
+}
+int sourceOfEntry(int e) {
+    return e < 2 * h(H_INPUT_ROWS) ? e / 2 : h(H_INPUT_ROWS) + (e - 2 * h(H_INPUT_ROWS));
+}
+int64_t amountFor(int e, int species) {
+    int r = sourceOfEntry(e);
+    int part = e % 2;
+    int64_t result = 0l;
+    for (int s = int(words[src(GRANULAR_SPECIES_OFFSETS) + r]); s < int(words[src(GRANULAR_SPECIES_OFFSETS) + r + 1]);
+         s++)
+        if (int(words[src(GRANULAR_SPECIES_HANDLES) + s]) == species)
+            result +=
+                e < 2 * h(H_INPUT_ROWS) ? speciesPart(s, r, part) : integer(src(GRANULAR_SPECIES_AMOUNTS) + 2 * s);
+    return result;
+}
+bool actualRow(int row) {
+    if (row < h(H_PARTICLE_CAPACITY))
+        return row < int(words[dst(GRANULAR_COUNTS)]);
+    if (row < h(H_PARTICLE_CAPACITY) + h(H_DEPOSIT_CAPACITY))
+        return row - h(H_PARTICLE_CAPACITY) < int(words[dst(GRANULAR_COUNTS) + 1]);
+    return true;
+}
+void gatherRow(int row, bool speciesWrite) {
+    if (!actualRow(row))
+        return;
+    int begin = get(FIELD_ROW_OFFSETS, row), end = get(FIELD_ROW_OFFSETS, row + 1);
+    if (begin == end)
+        return;
+    if (speciesWrite) {
+        int offset = int(words[dst(GRANULAR_SPECIES_OFFSETS) + row]);
+        for (int species = 0; species < h(H_SPECIES_COUNT); species++) {
+            int64_t amount = 0l;
+            for (int j = begin; j < end; j++)
+                amount += amountFor(get(FIELD_ROW_ENTRIES, j), species);
+            if (amount > 0l) {
+                words[dst(GRANULAR_SPECIES_HANDLES) + offset] = uint(species);
+                outint(dst(GRANULAR_SPECIES_AMOUNTS) + 2 * offset, amount);
+                offset++;
+            }
+        }
+        return;
+    }
+    int64_t vol = 0l, massUnits = 0l, residual = 0l;
+    double energy = 0.0;
+    int mat = -1, mixture = 0, first = -1, firstPart = 0;
+    int c = -1;
+    for (int j = begin; j < end; j++) {
+        int entry = get(FIELD_ROW_ENTRIES, j), r = sourceOfEntry(entry), part = entry % 2;
+        bool audit = entry >= 2 * h(H_INPUT_ROWS);
+        if (first < 0) {
+            first = r;
+            firstPart = part;
+        }
+        mat = int(words[src(GRANULAR_MATERIAL) + r]);
+        mixture |= int(words[src(GRANULAR_MIXTURE_PRESENT) + r]);
+        if (audit) {
+            vol += integer(src(GRANULAR_SOLID_VOLUME_SVQ) + 2 * r);
+            massUnits += integer(src(GRANULAR_MASS_UNITS) + 2 * r);
+            residual += integer(src(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * r);
+            energy += num(src(GRANULAR_INTERNAL_ENERGY) + 2 * r);
+        } else {
+            vol += transferredVolume(r, part);
+            int64_t movedMass = qty(FIELD_MOVED_MASS, r),
+                    partMass = part == 1 ? movedMass : integer(src(GRANULAR_MASS_UNITS) + 2 * r) - movedMass;
+            massUnits += partMass;
+            residual += split(7, r, part);
+            double allEnergy = num(src(GRANULAR_INTERNAL_ENERGY) + 2 * r),
+                   movedEnergy = allEnergy * (double(movedMass) / double(integer(src(GRANULAR_MASS_UNITS) + 2 * r)));
+            energy += part == 1 ? movedEnergy : allEnergy - movedEnergy;
+            if (get(FIELD_MODE, r) == 1 && part == 0 || get(FIELD_MODE, r) == 4 && part == 1)
+                energy += read(FIELD_HEAT, r);
+            if (!isActive(r, part))
+                c = destinationCell(r, part);
+        }
+    }
+    if (vol <= 0l || massUnits <= 0l || !finite(energy)) {
+        invalid();
+        return;
+    }
+    words[dst(GRANULAR_MATERIAL) + row] = uint(mat);
+    words[dst(GRANULAR_MIXTURE_PRESENT) + row] = uint(mixture);
+    outint(dst(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row, vol);
+    outint(dst(GRANULAR_MASS_UNITS) + 2 * row, massUnits);
+    outint(dst(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * row, residual);
+    outnum(dst(GRANULAR_INTERNAL_ENERGY) + 2 * row, energy);
+    if (row < h(H_PARTICLE_CAPACITY)) {
+        if (first < h(H_PARTICLE_CAPACITY)) {
+            outvec(dst(GRANULAR_POSITION), row, vec(src(GRANULAR_POSITION), first));
+            outvec(dst(GRANULAR_VELOCITY), row, vec(src(GRANULAR_VELOCITY), first));
+            words[dst(GRANULAR_CONTACT_AGE) + row] = words[src(GRANULAR_CONTACT_AGE) + first];
+            words[dst(GRANULAR_FLAGS) + row] = words[src(GRANULAR_FLAGS) + first];
+        } else {
+            outvec(dst(GRANULAR_POSITION), row, vec(at(FIELD_POSITION), first));
+            outvec(dst(GRANULAR_VELOCITY), row, dvec3(0.0));
+            words[dst(GRANULAR_CONTACT_AGE) + row] = 0u;
+            words[dst(GRANULAR_FLAGS) + row] = 0u;
+        }
+    } else if (row < h(H_PARTICLE_CAPACITY) + h(H_DEPOSIT_CAPACITY)) {
+        words[dst(GRANULAR_DEPOSIT_CELL) + row - h(H_PARTICLE_CAPACITY)] = uint(c);
+        double phi = read(FIELD_CELL_BULK, c) > 0.0 ? 1.0 - read(FIELD_CELL_SOLID, c) / read(FIELD_CELL_BULK, c) : 0.0;
+        words[dst(GRANULAR_DEPOSIT_POROSITY) + row - h(H_PARTICLE_CAPACITY)] =
+            floatBitsToUint(float(clamp(phi, 0.0, .999999)));
+    }
+    int count = 0;
+    for (int species = 0; species < h(H_SPECIES_COUNT); species++) {
+        int64_t amount = 0l;
+        for (int j = begin; j < end; j++)
+            amount += amountFor(get(FIELD_ROW_ENTRIES, j), species);
+        if (amount > 0l)
+            count++;
+    }
+    put(FIELD_SPECIES_COUNTS, row, count);
+}
+void main() {
+    int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
+    if (id >= p.count || errors != 0u)
+        return;
+    if (p.stage == 0) {
+        if (id < 12)
+            put(FIELD_CONTROL, id, 0);
+        if (id < h(H_SIZE_X) * h(H_SIZE_Z)) {
+            put(FIELD_COLUMN_COUNTS, id, 0);
+            put(FIELD_COLUMN_CURSORS, id, 0);
+            put(FIELD_SURFACE, id, -1);
+        }
+        if (id < h(H_INPUT_ROWS)) {
+            put(FIELD_MODE, id, -1);
+            put(FIELD_ACTIVE_COUNTS, id, 0);
+            put(FIELD_TARGET, id, -1);
+            outqty(FIELD_MOVED_VOLUME, id, 0l);
+            outqty(FIELD_MOVED_MASS, id, 0l);
+            write(FIELD_HEAT, id, 0.0);
+            outvec(at(FIELD_REACTION_IMPULSE), id, dvec3(0.0));
+            put(FIELD_DESTINATIONS, 2 * id, -1);
+            put(FIELD_DESTINATIONS, 2 * id + 1, -1);
+            for (int k = 0; k < 17; k++)
+                write(FIELD_LIFT_TERMS, 17 * id + k, 0.0);
+            if (!live(id))
+                outnum(src(GRANULAR_INTERNAL_ENERGY) + 2 * id, 0.0);
+        }
+        if (id < h(H_HASH_SIZE)) {
+            put(FIELD_HASH_KEYS, id, -1);
+            put(FIELD_HASH_COUNTS, id, 0);
+        }
+        if (id < h(H_ROW_CAPACITY)) {
+            put(FIELD_ROW_COUNTS, id, 0);
+            put(FIELD_ROW_CURSORS, id, 0);
+            put(FIELD_SPECIES_COUNTS, id, 0);
+        }
+        return;
+    }
+    if (p.stage == 1) {
+        if (!live(id))
+            return;
+        int c = sourceCell(id), col = columnOf(c);
+        put(FIELD_MODE, id, id < h(H_PARTICLE_CAPACITY) ? 0 : 2);
+        put(FIELD_TARGET, id, c);
+        atomicAdd(words[at(FIELD_COLUMN_COUNTS) + col], 1u);
+        return;
+    }
+    if (p.stage == 2) {
+        if (!live(id))
+            return;
+        int col = columnOf(sourceCell(id)), slot = int(atomicAdd(words[at(FIELD_COLUMN_CURSORS) + col], 1u));
+        put(FIELD_COLUMN_ENTRIES, get(FIELD_COLUMN_OFFSETS, col) + slot, id);
+        return;
+    }
+    if (p.stage == 3) {
+        double bulk = 0.0, m = 0.0, solid = 0.0;
+        int col = columnOf(id);
+        for (int e = get(FIELD_COLUMN_OFFSETS, col); e < get(FIELD_COLUMN_OFFSETS, col + 1); e++) {
+            int r = columnRow(e);
+            if (r >= h(H_PARTICLE_CAPACITY) && sourceCell(r) == id) {
+                bulk += bulkPortion(r, volume(r));
+                m += mass(r);
+                solid += double(volume(r));
+            }
+        }
+        cellState(id, bulk, m, solid);
+        write(FIELD_AVAILABLE_BULK, id,
+              max(0.0, openSvq(id) - max(0.0, double(integer(h(H_FIXED_SVQ) + 2 * id)) - solid)));
+        return;
+    }
+    if (p.stage == 4) {
+        settleColumn(id);
+        return;
+    }
+    if (p.stage == 5) {
+        relaxPair(id);
+        return;
+    }
+    if (p.stage == 6) {
+        wakeColumn(id);
+        return;
+    }
+    if (p.stage == 7) {
+        if (!live(id))
+            return;
+        put(FIELD_ACTIVE_COUNTS, id, activeRoute(id) ? 1 : 0);
+        return;
+    }
+    if (p.stage == 8) {
+        if (!live(id))
+            return;
+        for (int part = 0; part < 2; part++)
+            if (transferredVolume(id, part) > 0l && !isActive(id, part))
+                hashSlot(destinationCell(id, part) * h(H_MATERIAL_COUNT) + materialOf(id), true);
+        return;
+    }
+    if (p.stage == 9) {
+        put(FIELD_HASH_COUNTS, id, get(FIELD_HASH_KEYS, id) < 0 ? 0 : 1);
+        return;
+    }
+    if (p.stage == 10) {
+        int pa = get(FIELD_ACTIVE_OFFSETS, h(H_INPUT_ROWS)), pd = get(FIELD_HASH_OFFSETS, h(H_HASH_SIZE));
+        put(FIELD_CONTROL, 0, pa);
+        put(FIELD_CONTROL, 1, pd);
+        if (pa > h(H_PARTICLE_CAPACITY) || pd > h(H_DEPOSIT_CAPACITY)) {
+            atomicOr(errors, 64u);
+            return;
+        }
+        words[dst(GRANULAR_COUNTS)] = uint(pa);
+        words[dst(GRANULAR_COUNTS) + 1] = uint(pd);
+        return;
+    }
+    if (p.stage == 11 || p.stage == 12) {
+        if (id < h(H_INPUT_ROWS)) {
+            if (!live(id))
+                return;
+            for (int part = 0; part < 2; part++) {
+                int row = p.stage == 11 ? target(id, part) : get(FIELD_DESTINATIONS, 2 * id + part);
+                if (row < 0)
+                    continue;
+                if (p.stage == 11) {
+                    put(FIELD_DESTINATIONS, 2 * id + part, row);
+                    atomicAdd(words[at(FIELD_ROW_COUNTS) + row], 1u);
+                } else {
+                    int slot = int(atomicAdd(words[at(FIELD_ROW_CURSORS) + row], 1u));
+                    put(FIELD_ROW_ENTRIES, get(FIELD_ROW_OFFSETS, row) + slot, 2 * id + part);
+                }
+            }
+        } else {
+            int row = id;
+            if (integer(src(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row) <= 0l)
+                return;
+            if (p.stage == 11)
+                atomicAdd(words[at(FIELD_ROW_COUNTS) + row], 1u);
+            else {
+                int slot = int(atomicAdd(words[at(FIELD_ROW_CURSORS) + row], 1u));
+                put(FIELD_ROW_ENTRIES, get(FIELD_ROW_OFFSETS, row) + slot, 2 * h(H_INPUT_ROWS) + id - h(H_INPUT_ROWS));
+            }
+        }
+        return;
+    }
+    if (p.stage == 13) {
+        outint(dst(GRANULAR_SOLID_VOLUME_SVQ) + 2 * id, 0l);
+        outint(dst(GRANULAR_MASS_UNITS) + 2 * id, 0l);
+        outint(dst(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * id, 0l);
+        outnum(dst(GRANULAR_INTERNAL_ENERGY) + 2 * id, 0.0);
+        words[dst(GRANULAR_MIXTURE_PRESENT) + id] = 0u;
+        gatherRow(id, false);
+        write(FIELD_FINAL_ENERGY, id, num(dst(GRANULAR_INTERNAL_ENERGY) + 2 * id));
+        return;
+    }
+    if (p.stage == 14) {
+        int species = int(words[dst(GRANULAR_SPECIES_OFFSETS) + h(H_ROW_CAPACITY)]);
+        put(FIELD_CONTROL, 2, species);
+        if (species > h(H_SPECIES_CAPACITY)) {
+            atomicOr(errors, 64u);
+            return;
+        }
+        words[dst(GRANULAR_COUNTS) + 2] = uint(species);
+        outint(dst(GRANULAR_LOGICAL_STEP), integer(src(GRANULAR_LOGICAL_STEP)) + (p.duration > 0.0 ? 1l : 0l));
+        return;
+    }
+    if (p.stage == 15)
+        gatherRow(id, true);
 }

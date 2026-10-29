@@ -132,6 +132,7 @@ final class OwnershipTransactionCoordinator {
 	}
 
 	ReleaseAttempt release(MinecraftServer server, FluidRegion region) {
+		if (!region.allWorldCellsAvailable()) return ReleaseAttempt.refused("归还区域需要所有区块加载");
 		if (region.footprint() != null
 				&& region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.POOL)
 			return returnPoolWater(server, region);
@@ -139,8 +140,9 @@ final class OwnershipTransactionCoordinator {
 		long targetGeneration = -1L;
 		try {
 			if (!region.solverLoaded()) repository.restore(region);
-			if (region.domain().particleCount() != 0 || region.domain().totalGranularSolidVolumeSvq() > 0L
-					|| region.domain().totalCoherentSolidVolumeSvq() > 0L) {
+			var inventory = region.hostSnapshot();
+			if (inventory.particleCount() != 0 || inventory.totalGranularSolidVolumeSvq() > 0L
+					|| inventory.totalCoherentSolidVolumeSvq() > 0L) {
 				return ReleaseAttempt.refused("区域 " + region.id()
 						+ " 仍持有流体、颗粒或连续固相库存；请先 empty 后再移除");
 			}
@@ -215,7 +217,7 @@ final class OwnershipTransactionCoordinator {
 		OwnershipCommitted owned = files.readCommitted();
 		if (!owned.regionId().equals(region.id()) || !owned.dimensionId().equals(region.dimension().identifier().toString())
 				|| owned.generation() > region.checkpointGeneration()) throw new IOException("水池世界归属与区域不一致");
-		var domain = mmm.fluid.FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+		var domain = region.beginHostEdit();
 		int cellsPerBlock = (int) Math.round(1.0 / domain.config().cellSize());
 		if (cellsPerBlock * (double) domain.config().cellSize() != 1.0) throw new IOException("当前网格无法表示完整原版水方块");
 		var returned = new ArrayList<OwnershipJournal.BlockEntry>();
@@ -241,6 +243,7 @@ final class OwnershipTransactionCoordinator {
 	}
 
 	ReleaseAttempt returnPoolWater(MinecraftServer server, FluidRegion region) {
+		if (!region.allWorldCellsAvailable()) return ReleaseAttempt.refused("归还原版水需要所有区块加载");
 		OwnershipFiles files = ownershipStore.files(region.id());
 		long base = -1, target = -1;
 		try {

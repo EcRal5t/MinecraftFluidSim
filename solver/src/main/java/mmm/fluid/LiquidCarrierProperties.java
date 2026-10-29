@@ -32,7 +32,7 @@ final class LiquidCarrierProperties {
 	private final double[] observationMass;
 	private boolean buoyancyPrepared;
 	private Revision built;
-	private FluidDomain.CarrierViscosityStats publishedStats = new FluidDomain.CarrierViscosityStats(0, "");
+	private FluidDomainContracts.CarrierViscosityStats publishedStats = new FluidDomainContracts.CarrierViscosityStats(0, "");
 	private int extrapolatedCells;
 	private String sampleMaterialId;
 	private double sampleTemperatureK;
@@ -92,13 +92,13 @@ final class LiquidCarrierProperties {
 
 	void invalidate() { built = null; buoyancyPrepared = false; }
 
-	FluidDomain.CarrierViscosityStats finishStep() {
-		publishedStats = new FluidDomain.CarrierViscosityStats(extrapolatedCells, extrapolatedSample());
+	FluidDomainContracts.CarrierViscosityStats finishStep() {
+		publishedStats = new FluidDomainContracts.CarrierViscosityStats(extrapolatedCells, extrapolatedSample());
 		return publishedStats;
 	}
 
 	/** Reading diagnostics never rebuilds physical properties or changes the last successful result. */
-	FluidDomain.CarrierViscosityStats stats() {
+	FluidDomainContracts.CarrierViscosityStats stats() {
 		return publishedStats;
 	}
 
@@ -108,7 +108,7 @@ final class LiquidCarrierProperties {
 	 * <p>{@code thermal} may be null for layouts without thermal capability; those cells then take the
 	 * isothermal computation convention from {@link MaterialRegistry#STANDARD_TEMPERATURE_K}.
 	 */
-	void refresh(FluidDomain domain, ThermalCarrierContext markers, FluidMaterialRegistry materials,
+	void refresh(HostFluidState domain, ThermalCarrierContext markers, FluidMaterialRegistry materials,
 			MaterialRegistry definitions, GranularDomainState granular, ThermalDomainState thermal, long carrierMutation) {
 		if (built != null && built.carrierMutation() == carrierMutation
 				&& (thermal == null ? built.thermal() == null : thermal.matchesCondensedRevision(built.thermal()))) return;

@@ -16,14 +16,14 @@ import mmm.units.SignedDyadic;
  * the thermal state owner; no energy truth is copied into the gas side.
  */
 final class GasLifecyclePlanner {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	GasLifecyclePlanner(FluidDomain domain) {
+	GasLifecyclePlanner(HostFluidState domain) {
 		this.domain = domain;
 	}
 
 	/** Prevalidates an operator vent without treating ambient as inventory. */
-	FluidDomain.OperatorGasVentPlan planVent() {
+	FluidDomainContracts.OperatorGasVentPlan planVent() {
 		if (domain.hasPendingPhaseMotionWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
@@ -44,13 +44,13 @@ final class GasLifecyclePlanner {
 				availableVolumes, vacuum, GasAuditLedger.EMPTY, removed, domain.gasState.network.edges());
 		GasEnergyStore.GasVentPlan thermalPlan = domain.thermalState == null ? null
 				: domain.thermalState.planGasVent(domain.gasState.network, domain.liquidCells.physicalSize());
-		return new FluidDomain.OperatorGasVentPlan(nodeCount, removed, gasPlan, thermalPlan,
+		return new FluidDomainContracts.OperatorGasVentPlan(nodeCount, removed, gasPlan, thermalPlan,
 				domain.thermalState == null ? null : domain.thermalState.thermalRevision(),
 				sourceGeometry);
 	}
 
 	/** Leaves a complete sealed vacuum topology and books the removed gas plus U to sinks. */
-	FluidDomain.OperatorGasVent commitVent(FluidDomain.OperatorGasVentPlan plan) {
+	FluidDomainContracts.OperatorGasVent commitVent(FluidDomainContracts.OperatorGasVentPlan plan) {
 		domain.domainFlowFields.ensureInventoryGrid();
 		if (plan == null || domain.gasState.network.nodeCount() != plan.nodeCount()
 				|| (domain.gasState.frame == null) != (plan.sourceGeometry() == null)
@@ -68,7 +68,7 @@ final class GasLifecyclePlanner {
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasVent(plan.thermalPlan());
 		domain.gasState.network.commitRemapNodes(plan.gasPlan());
 		domain.gasState.pressureActive = domain.gasBoundary.nodeCount() > 0;
-		return new FluidDomain.OperatorGasVent(plan.removed(), plan.thermalPlan() == null
+		return new FluidDomainContracts.OperatorGasVent(plan.removed(), plan.thermalPlan() == null
 				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
 	}
 }

@@ -10,7 +10,7 @@ import mmm.fluid.GasLiquidContactGeometry.Point;
 final class WaterContactGeometry {
 	private WaterContactGeometry() { }
 
-	static List<FluidDomain.WaterContact> capture(FluidDomain domain, List<FluidDomain.WaterContactFace> faces) {
+	static List<FluidDomainContracts.WaterContact> capture(HostFluidState domain, List<FluidDomainContracts.WaterContactFace> faces) {
 		if (faces == null) throw new IllegalArgumentException("Water contact faces are missing");
 		domain.domainFlowFields.preparePhysicalState();
 		var frame = domain.gasState.frame;
@@ -66,11 +66,11 @@ final class WaterContactGeometry {
 				}
 			}
 		}
-		var result = new ArrayList<FluidDomain.WaterContact>();
+		var result = new ArrayList<FluidDomainContracts.WaterContact>();
 		for (var entry : areas.entrySet()) {
 			var key = entry.getKey();
 			var stock = domain.liquidCells.stock(key);
-			result.add(new FluidDomain.WaterContact(key.cell(), key.supportMask(), key.material(), entry.getValue(),
+			result.add(new FluidDomainContracts.WaterContact(key.cell(), key.supportMask(), key.material(), entry.getValue(),
 					domain.unitScale.cubicMeters(stock.volumeFraction())));
 		}
 		return List.copyOf(result);
@@ -80,7 +80,7 @@ final class WaterContactGeometry {
 		return new Point(axis == 0 ? sign : 0, axis == 1 ? sign : 0, axis == 2 ? sign : 0);
 	}
 
-	private static boolean isWater(FluidDomain domain, int material) {
+	private static boolean isWater(HostFluidState domain, int material) {
 		return domain.materialRegistry == null ? material == 0
 				: domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER.id());
 	}

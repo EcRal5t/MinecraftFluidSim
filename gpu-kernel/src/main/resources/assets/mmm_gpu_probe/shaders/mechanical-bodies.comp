@@ -1,23 +1,24 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+// HOST_LAYOUT
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint words[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; } p;
 int h(int i){return int(words[p.header+i]);}
-int gasCount(){return h(17)<0?0:int(words[h(17)]);}
-int particleCount(){return h(18)==0?0:int(words[h(19)]);}
-bool liveVertex(int index){if(index<h(3))return true;if(index<h(3)+h(10))return index<h(3)+gasCount();return index<h(3)+h(10)+particleCount();}
+int gasCount(){return h(H_GAS_COUNTS)<0?0:int(words[h(H_GAS_COUNTS)]);}
+int particleCount(){return h(H_PARTICLE_CAPACITY)==0?0:int(words[h(H_GRAIN_COUNTS)]);}
+bool liveVertex(int index){if(index<h(H_CELLS))return true;if(index<h(H_CELLS)+h(H_GAS_CAPACITY))return index<h(H_CELLS)+gasCount();return index<h(H_CELLS)+h(H_GAS_CAPACITY)+particleCount();}
 double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 int64_t mass(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
-int64_t routeMass(int stock,int slot){uint mask=words[h(28)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(27)+stock])+bitCount(mask&((1u<<slot)-1u));return mass(h(7)+2*r);}
+int64_t routeMass(int stock,int slot){uint mask=words[h(H_ROUTE_MASKS)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(H_ROUTE_OFFSETS)+stock])+bitCount(mask&((1u<<slot)-1u));return mass(h(H_ROUTE_MASS)+2*r);}
 int root(int vertex){
-    int next=int(atomicAdd(words[h(11)+vertex],0u));
+    int next=int(atomicAdd(words[h(H_PARENTS)+vertex],0u));
     while(next!=vertex){
-        int parent=int(atomicAdd(words[h(11)+next],0u));
-        atomicCompSwap(words[h(11)+vertex],uint(next),uint(parent));
+        int parent=int(atomicAdd(words[h(H_PARENTS)+next],0u));
+        atomicCompSwap(words[h(H_PARENTS)+vertex],uint(next),uint(parent));
         vertex=next;next=parent;
     }return vertex;
 }
@@ -26,58 +27,58 @@ void join(int first,int second){
         int a=root(first),b=root(second);if(a==b)return;
         int high=max(a,b),low=min(a,b);
         // Only roots are linked; every successful link strictly decreases the parent.
-        if(atomicCompSwap(words[h(11)+high],uint(high),uint(low))==uint(high))return;
+        if(atomicCompSwap(words[h(H_PARENTS)+high],uint(high),uint(low))==uint(high))return;
     }
 }
-int cellIndex(ivec3 pos){return (pos.z*h(1)+pos.y)*h(0)+pos.x;}
+int cellIndex(ivec3 pos){return (pos.z*h(H_SIZE_Y)+pos.y)*h(H_SIZE_X)+pos.x;}
 void face(int index){
-    int nx=(h(0)+1)*h(1)*h(2),ny=h(0)*(h(1)+1)*h(2);
+    int nx=(h(H_SIZE_X)+1)*h(H_SIZE_Y)*h(H_SIZE_Z),ny=h(H_SIZE_X)*(h(H_SIZE_Y)+1)*h(H_SIZE_Z);
     int axis=index<nx?0:index<nx+ny?1:2,local=index-(axis==0?0:axis==1?nx:nx+ny);
-    ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;
+    ivec3 dims=ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));dims[axis]++;
     ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
-    if(pos[axis]==0||pos[axis]==ivec3(h(0),h(1),h(2))[axis])return;
-    int at=h(8)+8*index;
+    if(pos[axis]==0||pos[axis]==ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z))[axis])return;
+    int at=h(H_PROJECTED_FACES)+8*index;
     if(value(at)<=0.0||value(at+4)<=0.0||value(at+6)<=0.0)return;
     ivec3 previous=pos;previous[axis]--;join(cellIndex(previous),cellIndex(pos));
 }
 void cell(int index){
-    if(h(9)>=0){int gas=int(words[h(9)+index]);if(gas>gasCount()||gasCount()>h(10)){atomicOr(errors,32u);return;}if(gas>0)join(index,h(3)+gas-1);}
-    ivec3 pos=ivec3(index%h(0),index/h(0)%h(1),index/(h(0)*h(1)));
-    int first=int(sourceWords[h(6)+index]),last=int(sourceWords[h(6)+index+1]);
+    if(h(H_GAS_CELL_NODES)>=0){int gas=int(words[h(H_GAS_CELL_NODES)+index]);if(gas>gasCount()||gasCount()>h(H_GAS_CAPACITY)){atomicOr(errors,32u);return;}if(gas>0)join(index,h(H_CELLS)+gas-1);}
+    ivec3 pos=ivec3(index%h(H_SIZE_X),index/h(H_SIZE_X)%h(H_SIZE_Y),index/(h(H_SIZE_X)*h(H_SIZE_Y)));
+    int first=int(sourceWords[h(H_SOURCE_CELL_OFFSETS)+index]),last=int(sourceWords[h(H_SOURCE_CELL_OFFSETS)+index+1]);
     for(int side=0;side<6;side++){
         bool moving=false;
         for(int stock=first;stock<last;stock++)if(routeMass(stock,side+1)>int64_t(0)){moving=true;break;}
         if(!moving)continue;
         ivec3 target=pos;target[side/2]+=(side&1)==0?-1:1;
-        if(any(lessThan(target,ivec3(0)))||any(greaterThanEqual(target,ivec3(h(0),h(1),h(2))))){atomicOr(errors,32u);return;}
+        if(any(lessThan(target,ivec3(0)))||any(greaterThanEqual(target,ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z))))){atomicOr(errors,32u);return;}
         join(index,cellIndex(target));
     }
 }
 void particle(int index){
-    if(index>=particleCount())return;int vertex=h(3)+h(10)+index;
-    if(h(25)>=0){int component=int(words[h(25)+index]);if(component<0||component>=particleCount()){atomicOr(errors,32u);return;}join(vertex,h(3)+h(10)+component);}
-    for(int slot=0;slot<8;slot++)if(mass(h(24)+2*(8*index+slot))>int64_t(0))join(vertex,int(words[h(23)+8*index+slot]));
+    if(index>=particleCount())return;int vertex=h(H_CELLS)+h(H_GAS_CAPACITY)+index;
+    if(h(H_CONTACT_COMPONENTS)>=0){int component=int(words[h(H_CONTACT_COMPONENTS)+index]);if(component<0||component>=particleCount()){atomicOr(errors,32u);return;}join(vertex,h(H_CELLS)+h(H_GAS_CAPACITY)+component);}
+    for(int slot=0;slot<8;slot++)if(mass(h(H_GRAIN_SUPPORT_QUOTAS)+2*(8*index+slot))>int64_t(0))join(vertex,int(words[h(H_GRAIN_SUPPORT_CELLS)+8*index+slot]));
     for(int entry=24*index;entry<24*(index+1);entry++){
-        if(value(h(21)+2*entry)<=0.0&&(value(h(26)+2*index)<=0.0||value(h(22)+2*entry)<=0.0))continue;
-        int f=int(words[h(20)+entry]);if(f<0)continue;
-        int nx=(h(0)+1)*h(1)*h(2),ny=h(0)*(h(1)+1)*h(2);
+        if(value(h(H_GRAIN_FACE_SHARES)+2*entry)<=0.0&&(value(h(H_GRAIN_DRAG_RESISTANCE)+2*index)<=0.0||value(h(H_GRAIN_DRAG_WEIGHTS)+2*entry)<=0.0))continue;
+        int f=int(words[h(H_GRAIN_FACE_IDS)+entry]);if(f<0)continue;
+        int nx=(h(H_SIZE_X)+1)*h(H_SIZE_Y)*h(H_SIZE_Z),ny=h(H_SIZE_X)*(h(H_SIZE_Y)+1)*h(H_SIZE_Z);
         int axis=f<nx?0:f<nx+ny?1:2,local=f-(axis==0?0:axis==1?nx:nx+ny);
-        ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;
+        ivec3 dims=ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));dims[axis]++;
         ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
-        if(pos[axis]<ivec3(h(0),h(1),h(2))[axis])join(vertex,cellIndex(pos));
+        if(pos[axis]<ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z))[axis])join(vertex,cellIndex(pos));
         if(pos[axis]>0){pos[axis]--;join(vertex,cellIndex(pos));}
     }
 }
 void main(){
     int item=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(item>=p.count||errors!=0u)return;
-    if(p.stage==0){words[h(11)+item]=uint(item);words[h(13)+item]=0u;words[h(15)+item]=0u;if(item==0)words[h(12)]=1u;}
-    else if(p.stage==1)words[h(12)]=0u;
+    if(p.stage==0){words[h(H_PARENTS)+item]=uint(item);words[h(H_COUNTS)+item]=0u;words[h(H_CURSORS)+item]=0u;if(item==0)words[h(H_CHANGED)]=1u;}
+    else if(p.stage==1)words[h(H_CHANGED)]=0u;
     else if(p.stage==2)face(item);
     else if(p.stage==3)cell(item);
     else if(p.stage==7)particle(item);
     else if(!liveVertex(item))return;
-    else if(p.stage==4){int parent=root(item);atomicExchange(words[h(11)+item],uint(parent));}
-    else if(p.stage==5){if(words[h(12)]!=0u){atomicOr(errors,8192u);return;}atomicAdd(words[h(13)+int(words[h(11)+item])],1u);}
-    else {int parent=int(words[h(11)+item]);uint offset=atomicAdd(words[h(15)+parent],1u);words[h(16)+int(words[h(14)+parent]+offset)]=uint(item);}
+    else if(p.stage==4){int parent=root(item);atomicExchange(words[h(H_PARENTS)+item],uint(parent));}
+    else if(p.stage==5){if(words[h(H_CHANGED)]!=0u){atomicOr(errors,8192u);return;}atomicAdd(words[h(H_COUNTS)+int(words[h(H_PARENTS)+item])],1u);}
+    else {int parent=int(words[h(H_PARENTS)+item]);uint offset=atomicAdd(words[h(H_CURSORS)+parent],1u);words[h(H_MEMBERS)+int(words[h(H_OFFSETS)+parent]+offset)]=uint(item);}
 }

@@ -2,133 +2,436 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_shader_atomic_int64 : require
-layout(local_size_x=128)in;
-layout(binding=0,std430)buffer Arena{uint words[];};
-layout(binding=1,std430)buffer Errors{uint errors;};
-layout(binding=2,std430)buffer AtomicArena{int64_t integers[];};
-layout(push_constant)uniform Params{int header;int stage;int count;}p;
-const int64_t LIMIT=int64_t(0x7fffffffffffffffUL),QUANTA_LIMIT=2000000000000000l;
-int h(int i){return int(words[p.header+i]);}int liquid(int i){return h(16+i);}int th(int i){return int(words[h(4)+i]);}
-int def(int i){return int(words[h(3)+i]);}int dword(int i){return int(words[h(3)+i]);}
-int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-void integerAt(int a,int64_t q){words[a]=uint(q);words[a+1]=uint(uint64_t(q)>>32);}
-double number(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
-void numberAt(int a,double q){uvec2 b=unpackDouble2x32(q);words[a]=b.x;words[a+1]=b.y;}
-void invalid(){atomicOr(errors,33554432u);words[h(5)]=5u;}
-int rows(){return int(words[liquid(0)]);}int material(int r){return int(words[liquid(2)+r]);}
-int support(int r){return int(words[liquid(3)+r]);}int phase(int r){return int(words[h(7)+material(r)]);}
-int64_t mass(int r){return integer(liquid(8)+2*r);}int64_t dense(int r,int s){return integer(h(8)+2*(r*h(2)+s));}
-void denseAt(int r,int s,int64_t q){integerAt(h(8)+2*(r*h(2)+s),q);}
-int64_t add(int64_t a,int64_t b){if((b>0l&&a>LIMIT-b)||(b<0l&&a<-LIMIT-b)){invalid();return 0l;}return a+b;}
-u64vec2 product(uint64_t a,uint64_t b){uint64_t mask=uint64_t(0xffffffffu),a0=a&mask,a1=a>>32,b0=b&mask,b1=b>>32;
- uint64_t low=a0*b0,t=a1*b0+(low>>32),middle=(t&mask)+a0*b1;
- return u64vec2((middle<<32)|(low&mask),a1*b1+(t>>32)+(middle>>32));}
-bool lessEqual(u64vec2 a,u64vec2 b){return a.y<b.y||(a.y==b.y&&a.x<=b.x);}
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Arena {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(binding = 2, std430) buffer AtomicArena {
+    int64_t integers[];
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+}
+p;
+bool activeCell(int cell);
+// HOST_LAYOUT
+const int64_t LIMIT = int64_t(0x7fffffffffffffffUL), QUANTA_LIMIT = 2000000000000000l;
+int h(int i) {
+    return int(words[p.header + i]);
+}
+int liquid(int i) {
+    return h(STOCK_FIELDS + i);
+}
+int th(int i) {
+    return int(words[h(H_CALORIC_HEADER) + i]);
+}
+int def(int i) {
+    return int(words[h(H_DEFINITIONS) + i]);
+}
+int dword(int i) {
+    return int(words[h(H_DEFINITIONS) + i]);
+}
+int64_t integer(int a) {
+    return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
+}
+void integerAt(int a, int64_t q) {
+    words[a] = uint(q);
+    words[a + 1] = uint(uint64_t(q) >> 32);
+}
+double number(int a) {
+    return packDouble2x32(uvec2(words[a], words[a + 1]));
+}
+void numberAt(int a, double q) {
+    uvec2 b = unpackDouble2x32(q);
+    words[a] = b.x;
+    words[a + 1] = b.y;
+}
+void invalid() {
+    atomicOr(errors, 33554432u);
+    words[h(H_CONTROL)] = 5u;
+}
+int rows() {
+    return int(words[liquid(STOCK_COUNTS)]);
+}
+int material(int r) {
+    return int(words[liquid(STOCK_MATERIALS) + r]);
+}
+int support(int r) {
+    return int(words[liquid(STOCK_SUPPORT_MASKS) + r]);
+}
+int phase(int r) {
+    return int(words[h(H_PHASE_TABLE) + material(r)]);
+}
+int64_t mass(int r) {
+    return integer(liquid(STOCK_MASS_UNITS) + 2 * r);
+}
+int64_t dense(int r, int s) {
+    return integer(h(H_DENSE) + 2 * (r * h(H_SPECIES_COUNT) + s));
+}
+void denseAt(int r, int s, int64_t q) {
+    integerAt(h(H_DENSE) + 2 * (r * h(H_SPECIES_COUNT) + s), q);
+}
+int64_t add(int64_t a, int64_t b) {
+    if ((b > 0l && a > LIMIT - b) || (b < 0l && a < -LIMIT - b)) {
+        invalid();
+        return 0l;
+    }
+    return a + b;
+}
+u64vec2 product(uint64_t a, uint64_t b) {
+    uint64_t mask = uint64_t(0xffffffffu), a0 = a & mask, a1 = a >> 32, b0 = b & mask, b1 = b >> 32;
+    uint64_t low = a0 * b0, t = a1 * b0 + (low >> 32), middle = (t & mask) + a0 * b1;
+    return u64vec2((middle << 32) | (low & mask), a1 * b1 + (t >> 32) + (middle >> 32));
+}
+bool lessEqual(u64vec2 a, u64vec2 b) {
+    return a.y < b.y || (a.y == b.y && a.x <= b.x);
+}
 // A binary64 estimate is corrected against the exact 128-bit product.
-int64_t portion(int64_t amount,int64_t weight,int64_t total){if(amount==0l||weight==0l)return 0l;if(weight==total)return amount;
- uint64_t q=min(uint64_t(amount),uint64_t(floor(double(amount)*(double(weight)/double(total)))));
- u64vec2 target=product(uint64_t(amount),uint64_t(weight));
- while(!lessEqual(product(q,uint64_t(total)),target))q--;
- while(q<uint64_t(amount)&&lessEqual(product(q+1UL,uint64_t(total)),target))q++;
- return int64_t(q);
+int64_t portion(int64_t amount, int64_t weight, int64_t total) {
+    if (amount == 0l || weight == 0l)
+        return 0l;
+    if (weight == total)
+        return amount;
+    uint64_t q = min(uint64_t(amount), uint64_t(floor(double(amount) * (double(weight) / double(total)))));
+    u64vec2 target = product(uint64_t(amount), uint64_t(weight));
+    while (!lessEqual(product(q, uint64_t(total)), target))
+        q--;
+    while (q < uint64_t(amount) && lessEqual(product(q + 1UL, uint64_t(total)), target))
+        q++;
+    return int64_t(q);
 }
-bool same(int a,int b){return support(a)==support(b)&&phase(a)==phase(b);}
-double baseCold(int r){int m=material(r);return double(mass(r))*1e-10*(number(th(3)+2*m)+number(th(9)+2*m));}
-double speciesReference(int r,int s){return number(th(4)+2*(material(r)*th(2)+s));}
-double rowCold(int r){double q=baseCold(r);for(int s=0;s<h(2);s++){int64_t amount=dense(r,s);if(amount!=0l)q+=double(amount)*speciesReference(r,s);}return q;}
-double groupCold(int first,int end,int64_t amounts[256],int64_t totalMass){double q=0.0;int64_t prefix=0l;
- for(int r=first;r<end;r++)if(same(first,r)){
-  int64_t next=add(prefix,mass(r));q+=baseCold(r);
-  for(int s=0;s<h(2);s++)if(amounts[s]!=0l){int64_t amount=portion(amounts[s],next,totalMass)-portion(amounts[s],prefix,totalMass);if(amount!=0l)q+=double(amount)*speciesReference(r,s);}
-  prefix=next;
- }return q;
+bool same(int a, int b) {
+    return support(a) == support(b) && phase(a) == phase(b);
 }
-bool representable(int first,int end,int64_t amounts[256],int64_t totalMass){int64_t prefix=0l;
- for(int r=first;r<end;r++)if(same(first,r)){int64_t next=add(prefix,mass(r));int count=0;
-  for(int s=0;s<h(2);s++)if(portion(amounts[s],next,totalMass)>portion(amounts[s],prefix,totalMass))count++;
-  if(count>16)return false;prefix=next;
- }return true;
+double baseCold(int r) {
+    int m = material(r);
+    return double(mass(r)) * 1e-10 * (number(th(CAL_MATERIAL_REFERENCE) + 2 * m) + number(th(CAL_COLD_SENSIBLE) + 2 * m));
 }
-bool reserveQuanta(int64_t delta){if(delta<=0l){atomicAdd(integers[h(40)/2],delta);return true;}
- int64_t old=atomicAdd(integers[h(40)/2],0l);
- for(;;){if(old>QUANTA_LIMIT-delta)return false;int64_t actual=atomicCompSwap(integers[h(40)/2],old,old+delta);if(actual==old)return true;old=actual;}
+double speciesReference(int r, int s) {
+    return number(th(CAL_SPECIES_REFERENCE) + 2 * (material(r) * th(CAL_SPECIES_STRIDE) + s));
 }
-void initialize(int r){words[h(9)+r]=0u;numberAt(h(14)+2*r,0.0LF);numberAt(h(41)+2*r,0.0LF);if(r>=rows())return;
- for(int s=0;s<h(2);s++)denseAt(r,s,0l);
- for(int i=int(words[liquid(11)+r]);i<int(words[liquid(11)+r+1]);i++){
-  int s=int(words[liquid(12)+i]);int64_t q=integer(liquid(13)+2*i);
-  if(s<0||s>=h(2)||q<0l){invalid();return;}denseAt(r,s,q);atomicAdd(integers[h(40)/2],q);
- }
- numberAt(h(14)+2*r,number(liquid(9)+2*r));
- numberAt(h(41)+2*r,number(liquid(9)+2*r));
+double rowCold(int r) {
+    double q = baseCold(r);
+    for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
+        int64_t amount = dense(r, s);
+        if (amount != 0l)
+            q += double(amount) * speciesReference(r, s);
+    }
+    return q;
 }
-void advance(int64_t before[256],out int64_t after[256],int rule,int64_t extent){for(int s=0;s<h(2);s++)after[s]=before[s];
- for(int side=0;side<2;side++){int start=dword(rule+2+2*side),count=dword(rule+3+2*side);
-  for(int t=0;t<count;t++){int species=dword(start+2*t),coefficient=dword(start+2*t+1);int64_t q=extent*int64_t(coefficient);
-   after[species]=add(after[species],side==0?-q:q);
-  }}
+double groupCold(int first, int end, int64_t amounts[256], int64_t totalMass) {
+    double q = 0.0;
+    int64_t prefix = 0l;
+    for (int r = first; r < end; r++)
+        if (same(first, r)) {
+            int64_t next = add(prefix, mass(r));
+            q += baseCold(r);
+            for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                if (amounts[s] != 0l) {
+                    int64_t amount = portion(amounts[s], next, totalMass) - portion(amounts[s], prefix, totalMass);
+                    if (amount != 0l)
+                        q += double(amount) * speciesReference(r, s);
+                }
+            prefix = next;
+        }
+    return q;
 }
-double capacityAt(int r,double t){int m=material(r),first=int(words[th(5)+m]),last=int(words[th(5)+m+1])-1,segment=first;
- while(segment<last&&t>=number(th(6)+2*segment))segment++;return double(mass(r))*1e-10*number(th(7)+2*segment);
+bool representable(int first, int end, int64_t amounts[256], int64_t totalMass) {
+    int64_t prefix = 0l;
+    for (int r = first; r < end; r++)
+        if (same(first, r)) {
+            int64_t next = add(prefix, mass(r));
+            int count = 0;
+            for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                if (portion(amounts[s], next, totalMass) > portion(amounts[s], prefix, totalMass))
+                    count++;
+            if (count > 16)
+                return false;
+            prefix = next;
+        }
+    return true;
 }
-double sensibleAboveCold(int r,double t){int m=material(r),first=int(words[th(5)+m]),last=int(words[th(5)+m+1])-1;double lower=number(h(4)+44),sum=0.0;
- for(int s=first;s<=last&&lower<t;s++){double upper=s==last?t:min(t,number(th(6)+2*s));
-  if(upper>lower){sum+=(upper-lower)*number(th(7)+2*s);lower=upper;}}
- return double(mass(r))*1e-10*sum;
+bool reserveQuanta(int64_t delta) {
+    if (delta <= 0l) {
+        atomicAdd(integers[h(H_TOTAL_QUANTA) / 2], delta);
+        return true;
+    }
+    int64_t old = atomicAdd(integers[h(H_TOTAL_QUANTA) / 2], 0l);
+    for (;;) {
+        if (old > QUANTA_LIMIT - delta)
+            return false;
+        int64_t actual = atomicCompSwap(integers[h(H_TOTAL_QUANTA) / 2], old, old + delta);
+        if (actual == old)
+            return true;
+        old = actual;
+    }
 }
-void cell(int c){int begin=int(words[liquid(1)+c]),end=int(words[liquid(1)+c+1]);words[h(6)+c]=0u;if(begin==end)return;
- double energy=0.0,cold=0.0;for(int r=begin;r<end;r++){energy+=number(liquid(9)+2*r);cold+=rowCold(r);}
- bool changed=false,pending=false;
- for(int first=begin;first<end;first++){
-  if(phase(first)<0)continue;bool representative=true;for(int r=begin;r<first;r++)if(same(first,r)){representative=false;break;}if(!representative)continue;
-  int64_t amounts[256],candidate[256];for(int s=0;s<h(2);s++)amounts[s]=0l;int64_t totalMass=0l,oldTotal=0l;
-  for(int r=first;r<end;r++)if(same(first,r)){totalMass=add(totalMass,mass(r));for(int s=0;s<h(2);s++)amounts[s]=add(amounts[s],dense(r,s));}
-  if(totalMass<=0l)continue;for(int s=0;s<h(2);s++)oldTotal=add(oldTotal,amounts[s]);
-  double previousCold=0.0;for(int r=first;r<end;r++)if(same(first,r))previousCold+=rowCold(r);
-  double otherCold=cold-previousCold;bool groupChanged=false;
-  for(int i=0;i<def(4);i++){int directory=def(5)+2*i;if(dword(directory)!=0)continue;int rule=dword(directory+1);if(dword(rule)!=phase(first))continue;
-   atomicAdd(words[h(5)+3],1u);int64_t maximum=LIMIT;int reactants=dword(rule+2),count=dword(rule+3);
-   for(int term=0;term<count;term++)maximum=min(maximum,amounts[dword(reactants+2*term)]/int64_t(dword(reactants+2*term+1)));
-   if(maximum<=0l||maximum==LIMIT)continue;int64_t accepted=maximum;advance(amounts,candidate,rule,accepted);
-   if(groupCold(first,end,candidate,totalMass)>energy-otherCold){int64_t low=0l,high=accepted;
-    while(low<high){int64_t middle=low+(high-low+1l)/2l;advance(amounts,candidate,rule,middle);
-     if(groupCold(first,end,candidate,totalMass)<=energy-otherCold)low=middle;else high=middle-1l;}
-    accepted=low;advance(amounts,candidate,rule,accepted);
-   }
-   pending=pending||accepted<maximum;if(accepted==0l)continue;for(int s=0;s<h(2);s++)amounts[s]=candidate[s];groupChanged=true;
-  }
-  if(!groupChanged)continue;int64_t newTotal=0l;for(int s=0;s<h(2);s++)newTotal=add(newTotal,amounts[s]);
-  if(!representable(first,end,amounts,totalMass)||!reserveQuanta(newTotal-oldTotal)){pending=true;continue;}
-  int64_t prefix=0l;for(int r=first;r<end;r++)if(same(first,r)){int64_t next=add(prefix,mass(r));
-   for(int s=0;s<h(2);s++)denseAt(r,s,portion(amounts[s],next,totalMass)-portion(amounts[s],prefix,totalMass));prefix=next;}
-  cold=otherCold+groupCold(first,end,amounts,totalMass);changed=true;
- }
- if(pending){words[h(6)+c]=1u;atomicAdd(words[h(5)+5],1u);}if(!changed)return;atomicAdd(words[h(5)+4],1u);
- double t=number(h(4)+44),remaining=max(0.0LF,energy-cold);
- for(;;){double cv=0.0,next=1.7976931348623157e308;
-  for(int r=begin;r<end;r++)if(mass(r)>0l){cv+=capacityAt(r,t);int m=material(r),s=int(words[th(5)+m]),last=int(words[th(5)+m+1])-1;
-   while(s<last&&t>=number(th(6)+2*s))s++;if(s<last)next=min(next,number(th(6)+2*s));}
-  if(cv<=0.0)break;double cost=(next-t)*cv;if(next==1.7976931348623157e308||remaining<cost){t+=remaining/cv;break;}remaining-=cost;t=next;
- }
- for(int r=begin;r<end;r++)numberAt(h(14)+2*r,mass(r)>0l?rowCold(r)+sensibleAboveCold(r,t):0.0LF);
+void initialize(int r) {
+    words[h(H_ROW_COUNTS) + r] = 0u;
+    numberAt(h(H_ENERGIES) + 2 * r, 0.0LF);
+    numberAt(h(H_INITIAL_ENERGIES) + 2 * r, 0.0LF);
+    if (r >= rows())
+        return;
+    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+        denseAt(r, s, 0l);
+    for (int i = int(words[liquid(STOCK_SPECIES_OFFSETS) + r]); i < int(words[liquid(STOCK_SPECIES_OFFSETS) + r + 1]);
+         i++) {
+        int s = int(words[liquid(STOCK_SPECIES_HANDLES) + i]);
+        int64_t q = integer(liquid(STOCK_SPECIES_AMOUNTS) + 2 * i);
+        if (s < 0 || s >= h(H_SPECIES_COUNT) || q < 0l) {
+            invalid();
+            return;
+        }
+        denseAt(r, s, q);
+        atomicAdd(integers[h(H_TOTAL_QUANTA) / 2], q);
+    }
+    numberAt(h(H_ENERGIES) + 2 * r, number(liquid(STOCK_ENERGY_BITS) + 2 * r));
+    numberAt(h(H_INITIAL_ENERGIES) + 2 * r, number(liquid(STOCK_ENERGY_BITS) + 2 * r));
 }
-void countRow(int r){if(r>=rows())return;int count=0;int64_t speciesMass=0l;
- for(int s=0;s<h(2);s++){int64_t q=dense(r,s);if(q>0l){count++;int64_t unit=integer(h(3)+def(1)+5*s+1);
-  if(unit>0l&&q>LIMIT/unit){invalid();return;}speciesMass=add(speciesMass,q*unit);}}
- words[h(9)+r]=uint(count);integerAt(h(13)+2*r,mass(r)-speciesMass);
+void advance(int64_t before[256], out int64_t after[256], int rule, int64_t extent) {
+    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+        after[s] = before[s];
+    for (int side = 0; side < 2; side++) {
+        int start = dword(rule + 2 + 2 * side), count = dword(rule + 3 + 2 * side);
+        for (int t = 0; t < count; t++) {
+            int species = dword(start + 2 * t), coefficient = dword(start + 2 * t + 1);
+            int64_t q = extent * int64_t(coefficient);
+            after[species] = add(after[species], side == 0 ? -q : q);
+        }
+    }
 }
-void scatter(int r){if(r>=rows()||int(words[h(5)])!=2)return;int at=int(words[h(10)+r]);
- for(int s=0;s<h(2);s++)if(dense(r,s)>0l){words[h(11)+at]=uint(s);integerAt(h(12)+2*at,dense(r,s));at++;}
+double capacityAt(int r, double t) {
+    int m = material(r), first = int(words[th(CAL_SEGMENT_OFFSETS) + m]), last = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]) - 1, segment = first;
+    while (segment < last && t >= number(th(CAL_SEGMENT_UPPER) + 2 * segment))
+        segment++;
+    return double(mass(r)) * 1e-10 * number(th(CAL_SEGMENT_CAPACITY) + 2 * segment);
 }
-void publish(int id){if(int(words[h(5)])!=2)return;int required=int(words[h(10)+h(1)]);
- if(id<required){words[liquid(12)+id]=words[h(11)+id];integerAt(liquid(13)+2*id,integer(h(12)+2*id));}
- if(id<=h(1))words[liquid(11)+id]=words[h(10)+id];
- if(id<rows()){integerAt(liquid(14)+2*id,integer(h(13)+2*id));numberAt(liquid(9)+2*id,number(h(14)+2*id));words[liquid(10)+id]=words[h(9)+id]>0u?1u:words[liquid(10)+id];}
- if(id==0)words[liquid(0)+1]=uint(required);
+double sensibleAboveCold(int r, double t) {
+    int m = material(r), first = int(words[th(CAL_SEGMENT_OFFSETS) + m]), last = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+    double lower = number(h(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), sum = 0.0;
+    for (int s = first; s <= last && lower < t; s++) {
+        double upper = s == last ? t : min(t, number(th(CAL_SEGMENT_UPPER) + 2 * s));
+        if (upper > lower) {
+            sum += (upper - lower) * number(th(CAL_SEGMENT_CAPACITY) + 2 * s);
+            lower = upper;
+        }
+    }
+    return double(mass(r)) * 1e-10 * sum;
 }
-void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count)return;
- if(p.stage==6){for(int i=0;i<8;i++)words[h(5)+i]=0u;integerAt(h(40),0l);return;}if(errors!=0u)return;
- if(p.stage==0)initialize(id);else if(p.stage==1)cell(id);else if(p.stage==2)countRow(id);
- else if(p.stage==3){int required=int(words[h(10)+h(1)]);words[h(5)+2]=uint(required);words[h(5)]=required>h(15)?1u:2u;}
- else if(p.stage==4)scatter(id);else if(p.stage==5)publish(id);
+void cell(int c) {
+    if (!activeCell(c))
+        return;
+    int begin = int(words[liquid(STOCK_CELL_OFFSETS) + c]), end = int(words[liquid(STOCK_CELL_OFFSETS) + c + 1]);
+    words[h(H_DIRTY_CELLS) + c] = 0u;
+    if (begin == end)
+        return;
+    double energy = 0.0, cold = 0.0;
+    for (int r = begin; r < end; r++) {
+        energy += number(liquid(STOCK_ENERGY_BITS) + 2 * r);
+        cold += rowCold(r);
+    }
+    bool changed = false, pending = false;
+    for (int first = begin; first < end; first++) {
+        if (phase(first) < 0)
+            continue;
+        bool representative = true;
+        for (int r = begin; r < first; r++)
+            if (same(first, r)) {
+                representative = false;
+                break;
+            }
+        if (!representative)
+            continue;
+        int64_t amounts[256], candidate[256];
+        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+            amounts[s] = 0l;
+        int64_t totalMass = 0l, oldTotal = 0l;
+        for (int r = first; r < end; r++)
+            if (same(first, r)) {
+                totalMass = add(totalMass, mass(r));
+                for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                    amounts[s] = add(amounts[s], dense(r, s));
+            }
+        if (totalMass <= 0l)
+            continue;
+        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+            oldTotal = add(oldTotal, amounts[s]);
+        double previousCold = 0.0;
+        for (int r = first; r < end; r++)
+            if (same(first, r))
+                previousCold += rowCold(r);
+        double otherCold = cold - previousCold;
+        bool groupChanged = false;
+        for (int i = 0; i < def(4); i++) {
+            int directory = def(5) + 2 * i;
+            if (dword(directory) != 0)
+                continue;
+            int rule = dword(directory + 1);
+            if (dword(rule) != phase(first))
+                continue;
+            atomicAdd(words[h(H_CONTROL) + 3], 1u);
+            int64_t maximum = LIMIT;
+            int reactants = dword(rule + 2), count = dword(rule + 3);
+            for (int term = 0; term < count; term++)
+                maximum = min(maximum, amounts[dword(reactants + 2 * term)] / int64_t(dword(reactants + 2 * term + 1)));
+            if (maximum <= 0l || maximum == LIMIT)
+                continue;
+            int64_t accepted = maximum;
+            advance(amounts, candidate, rule, accepted);
+            if (groupCold(first, end, candidate, totalMass) > energy - otherCold) {
+                int64_t low = 0l, high = accepted;
+                while (low < high) {
+                    int64_t middle = low + (high - low + 1l) / 2l;
+                    advance(amounts, candidate, rule, middle);
+                    if (groupCold(first, end, candidate, totalMass) <= energy - otherCold)
+                        low = middle;
+                    else
+                        high = middle - 1l;
+                }
+                accepted = low;
+                advance(amounts, candidate, rule, accepted);
+            }
+            pending = pending || accepted < maximum;
+            if (accepted == 0l)
+                continue;
+            for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                amounts[s] = candidate[s];
+            groupChanged = true;
+        }
+        if (!groupChanged)
+            continue;
+        int64_t newTotal = 0l;
+        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+            newTotal = add(newTotal, amounts[s]);
+        if (!representable(first, end, amounts, totalMass) || !reserveQuanta(newTotal - oldTotal)) {
+            pending = true;
+            continue;
+        }
+        int64_t prefix = 0l;
+        for (int r = first; r < end; r++)
+            if (same(first, r)) {
+                int64_t next = add(prefix, mass(r));
+                for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                    denseAt(r, s, portion(amounts[s], next, totalMass) - portion(amounts[s], prefix, totalMass));
+                prefix = next;
+            }
+        cold = otherCold + groupCold(first, end, amounts, totalMass);
+        changed = true;
+    }
+    if (pending) {
+        words[h(H_DIRTY_CELLS) + c] = 1u;
+        atomicAdd(words[h(H_CONTROL) + 5], 1u);
+    }
+    if (!changed)
+        return;
+    atomicAdd(words[h(H_CONTROL) + 4], 1u);
+    double t = number(h(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), remaining = max(0.0LF, energy - cold);
+    for (;;) {
+        double cv = 0.0, next = 1.7976931348623157e308;
+        for (int r = begin; r < end; r++)
+            if (mass(r) > 0l) {
+                cv += capacityAt(r, t);
+                int m = material(r), s = int(words[th(CAL_SEGMENT_OFFSETS) + m]), last = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+                while (s < last && t >= number(th(CAL_SEGMENT_UPPER) + 2 * s))
+                    s++;
+                if (s < last)
+                    next = min(next, number(th(CAL_SEGMENT_UPPER) + 2 * s));
+            }
+        if (cv <= 0.0)
+            break;
+        double cost = (next - t) * cv;
+        if (next == 1.7976931348623157e308 || remaining < cost) {
+            t += remaining / cv;
+            break;
+        }
+        remaining -= cost;
+        t = next;
+    }
+    for (int r = begin; r < end; r++)
+        numberAt(h(H_ENERGIES) + 2 * r, mass(r) > 0l ? rowCold(r) + sensibleAboveCold(r, t) : 0.0LF);
+}
+void countRow(int r) {
+    if (r >= rows())
+        return;
+    int count = 0;
+    int64_t speciesMass = 0l;
+    for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
+        int64_t q = dense(r, s);
+        if (q > 0l) {
+            count++;
+            int64_t unit = integer(h(H_DEFINITIONS) + def(1) + 5 * s + 1);
+            if (unit > 0l && q > LIMIT / unit) {
+                invalid();
+                return;
+            }
+            speciesMass = add(speciesMass, q * unit);
+        }
+    }
+    words[h(H_ROW_COUNTS) + r] = uint(count);
+    integerAt(h(H_RESIDUALS) + 2 * r, mass(r) - speciesMass);
+}
+void scatter(int r) {
+    if (r >= rows() || int(words[h(H_CONTROL)]) != 2)
+        return;
+    int at = int(words[h(H_ROW_OFFSETS) + r]);
+    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+        if (dense(r, s) > 0l) {
+            words[h(H_HANDLES) + at] = uint(s);
+            integerAt(h(H_AMOUNTS) + 2 * at, dense(r, s));
+            at++;
+        }
+}
+void publish(int id) {
+    if (int(words[h(H_CONTROL)]) != 2)
+        return;
+    int required = int(words[h(H_ROW_OFFSETS) + h(H_STOCK_CAPACITY)]);
+    if (id < required) {
+        words[liquid(STOCK_SPECIES_HANDLES) + id] = words[h(H_HANDLES) + id];
+        integerAt(liquid(STOCK_SPECIES_AMOUNTS) + 2 * id, integer(h(H_AMOUNTS) + 2 * id));
+    }
+    if (id <= h(H_STOCK_CAPACITY))
+        words[liquid(STOCK_SPECIES_OFFSETS) + id] = words[h(H_ROW_OFFSETS) + id];
+    if (id < rows()) {
+        integerAt(liquid(STOCK_MASS_RESIDUAL_UNITS) + 2 * id, integer(h(H_RESIDUALS) + 2 * id));
+        numberAt(liquid(STOCK_ENERGY_BITS) + 2 * id, number(h(H_ENERGIES) + 2 * id));
+        words[liquid(STOCK_MIXTURE_PRESENT) + id] =
+            words[h(H_ROW_COUNTS) + id] > 0u ? 1u : words[liquid(STOCK_MIXTURE_PRESENT) + id];
+    }
+    if (id == 0)
+        words[liquid(STOCK_COUNTS) + 1] = uint(required);
+}
+bool activeCell(int cell) {
+    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
+}
+void main() {
+    int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if (id >= p.count)
+        return;
+    if (p.stage == 6) {
+        for (int i = 0; i < 8; i++)
+            words[h(H_CONTROL) + i] = 0u;
+        integerAt(h(H_TOTAL_QUANTA), 0l);
+        return;
+    }
+    if (errors != 0u)
+        return;
+    if (p.stage == 0)
+        initialize(id);
+    else if (p.stage == 1)
+        cell(id);
+    else if (p.stage == 2)
+        countRow(id);
+    else if (p.stage == 3) {
+        int required = int(words[h(H_ROW_OFFSETS) + h(H_STOCK_CAPACITY)]);
+        words[h(H_CONTROL) + 2] = uint(required);
+        words[h(H_CONTROL)] = required > h(H_SPECIES_CAPACITY) ? 1u : 2u;
+    } else if (p.stage == 4)
+        scatter(id);
+    else if (p.stage == 5)
+        publish(id);
 }

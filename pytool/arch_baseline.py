@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit the architecture baseline metrics for the restructuring plan.
 
-Scans production Java sources (api, model, solver, app, core, Fabric and GPU probe) and prints:
+Scans production Java sources (api, model, solver, app, core, Fabric and GPU kernel) and prints:
   1. a markdown table of every production class above the warn threshold (600 lines);
   2. the production class count and total line count per module.
 
@@ -27,7 +27,6 @@ SOURCE_ROOTS = (
     "fabric/src/main/java",
     "fabric/src/client/java",
     "gpu-kernel/src/main/java",
-    "gpu-probe/src/main/java",
 )
 
 

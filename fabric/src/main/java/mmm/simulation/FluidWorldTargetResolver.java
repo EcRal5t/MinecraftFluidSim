@@ -2,7 +2,6 @@ package mmm.simulation;
 
 import mmm.block.MmmBlocks;
 import mmm.block.FluidPortBlock;
-import mmm.fluid.FluidDomain;
 import mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -134,11 +133,10 @@ final class FluidWorldTargetResolver {
 	/** Exact targeting semantics used by the development pour/drain commands. */
 	CellTarget aimedCellForEdit(ServerPlayer player, FluidRegion region, boolean requireFluid) {
 		if (!validPlayerRegion(player, region)) return null;
-		FluidDomain domain = region.domain();
 		Vec3 eye = player.getEyePosition();
 		Vec3 look = player.getLookAngle();
 		double visibleDistance = visibleAimDistance(player);
-		double step = domain.config().cellSize() * 0.25;
+		double step = region.solverConfig().cellSize() * 0.25;
 		CellTarget previousOpen = null;
 		CellTarget previousSample = null;
 		boolean enteredDomain = false;
@@ -153,10 +151,10 @@ final class FluidWorldTargetResolver {
 			if (cell.equals(previousSample)) continue;
 			previousSample = cell;
 			if (requireFluid) {
-				if (hasFluid(domain, cell)) return cell;
-			} else if (domain.isSolid(cell.x(), cell.y(), cell.z())) {
+				if (hasFluid(region, cell)) return cell;
+			} else if (region.solidMicroMask(cell.x(), cell.y(), cell.z()) == 255) {
 				return previousOpen;
-			} else if (hasFluid(domain, cell)) {
+			} else if (hasFluid(region, cell)) {
 				return previousOpen == null ? cell : previousOpen;
 			} else {
 				previousOpen = cell;
@@ -174,13 +172,12 @@ final class FluidWorldTargetResolver {
 	static int[] cellAtInteriorBlock(FluidRegion region, BlockPos position) {
 		if (!region.solverLoaded()) return null;
 		if (region.footprint() != null && !region.footprint().containsInterior(position)) return null;
-		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
-		double cellSize = domain.config().cellSize();
+		double cellSize = region.solverConfig().cellSize();
 		int x = Mth.floor((position.getX() + 0.5 - origin.getX()) / cellSize);
 		int y = Mth.floor((position.getY() + 0.5 - origin.getY()) / cellSize);
 		int z = Mth.floor((position.getZ() + 0.5 - origin.getZ()) / cellSize);
-		if (!inBounds(domain, x, y, z) || !domain.groupAvailable((z*domain.sizeY()+y)*domain.sizeX()+x)) return null;
+		if (!inBounds(region, x, y, z) || !region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x)) return null;
 		return new int[] {x, y, z};
 	}
 
@@ -189,9 +186,8 @@ final class FluidWorldTargetResolver {
 		if (!validPlayerRegion(player, region)) return null;
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
-		FluidDomain domain = region.domain();
 		double visibleDistance = visibleAimDistance(player);
-		double step = domain.config().cellSize() * 0.25;
+		double step = region.solverConfig().cellSize() * 0.25;
 		CellTarget previousOpen = null;
 		CellTarget previousSample = null;
 		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
@@ -203,10 +199,10 @@ final class FluidWorldTargetResolver {
 			if (cell.equals(previousSample)) continue;
 			previousSample = cell;
 			if (requireFluid) {
-				if (hasFluid(domain, cell)) return cell.toArray();
-			} else if (domain.isSolid(cell.x(), cell.y(), cell.z())) {
+				if (hasFluid(region, cell)) return cell.toArray();
+			} else if (region.solidMicroMask(cell.x(), cell.y(), cell.z()) == 255) {
 				return previousOpen == null ? null : previousOpen.toArray();
-			} else if (hasFluid(domain, cell)) {
+			} else if (hasFluid(region, cell)) {
 				return (previousOpen == null ? cell : previousOpen).toArray();
 			} else {
 				previousOpen = cell;
@@ -217,18 +213,17 @@ final class FluidWorldTargetResolver {
 
 	/** First ray-intersected cell carrying active or exposed/deep granular inventory truth. */
 	int[] aimedGranularCellNear(ServerPlayer player, FluidRegion region) {
-		if (!validPlayerRegion(player, region) || !region.domain().hasGranularState()) return null;
+		if (!validPlayerRegion(player, region) || !region.hasGranularState()) return null;
 		Vec3 start = player.getEyePosition();
 		Vec3 direction = player.getLookAngle();
-		FluidDomain domain = region.domain();
 		double visibleDistance = visibleAimDistance(player);
-		double step = domain.config().cellSize() * 0.25;
+		double step = region.solverConfig().cellSize() * 0.25;
 		CellTarget previous = null;
 		for (double distance = 0.0; distance <= visibleDistance; distance += step) {
 			CellTarget cell = worldToCell(region, start.add(direction.scale(distance)));
 			if (cell == null || cell.equals(previous)) continue;
 			previous = cell;
-			if (domain.granularSolidVolumeSvq(cell.x(), cell.y(), cell.z()) > 0L) return cell.toArray();
+			if (region.hasGranularOccupancy(cell.x(), cell.y(), cell.z())) return cell.toArray();
 		}
 		return null;
 	}
@@ -236,15 +231,14 @@ final class FluidWorldTargetResolver {
 	/** First condensed cell after entering a uniquely resolved shell interior, using exact grid-boundary DDA. */
 	int[] firstCondensedCellAlong(FluidRegion region, Vec3 interiorPoint, Vec3 direction) {
 		if (region == null || !region.solverLoaded() || interiorPoint == null || direction == null) return null;
-		FluidDomain domain = region.domain();
-		double h = domain.config().cellSize();
+		double h = region.solverConfig().cellSize();
 		return firstMatchingCell(
 				(interiorPoint.x - region.origin().getX()) / h,
 				(interiorPoint.y - region.origin().getY()) / h,
 				(interiorPoint.z - region.origin().getZ()) / h,
 				direction.x, direction.y, direction.z,
-				domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain::hasCondensedInventoryInCell);
+				region.sizeX(), region.sizeY(), region.sizeZ(),
+				region::hasCondensedInventory);
 	}
 
 	static int[] firstMatchingCell(
@@ -295,26 +289,27 @@ final class FluidWorldTargetResolver {
 		return region != null && region.solverLoaded() && player.level().dimension().equals(region.dimension());
 	}
 
-	private static boolean hasFluid(FluidDomain domain, CellTarget cell) {
-		return domain.volume(cell.x(), cell.y(), cell.z()) > domain.config().fluidEpsilon();
+	private static boolean hasFluid(FluidRegion region, CellTarget cell) {
+		var inventory = region.observeCellInventory(cell.x(), cell.y(), cell.z());
+		double h = region.solverConfig().cellSize();
+		return inventory != null && inventory.liquidVolumeCubicMetres() > region.solverConfig().fluidEpsilon() * h * h * h;
 	}
 
 	private static CellTarget worldToCell(FluidRegion region, Vec3 point) {
 		if (region == null || !region.solverLoaded()) return null;
 		FluidRegionFootprint footprint = region.footprint();
 		if (footprint != null && !footprint.containsInterior(BlockPos.containing(point))) return null;
-		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
-		float cellSize = domain.config().cellSize();
+		float cellSize = region.solverConfig().cellSize();
 		int x = Mth.floor((point.x - origin.getX()) / cellSize);
 		int y = Mth.floor((point.y - origin.getY()) / cellSize);
 		int z = Mth.floor((point.z - origin.getZ()) / cellSize);
-		return inBounds(domain, x, y, z) && domain.groupAvailable((z*domain.sizeY()+y)*domain.sizeX()+x) ? new CellTarget(x, y, z) : null;
+		return inBounds(region, x, y, z) && region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x) ? new CellTarget(x, y, z) : null;
 	}
 
-	private static boolean inBounds(FluidDomain domain, int x, int y, int z) {
-		return x >= 0 && x < domain.sizeX() && y >= 0 && y < domain.sizeY()
-				&& z >= 0 && z < domain.sizeZ();
+	private static boolean inBounds(FluidRegion region, int x, int y, int z) {
+		return x >= 0 && x < region.sizeX() && y >= 0 && y < region.sizeY()
+				&& z >= 0 && z < region.sizeZ();
 	}
 
 	/** Stops simulation-space targeting at the first Minecraft collision hit. */

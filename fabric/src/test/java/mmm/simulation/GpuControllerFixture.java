@@ -58,7 +58,7 @@ final class GpuControllerFixture {
         if (!scan.succeeded()) throw new IllegalStateException("controller scan: " + scan.failure());
         var dimension = ResourceKey.create(Registries.DIMENSION, Identifier.fromNamespaceAndPath("mmm", "gpu_controller"));
         var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false,
-                () -> null, candidate -> world.bindConfiguredState(candidate.domain(), startup.config().maximumThermalSubstepsPerStep()),
+                () -> null, candidate -> world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep()),
                 operations::checkpoint);
         if (result.failure() != null) throw new IllegalStateException("controller creation: " + result.failure());
         FluidRegion region = result.region();
@@ -158,11 +158,11 @@ final class GpuControllerFixture {
         ItemStack water = new ItemStack(Items.WATER_BUCKET);
         transfer(water);
         if (!actor.current.is(Items.BUCKET)) throw new IllegalStateException("vanilla water bucket did not become an empty bucket");
-        if (region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) <= 0)
+        if (region.hostSnapshot().unitScale().cubicMeters(region.hostSnapshot().totalVolumeExact()) <= 0)
             throw new IllegalStateException("controller pour did not publish liquid inventory");
         var function = new ThermalStateFunction(world.thermalRegistry());
         int handle = world.thermalRegistry().materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id());
-        for (var stock : region.domain().exportLiquidCellState().physicalStocks()) {
+        for (var stock : region.hostSnapshot().exportLiquidCellState().physicalStocks()) {
             double temperature = function.stateForInternalEnergy(handle, stock.massKilograms(),
                     stock.mixture() == null ? Map.of() : stock.mixture().stableAmounts(world.chemicalRegistry()),
                     stock.internalEnergy()).temperatureK();
@@ -182,7 +182,7 @@ final class GpuControllerFixture {
     }
 
     private void transfer(ItemStack before, boolean creative) throws IOException {
-        var domain = region.domain();
+        var domain = region.hostSnapshot();
         System.out.printf("stage=controller-container-input kind=%s cell=%d,%d,%d pending_phase=%s near_water=%.9g eligible_water=%.9g total_liquid=%.9g%n",
                 before.getItem(), portCell[0], portCell[1], portCell[2], domain.hasPendingPhaseMotionWork(),
                 domain.exactVolumeNear(portCell[0], portCell[1], portCell[2], 6, 0),

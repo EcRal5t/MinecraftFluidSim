@@ -1,152 +1,497 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) buffer Arena { uint words[]; };
-layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; double cellSize; double duration; double gravity; } p;
-const int FI=0,FS=1,DW=2,FC=3,FO=4,CURSOR=5,FE=6,FVOL=7,FPORE=8,SV=9,SK=10,SY=11,PK=12,K=13,IMPULSE=14,HEAT=15,DIAMETER=16,FINAL_K=18,FINAL_Y=19;
-int h(int i){return int(words[p.header+i]);}int sh(int f){return h(16+f);}int at(int f){return h(40+f);}
-int gh(int i){return int(words[h(7)+i]);}int ga(int f){return gh(64+f);}int jh(int i){return int(words[h(8)+i]);}int ja(int f){return jh(24+f);}
-int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int v){words[at(f)+i]=uint(v);}
-double number(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
-void writeNumber(int a,double x){uvec2 v=unpackDouble2x32(x);words[a]=v.x;words[a+1]=v.y;}
-double read(int f,int i){return number(at(f)+2*i);}void write(int f,int i,double x){writeNumber(at(f)+2*i,x);}
-int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-double particleMass(int parcel){return double(integer(sh(5)+2*parcel))*1e-10;}
-double face(int f,int q){return number(gh(5)+2*(4*f+q));}void faceWrite(int f,int q,double x){writeNumber(gh(5)+2*(4*f+q),x);}
-double cell(int c,int q){return number(gh(4)+2*(4*c+q));}
-bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,1048576u);}
-int actual(){return int(words[sh(0)]);}int nx(){return (h(0)+1)*h(1)*h(2);}int ny(){return h(0)*(h(1)+1)*h(2);}
-ivec2 cellsOf(int f){int axis=f<nx()?0:f<nx()+ny()?1:2,local=f-(axis==0?0:axis==1?nx():nx()+ny());
- ivec3 dims=ivec3(h(0),h(1),h(2)),shape=dims;shape[axis]++;ivec3 c=ivec3(local%shape.x,local/shape.x%shape.y,local/(shape.x*shape.y));
- if(c[axis]==0||c[axis]==dims[axis])return ivec2(-1);int right=(c.z*dims.y+c.y)*dims.x+c.x;
- return ivec2(right-(axis==0?1:axis==1?dims.x:dims.x*dims.y),right);}
-int faceAt(int axis,ivec3 c){ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;return (axis==0?0:axis==1?nx():nx()+ny())+(c.z*dims.y+c.y)*dims.x+c.x;}
-bool full(int c){return cell(c,1)>0.0&&cell(c,2)>0.0&&cell(c,2)-cell(c,0)<=4e-5;}
-int pressureRow(int c){if(full(c))return c;int node=int(words[gh(6)+c]);return node>0?h(5)+node-1:-1;}
-double datum(){return number(ga(19));}
-void term(int e,int row,int velocity,double coefficient){if(row<0||coefficient==0.0)return;
- words[ja(0)+e]=uint(row);words[ja(1)+e]=uint(velocity);writeNumber(ja(2)+2*e,coefficient);}
-double logDouble(double x){int e;double m=frexp(x,e);if(m<.7071067811865475244LF){m*=2.0;e--;}
- double z=(m-1.0)/(m+1.0),square=z*z,power=z,result=z;for(int k=3;k<=25;k+=2){power*=square;result+=power/double(k);}return 2.0*result+double(e)*.6931471805599453094LF;}
-double expDouble(double x){int e=int(round(x/.6931471805599453094LF));double r=x-double(e)*.6931471805599453094LF,t=1.0,result=1.0;
- for(int k=1;k<=18;k++){t*=r/double(k);result+=t;}return ldexp(result,e);}
-void clearFace(int f){put(FC,f,0);put(CURSOR,f,0);}
-void particleFaces(int parcel){
- for(int slot=0;slot<24;slot++){put(FI,24*parcel+slot,-1);write(FS,24*parcel+slot,0.0);write(DW,24*parcel+slot,0.0);}
- if(parcel>=actual())return;dvec3 position=dvec3(number(sh(1)+6*parcel),number(sh(1)+6*parcel+2),number(sh(1)+6*parcel+4));
- dvec3 velocity=dvec3(number(sh(2)+6*parcel),number(sh(2)+6*parcel+2),number(sh(2)+6*parcel+4));
- write(SK,parcel,.5*particleMass(parcel)*dot(velocity,velocity));write(SY,parcel,position.y);
- for(int axis=0;axis<3;axis++){
-  write(SV,3*parcel+axis,velocity[axis]);dvec3 grid=position/p.cellSize-.5;grid[axis]+=.5;ivec3 base=ivec3(floor(grid)),dims=ivec3(h(0),h(1),h(2));
-  dims[axis]++;dvec3 f=grid-dvec3(base);double total=0.0;
-  for(int slot=0;slot<8;slot++){
-   int e=24*parcel+8*axis+slot;ivec3 delta=ivec3(slot&1,(slot>>1)&1,(slot>>2)&1),c=base+delta;
-   if(any(lessThan(c,ivec3(0)))||any(greaterThanEqual(c,dims))||c[axis]==0||c[axis]==dims[axis]-1)continue;
-   int faceId=faceAt(axis,c);dvec3 a=mix(1.0-f,f,bvec3(delta));double weight=a.x*a.y*a.z*face(faceId,2);
-   if(weight<=0.0)continue;put(FI,e,faceId);write(FS,e,weight);write(DW,e,a.x*a.y*a.z);total+=weight;
-   atomicAdd(words[at(FC)+faceId],1u);
-  }
-  if(total>0.0)for(int slot=0;slot<8;slot++){int e=24*parcel+8*axis+slot;write(FS,e,read(FS,e)*double(integer(sh(4)+2*parcel))/16777216.0/total);}
- }
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Arena {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    double cellSize;
+    double duration;
+    double gravity;
 }
-void scatterFace(int e){int f=get(FI,e);if(f<0)return;int slot=int(atomicAdd(words[at(CURSOR)+f],1u));put(FE,get(FO,f)+slot,e);}
-void aperture(int f){
- double total=0.0;for(int i=get(FO,f);i<get(FO,f+1);i++)total+=read(FS,get(FE,i));write(FVOL,f,total);
- ivec2 c=cellsOf(f);double pore=0.0,geometric=face(f,2);
- if(c.x>=0){double a=double(bitCount((~words[h(9)+c.x])&255u))*.125,b=double(bitCount((~words[h(9)+c.y])&255u))*.125;
-  double x=double(integer(h(11)+2*c.x))/16777216.0,y=double(integer(h(11)+2*c.y))/16777216.0;
-  double fraction=(a>0.0&&b>0.0&&x<a&&y<b)?clamp((x+y)/(a+b),0.0,1.0):1.0;
-  pore=max(0.0,geometric*(1.0-fraction)-(h(12)<0?0.0:number(h(12)+2*f)));
- }
- write(FPORE,f,pore);double liquid=max(0.0,pore-total);faceWrite(f,2,liquid);faceWrite(f,3,min(face(f,3),liquid));
+p;
+// HOST_LAYOUT
+int h(int i) {
+    return int(words[p.header + i]);
 }
-void prepareDrag(int parcel){
- if(parcel>=actual()){write(K,parcel,0.0);return;}dvec3 fluid=dvec3(0.0),velocity=dvec3(read(SV,3*parcel),read(SV,3*parcel+1),read(SV,3*parcel+2));
- for(int axis=0;axis<3;axis++){
-  double sum=0.0;int last=-1;for(int slot=0;slot<8;slot++){int e=24*parcel+8*axis+slot,f=get(FI,e);double w=f>=0&&face(f,2)>0.0?read(DW,e)*face(f,0):0.0;write(DW,e,w);sum+=w;if(w>0.0)last=e;}
-  double remaining=1.0;for(int slot=0;slot<8;slot++){int e=24*parcel+8*axis+slot,f=get(FI,e);double w=read(DW,e),share=w>0.0?(e==last?remaining:w/sum):0.0;
-   write(DW,e,share);remaining-=share;if(share>0.0)fluid[axis]+=share*face(f,1);}
- }
- double wet=0.0,density=0.0,viscosity=0.0,svq=double(integer(sh(4)+2*parcel));
- for(int i=0;i<8;i++){int c=int(words[sh(14)+8*parcel+i]);double weight=double(integer(sh(15)+2*(8*parcel+i)))/svq;
-  if(c<0||weight<=0.0||cell(c,0)<=0.0||cell(c,2)<=0.0)continue;double portion=weight*min(1.0,cell(c,0)/cell(c,2));
-  wet+=portion;density+=portion*cell(c,1)/(cell(c,0)*p.cellSize*p.cellSize*p.cellSize);viscosity+=portion*number(h(10)+2*c);
- }
- double resistance=0.0;
- if(wet>0.0){density/=wet;viscosity/=wet;int material=int(words[sh(3)+parcel]);double diameter=read(DIAMETER,material),slip=length(velocity-fluid);
-  double reynolds=density*diameter*slip/viscosity,factor=max(1.0+(reynolds>0.0?.15*expDouble(.687*logDouble(reynolds)):0.0),.44*reynolds/24.0);
-  double grains=(svq/134217728.0)/(3.14159265358979323846LF*diameter*diameter*diameter/6.0)*wet;
-  resistance=3.0*3.14159265358979323846LF*viscosity*diameter*grains*factor;
-  if(!(finite(resistance)&&resistance>0.0)){invalid();return;}
- }write(K,parcel,resistance);
+int sh(int f) {
+    return h(STATE_FIELDS + f);
 }
-void initializeRow(int row){
- int ng=h(5)+h(6);double reference=0.0,storage=0.0,source=0.0;bool enabled=false;
- if(row<ng)reference=number(ga(3)+2*row);
- if(row<h(5))enabled=full(row);
- else if(row<ng){int node=row-h(5),actualGas=int(words[gh(9)]);enabled=node<actualGas&&int(words[ga(11)+node])>0;
-  if(node<actualGas){double volume=number(gh(7)+2*node),factor=1.0/(p.duration*p.duration*p.cellSize*p.cellSize*p.cellSize);
-   bool populated=words[gh(10)+node]!=words[gh(10)+node+1];storage=number(ga(4)+2*node);
-   if(populated&&storage==0.0)storage=factor*volume*number(gh(8)+2*(9*node+8));if(!populated)source=-factor*volume;
-  }
- }else{words[jh(14)+row]=0u;writeNumber(jh(15)+2*(jh(0)+row),0.0);writeNumber(jh(15)+2*(2*jh(0)+row),0.0);}
- writeNumber(ja(6)+2*row,reference);writeNumber(ja(7)+2*row,storage);writeNumber(ja(8)+2*row,source);words[ja(9)+row]=enabled?1u:0u;
+int at(int f) {
+    return h(WORK_FIELDS + f);
 }
-void fluidIncidence(int f){
- int a=int(words[ga(10)+2*f]),b=int(words[ga(10)+2*f+1]);double coefficient=face(f,3)/p.cellSize,mass=face(f,0);
- term(2*f,a,f,coefficient);term(2*f+1,b,f,-coefficient);
- double inverse=mass>0.0&&face(f,2)>0.0?p.cellSize*p.cellSize*p.cellSize/mass:0.0;
- writeNumber(ja(3)+2*f,inverse);writeNumber(ja(4)+2*f,face(f,1));
- writeNumber(ja(5)+2*f,((a<0?-datum():0.0)-(b<0?-datum():0.0))*coefficient);
+int gh(int i) {
+    return int(words[h(H_GAS_HEADER) + i]);
 }
-void particleIncidence(int parcel){
- for(int axis=0;axis<3;axis++){
-  int velocity=h(4)+3*parcel+axis,dragRow=h(5)+h(6)+3*parcel+axis;
-  writeNumber(ja(3)+2*velocity,0.0);writeNumber(ja(4)+2*velocity,0.0);writeNumber(ja(5)+2*velocity,0.0);
-  if(parcel>=actual())continue;double mass=particleMass(parcel),inverse=p.cellSize*p.cellSize*p.cellSize/mass,affine=0.0;
-  writeNumber(ja(3)+2*velocity,inverse);writeNumber(ja(4)+2*velocity,read(SV,3*parcel+axis)-(axis==1?p.gravity*p.duration:0.0));
-  int row[16],count=0;double coefficient[16];
-  for(int slot=0;slot<8;slot++){
-   int e=24*parcel+8*axis+slot,f=get(FI,e);if(f<0)continue;ivec2 c=cellsOf(f);
-   double volume=read(FVOL,f),area=volume>0.0?min(read(FPORE,f),volume)*read(FS,e)/volume:0.0;if(area==0.0)continue;
-   for(int side=0;side<2;side++){
-    int r=pressureRow(c[side]);double value=(side==0?1.0:-1.0)*area/p.cellSize;
-    if(r<0){affine-=value*datum();continue;}int index=-1;for(int i=0;i<count;i++)if(row[i]==r)index=i;
-    if(index<0){index=count++;row[index]=r;coefficient[index]=0.0;}coefficient[index]+=value;
-   }
-  }
-  int base=2*h(4)+75*parcel+25*axis;
-  for(int i=0;i<count;i++){term(base+i,row[i],velocity,coefficient[i]);if(coefficient[i]!=0.0)atomicOr(words[ja(9)+row[i]],1u);}
-  writeNumber(ja(5)+2*velocity,affine);bool hasCarrier=false;for(int slot=0;slot<8;slot++)if(read(DW,24*parcel+8*axis+slot)>0.0)hasCarrier=true;
-  double resistance=read(K,parcel);if(resistance>0.0&&hasCarrier){
-   words[ja(9)+dragRow]=1u;writeNumber(ja(7)+2*dragRow,p.cellSize/(p.duration*resistance));
-   for(int slot=0;slot<8;slot++){int e=24*parcel+8*axis+slot;double w=read(DW,e);if(w>0.0)term(base+16+slot,dragRow,get(FI,e),-w/p.cellSize);}
-   term(base+24,dragRow,velocity,1.0/p.cellSize);
-  }
- }
+int ga(int f) {
+    return gh(GAS_PRESSURE_FIELDS + f);
 }
-void publishFace(int f){double v=number(ja(20)+2*f);faceWrite(f,1,v);}
-void publishParticle(int parcel){if(parcel>=actual())return;double kinetic=0.0,slipSquared=0.0;
- for(int axis=0;axis<3;axis++){
-  int velocity=h(4)+3*parcel+axis,row=h(5)+h(6)+3*parcel+axis;double v=number(ja(20)+2*velocity),carrier=0.0;
-  writeNumber(sh(2)+2*(3*parcel+axis),v);kinetic+=v*v;
-  for(int slot=0;slot<8;slot++){int e=24*parcel+8*axis+slot;double w=read(DW,e);if(w>0.0)carrier+=w*number(ja(20)+2*get(FI,e));}
-  double slip=v-carrier;if(words[ja(9)+row]!=0u)slipSquared+=slip*slip;
-  write(IMPULSE,3*parcel+axis,p.duration*p.cellSize*p.cellSize*number(jh(12)+2*row));
- }write(PK,parcel,.5*particleMass(parcel)*kinetic);write(FINAL_K,parcel,.5*particleMass(parcel)*kinetic);write(FINAL_Y,parcel,read(SY,parcel));write(HEAT,parcel,p.duration*read(K,parcel)*slipSquared);
+int jh(int i) {
+    return int(words[h(H_COUPLED_HEADER) + i]);
 }
-void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128+gl_LocalInvocationID.x);
- if(p.stage==0&&id<h(4))clearFace(id);else if(p.stage==1&&id<h(3))particleFaces(id);
- else if(p.stage==2&&id<24*h(3))scatterFace(id);else if(p.stage==3&&id<h(4))aperture(id);else if(p.stage==4&&id<h(3))prepareDrag(id);
- else if(p.stage==5&&id<jh(2))words[ja(0)+id]=uint(-1);else if(p.stage==6&&id<jh(0))initializeRow(id);
- else if(p.stage==7&&id<h(4))fluidIncidence(id);else if(p.stage==8&&id<h(3))particleIncidence(id);
- else if(p.stage==9&&id<h(4))publishFace(id);else if(p.stage==10&&id<h(3))publishParticle(id);
- else if(p.stage==11&&id<h(6)){
-  bool enabled=words[jh(11)+h(5)+id]!=uint(-1);words[ga(6)+id]=enabled?1u:0u;
-  writeNumber(ga(9)+2*id,p.duration*p.cellSize*p.cellSize*p.cellSize*number(ja(23)+2*(h(5)+id)));
-  double sourcePressure=id<int(words[gh(9)])?number(gh(8)+2*(9*id+1)):0.0;
-  writeNumber(ga(8)+2*id,max(0.0,sourcePressure+(enabled?number(jh(12)+2*(h(5)+id)):0.0)));
- }
+int ja(int f) {
+    return jh(COUPLED_FIELDS + f);
+}
+int get(int f, int i) {
+    return int(words[at(f) + i]);
+}
+void put(int f, int i, int v) {
+    words[at(f) + i] = uint(v);
+}
+double number(int a) {
+    return packDouble2x32(uvec2(words[a], words[a + 1]));
+}
+void writeNumber(int a, double x) {
+    uvec2 v = unpackDouble2x32(x);
+    words[a] = v.x;
+    words[a + 1] = v.y;
+}
+double read(int f, int i) {
+    return number(at(f) + 2 * i);
+}
+void write(int f, int i, double x) {
+    writeNumber(at(f) + 2 * i, x);
+}
+int64_t integer(int a) {
+    return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
+}
+double particleMass(int parcel) {
+    return double(integer(sh(GRANULAR_MASS_UNITS) + 2 * parcel)) * 1e-10;
+}
+double face(int f, int q) {
+    return number(gh(GAS_PRESSURE_H_FACES) + 2 * (4 * f + q));
+}
+void faceWrite(int f, int q, double x) {
+    writeNumber(gh(GAS_PRESSURE_H_FACES) + 2 * (4 * f + q), x);
+}
+double cell(int c, int q) {
+    return number(gh(GAS_PRESSURE_H_CELLS) + 2 * (4 * c + q));
+}
+bool finite(double x) {
+    return !isnan(x) && !isinf(x);
+}
+void invalid() {
+    atomicOr(errors, 1048576u);
+}
+int actual() {
+    return int(words[sh(GRANULAR_COUNTS)]);
+}
+int nx() {
+    return (h(H_SIZE_X) + 1) * h(H_SIZE_Y) * h(H_SIZE_Z);
+}
+int ny() {
+    return h(H_SIZE_X) * (h(H_SIZE_Y) + 1) * h(H_SIZE_Z);
+}
+bool activeCell(int c) {
+    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + c] != 0u;
+}
+bool activeFace(int f) {
+    return h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + f] != 0u;
+}
+bool activeParticle(int parcel) {
+    dvec3 x = dvec3(number(sh(GRANULAR_POSITION) + 6 * parcel), number(sh(GRANULAR_POSITION) + 6 * parcel + 2),
+                    number(sh(GRANULAR_POSITION) + 6 * parcel + 4));
+    ivec3 q = clamp(ivec3(floor(x / p.cellSize)), ivec3(0), ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z)) - 1);
+    return activeCell((q.z * h(H_SIZE_Y) + q.y) * h(H_SIZE_X) + q.x);
+}
+ivec2 cellsOf(int f) {
+    int axis = f < nx() ? 0 : f < nx() + ny() ? 1 : 2, local = f - (axis == 0 ? 0 : axis == 1 ? nx() : nx() + ny());
+    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z)), shape = dims;
+    shape[axis]++;
+    ivec3 c = ivec3(local % shape.x, local / shape.x % shape.y, local / (shape.x * shape.y));
+    if (c[axis] == 0 || c[axis] == dims[axis])
+        return ivec2(-1);
+    int right = (c.z * dims.y + c.y) * dims.x + c.x;
+    return ivec2(right - (axis == 0 ? 1 : axis == 1 ? dims.x : dims.x * dims.y), right);
+}
+int faceAt(int axis, ivec3 c) {
+    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    dims[axis]++;
+    return (axis == 0 ? 0 : axis == 1 ? nx() : nx() + ny()) + (c.z * dims.y + c.y) * dims.x + c.x;
+}
+bool full(int c) {
+    return cell(c, 1) > 0.0 && cell(c, 2) > 0.0 && cell(c, 2) - cell(c, 0) <= 4e-5;
+}
+int pressureRow(int c) {
+    if (full(c))
+        return c;
+    int node = int(words[gh(GAS_PRESSURE_H_CELL_NODES) + c]);
+    return node > 0 ? h(H_LIQUID_COUNT) + node - 1 : -1;
+}
+double datum() {
+    return number(ga(GAS_PRESSURE_DATUM));
+}
+void term(int e, int row, int velocity, double coefficient) {
+    if (row < 0 || coefficient == 0.0)
+        return;
+    words[ja(COUPLED_TERM_ROW) + e] = uint(row);
+    words[ja(COUPLED_TERM_VELOCITY) + e] = uint(velocity);
+    writeNumber(ja(COUPLED_TERM_COEFFICIENT) + 2 * e, coefficient);
+}
+double logDouble(double x) {
+    int e;
+    double m = frexp(x, e);
+    if (m < .7071067811865475244LF) {
+        m *= 2.0;
+        e--;
+    }
+    double z = (m - 1.0) / (m + 1.0), square = z * z, power = z, result = z;
+    for (int k = 3; k <= 25; k += 2) {
+        power *= square;
+        result += power / double(k);
+    }
+    return 2.0 * result + double(e) * .6931471805599453094LF;
+}
+double expDouble(double x) {
+    int e = int(round(x / .6931471805599453094LF));
+    double r = x - double(e) * .6931471805599453094LF, t = 1.0, result = 1.0;
+    for (int k = 1; k <= 18; k++) {
+        t *= r / double(k);
+        result += t;
+    }
+    return ldexp(result, e);
+}
+void clearFace(int f) {
+    put(FIELD_FACE_COUNTS, f, 0);
+    put(FIELD_FACE_CURSORS, f, 0);
+}
+void particleFaces(int parcel) {
+    for (int slot = 0; slot < 24; slot++) {
+        put(FIELD_FACE_IDS, 24 * parcel + slot, -1);
+        write(FIELD_FACE_SHARES, 24 * parcel + slot, 0.0);
+        write(FIELD_DRAG_WEIGHTS, 24 * parcel + slot, 0.0);
+    }
+    if (parcel >= actual())
+        return;
+    dvec3 position = dvec3(number(sh(GRANULAR_POSITION) + 6 * parcel), number(sh(GRANULAR_POSITION) + 6 * parcel + 2),
+                           number(sh(GRANULAR_POSITION) + 6 * parcel + 4));
+    dvec3 velocity = dvec3(number(sh(GRANULAR_VELOCITY) + 6 * parcel), number(sh(GRANULAR_VELOCITY) + 6 * parcel + 2),
+                           number(sh(GRANULAR_VELOCITY) + 6 * parcel + 4));
+    write(FIELD_SOURCE_K, parcel, .5 * particleMass(parcel) * dot(velocity, velocity));
+    write(FIELD_SOURCE_Y, parcel, position.y);
+    for (int axis = 0; axis < 3; axis++) {
+        write(FIELD_SOURCE_VELOCITY, 3 * parcel + axis, velocity[axis]);
+        dvec3 grid = position / p.cellSize - .5;
+        grid[axis] += .5;
+        ivec3 base = ivec3(floor(grid)), dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+        dims[axis]++;
+        dvec3 f = grid - dvec3(base);
+        double total = 0.0;
+        for (int slot = 0; slot < 8; slot++) {
+            int e = 24 * parcel + 8 * axis + slot;
+            ivec3 delta = ivec3(slot & 1, (slot >> 1) & 1, (slot >> 2) & 1), c = base + delta;
+            if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, dims)) || c[axis] == 0 ||
+                c[axis] == dims[axis] - 1)
+                continue;
+            int faceId = faceAt(axis, c);
+            dvec3 a = mix(1.0 - f, f, bvec3(delta));
+            double weight = a.x * a.y * a.z * face(faceId, 2);
+            if (weight <= 0.0)
+                continue;
+            put(FIELD_FACE_IDS, e, faceId);
+            write(FIELD_FACE_SHARES, e, weight);
+            write(FIELD_DRAG_WEIGHTS, e, a.x * a.y * a.z);
+            total += weight;
+            atomicAdd(words[at(FIELD_FACE_COUNTS) + faceId], 1u);
+        }
+        if (total > 0.0)
+            for (int slot = 0; slot < 8; slot++) {
+                int e = 24 * parcel + 8 * axis + slot;
+                write(FIELD_FACE_SHARES, e,
+                      read(FIELD_FACE_SHARES, e) * double(integer(sh(GRANULAR_SOLID_VOLUME_SVQ) + 2 * parcel)) /
+                          16777216.0 / total);
+            }
+    }
+}
+void scatterFace(int e) {
+    int f = get(FIELD_FACE_IDS, e);
+    if (f < 0)
+        return;
+    int slot = int(atomicAdd(words[at(FIELD_FACE_CURSORS) + f], 1u));
+    put(FIELD_FACE_ENTRIES, get(FIELD_FACE_OFFSETS, f) + slot, e);
+}
+void aperture(int f) {
+    double total = 0.0;
+    for (int i = get(FIELD_FACE_OFFSETS, f); i < get(FIELD_FACE_OFFSETS, f + 1); i++)
+        total += read(FIELD_FACE_SHARES, get(FIELD_FACE_ENTRIES, i));
+    write(FIELD_FACE_SOLID_VOLUME, f, total);
+    ivec2 c = cellsOf(f);
+    double pore = 0.0, geometric = face(f, 2);
+    if (c.x >= 0) {
+        double a = double(bitCount((~words[h(H_MASKS) + c.x]) & 255u)) * .125,
+               b = double(bitCount((~words[h(H_MASKS) + c.y]) & 255u)) * .125;
+        double x = double(integer(h(H_FIXED_SVQ) + 2 * c.x)) / 16777216.0,
+               y = double(integer(h(H_FIXED_SVQ) + 2 * c.y)) / 16777216.0;
+        double fraction = (a > 0.0 && b > 0.0 && x < a && y < b) ? clamp((x + y) / (a + b), 0.0, 1.0) : 1.0;
+        pore = max(0.0, geometric * (1.0 - fraction) -
+                            (h(H_ENTITY_FACE_AREA) < 0 ? 0.0 : number(h(H_ENTITY_FACE_AREA) + 2 * f)));
+    }
+    write(FIELD_FIXED_PORE, f, pore);
+    double liquid = max(0.0, pore - total);
+    faceWrite(f, 2, liquid);
+    faceWrite(f, 3, min(face(f, 3), liquid));
+}
+void prepareDrag(int parcel) {
+    if (parcel >= actual()) {
+        write(FIELD_DRAG_RESISTANCE, parcel, 0.0);
+        return;
+    }
+    dvec3 fluid = dvec3(0.0),
+          velocity = dvec3(read(FIELD_SOURCE_VELOCITY, 3 * parcel), read(FIELD_SOURCE_VELOCITY, 3 * parcel + 1),
+                           read(FIELD_SOURCE_VELOCITY, 3 * parcel + 2));
+    for (int axis = 0; axis < 3; axis++) {
+        double sum = 0.0;
+        int last = -1;
+        for (int slot = 0; slot < 8; slot++) {
+            int e = 24 * parcel + 8 * axis + slot, f = get(FIELD_FACE_IDS, e);
+            double w = f >= 0 && activeFace(f) && activeParticle(parcel) && face(f, 2) > 0.0
+                           ? read(FIELD_DRAG_WEIGHTS, e) * face(f, 0)
+                           : 0.0;
+            write(FIELD_DRAG_WEIGHTS, e, w);
+            sum += w;
+            if (w > 0.0)
+                last = e;
+        }
+        double remaining = 1.0;
+        for (int slot = 0; slot < 8; slot++) {
+            int e = 24 * parcel + 8 * axis + slot, f = get(FIELD_FACE_IDS, e);
+            double w = read(FIELD_DRAG_WEIGHTS, e), share = w > 0.0 ? (e == last ? remaining : w / sum) : 0.0;
+            write(FIELD_DRAG_WEIGHTS, e, share);
+            remaining -= share;
+            if (share > 0.0)
+                fluid[axis] += share * face(f, 1);
+        }
+    }
+    double wet = 0.0, density = 0.0, viscosity = 0.0, svq = double(integer(sh(GRANULAR_SOLID_VOLUME_SVQ) + 2 * parcel));
+    for (int i = 0; i < 8; i++) {
+        int c = int(words[sh(GRANULAR_SUPPORT_CELLS) + 8 * parcel + i]);
+        double weight = double(integer(sh(GRANULAR_SUPPORT_QUOTAS) + 2 * (8 * parcel + i))) / svq;
+        if (c < 0 || weight <= 0.0 || cell(c, 0) <= 0.0 || cell(c, 2) <= 0.0)
+            continue;
+        double portion = weight * min(1.0, cell(c, 0) / cell(c, 2));
+        wet += portion;
+        density += portion * cell(c, 1) / (cell(c, 0) * p.cellSize * p.cellSize * p.cellSize);
+        viscosity += portion * number(h(H_VISCOSITY) + 2 * c);
+    }
+    double resistance = 0.0;
+    if (wet > 0.0) {
+        density /= wet;
+        viscosity /= wet;
+        int material = int(words[sh(GRANULAR_MATERIAL) + parcel]);
+        double diameter = read(FIELD_DIAMETERS, material), slip = length(velocity - fluid);
+        double reynolds = density * diameter * slip / viscosity,
+               factor = max(1.0 + (reynolds > 0.0 ? .15 * expDouble(.687 * logDouble(reynolds)) : 0.0),
+                            .44 * reynolds / 24.0);
+        double grains = (svq / 134217728.0) / (3.14159265358979323846LF * diameter * diameter * diameter / 6.0) * wet;
+        resistance = 3.0 * 3.14159265358979323846LF * viscosity * diameter * grains * factor;
+        if (!(finite(resistance) && resistance > 0.0)) {
+            invalid();
+            return;
+        }
+    }
+    write(FIELD_DRAG_RESISTANCE, parcel, resistance);
+}
+void initializeRow(int row) {
+    int ng = h(H_LIQUID_COUNT) + h(H_GAS_CAPACITY);
+    double reference = 0.0, storage = 0.0, source = 0.0;
+    bool enabled = false;
+    if (row < ng)
+        reference = number(ga(GAS_PRESSURE_REFERENCE) + 2 * row);
+    if (row < h(H_LIQUID_COUNT))
+        enabled = activeCell(row) && full(row);
+    else if (row < ng) {
+        int node = row - h(H_LIQUID_COUNT), actualGas = int(words[gh(GAS_PRESSURE_H_GAS_COUNTS)]);
+        enabled = node < actualGas && int(words[ga(GAS_PRESSURE_FACE_COUNTS) + node]) > 0;
+        if (node < actualGas) {
+            double volume = number(gh(GAS_PRESSURE_H_NODE_VOLUMES) + 2 * node),
+                   factor = 1.0 / (p.duration * p.duration * p.cellSize * p.cellSize * p.cellSize);
+            bool populated = words[gh(GAS_PRESSURE_H_COMPONENT_OFFSETS) + node] !=
+                             words[gh(GAS_PRESSURE_H_COMPONENT_OFFSETS) + node + 1];
+            storage = number(ga(GAS_PRESSURE_STORAGE) + 2 * node);
+            if (populated && storage == 0.0)
+                storage = factor * volume * number(gh(GAS_PRESSURE_H_THERMODYNAMIC_STATES) + 2 * (9 * node + 8));
+            if (!populated)
+                source = -factor * volume;
+        }
+    } else {
+        words[jh(COUPLED_H_META) + row] = 0u;
+        writeNumber(jh(COUPLED_H_PROBLEM) + 2 * (jh(COUPLED_H_ROW_COUNT) + row), 0.0);
+        writeNumber(jh(COUPLED_H_PROBLEM) + 2 * (2 * jh(COUPLED_H_ROW_COUNT) + row), 0.0);
+    }
+    writeNumber(ja(COUPLED_REFERENCE) + 2 * row, reference);
+    writeNumber(ja(COUPLED_STORAGE) + 2 * row, storage);
+    writeNumber(ja(COUPLED_ROW_SOURCE) + 2 * row, source);
+    words[ja(COUPLED_ROW_ENABLED) + row] = enabled ? 1u : 0u;
+}
+void fluidIncidence(int f) {
+    if (!activeFace(f)) {
+        writeNumber(ja(COUPLED_INVERSE_MASS) + 2 * f, 0.0);
+        writeNumber(ja(COUPLED_PREDICTED_VELOCITY) + 2 * f, face(f, 1));
+        writeNumber(ja(COUPLED_FIXED_REFERENCE_FORCE) + 2 * f, 0.0);
+        return;
+    }
+    int a = int(words[ga(GAS_PRESSURE_FACE_ROWS) + 2 * f]), b = int(words[ga(GAS_PRESSURE_FACE_ROWS) + 2 * f + 1]);
+    double coefficient = face(f, 3) / p.cellSize, mass = face(f, 0);
+    term(2 * f, a, f, coefficient);
+    term(2 * f + 1, b, f, -coefficient);
+    double inverse = mass > 0.0 && face(f, 2) > 0.0 ? p.cellSize * p.cellSize * p.cellSize / mass : 0.0;
+    writeNumber(ja(COUPLED_INVERSE_MASS) + 2 * f, inverse);
+    writeNumber(ja(COUPLED_PREDICTED_VELOCITY) + 2 * f, face(f, 1));
+    writeNumber(ja(COUPLED_FIXED_REFERENCE_FORCE) + 2 * f,
+                ((a < 0 ? -datum() : 0.0) - (b < 0 ? -datum() : 0.0)) * coefficient);
+}
+void particleIncidence(int parcel) {
+    for (int axis = 0; axis < 3; axis++) {
+        int velocity = h(H_FACE_COUNT) + 3 * parcel + axis,
+            dragRow = h(H_LIQUID_COUNT) + h(H_GAS_CAPACITY) + 3 * parcel + axis;
+        writeNumber(ja(COUPLED_INVERSE_MASS) + 2 * velocity, 0.0);
+        writeNumber(ja(COUPLED_PREDICTED_VELOCITY) + 2 * velocity, 0.0);
+        writeNumber(ja(COUPLED_FIXED_REFERENCE_FORCE) + 2 * velocity, 0.0);
+        if (parcel >= actual() || !activeParticle(parcel))
+            continue;
+        double mass = particleMass(parcel), inverse = p.cellSize * p.cellSize * p.cellSize / mass, affine = 0.0;
+        writeNumber(ja(COUPLED_INVERSE_MASS) + 2 * velocity, inverse);
+        writeNumber(ja(COUPLED_PREDICTED_VELOCITY) + 2 * velocity,
+                    read(FIELD_SOURCE_VELOCITY, 3 * parcel + axis) - (axis == 1 ? p.gravity * p.duration : 0.0));
+        int row[16], count = 0;
+        double coefficient[16];
+        for (int slot = 0; slot < 8; slot++) {
+            int e = 24 * parcel + 8 * axis + slot, f = get(FIELD_FACE_IDS, e);
+            if (f < 0 || !activeFace(f))
+                continue;
+            ivec2 c = cellsOf(f);
+            double volume = read(FIELD_FACE_SOLID_VOLUME, f),
+                   area = volume > 0.0 ? min(read(FIELD_FIXED_PORE, f), volume) * read(FIELD_FACE_SHARES, e) / volume
+                                       : 0.0;
+            if (area == 0.0)
+                continue;
+            for (int side = 0; side < 2; side++) {
+                int r = pressureRow(c[side]);
+                double value = (side == 0 ? 1.0 : -1.0) * area / p.cellSize;
+                if (r < 0) {
+                    affine -= value * datum();
+                    continue;
+                }
+                int index = -1;
+                for (int i = 0; i < count; i++)
+                    if (row[i] == r)
+                        index = i;
+                if (index < 0) {
+                    index = count++;
+                    row[index] = r;
+                    coefficient[index] = 0.0;
+                }
+                coefficient[index] += value;
+            }
+        }
+        int base = 2 * h(H_FACE_COUNT) + 75 * parcel + 25 * axis;
+        for (int i = 0; i < count; i++) {
+            term(base + i, row[i], velocity, coefficient[i]);
+            if (coefficient[i] != 0.0)
+                atomicOr(words[ja(COUPLED_ROW_ENABLED) + row[i]], 1u);
+        }
+        writeNumber(ja(COUPLED_FIXED_REFERENCE_FORCE) + 2 * velocity, affine);
+        bool hasCarrier = false;
+        for (int slot = 0; slot < 8; slot++)
+            if (read(FIELD_DRAG_WEIGHTS, 24 * parcel + 8 * axis + slot) > 0.0)
+                hasCarrier = true;
+        double resistance = read(FIELD_DRAG_RESISTANCE, parcel);
+        if (resistance > 0.0 && hasCarrier) {
+            words[ja(COUPLED_ROW_ENABLED) + dragRow] = 1u;
+            writeNumber(ja(COUPLED_STORAGE) + 2 * dragRow, p.cellSize / (p.duration * resistance));
+            for (int slot = 0; slot < 8; slot++) {
+                int e = 24 * parcel + 8 * axis + slot;
+                double w = read(FIELD_DRAG_WEIGHTS, e);
+                if (w > 0.0)
+                    term(base + 16 + slot, dragRow, get(FIELD_FACE_IDS, e), -w / p.cellSize);
+            }
+            term(base + 24, dragRow, velocity, 1.0 / p.cellSize);
+        }
+    }
+}
+void publishFace(int f) {
+    if (!activeFace(f))
+        return;
+    double v = number(ja(COUPLED_PROJECTED_VELOCITY) + 2 * f);
+    faceWrite(f, 1, v);
+}
+void publishParticle(int parcel) {
+    if (parcel >= actual())
+        return;
+    if (!activeParticle(parcel)) {
+        write(FIELD_PROJECTED_K, parcel, read(FIELD_SOURCE_K, parcel));
+        write(FIELD_FINAL_K, parcel, read(FIELD_SOURCE_K, parcel));
+        write(FIELD_FINAL_Y, parcel, read(FIELD_SOURCE_Y, parcel));
+        write(FIELD_DRAG_HEAT, parcel, 0.0);
+        for (int axis = 0; axis < 3; axis++)
+            write(FIELD_DRAG_IMPULSE, 3 * parcel + axis, 0.0);
+        return;
+    }
+    double kinetic = 0.0, slipSquared = 0.0;
+    for (int axis = 0; axis < 3; axis++) {
+        int velocity = h(H_FACE_COUNT) + 3 * parcel + axis,
+            row = h(H_LIQUID_COUNT) + h(H_GAS_CAPACITY) + 3 * parcel + axis;
+        double v = number(ja(COUPLED_PROJECTED_VELOCITY) + 2 * velocity), carrier = 0.0;
+        writeNumber(sh(GRANULAR_VELOCITY) + 2 * (3 * parcel + axis), v);
+        kinetic += v * v;
+        for (int slot = 0; slot < 8; slot++) {
+            int e = 24 * parcel + 8 * axis + slot;
+            double w = read(FIELD_DRAG_WEIGHTS, e);
+            if (w > 0.0)
+                carrier += w * number(ja(COUPLED_PROJECTED_VELOCITY) + 2 * get(FIELD_FACE_IDS, e));
+        }
+        double slip = v - carrier;
+        if (words[ja(COUPLED_ROW_ENABLED) + row] != 0u)
+            slipSquared += slip * slip;
+        write(FIELD_DRAG_IMPULSE, 3 * parcel + axis,
+              p.duration * p.cellSize * p.cellSize * number(jh(COUPLED_H_PRESSURE) + 2 * row));
+    }
+    write(FIELD_PROJECTED_K, parcel, .5 * particleMass(parcel) * kinetic);
+    write(FIELD_FINAL_K, parcel, .5 * particleMass(parcel) * kinetic);
+    write(FIELD_FINAL_Y, parcel, read(FIELD_SOURCE_Y, parcel));
+    write(FIELD_DRAG_HEAT, parcel, p.duration * read(FIELD_DRAG_RESISTANCE, parcel) * slipSquared);
+}
+void main() {
+    int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
+    if (p.stage == 0 && id < h(H_FACE_COUNT))
+        clearFace(id);
+    else if (p.stage == 1 && id < h(H_PARTICLE_CAPACITY))
+        particleFaces(id);
+    else if (p.stage == 2 && id < 24 * h(H_PARTICLE_CAPACITY))
+        scatterFace(id);
+    else if (p.stage == 3 && id < h(H_FACE_COUNT))
+        aperture(id);
+    else if (p.stage == 4 && id < h(H_PARTICLE_CAPACITY))
+        prepareDrag(id);
+    else if (p.stage == 5 && id < jh(COUPLED_H_TERM_COUNT))
+        words[ja(COUPLED_TERM_ROW) + id] = uint(-1);
+    else if (p.stage == 6 && id < jh(COUPLED_H_ROW_COUNT))
+        initializeRow(id);
+    else if (p.stage == 7 && id < h(H_FACE_COUNT))
+        fluidIncidence(id);
+    else if (p.stage == 8 && id < h(H_PARTICLE_CAPACITY))
+        particleIncidence(id);
+    else if (p.stage == 9 && id < h(H_FACE_COUNT))
+        publishFace(id);
+    else if (p.stage == 10 && id < h(H_PARTICLE_CAPACITY))
+        publishParticle(id);
+    else if (p.stage == 11 && id < h(H_GAS_CAPACITY)) {
+        bool enabled = words[jh(COUPLED_H_ROWS) + h(H_LIQUID_COUNT) + id] != uint(-1);
+        words[ga(GAS_PRESSURE_MECHANICAL_MODE) + id] = enabled ? 1u : 0u;
+        writeNumber(ga(GAS_PRESSURE_NODE_PREDICTED_VOLUME_CHANGE) + 2 * id,
+                    p.duration * p.cellSize * p.cellSize * p.cellSize *
+                        number(ja(COUPLED_ROW_DIVERGENCE) + 2 * (h(H_LIQUID_COUNT) + id)));
+        double sourcePressure = id < int(words[gh(GAS_PRESSURE_H_GAS_COUNTS)])
+                                    ? number(gh(GAS_PRESSURE_H_THERMODYNAMIC_STATES) + 2 * (9 * id + 1))
+                                    : 0.0;
+        writeNumber(
+            ga(GAS_PRESSURE_NODE_ABSOLUTE_PRESSURE) + 2 * id,
+            max(0.0, sourcePressure + (enabled ? number(jh(COUPLED_H_PRESSURE) + 2 * (h(H_LIQUID_COUNT) + id)) : 0.0)));
+    }
 }

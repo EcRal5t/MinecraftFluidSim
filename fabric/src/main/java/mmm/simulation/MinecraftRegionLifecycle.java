@@ -7,7 +7,7 @@ import mmm.application.RegionLifecycleUseCase;
 import mmm.controller.LifecycleOperation;
 import mmm.controller.LifecycleOperationPreview;
 import mmm.controller.LifecycleOperationSessions;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.air.AirNetwork;
 import mmm.simulation.persistence.GenerationSequence;
 import mmm.thermal.ThermalRegistry;
@@ -118,6 +118,8 @@ public final class MinecraftRegionLifecycle {
 			return CommitResult.failed("message.mmm.lifecycle.blocked_confirm",
 					lifecycleBlockers(authorization.blockers()));
 		}
+		MinecraftGroupAvailability.prepare(player.level(), region);
+		if (!region.allWorldCellsAvailable()) return CommitResult.failedDetail("区域操作需要所有区块加载");
 		return switch (operation) {
 			case EMPTY_CONDENSED, VENT_SEALED_GAS -> commitInventory(player.level(), region, operation);
 			case RELEASE_OWNERSHIP -> commitOwnershipRelease(player.level().getServer(), region);
@@ -129,7 +131,7 @@ public final class MinecraftRegionLifecycle {
 
 	private void prepareInventoryDecrease(ServerLevel level, FluidRegion region) {
 		if (availability.ensureForInventoryDecrease(level, region) && region.solverLoaded()
-				&& region.domain().hasPendingPhaseMotionWork()
+				&& region.hasPendingPhaseMotionWork()
 				&& phaseWorkBarrier.settle(level, region)) {
 			try {
 				snapshots.sendToLevel(level, region);
@@ -141,9 +143,11 @@ public final class MinecraftRegionLifecycle {
 	}
 
 	CommitResult commitInventory(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
-		FluidDomain candidate;
+		MinecraftGroupAvailability.prepare(level, region);
+		if (!region.allWorldCellsAvailable()) return CommitResult.failedDetail("区域操作需要所有区块加载");
+		HostFluidState candidate;
 		try {
-			candidate = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			candidate = region.beginHostEdit();
 			if (operation == LifecycleOperation.EMPTY_CONDENSED) {
 				candidate.commitOperatorClear(candidate.planOperatorClear());
 			} else {
@@ -157,7 +161,7 @@ public final class MinecraftRegionLifecycle {
 	}
 
 	/** Commits the same private candidate/checkpoint path used by lifecycle operations. */
-	CommitResult commitCandidate(ServerLevel level, FluidRegion region, FluidDomain candidate, LifecycleOperation operation) {
+	CommitResult commitCandidate(ServerLevel level, FluidRegion region, HostFluidState candidate, LifecycleOperation operation) {
 		RegionRepositoryAdapter.StagedCheckpoint staged = null;
 		long published;
 		try {
@@ -240,7 +244,7 @@ public final class MinecraftRegionLifecycle {
 	CommitResult removeEmptyPool(ServerPlayer player, FluidRegion region) {
 		var facts=lifecycleFacts(player,region,LifecycleOperation.REMOVE_EMPTY_REGION);
 		if (!facts.blockers().isEmpty()) return CommitResult.failedDetail("池中仍有物质、热量或未完成事务，已保留区域");
-		if (!region.domain().exactInternalEnergy().equals(mmm.units.SignedDyadic.ZERO))
+		if (!region.hostSnapshot().exactInternalEnergy().equals(mmm.units.SignedDyadic.ZERO))
 			return CommitResult.failedDetail("池中仍有热量，已保留区域");
 		return commitRemoval(player.level().getServer(),region);
 	}
@@ -360,9 +364,9 @@ public final class MinecraftRegionLifecycle {
 				context, LifecycleOperationPreview.Removal.none(),
 				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
 
-		FluidDomain domain;
+		HostFluidState domain;
 		try (var capture = region.captureSolverState()) {
-			domain = FluidDomain.restoreAuthoritativeState(capture.exportState());
+			domain = HostFluidState.restoreAuthoritativeState(capture.exportState());
 		}
 		if (domain.hasPendingPhaseMotionWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
 		boolean auditClosed = domain.gasBoundary().auditClosed()
@@ -424,12 +428,12 @@ public final class MinecraftRegionLifecycle {
 	}
 
 	/** Empty cavities retain topology; only their actual inventory and energy constrain release. */
-	static boolean gasInventoryEmpty(FluidDomain domain) {
+	static boolean gasInventoryEmpty(HostFluidState domain) {
 		return domain.gasBoundary().sealedInventory().isEmpty()
 				&& domain.exactGasInternalEnergy().signum() == 0;
 	}
 
-	private static GasSummary lifecycleGasSummary(FluidDomain domain) {
+	private static GasSummary lifecycleGasSummary(HostFluidState domain) {
 		long nanos = 0L, species = 0L;
 		mmm.units.SignedDyadic exactMass = mmm.units.SignedDyadic.ZERO;
 		for (var component : domain.gasBoundary().sealedInventory().entries()) {

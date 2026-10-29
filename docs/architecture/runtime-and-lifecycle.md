@@ -65,13 +65,10 @@
 
 玩家协议会话由 [ProtocolSessions](../../fabric/src/main/java/mmm/network/ProtocolSessions.java) 随当前运行时保存。
 [FluidProtocolServer](../../fabric/src/main/java/mmm/network/FluidProtocolServer.java) 保存配置协商期间的短期任务。
-可选 GPU probe 使用自己的生命周期实例，通过 [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java) 接入主模组。
 
 区域求解默认使用 Vulkan。主模组已打包 GPU kernel、provider 服务声明以及 Windows x64 运行库；将主模组与 Fabric API 放入 Minecraft 26.2 / Fabric 的 `mods` 目录即可使用。`MmmRuntimeFactory` 经 `ServiceLoader` 创建设备常驻区域后端，默认设备编号为0，停服时释放设备资源。多显卡环境可用 Java 参数 `-Dmmm.gpuDevice=1` 选择其他设备，也可用 `-Dmmm.gpuDeviceName=显卡名称片段` 按名称选择。设备须支持当前内核所需的 Vulkan、FP64 与64位整数原子操作；缺少运行库或设备能力会报告具体启动错误。
 
-Vulkan 后端沿现有 `RegionApplicationService` 请求、私有候选和区域原子提交执行机械步与热步。日常观察、显示、单元库存查询和实体采样读取已提交设备代；存档、世界碰撞编辑与容器操作通过显式冷导出交接，后续求解重新导入设备。CPU 与 Vulkan 共用区域存档格式。
-
-设备请求失败时保留已提交区域，私有候选失败沿区域数值暂停流程报告。Java 参数 `-Dmmm.solverBackend=cpu` 显式选择 CPU 后端；此时 `-Dmmm.pressureCompute=vulkan` 可选择 GPU 压力计算服务。独立 `/mmmgpu` probe 保留自己的生命周期，主模组的正常 GPU 执行由主模组内嵌 kernel 提供。
+Vulkan 后端通过 `RegionApplicationService` 生成机械与热学设备候选。日常观察、显示、单元库存查询和实体采样读取已提交设备代；存档和编辑显式捕获状态，编辑在宿主私有副本上规划，再写入设备候选并提交。普通候选失败保留已提交状态并报告原因。设备故障停止受影响区域，恢复流程以 HEAD 与日志核对已完成的外部事务，再从一致 checkpoint 恢复。
 
 <a id="tick"></a>
 ## 一次区域计算
@@ -100,7 +97,7 @@ Vulkan 后端沿现有 `RegionApplicationService` 请求、私有候选和区域
 
 存档记录玩家运行意图、恢复状态、执行间隔和 tick。连续过载、恢复计数属于本次进程的调度记录。性能重试清除这次耗时记录；数值失败仍按其具体原因处理。
 
-新控制器首次成功提交后开始运行。外壳破损造成的暂停保留玩家意图，条件恢复后按该意图继续。缺少世界区块时暂停受影响的物理活动组；全部组等待时设置 `CHUNK_MISSING` 并保留内存求解域。
+新控制器首次成功提交后开始运行。外壳破损造成的暂停保留玩家意图，条件恢复后按该意图继续。世界区块缺失时，关联的物理活动组等待并保留库存；所有开放活动组均不可用时设置 `CHUNK_MISSING`。
 
 <a id="candidate"></a>
 ## 后端计算与提交
@@ -111,9 +108,7 @@ Vulkan 后端沿现有 `RegionApplicationService` 请求、私有候选和区域
 
 后端在私有状态上完成计算。`RegionApplicationService` 检查后端标识、紧邻代次和完整 `Layout`，其中包括网格、求解配置、预算、外壳、载体种类、注册表指纹和功能配置。`FluidRegionRepository` 在替换当前状态前再次核对区域身份。
 
-CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的序列化与重建。该对象只交接一次。提交前，如存档、重放或诊断需要不可变状态，调用 `candidate.state()` 生成快照；提交后该对象已成为活动状态，历史候选的 `state()` 会拒绝调用。
-
-其他后端可以提供完整不可变状态，接受相同检查。成功结果向 Minecraft 层返回本步统计和实体作用冲量。布局、容量或收支校验失败时，返回对应失败类型，区域保留原状态并暂停计算。
+候选持有完整设备后继，成功采用时交接一次；失败或过期候选释放资源，已提交代保持有效。成功结果向 Minecraft 层返回本步统计和实体作用冲量。布局、容量或收支失败时报告对应原因。
 
 本次输入还会携带世界热交换面和最近一次真实压力投影等计算数据。这些数据供后续计算使用，区域存档保存的物质库存另由 [存档专题](region-state.md)定义。
 
@@ -125,9 +120,9 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 
 新区域在首次 HEAD 提交成功后登记。恢复时，已经提交的元数据先登记，再检查当前预算和运行条件。暂时超出预算的区域仍保留身份与预留量，等待以后恢复求解器。
 
-[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。世界区块缺失时继续检查已加载外壳，将单元可用性交给活动组；其他独立组保持运行。
+[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。世界区块缺失时检查已加载外壳，并按物理连通关系暂停受影响的组。冷恢复先导入已保存几何生成分组，再刷新可用组的世界碰撞；碰撞改变后重新计算分组。
 
-冷恢复通过 `RegionRepositoryAdapter.restoreIncrementally` 分批读取同一 HEAD 的 section。完整区域磁盘库存到齐后才建立完整 CPU 求解域，再检查各活动组所需的世界区块。世界区块缺失期间保留读取进度；缺失或损坏的磁盘分片保留具体恢复错误。
+冷恢复通过 `RegionRepositoryAdapter.restoreIncrementally` 分批读取同一 HEAD 的 section。完整区域磁盘库存到齐后构造宿主状态，并在世界区块可用后导入设备。世界区块缺失期间保留读取进度；缺失或损坏的磁盘分片保留具体恢复错误。
 
 [RegionAvailabilityReason](../../api/src/main/java/mmm/api/RegionAvailabilityReason.java) 给出具体不可用原因。
 控制器扫描在 [controller 包](../../fabric/src/main/java/mmm/simulation/controller/)：它检查已经加载的世界，要求唯一封闭内腔、完整所需区块、无重叠且预算足够。
@@ -197,13 +192,7 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 
 ## 物理活动组
 
-一个区域中的固定开放空间按实际通路组织活动组。共享有限气腔、颗粒支撑、实体作用范围、导热接触或有限设备的空间共同推进。组的划分遵循物理关联；Minecraft section 继续负责存档和加载。
-
-力学与热化学分别维护活动状态。安静组进入休眠后，压力、黏性、体力、输运及热化学阶段跳过对应工作，原库存、MAC 动量、压力与内能保留。局部物质、温度或运动输入唤醒关联组，几何及设备连接改变时重建关联关系。只读观察返回已维护的活动统计。
-
-所有组共用区域的权威库存与收支账。后端在完整私有候选中计算活动组，同一候选提交其全部后继；跨 section 面继续按现有唯一归属结算。进程内候选交接保存调度状态；冷恢复从完整物理库存重新建立活动状态。
-
-[MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java) 的 `prepare` 采样每个求解单元及其邻接方块的世界区块，交给 `PhysicalActivityGroups.prepareAvailability`。一个组含有不可用单元时，力学与热化学共同暂停，库存、MAC 动量和内能保留；其他独立组沿同一区域候选继续推进。实体及外部交换也按组可用性捕获输入。全部组等待区块时区域保留完整内存求解域。区块恢复后，相关组唤醒，碰撞输入刷新。
+`MinecraftGroupAvailability` 采集世界区块可用性，`PhysicalActivityGraph` 根据同代设备摘要合并开放格面、有限气腔、颗粒支持与接触邻域、实体扫掠范围和有限热设备端口。某一成员不可用时整组暂停。机械与独立热请求携带共同的单元及格面活动输入；暂停组保留库存、内能、动量和相变待处理状态。可用性恢复会刷新碰撞并唤醒区域。清空、排气、移除、归还原版水和演示重置需要全部相关区块加载。
 
 ## 原版静水池操作
 

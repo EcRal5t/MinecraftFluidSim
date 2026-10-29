@@ -20,7 +20,7 @@ final class GasRuntimeGeometry {
 	private final GasChamberCapacity capacity;
 	private final SignedDyadic[] openedPoreVolumes;
 
-	private GasRuntimeGeometry(FluidDomain domain,LiquidCellInventory future,long[] occupied,boolean sealed,
+	private GasRuntimeGeometry(HostFluidState domain,LiquidCellInventory future,long[] occupied,boolean sealed,
 	                           byte[] futureMasks,PhaseOccupancyState futureOccupancy,
                                FlipPressurePhaseGeometry preparedPhase,GasComplementGeometry preparedGeometry,GasComponentCapacity.Prepared preparedCapacity,
                                int[] restoredCells,int restoredNodes) {
@@ -66,10 +66,10 @@ final class GasRuntimeGeometry {
 		return new GasRuntimeGeometry(this,future.snapshot());
 	}
 	/** The caller has retained volumes, fixed pores, collisions and exterior mode for this operation. */
-	GasRuntimeGeometry continueInventory(FluidDomain domain,LiquidCellInventory future){
+	GasRuntimeGeometry continueInventory(HostFluidState domain,LiquidCellInventory future){
 		return new GasRuntimeGeometry(this,domain,future.snapshot());
 	}
-	private GasRuntimeGeometry(GasRuntimeGeometry retained,FluidDomain domain,LiquidCellInventory.Snapshot future){
+	private GasRuntimeGeometry(GasRuntimeGeometry retained,HostFluidState domain,LiquidCellInventory.Snapshot future){
 		cellSize=retained.cellSize;sealedExterior=retained.sealedExterior;occupiedSvq=retained.occupiedSvq;
 		sourceOccupiedSvq=retained.occupiedSvq;sourceFixedGeometry=retained.geometry.actualCapacity().fixedGeometry;
 		sourceCells=domain.liquidCells.snapshot();targetCells=future;sourceOccupancy=domain.phaseOccupancy;
@@ -138,42 +138,42 @@ final class GasRuntimeGeometry {
 	}
 	SignedDyadic openedPoreVolume(int node){return openedPoreVolumes==null?SignedDyadic.ZERO:openedPoreVolumes[node-1];}
 
-	static GasRuntimeGeometry capture(FluidDomain domain,long[] occupied,boolean sealed) {
+	static GasRuntimeGeometry capture(HostFluidState domain,long[] occupied,boolean sealed) {
 		domain.ensurePhaseOccupancy();
 		return new GasRuntimeGeometry(domain,domain.liquidCells,occupied,sealed,null,domain.phaseOccupancy,null,null,null,null,0);
 	}
-	static GasRuntimeGeometry captureRestored(FluidDomain domain,long[] occupied,boolean sealed,int[] savedCells,int savedNodes) {
+	static GasRuntimeGeometry captureRestored(HostFluidState domain,long[] occupied,boolean sealed,int[] savedCells,int savedNodes) {
 		domain.ensurePhaseOccupancy();
 		return new GasRuntimeGeometry(domain,domain.liquidCells,occupied,sealed,null,domain.phaseOccupancy,null,null,null,savedCells,savedNodes);
 	}
-	static GasRuntimeGeometry captureCellFuture(FluidDomain domain,LiquidCellInventory future,long[] occupied,
+	static GasRuntimeGeometry captureCellFuture(HostFluidState domain,LiquidCellInventory future,long[] occupied,
 	                                           boolean sealed,byte[] masks,PhaseOccupancyState futureOccupancy) {
 		return captureCellFuture(domain,future,occupied,sealed,masks,futureOccupancy,null,null,null);
 	}
-	static GasRuntimeGeometry captureCellFuture(FluidDomain domain,LiquidCellInventory future,long[] occupied,
+	static GasRuntimeGeometry captureCellFuture(HostFluidState domain,LiquidCellInventory future,long[] occupied,
 	                                           boolean sealed,byte[] masks,PhaseOccupancyState futureOccupancy,
 	                                           FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity) {
 		return new GasRuntimeGeometry(domain,future,occupied,sealed,masks,futureOccupancy,phase,geometry,capacity,null,0);
 	}
-	static GasRuntimeGeometry allDry(FluidDomain domain,boolean sealed) {
+	static GasRuntimeGeometry allDry(HostFluidState domain,boolean sealed) {
 		return allDry(domain,new long[domain.cellCount],sealed);
 	}
-	static GasRuntimeGeometry allDry(FluidDomain domain,long[] occupied,boolean sealed) {
+	static GasRuntimeGeometry allDry(HostFluidState domain,long[] occupied,boolean sealed) {
 		var empty=new LiquidCellInventory(domain.cellCount,domain.liquidCells.chemicalRegistry());
 		return new GasRuntimeGeometry(domain,empty,occupied,sealed,null,new PhaseOccupancyState(new double[8*domain.cellCount]),null,null,null,null,0);
 	}
-	boolean matchesCarrierGeometry(FluidDomain domain,long[] occupied) {
+	boolean matchesCarrierGeometry(HostFluidState domain,long[] occupied) {
 		return matchesCarrierInventory(domain,occupied)&&domain.phaseOccupancy!=null
 				&&domain.phaseOccupancy.geometryIdentity()==occupancy.geometryIdentity();
 	}
-	boolean matchesCarrierInventory(FluidDomain domain,long[] occupied) {
+	boolean matchesCarrierInventory(HostFluidState domain,long[] occupied) {
 		return matchesGeometryInputs(domain,occupied,occupiedSvq,null)&&sameLiquidVolumes(domain.liquidCells,targetCells);
 	}
-	boolean matchesSourceCarrierGeometry(FluidDomain domain,long[] occupied) {
+	boolean matchesSourceCarrierGeometry(HostFluidState domain,long[] occupied) {
 		return matchesGeometryInputs(domain,occupied,sourceOccupiedSvq,sourceFixedGeometry)
 				&&sameLiquidVolumes(domain.liquidCells,sourceCells)&&domain.phaseOccupancy==sourceOccupancy;
 	}
-	private boolean matchesGeometryInputs(FluidDomain domain,long[] occupied,long[] expected,FixedGeometrySnapshot fixed) {
+	private boolean matchesGeometryInputs(HostFluidState domain,long[] occupied,long[] expected,FixedGeometrySnapshot fixed) {
 		if(domain==null||domain.sizeX!=geometry.sizeX()||domain.sizeY!=geometry.sizeY()||domain.sizeZ!=geometry.sizeZ()
 				||Float.floatToRawIntBits(cellSize)!=Float.floatToRawIntBits(domain.config.cellSize())||!Arrays.equals(occupied,expected))return false;
 		var expectedFixed=fixed==null?geometry.actualCapacity().fixedGeometry:fixed;

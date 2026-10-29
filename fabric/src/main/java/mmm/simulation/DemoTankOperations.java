@@ -9,7 +9,7 @@ import mmm.block.MmmBlocks;
 import mmm.chemistry.ChemicalMixtureRecord;
 import mmm.chemistry.ChemicalTransferLedger;
 import mmm.controller.LifecycleOperation;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.transfer.ChemicalContents;
 import mmm.transfer.ContainerFluidLedger;
 import mmm.transfer.FluidMixture;
@@ -56,12 +56,13 @@ final class DemoTankOperations {
         error = recipeCapabilityFailure(recipe);
         if (error != null) return error;
         if (!availability.ensureForInventoryDecrease(level, region)) return region.availabilityFailure();
+        if (!region.allWorldCellsAvailable()) return "演示操作需要所有区块加载";
         int[] port = portCell(level, region);
         if (port == null) return "演示接口未连接到当前区域";
         try {
             region.setPaused(true);
             if (!phaseWork.settle(level, region)) return "无法结算待处理的相变运动";
-            FluidDomain domain = prepareCandidate(world, region, recipe, port);
+            HostFluidState domain = prepareCandidate(world, region, recipe, port);
             var committed = lifecycle.commitCandidate(level, region, domain, null);
             if (!committed.committed() || region.availabilityReason() == mmm.api.RegionAvailabilityReason.HEAD_INVALID)
                 return committed.message().getString();
@@ -86,14 +87,14 @@ final class DemoTankOperations {
     }
 
     /** Builds a complete private replacement before publishing any inventory changes. */
-    static FluidDomain prepareCandidate(CommittedWorldRegistries world, FluidRegion region, Recipe recipe, int[] port) {
+    static HostFluidState prepareCandidate(CommittedWorldRegistries world, FluidRegion region, Recipe recipe, int[] port) {
         return prepareCandidate(world, region, recipe, port, 1_000_000L);
     }
 
-    static FluidDomain prepareCandidate(CommittedWorldRegistries world, FluidRegion region, Recipe recipe, int[] port,
+    static HostFluidState prepareCandidate(CommittedWorldRegistries world, FluidRegion region, Recipe recipe, int[] port,
             long reagentQuanta) {
-        FluidDomain domain;
-        try (var captured = region.captureSolverState()) { domain = FluidDomain.restoreAuthoritativeState(captured.exportState()); }
+        HostFluidState domain;
+        try (var captured = region.captureSolverState()) { domain = HostFluidState.restoreAuthoritativeState(captured.exportState()); }
         domain.commitOperatorClear(domain.planOperatorClear());
         domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
         populate(world, region.lifecycleCandidate(domain, true), recipe, port, reagentQuanta);
@@ -109,7 +110,7 @@ final class DemoTankOperations {
             long reagentQuanta) {
         if (recipe == null || port == null || port.length != 3)
             throw new IllegalArgumentException("演示配方或接口缺失");
-        FluidDomain domain = candidate.domain();
+        HostFluidState domain = candidate.editableHost();
         restoreAmbientGas(world, domain);
         if (recipe == Recipe.WATER) {
             int material = domain.hasMaterialState() ? domain.materialRegistry().handle("mmm:water") : 0;
@@ -135,7 +136,7 @@ final class DemoTankOperations {
     }
 
     /** Refill every finite cavity from the ambient source at its current open volume. */
-    private static void restoreAmbientGas(CommittedWorldRegistries world, FluidDomain domain) {
+    private static void restoreAmbientGas(CommittedWorldRegistries world, HostFluidState domain) {
         var gas = domain.gasBoundary();
         if (!gas.topologyInitialized()) domain.bootstrapGasState(
                 world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry().fingerprint() : "");
@@ -173,6 +174,7 @@ final class DemoTankOperations {
 
     private String clear(ServerLevel level, FluidRegion region) {
         if (!availability.ensureForInventoryDecrease(level, region)) return region.availabilityFailure();
+        if (!region.allWorldCellsAvailable()) return "演示操作需要所有区块加载";
         region.setPaused(true);
         if (!phaseWork.settle(level, region)) return "无法结算待处理的相变运动";
         for (var operation : List.of(LifecycleOperation.EMPTY_CONDENSED, LifecycleOperation.VENT_SEALED_GAS)) {

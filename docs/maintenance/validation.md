@@ -72,7 +72,7 @@
 控制器交互覆盖空手激活、潜行切换、探针交互、运行与暂停、生命周期预览／取消／确认、温度源输入、清空／排气／释放／移除以及比较器关联。
 
 - 自动化验证：
-  - `:fabric:compileClientJava` 编译客户端；`runCpuValidation -PcpuValidation=protocol` 执行协议编解码、请求代次与客户端几何验证。
+  - `:fabric:compileClientJava` 编译客户端；`runHostValidation -PhostValidation=protocol` 执行协议编解码、请求代次与客户端几何验证。
   - `:fabric:runGpuProductionDemoValidation -PgpuDemo=controller -PgpuDemoSteps=20` 覆盖生产注液、GPU 推进、手动步进、装取与 WAL/checkpoint 持久化。
   - `ContainerTransferStoreValidation --rapid-pour` 覆盖 24 次连续注液后的持久清空、排气、恢复与重注液。
 - 实机观察：执行 `/mmm controllerdemo`，使用探针打开控制器，滚动摘要面板，测试暂停／继续与刷新，依次预览、取消及确认清空、排气与移除。操作回复与生命周期状态保持同步，关闭后不重新弹窗。
@@ -82,7 +82,7 @@
 2026-10-29，以下命令通过。客户端渲染修复使用 Minecraft 26.2 的图集定义 ID，保留纹理绑定 ID；测试执行实际几何发射，不创建 Minecraft 窗口或图形设备。
 
 ```powershell
-./gradlew.bat :fabric:compileClientJava :fabric:runCpuValidation '-PcpuValidation=protocol,lifecycle,boundary,region-manager' :fabric:runDemoInteractionValidation :fabric:assemble --console=plain --max-workers=1
+./gradlew.bat :fabric:compileClientJava :fabric:runHostValidation '-PhostValidation=protocol,lifecycle,boundary,region-manager' :fabric:runDemoInteractionValidation :fabric:assemble --console=plain --max-workers=1
 ```
 
 `DemoInteractionValidation` 驱动生产工作台请求，世界读写通过测试适配器提供，区域目录、外壳扫描、会话及演示存档使用正式实现。全部七个预设依次执行重置、开始、暂停、单步、原位重置、移除和异位重建；覆盖权限／世界未就绪、首次放置失败后换位置、旧请求与跨维请求、远离场景、单步失败、配方失败、临时场景替换失败、目标空间及区域重叠拒绝，以及水箱被外部删除后的恢复。失败用例检查原区域、壳体与会话保留，并继续执行成功流程。
@@ -107,253 +107,17 @@
 - `:gpu-kernel:runGpuResidentStateValidation`：生产 ServiceLoader 发现、设备状态连续推进、实体运动插入与 checkpoint 导出恢复。
 - `:gpu-kernel:runGpuThermalPhaseValidation`：冻结、熔化、汽化、凝结热相变，有限气腔 CO₂ 溶解与外界析气膜传质；检查整数质量、物种与内能账闭合。
 
-## CPU 测试怎么运行
+<a id="host"></a>
+## 宿主事务、存档与协议验证
 
-完整工程入口为根项目 `runValidation`，统一执行 CPU 领域、架构和 GPU 命令适配器验证。默认使用 `fast`，指定 `-PcpuValidation=full` 运行全部 CPU 领域；根项目 `check` 接入相同入口。模块的独立 main 验证任务继续供定位使用。
-
-```powershell
-./gradlew.bat test runValidation -PcpuValidation=full -PcpuValidationKeepGoing=true --continue --max-workers=1 --offline --no-daemon
-```
-
-在仓库根目录执行，例如：
+宿主验证选择器覆盖定义、几何、生命周期、存档、容器、世界归属和协议。连续物理推进使用 GPU 验证入口。多个名称用逗号分隔，`list` 列出选择器；省略或使用 `fast` / `full` 运行当前组合。任务定义见 [fabric/build.gradle](../../fabric/build.gradle)，选择器见 [HostValidationSuite](../../fabric/src/test/java/mmm/validation/HostValidationSuite.java)。
 
 ```powershell
-./gradlew.bat :fabric:runCpuValidation '-PcpuValidation=region-state,containers' --offline --no-daemon
+./gradlew.bat :fabric:runHostValidation '-PhostValidation=region-state,containers,ownership,lifecycle' --offline --no-daemon --max-workers=1
+./gradlew.bat :fabric:runHostValidation -PhostValidation=list --offline --no-daemon
 ```
 
-`cpuValidation` 是测试选择器，多个名称用逗号连接。[CpuValidationSuite](../../fabric/src/test/java/mmm/validation/CpuValidationSuite.java) 定义了全部名称与组合。
-[fabric/build.gradle](../../fabric/build.gradle) 定义执行任务。
-
-| 选择方式 | 含义 |
-|---|---|
-| 指定名称，例如 `thermal` | 完整运行该领域；多个名称会去重 |
-| 名称加 `:short`，例如 `cut-cell:short` | 单独运行该领域的短入口；没有短入口的领域运行完整入口并标明 `full` |
-| 省略参数或使用 `fast` | 运行默认组合，提供短模式的场景使用短模式 |
-| `milestone` | 较广的阶段验收组合，仍使用各场景的短模式 |
-| `soak` | 完整运行 `gas-liquid`、`free-surface`、`cell-inventory` |
-| `full` | 完整运行所有已登记的领域 |
-| `list` | 输出当前组合与选择器名称 |
-
-显式写出的领域名称运行完整模式，即使它也出现在 `fast` 中。根项目 `check` 默认运行 19 个领域的 `fast`；该组合省略 `materials`、`surface-tension`、`gas-liquid`、`region-state`、`takeover`、`ownership`、`liquid-joining`、`thermal-extremes`、`controller-gas-lineage`、`production-live-budget`。省略的领域须显式选择，完整验收使用 `-PcpuValidation=full`。
-
-同一领域同时选择短模式和完整模式时，完整模式优先。基线测量可加 `-PcpuValidationKeepGoing=true`，记录当前领域的首个失败后继续下一领域，最后仍以失败退出；默认在首个失败处停止。输出区分断言、参数配置与执行失败，并记录每个领域的耗时。超时或主动中止的进程须另行登记，已开始的场景不计作通过。
-
-`CpuValidationSuite` 在运行开头输出构建版本、源码摘要、JVM 参数与选择器清单。全量、长重放及预算测试以实际退出码与断言结果为准，并区分独立冷启动与 JVM 预热后的热运行。
-
-`cut-cell:short` 保留参数、黏性、微盒几何、CCD、容量及恢复对照，省略 600 步障碍物流动。长场景单独运行：
-
-```powershell
-./gradlew.bat :solver:runSolverValidation --args="--flow-only" --offline --no-daemon
-```
-
-相变待机械推进格的聚焦验证使用 `:fabric:runThermalValidation --args="--phase-motion"`，复用固液待处理任务、沸腾与凝结后的真实压力投影、恢复及容量拒绝断言，同时检查标记合并、快照独立性与完全汽化终态的正式存档恢复。完整热学验证仍使用 `thermal`。
-
-气腔刷新、持久化同步、压缩功、排气及气液相变的热账交接可用 `:fabric:runThermalValidation --args="--gas-topology"` 聚焦运行，复用现有热学场景。沸腾搜索固定输入与端口复用的对照归属 `air-cavity`。
-
-气液物种转换及其热学后继可用 `:fabric:runThermalValidation --args="--phase-species"` 聚焦运行；场景沿用完整热学入口。
-
-热平流与分层后继使用 `:fabric:runThermalValidation --args="--flow"`；自然对流及后续换热使用 `--convection`；实际载体内能分配使用 `--assignment`。这些选择器共用完整热学入口的场景，已通过且未受改动影响的部分直接复用。
-
-`free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及达到 `U*t/L=1` 的 20 秒多网格旋流；短入口保留 0.1 秒旋流。单独旋流入口为 `FlipFluidFreeSurfaceValidation --vortex`，记录动能与角动量相对值；三轴旋转入口 `LiquidMacroscopicMotionValidation joint-moments` 覆盖 `ω*t=0.8 rad`。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
-
-`ProductionFluidReplayValidation --controller-gas` 复用生产重放中的完整连续注液与气体库存场景，用于定位注液后继的容量、压缩功和 EOS；完整验收仍由 `production-replay` 执行全部场景。
-
-<a id="cpu"></a>
-## 按改动选择测试
-
-- **极端温度、压力与相变连续推进**
-  - 选择器：`thermal-extremes`
-  - 测试源码入口：[ExtremeThermalValidation](../../fabric/src/test/java/mmm/fluid/ExtremeThermalValidation.java)
-
-- **材料、质量、混合与液液界面**
-  - 选择器：`materials`
-  - 测试源码入口：[M3ConnectedVesselValidation](../../fabric/src/test/java/mmm/fluid/M3ConnectedVesselValidation.java)
-
-- **表面张力和润湿**
-  - 选择器：`surface-tension`
-  - 测试源码入口：[M4SurfaceTensionValidation](../../fabric/src/test/java/mmm/fluid/M4SurfaceTensionValidation.java)
-  - 同一构建的聚焦入口：`M4SurfaceTensionValidation --wetting` 复用润湿 1,200 步及液液界面后继，`--liquid-pair` 单独运行该后继，`--curvature` 保留共同曲率场景。直接运行测试类时附加 JVM 参数 `-ea -Xmx512m`。
-
-- **气体库存、状态方程与孔流**
-  - 选择器：`air-network`
-  - 测试源码入口：[AirNetworkValidation](../../fabric/src/test/java/mmm/fluid/air/AirNetworkValidation.java)
-
-- **气腔扫描和连通关系**
-  - 选择器：`air-cavity`
-  - 测试源码入口：[AirCavityScannerValidation](../../fabric/src/test/java/mmm/fluid/AirCavityScannerValidation.java)
-
-- **液体与气体压力耦合**
-  - 选择器：`gas-liquid`
-  - 测试源码入口：[M5GasLiquidCouplingValidation](../../fabric/src/test/java/mmm/fluid/M5GasLiquidCouplingValidation.java)
-
-- **控制器清空后再注液的气腔归属**
-  - 选择器：`controller-gas-lineage`
-  - 测试源码入口：[ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java)
-
-- **生产场景耗时**
-  - 选择器：`production-live-budget`
-  - 测试源码入口：[ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java)
-
-- **连续注液、后端恢复和长时间物理行为**
-  - 选择器：`production-replay`
-  - 测试源码入口：[ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java)
-
-- **区域数量、预算、重叠和选择**
-  - 选择器：`region-manager`
-  - 测试源码入口：[FluidRegionManagerValidation](../../fabric/src/test/java/mmm/simulation/FluidRegionManagerValidation.java)
-
-- **调度、暂停、完整状态交接**
-  - 选择器：`lifecycle`
-  - 测试源码入口：
-    - [FluidRegionLifecycleValidation](../../fabric/src/test/java/mmm/simulation/FluidRegionLifecycleValidation.java)
-    - [FluidDomainStateParityValidation](../../fabric/src/test/java/mmm/simulation/FluidDomainStateParityValidation.java)
-
-- **实体位移观测和液体响应**
-  - 选择器：`entity-fluid`
-  - 测试源码入口：
-    - [EntityFluidWiringValidation](../../fabric/src/test/java/mmm/simulation/EntityFluidWiringValidation.java)
-    - [ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java)
-
-- **压力、自由面、速度传递与平流**
-  - 选择器：`free-surface`
-  - 测试源码入口：[FlipFluidFreeSurfaceValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidFreeSurfaceValidation.java)
-
-- **实际格面惯性与初始动量交接**
-  - 选择器：`marker-transfer`
-  - 测试源码入口：[MarkerVelocityTransferValidation](../../fabric/src/test/java/mmm/fluid/MarkerVelocityTransferValidation.java)
-
-- **共同压力、薄层与有限气腔**
-  - 选择器：`marker-pressure`
-  - 测试源码入口：[MarkerPressureValidation](../../fabric/src/test/java/mmm/fluid/MarkerPressureValidation.java)
-
-- **单元库存、动量、墙面交接与正常事务**
-  - 选择器：`cell-inventory`
-  - 测试源码入口：
-    - [LiquidCellInventoryValidation](../../solver/src/test/java/mmm/fluid/LiquidCellInventoryValidation.java)
-    - [MacMomentumAdvectionValidation](../../solver/src/test/java/mmm/fluid/MacMomentumAdvectionValidation.java)
-    - [CarrierMutationValidation](../../fabric/src/test/java/mmm/fluid/CarrierMutationValidation.java)
-    - [LiquidMacroscopicMotionValidation](../../fabric/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java)：完整组合运行 `joint-moments` 与 `sweep-only`，覆盖旋转及多轴、多格长平移。
-
-- **相向液体的连续合流**
-  - 选择器：`liquid-joining`，显式完整场景
-  - 测试源码入口：[LiquidHandoffContinuityValidation](../../fabric/src/test/java/mmm/fluid/LiquidHandoffContinuityValidation.java)
-
-- **黏性解析解、谱界、局部网格碰撞和连续碰撞检测**
-  - 选择器：`cut-cell`
-  - 测试源码入口：[FlipCutCellValidation](../../solver/src/test/java/mmm/fluid/FlipCutCellValidation.java)
-
-- **Minecraft 方块形状采样**
-  - 选择器：`shape`
-  - 测试源码入口：[FluidCutCellShapeValidation](../../fabric/src/test/java/mmm/simulation/FluidCutCellShapeValidation.java)
-
-- **存档、世界能力包、配置和启动恢复**
-  - 选择器：`region-state`
-  - 测试源码入口：
-    - [RegionRepositoryAdapterValidation](../../fabric/src/test/java/mmm/simulation/persistence/RegionRepositoryAdapterValidation.java)
-    - [WorldCapabilityBundleStoreValidation](../../fabric/src/test/java/mmm/simulation/persistence/WorldCapabilityBundleStoreValidation.java)
-    - [WorldCapabilityStartupValidation](../../fabric/src/test/java/mmm/simulation/persistence/WorldCapabilityStartupValidation.java)
-
-- **网络、查询、探针和提交通知**
-  - 选择器：`protocol`
-  - 测试源码入口：
-    - [FluidNetworkProtocolValidation](../../fabric/src/test/java/mmm/network/FluidNetworkProtocolValidation.java)
-    - [ShellFluidQueryValidation](../../fabric/src/test/java/mmm/simulation/ShellFluidQueryValidation.java)
-    - [CommittedEventHubValidation](../../fabric/src/test/java/mmm/simulation/CommittedEventHubValidation.java)
-
-- **控制器外壳和内腔扫描**
-  - 选择器：`boundary`
-  - 测试源码入口：[FluidBoundaryScannerValidation](../../fabric/src/test/java/mmm/simulation/controller/FluidBoundaryScannerValidation.java)
-
-- **开发场景的世界接管备份**
-  - 选择器：`takeover`
-  - 测试源码入口：[TakeoverJournalValidation](../../fabric/src/test/java/mmm/simulation/TakeoverJournalValidation.java)
-
-- **桶、发射器、库存编码与事务恢复**
-  - 选择器：`containers`
-  - 测试源码入口：
-    - [M6ContainerValidation](../../fabric/src/test/java/mmm/item/M6ContainerValidation.java)
-    - [ContainerApplicationValidation](../../app/src/test/java/mmm/application/ContainerApplicationValidation.java)
-    - [ContainerTransferStoreValidation](../../fabric/src/test/java/mmm/simulation/ContainerTransferStoreValidation.java)
-
-- **世界方块归属和恢复**
-  - 选择器：`ownership`
-  - 测试源码入口：[M6OwnershipValidation](../../fabric/src/test/java/mmm/simulation/ownership/M6OwnershipValidation.java)
-
-- **命令日志**
-  - 选择器：`audit`
-  - 测试源码入口：[CommandAuditFileValidation](../../fabric/src/test/java/mmm/logging/CommandAuditFileValidation.java)
-
-- **化学反应和组分输运**
-  - 选择器：`chemistry`
-  - 测试源码入口：
-    - [M7ChemistryValidation](../../fabric/src/test/java/mmm/chemistry/M7ChemistryValidation.java)
-    - [M7ChemicalTransportValidation](../../fabric/src/test/java/mmm/fluid/M7ChemicalTransportValidation.java)
-
-- **颗粒运动、沉积和固液转移**
-  - 选择器：`granular`
-  - 测试源码入口：
-    - [M8GranularValidation](../../fabric/src/test/java/mmm/granular/M8GranularValidation.java)
-    - [GranularReactionCandidateValidation](../../fabric/src/test/java/mmm/fluid/GranularReactionCandidateValidation.java)
-
-- **内能、导热、反应热、相变和设备换热**
-  - 选择器：`thermal`
-  - 测试源码入口：[M9ThermalValidation](../../fabric/src/test/java/mmm/fluid/M9ThermalValidation.java)
-
-- **零导热平流、连续组成密度与热浮力、caloric 空间观察及冷热尖峰单调性**
-  - 选择器：`thermal`
-  - 测试源码入口：
-    - [LiquidThermalAdvectionValidation](../../fabric/src/test/java/mmm/fluid/LiquidThermalAdvectionValidation.java)
-    - [LiquidStratificationValidation](../../fabric/src/test/java/mmm/fluid/LiquidStratificationValidation.java)
-
-- **有限热接触解析解、跨热容分段熵增与逐载体正温**
-  - 选择器：`thermal`
-  - 测试源码入口：[ThermalContactValidation](../../model/src/test/java/mmm/thermal/ThermalContactValidation.java)
-
-以上是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。
-
-输运与空间矩的聚焦入口复用现有断言：
-
-```powershell
-./gradlew.bat :fabric:runLiquidTransportValidation --args="components" --offline --no-daemon
-./gradlew.bat :fabric:runLiquidTransportValidation --args="geometry-remap" --offline --no-daemon
-./gradlew.bat :fabric:runLiquidTransportValidation --args="handoff-short" --offline --no-daemon
-./gradlew.bat :fabric:runCarrierMutationValidation --offline --no-daemon
-./gradlew.bat :fabric:runRemapMomentsValidation --args="transport-moments" --offline --no-daemon
-./gradlew.bat :fabric:runRemapMomentsValidation --args="joint-moments" --offline --no-daemon
-```
-
-常用输运参数为 `components`、`geometry-remap` 和 `handoff-short`，长轨迹使用 `handoff` 与 `continuity`。
-空间矩入口 [LiquidMacroscopicMotionValidation](../../fabric/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java) 按 `transport-moments`、`joint-moments` 或 `common-mesh` 选择场景。`cell-inventory` 组合只运行其中的 `joint-moments`；完整宏观入口使用 `:fabric:runRemapMomentsValidation`，省略参数。
-省略参数执行完整入口，全部参数及逐项断言以对应测试源码为准。
-
-`common-mesh` 运行三格 L 形连续 8 步并逐步恢复，检查库存、宏观位移和动能。`transport-moments` 追加多方向平移和多密度库存；`joint-moments` 与 `footprint-only` 保留为宏观旋转和材料输运的选择器。具体通过状态见[验证证据](#当前验证证据)。
-
-压力短回归使用 `:fabric:runMarkerPressureValidation`；`--args="--thin-layer"` 聚焦薄层库存、动能和恢复，`--args="--kernel"` 运行共同压力与 L 形流程。
-
-注液使用 `:fabric:runBoundaryPourDiagnostic`，默认执行 4 个完整步及捕获恢复；`--args="--steps=200"` 指定步数，`--args="--l-shape"` 切换 L 形来源，`--flux` 追加输运统计。每步报告完整耗时、捕获与计算耗时、子步、压力迭代、残差和动能；失败保留异常并以非零状态退出。
-
-自然对流随 `thermal` 选择器检查宏观增长：一档普通扰动、两级网格、临界 Ra 两侧，增长率按空间离散与时间步长的误差范围评价，同时检查体积、材料质量、物种、壁面热源汇、舍入与载体内能闭合。
-单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；
-省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[自然对流的宏观增长](../architecture/thermal-state.md#自然对流的宏观增长)。
-
-粒子分布离线研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。
-用 `--args="analytic transport"` 选择解析平流对照，`--args="free-analytic"` 观察自由面覆盖误差与细化。
-完整 `free-surface` 包含长时溃坝，检查库存、逐格容量和压力工作区交接。
-`cell-inventory` 集中检查库存分配、低速与少数相连续流、墙面动量与热量交接、宏观旋转及正常库存事务；其他领域直接运行所属场景。
-场景参数在测试源码维护，生产成本按[完整步预算](#performance)评价。
-
-### 什么时候追加测试
-
-- 改存档字段或恢复状态：追加 `region-state`。
-- 改压力算法并影响气体：追加 `gas-liquid`；改变库存输运或动量表示时追加 `cell-inventory`。
-- 改气体热力学：运行 `thermal`；改等温状态方程追加 `air-network`，改压力矩阵接入追加 `gas-liquid,free-surface`。
-- 改气腔与局部方块形状共享的几何：追加 `cut-cell`；Minecraft 采样变化再追加 `shape`。
-- 改控制器摘要或预览授权：使用 `protocol,lifecycle`；改删除提交再加 `region-state,ownership`。
-- 改容器提交后的事件：使用 `protocol,containers`。
-- 改颗粒与气体、压力、热学或存档共享的数据：追加相应领域。
-- 改后端状态交接：运行 `lifecycle`，再运行受影响载体的测试。库存、组成、MAC 动量及内能原始列保持精确内容或原始浮点位比较；由残余压力和已知载荷重建的凝聚相压力，按局部压力与大气压的较大尺度允许 4 个 float ULP，独立于原始列的位模式要求。
-
-新增回归场景放入负责该行为的现有测试。只有新失败类型确实属于独立领域时，才增加选择器。
+改存档和恢复选 `region-state`；改容器或物品 WAL 选 `containers`；改世界归属选 `ownership`；改生命周期选 `lifecycle`；改客户端消息选 `protocol`；改碰撞几何选 `shape`。设备状态与候选交接运行 `:gpu-kernel:runGpuResidentStateValidation`，物理变化按具体 GPU 演示或内核场景选择。只对新增失败模式补充常态用例。
 
 <a id="fluid-presentation"></a>
 ## 展示几何与光影接入
@@ -363,7 +127,7 @@
 
 ### 自动化与离线成本
 
-- D01 沿 `protocol` 检查新几何字段、同代接收、迟到帧和移除游标，沿 `materials` 覆盖实际几何输入。
+- D01 沿 `protocol` 检查新几何字段、同代接收、迟到帧和移除游标。
 - D02／D03 复用相关几何测试，按改动覆盖薄层、格内液滴、斜切单元、多材料、共享面、朝向、有限坐标和重复重建一致性。
 - 重构绑死旧阈值、增厚或网格形状的断言；新增常态测试对应新增失败类型。
 - `presentation` 分列快照与网格时间、分配量；编码字节数、客户端排序、上传和 GPU 绘制按实际入口补充测量。
@@ -371,8 +135,7 @@
 现有选择器命令：
 
 ```powershell
-./gradlew.bat :fabric:runCpuValidation '-PcpuValidation=protocol,materials' --offline --no-daemon
-./gradlew.bat :fabric:runCompositeBenchmark -PbenchmarkScene=presentation --offline --no-daemon
+./gradlew.bat :fabric:runHostValidation -PhostValidation=protocol --offline --no-daemon
 ```
 
 展示基准：2592 个有液单元代表场景下，四类展示快照平均 ~15 ms，网格生成平均 ~5 ms（以 16 ms 为客户端 CPU 目标）；同几何帧与暂停状态复用网格。
@@ -399,78 +162,7 @@
 <a id="performance"></a>
 ## 性能和长期场景
 
-快速离线测量使用 `./gradlew.bat :fabric:runStepBenchmark --offline`。
-[ProductionStepBenchmark](../../fabric/src/test/java/mmm/simulation/ProductionStepBenchmark.java)
-测量控制器半满场景与大型 demo，各预热 20 步、采样 20 步，分别报告捕获、计算、提交和完整步的均值、中位数、p95 与最大值，以及调用线程的内存分配量，并检查物质与能量收支。
-测量范围是 CPU 计算流程，适合同机同配置的优化对比；评估耗时收益时应结合多次测量的波动。
-
-组合过程使用 [CompositeStepBenchmark](../../fabric/src/test/java/mmm/simulation/CompositeStepBenchmark.java)，例如：
-
-```powershell
-./gradlew.bat :fabric:runCompositeBenchmark -PbenchmarkScene=thermochem -PbenchmarkWarmup=20 -PbenchmarkSamples=80 --offline
-```
-
-`benchmarkOutput` 指定输出前缀（建议绝对路径），默认写入根目录 `build/composite-profile/<scene>.csv`。
-`-PbenchmarkJfr=true` 另录制采样阶段的 JFR；采样运行的耗时应与普通计时分开报告。
-
-| scene | 测量范围与实际过程 |
-|---|---|
-| `granular` | 256 个初始细砂 parcel，连续推进至沉积后，向床面附近液体施加刚体扰动；需要足够步数形成沉积。CSV 分别记录沉积、唤醒、接触粒子和冲量，接触不保证唤醒 |
-| `granular-active` / `granular-large` | 每次重放同一初态的完整后端步并提交，分别保留 256 / 1,536 个活动 parcel；初态捕获在计时外，适合对比持续活动的耦合算子成本 |
-| `thermochem` | 每步注入带酸碱和盐离子的液体，结算待处理相变体积并执行完整步；采样阶段必须有实际化学变化和析出 |
-| `mixed` | 显式安排三个区域：隔轮运动、每轮独立热轴、保持静止；记录实际入口调用次数，测量离线组合工作量 |
-| `presentation` | 对固定大型状态分别测量捕获、恢复、四类展示快照与液面网格生成的时间和分配量 |
-
-完整计时包含并行工作任务的等待时间。分配量统计调用线程，工作线程分配另用 JFR 排查；额外状态导出、审计与 CSV 格式化位于测量范围外。
-连续推进场景包含请求捕获、计算和提交；`thermochem` 还包含注液操作。
-这些场景不包含 Minecraft 活动分类、到期调度、世界读取、网络编码、磁盘写入或 GPU 绘制。
-`mixed` 的调用次数统计全部区域；粒子、固体和内能列描述第一个区域，其余区域也逐步检查气体与内能收支。
-应在同机交错启动独立 JVM 重复测量，并查看逐步过程计数；诊断列相同只能说明这些观测一致，完整状态等价需要另行比较。
-
-`production-live-budget` 调用 `defaultLiveStepsRemainBounded`，验证两种生产负载：
-
-| 场景 | 规模 | 耗时要求 |
-|---|---|---|
-| 默认控制器注入 16 m³ | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
-| 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 条初始 Stock（9×12×24）、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
-
-定位最大场景成本时，`ProductionFluidReplayValidation --demo-budget` 可直接运行同一最大 demo；它保留原场景、预热、20 个完整步和暂停判据。正式预算汇总仍采用同时覆盖控制器与最大 demo 的 `production-live-budget`。
-
-性能验收采用热运行基准（预热后采样）。单独复测使用 `-PcpuValidation=production-replay,production-live-budget`。
-`production-replay` 检查长时间注液、清空、气腔归属、相变功结算、实体响应及后端捕获恢复的收支守恒；`ProductionFluidReplayValidation --compressed-soak` 覆盖气腔静止场与扰动衰减场。物理验收覆盖分层、液封、惯性、孔流、热对流与气腔压缩。
-
-`granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/mmm/fluid/GranularCarrierValidation.java)
-覆盖液固阻力动量交换、耗散、压力功、浮力和跨格连续接触。
-`containers` 的种子 4、54、103 保留正常操作中的薄层反冲、颗粒排水与高压时间细化回放。
-
-`./gradlew.bat :fabric:runGranularCarrierValidation --offline --no-daemon` 单独执行完整颗粒载体校验。
-加 `--args="--contacts"` 聚焦固定墙与床体连续碰撞、Coulomb 摩擦、真实支撑年龄、容量暂停、合并后联合球体几何、六轴悬殊质量碰撞的动量与质量第一矩，以及碰撞改道后的三球接触链。
-
-`./gradlew.bat :fabric:runThermalValidation --args="--granular-energy" --offline --no-daemon` 聚焦颗粒内能列的插入、部分提取、床层转换、清空和精确热账。省去参数执行完整热学入口，沿用 `thermal` 的全部场景。
-
-[GranularBedWakeValidation](../../fabric/src/test/java/mmm/fluid/GranularBedWakeValidation.java)
-使用正式全能力注册表与逐步捕获恢复，覆盖“沉积休眠 → 弱扰动 → 强扰动起动搬运 → 再次沉积休眠”。
-每步检查液固联合容量、物质与内能收支，以及独立的 U+K+PE 与外功变化，并记录起动、接触和床面受力。
-该流程与薄床自由流动、时间细化共同构成正常沙床验收，具体场景参数由测试维护。
-单独运行使用 `./gradlew.bat :fabric:runGranularBedValidation --offline`。
-
-批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，
-每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
-
-```powershell
-./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=0,200,60' --offline --no-daemon
-```
-
-扩展动作包含独立热轴、移动刚体、油、成批注入和随机注入点；容量拒绝记录为 skip，强制仿真中断使任务失败。首参数也可用冒号分隔一组种子，或用 `reported` 运行九类已报告异常的全部 28 个固定种子：
-
-```powershell
-./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=reported,1,80' --offline --no-daemon
-./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=1393:1433,1,80' --offline --no-daemon
-```
-
-失败报告包含种子、操作序号、完整操作轨迹和根因分类。原动作集的种子 4、54、103 保持在既有 `containers` 回归中。
-
-`controller-gas-lineage` 集中复现清空扩大气体空间后，从外壳附近再次注液的过程。修改扫描几何时先运行 `air-cavity`，修改气压作用时再运行 `gas-liquid`。
+完整步计时包含输入、设备执行、提交和必要世界交接；冷初始化、编辑及存档分别计量。比较使用同一硬件、场景、功能及物理时长。场景与当前预算见 [GPU 演示](#gpu-演示完整流程)及[后端参考](../roadmap/performance-and-backends.md)。历史 CPU 预算数据仅适用于原执行条件。
 
 <a id="architecture"></a>
 ## 架构与编译检查
@@ -482,7 +174,7 @@
 ```
 
 `verifyArchitecture` 是仓库根任务，会调用 `:fabric:runArchitectureValidation`；
-架构检查直接使用该根任务，不要写成 `-PcpuValidation=architecture` 或 `:fabric:verifyArchitecture`。
+架构检查直接使用该根任务，不要写成 `-PhostValidation=architecture` 或 `:fabric:verifyArchitecture`。
 
 [ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java) 检查模块 import 方向、
 纯 Java 模块包循环、持久化与运行时依赖隔离、唯一服务器运行时注册点，以及生产类 1000 行上限。超过 600 行会提示，超过 1000 行会失败。
@@ -499,7 +191,7 @@
 <a id="gpu"></a>
 ## GPU 内核基准与驱动排查
 
-生产物理主干已默认启用 Vulkan 后端。内核与底层任务定义在 [kernel 构建文件](../../gpu-kernel/build.gradle) 和 [Fabric 适配构建文件](../../gpu-probe/build.gradle)。
+生产物理主干使用 Vulkan。内核和底层任务定义在 [kernel 构建文件](../../gpu-kernel/build.gradle)。
 
 ### 离线内核基准测试
 
@@ -518,46 +210,33 @@
 ./gradlew.bat :gpu-kernel:runGpuThermalConductionBenchmark -PgpuThermalGrid=64 -PgpuThermalWarmup=5 -PgpuThermalSamples=10 -PgpuThermalScene=normal --offline --no-daemon
 ```
 
-### 底层驱动与适配器验证
+### 底层驱动排查
 
-改动设备资源、着色器或数值算法时运行基础验证：
-
-```powershell
-./gradlew.bat :gpu-kernel:compileJava :gpu-probe:compileJava :gpu-probe:runAdapterValidation verifyArchitecture --offline --no-daemon
-./gradlew.bat :gpu-kernel:runGpuFlipValidation -PgpuProbeSkipLarge=true -PgpuProbeSkipLong=true --offline --no-daemon
-```
-
-Windows 环境若 `vkCreateInstance` 返回 `-9` 或无可用设备，在当前会话设置 `$env:VK_LOADER_DEBUG='error,warn,driver'` 后运行 `:gpu-kernel:runHeadlessGpuProbe`。若日志提示 `Found no drivers`，核对显卡驱动对应的 `VulkanDriverName` 注册表项与 ICD 路径配置。
+设备状态交接使用 `:gpu-kernel:runGpuResidentStateValidation`，实现变更按受影响的设备场景选择对应任务。Windows 环境若 `vkCreateInstance` 返回 `-9` 或无可用设备，可设置 `$env:VK_LOADER_DEBUG='error,warn,driver'`，核对显卡驱动及 ICD 路径。
 
 ## 需要进入游戏时
 
 当问题依赖实际画面、Minecraft 方块形状或磁盘重启过程时，准备一个可重复场景，写明操作、预期现象和需要保留的日志。发布构建、产物校验和部署步骤见 [验收与发布](../roadmap/acceptance-and-release.md)。
 
-## 正常操作随机仿真
-
-```powershell
-# 扫描 13 种几何、每种 16 个种子，每个种子 80 步，检查库存守恒与状态恢复
-./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=16,80,false,8,0,13' --offline --no-daemon
-
-# 单个复现与最小化
-./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=replay,1,203,80' --offline --no-daemon
-./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=minimize,1,203' --offline --no-daemon
-```
-
-回归测试包含分数抽取后的盘上气腔归属（`replay,partialdisk,1,200,49`）与颗粒阻力外层收敛（`replay,17,7810,37`），均保留逐动作守恒审计及恢复检查。
-
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
-生产物理主干已默认启用 Vulkan GPU 后端，最新基线与证据由前文对应入口维护：
+2026-10-29 GPU 主线迁移：`runGpuResidentStateValidation` 通过，覆盖设备提交、导出恢复及同布局导入候选的拒绝和采用；`verifyArchitecture` 扫描 613 个文件通过，区域类 722 行、工作区 980 行。运行记录 `build/gpu-mainline-resident.log`。
 
-| 验证领域 | 覆盖内容与完成标准 | 主要验证入口 | 当前状态 |
-|---|---|---|---|
-| **交互演示面板** | 水箱三配方、水流池、U形管气压、控制器注液装取 | `:fabric:runGpuProductionDemoValidation` | 离线与回放全通过，中位 15~36 ms，无连续超限 |
-| **高浓度析盐** | 500 步高浓度酸碱析盐、沉淀清空、待位移 checkpoint 恢复 | `-PgpuDemo=precipitation -PgpuDemoSteps=500` | 质量守恒闭合，末态水温正常，连续推进无异常 |
-| **控制器界面与交互** | 探针打开、摘要更新、暂停/恢复、清空/排气/释放/删除工作流 | `:fabric:compileClientJava`、`protocol,lifecycle` | 协议闭合，生命周期与持久化状态机通过 |
-| **GPU 生产接入** | 析出、驻留状态、热相变、气液膜传质、ServiceLoader 发现 | `:gpu-kernel:runGpuThermalPhaseValidation` 等短链 | 默认启用 Vulkan，各物种/能量账本守恒 |
-| **CPU 生产预算** | 控制器 16 m³（≤40 ms）、最大 demo 324 m³（连续超 200 ms < 3 步） | `-PcpuValidation=production-live-budget` | 热运行基准达标 |
-| **架构规范** | 依赖方向、1000 行限制、权威写入隔离 | `verifyArchitecture` | 扫描全部源码通过 |
+同日 `:fabric:runHostValidation -PhostValidation=region-state,containers,ownership,lifecycle` 通过，包含容器存储 19 个场景、世界归属 27 个场景及生命周期和区域存档；记录 `build/gpu-mainline-host.log`。这次构建同时编译 Fabric 测试源码。
 
-早期演进过程中的分项调试日志与淘汰方案已归档至 Git 提交历史；日常开发与交付以本基准及前文具体命令为准。
+2026-10-30，主线迁移后的 controller 20 步、tank 120 步、flow 120 步及 precipitation 120 步完整流程通过。覆盖真实容器 WAL、暂停与单步、编辑后续算、实体交互、checkpoint 恢复及沉淀清空；水箱和析盐各运行三种配方。记录分别为 `build/gpu-mainline-controller.log`、`build/gpu-mainline-tank.log`、`build/gpu-mainline-flow.log`、`build/gpu-mainline-precipitation.log`。
+
+同日 `runGpuResidentStateValidation` 和 `runGpuThermalPhaseValidation` 通过，新增覆盖已有实体工作区的同布局编辑候选复用、拒绝和采用；七类热相变保留整数质量、热账、机械续算与 checkpoint。记录为 `build/gpu-mainline-resident-final.log`。
+
+设备故障生命周期测试使用受控后端模拟读回失败，以及 HEAD 发布后导入失败；验证暂停和按已发布库存恢复运行意图。该证据不包含真实 Vulkan 设备丢失注入。
+
+同日 `:gpu-kernel:runGpuActivityMaskValidation :fabric:runHostValidation -PhostValidation=lifecycle` 通过。两个隔离空间分别运行和暂停，机械步与独立热步均确认活动侧有输运或热量变化，暂停侧液体、气体、颗粒、冰及其内能保持，暂停格面动量、实体占位和未决相变保留。分组断言覆盖有限气腔、设备端口、实体扫掠、颗粒接触及区块恢复。记录 `build/gpu-mainline-activity-final.log`。
+
+布局整理后，热相变、固液反应和整数库存输运验证通过，记录 `build/gpu-layout-consolidation.log`、`build/gpu-layout-transport-followup.log`。宿主各模块测试源码、Fabric 客户端编译及架构检查通过，扫描 612 个生产源，记录 `build/gpu-mainline-integration-compile.log`。
+
+热边界温度候选验证通过：取消候选保持源库存与参数，单次采用后热步续算使用新温度；准备过程只回读 4 字节执行状态。环境参数更新保留常驻库存。
+
+已知数值问题：resident 的实体续算曾间歇报告容量 `INFEASIBLE`，实际执行 14 轮，上限 512 轮，未触及轮数上限。原版和整理后的黏性 shader 隔离重放均通过；随后三次开启失败捕获的重放也均通过，未取得失败残量图。原因未定，未调整预算或数值参数。记录 `build/gpu-mainline-cell-observation.log`、`build/entity-capacity-attempt-1.log` 至 `-3.log`。
+
+2026-10-30 最终统一交付构建通过：`assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuActivityMaskValidation :gpu-kernel:runGpuThermalPhaseValidation :fabric:runGpuProductionDemoValidation`，选择 `hostValidation=region-state,containers,ownership,lifecycle`、`gpuDemo=flow`、`gpuDemoSteps=120`、`gpuDemoStage=complete`，使用 `--offline --no-daemon --console=plain --max-workers=1`。共 59 秒，39 个任务中 20 个复用产物；架构扫描 611 个生产源通过。水流场景完成实体交互、保存恢复、暂停手动单步、库存编辑及续算；双组与七类热相变均通过。记录 `build/gpu-mainline-delivery.log`，发布产物 `fabric/build/libs/mmm-fabric-0.17.0.jar`。

@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -12,7 +14,7 @@ import mmm.api.RegionAvailabilityReason;
 import mmm.block.FiniteHeatExchangerBlockEntity;
 import mmm.block.FiniteHeatExchangerBlockItem;
 import mmm.block.MmmBlocks;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.item.MmmComponents;
 import mmm.recovery.CrossDomainRecovery;
 import mmm.simulation.persistence.FiniteDeviceJournalStore;
@@ -120,6 +122,7 @@ public final class FiniteHeatExchangerOperations {
 					throw new IllegalArgumentException("设备物品与当前世界能力不一致");
 				body=new FiniteThermalDeviceState(PROVIDER,Long.toString(position.asLong()),PROVIDER,body.body());
 			}
+			requireAvailablePorts(region, position, registry.finiteDevice(body.deviceTypeId()), registry);
 			var inventory=region.finiteThermalDevices(registry.fingerprint()).insertExternal(body);
 			inventory.requireCompatible(registry);
 			transact(player,hand,position,region,body,encoded==null?"":encoded,true,false,inventory);
@@ -141,6 +144,7 @@ public final class FiniteHeatExchangerOperations {
 			var body=inventory.devices().stream().filter(device -> device.providerId().equals(PROVIDER)
 					&& device.objectId().equals(locator.objectId())).findFirst()
 					.orElseThrow(() -> new IllegalStateException("设备方块与区域库存不一致"));
+			requireAvailablePorts(region, position, world.thermalRegistry().finiteDevice(body.deviceTypeId()), world.thermalRegistry());
 			transact(player,hand,position,region,body,"",false,drop,inventory.extractExternal(PROVIDER,body.objectId()));
 			player.sendSystemMessage(Component.literal("有限换热器已拆卸，保留质量与内能"));
 			return InteractionResult.SUCCESS;
@@ -173,7 +177,13 @@ public final class FiniteHeatExchangerOperations {
 			throw new IllegalArgumentException("换热器端口需要连接已启用的控制器区域");
 		if (!availability.ensure(level,region) || !phaseWork.settle(level,region))
 			throw new IllegalStateException("区域当前暂停或正在恢复事务");
-		if (!region.domain().hasThermalState()) throw new IllegalStateException("当前世界未启用热模型");
+		if (!region.hasThermalState()) throw new IllegalStateException("当前世界未启用热模型");
+	}
+	private void requireAvailablePorts(FluidRegion region, BlockPos position, FiniteThermalDeviceDefinition definition, ThermalRegistry registry) {
+		for (var port : ports(region, position, definition, registry)) {
+			int cell = (port.cellZ() * region.sizeY() + port.cellY()) * region.sizeX() + port.cellX();
+			if (!region.groupAvailable(cell)) throw new IllegalStateException("换热器连接的活动组等待区块加载");
+		}
 	}
 	private String profile() { return world.profile().profileFingerprint(); }
 	private InteractionResult fail(ServerPlayer player,Exception failure) {
@@ -350,7 +360,7 @@ public final class FiniteHeatExchangerOperations {
 
 	/** Installed finite bodies join the cells sharing their heat inventory before scheduling. */
 	void refreshActivityConnections(FluidRegion region) {
-		if (!region.solverLoaded()) return;
+		if (!region.solverLoaded() || !region.devicePortsDirty()) return;
 		var connections = new ArrayList<int[]>();
 		var devicePorts = new ArrayList<mmm.fluid.FluidStateAccess.DevicePort>();
 		if (world.thermalOrNull() != null) {
@@ -367,38 +377,9 @@ public final class FiniteHeatExchangerOperations {
 		region.replaceDevicePorts(devicePorts,connections);
 	}
 
-	/** Shares the successful region thermal step's logical duration and owner state. */
-	void tickExchange(ServerLevel level,FluidRegion region) {
-		if(world.thermalOrNull()==null || region.deviceResident()) return;
-		var registry=world.thermalRegistry();
-			if(!region.solverLoaded() || hasPending(region.id()) || region.paused()) return;
-			var devices=region.finiteThermalDevices(registry.fingerprint()).devices();
-			if(devices.isEmpty()) return;
-			if(!availability.ensure(level,region) || !phaseWork.settle(level,region)) return;
-			for(var device:devices) {
-				if(!device.providerId().equals(PROVIDER)) continue;
-				try {
-					BlockPos position=BlockPos.of(Long.parseLong(device.objectId()));
-					if(!level.hasChunkAt(position)) continue;
-					if(!(level.getBlockEntity(position) instanceof FiniteHeatExchangerBlockEntity locator)
-							|| !region.id().equals(locator.regionId()) || !device.objectId().equals(locator.objectId()))
-						throw new IllegalStateException("Installed finite body has no matching world locator");
-					var ports=ports(region,position,registry.finiteDevice(device.deviceTypeId()),registry);
-					if(ports.stream().anyMatch(port -> !region.domain().groupAvailable((port.cellZ()*region.sizeY()+port.cellY())*region.sizeX()+port.cellX()))) continue;
-					var contacts=region.domain().finiteThermalPortContacts(ports);
-					if(contacts.isEmpty()) continue;
-					var exchange=FiniteThermalExchange.plan(registry,device.body(),contacts,region.solverConfig().timeStep(),ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-					region.commitFiniteThermalPortExchange(PROVIDER,device.objectId(),exchange,ports,registry);
-				} catch(RuntimeException failure) {
-					region.blockThermal("有限换热器："+failure.getMessage());
-					MmmMod.LOGGER.error("Finite device exchange {} failed",device.objectId(),failure); break;
-				}
-			}
-	}
-
-	private List<FluidDomain.ThermalPortRequest> ports(FluidRegion region,BlockPos position,
+	private List<FluidDomainContracts.ThermalPortRequest> ports(FluidRegion region,BlockPos position,
 			FiniteThermalDeviceDefinition definition,ThermalRegistry registry) {
-		var requests=new ArrayList<FluidDomain.ThermalPortRequest>();
+		var requests=new ArrayList<FluidDomainContracts.ThermalPortRequest>();
 		double h=region.solverConfig().cellSize();
 		double conductivity=registry.material(registry.materialHandle(definition.thermalMaterialId())).conductivityWPerMeterK();
 		for(var port:definition.ports()) {
@@ -416,7 +397,7 @@ public final class FiniteHeatExchangerOperations {
 				int x=(int)Math.floor((point[0]-region.origin().getX())/h),y=(int)Math.floor((point[1]-region.origin().getY())/h),z=(int)Math.floor((point[2]-region.origin().getZ())/h);
 				if(x<0||x>=region.sizeX()||y<0||y>=region.sizeY()||z<0||z>=region.sizeZ()) continue;
 				int face=axis*2+(positive?0:1);
-				requests.add(new FluidDomain.ThermalPortRequest(x,y,z,face,port.wallThicknessMeters(),conductivity,port.fluidFilmThicknessMeters()));
+				requests.add(new FluidDomainContracts.ThermalPortRequest(x,y,z,face,port.wallThicknessMeters(),conductivity,port.fluidFilmThicknessMeters()));
 			}
 		}
 		return List.copyOf(requests);

@@ -11,7 +11,7 @@ final class PhaseOccupancyTransport {
 	private PhaseOccupancyTransport() {
 	}
 
-	static void ensure(FluidDomain domain) {
+	static void ensure(HostFluidState domain) {
 		if (domain.phaseOccupancy != null && !domain.phaseOccupancyDirty) return;
 		domain.domainFlowFields.ensureInventoryGrid();
 		long[] occupied = domain.occupiedSolidSvq();
@@ -24,12 +24,12 @@ final class PhaseOccupancyTransport {
 		reconstruct(domain,domain.liquidCells,pore,null,phase);
 		publish(domain,phase.occupancyState());
 	}
-	static void publish(FluidDomain domain,PhaseOccupancyState state){
+	static void publish(HostFluidState domain,PhaseOccupancyState state){
 		domain.phaseOccupancy=state;domain.phaseOccupancyDirty=false;
 	}
 
 	/** Reconstructs external edits and their gas source shares before publication. */
-	static GasVolumeAllocation prepareEdit(FluidDomain domain, LiquidCellInventory future, long[] occupied, byte[] masks) {
+	static GasVolumeAllocation prepareEdit(HostFluidState domain, LiquidCellInventory future, long[] occupied, byte[] masks) {
 		ensure(domain);
 		var cut=domain.geometry.cutCells;
 		if(masks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
@@ -76,14 +76,14 @@ final class PhaseOccupancyTransport {
 		return GasVolumeAllocation.fromTargetSources(domain,future,prepared,sources);
 	}
 
-	static void requireCurrentGeometry(FluidDomain domain, PhaseOccupancyState state) {
+	static void requireCurrentGeometry(HostFluidState domain, PhaseOccupancyState state) {
 		if (state == null || state.cellCount() != domain.cellCount) throw new IllegalArgumentException("Phase occupation dimensions differ from domain");
 		domain.domainFlowFields.ensureInventoryGrid();
 		long[] occupied = domain.occupiedSolidSvq();
 		requireGeometry(domain, state, occupied);
 	}
 
-	static void requireGeometry(FluidDomain domain, PhaseOccupancyState state, long[] occupied) {
+	static void requireGeometry(HostFluidState domain, PhaseOccupancyState state, long[] occupied) {
 		if (state == null || state.cellCount() != domain.cellCount) throw new IllegalArgumentException("Phase occupation dimensions differ from domain");
 		double[] pore = poreVolumes(domain, occupied, null);
 		for (int cell = 0; cell<domain.cellCount; cell++) {
@@ -108,7 +108,7 @@ final class PhaseOccupancyTransport {
 	}
 
 	/** Distributes actual fixed and solid pore capacity over the open microboxes. */
-	static double[] poreVolumes(FluidDomain domain, long[] occupied, byte[] masks) {
+	static double[] poreVolumes(HostFluidState domain, long[] occupied, byte[] masks) {
 		if (occupied == null || occupied.length != domain.cellCount || masks != null && masks.length != domain.cellCount) throw new IllegalArgumentException("Micro pore columns differ from domain");
 		var result = new double[8 * domain.cellCount];
 		for (int cell = 0; cell<domain.cellCount; cell++) {
@@ -127,14 +127,14 @@ final class PhaseOccupancyTransport {
 		return result;
 	}
 
-	private static SignedDyadic componentLiquid(FluidDomain domain, int cell, int support) {
+	private static SignedDyadic componentLiquid(HostFluidState domain, int cell, int support) {
 		var result = SignedDyadic.ZERO;
 		for (var stock : domain.liquidCells.stocksInCell(cell)) if (stock.key().supportMask() == support) result = result.add(stock.volume());
 		return result;
 	}
 
 	/** One coarse component PLIC supplies all eight micro views. */
-	static double[] reconstruct(FluidDomain domain, LiquidCellInventory inventory, double[] pore, byte[] masks, FlipPressurePhaseGeometry workspace) {
+	static double[] reconstruct(HostFluidState domain, LiquidCellInventory inventory, double[] pore, byte[] masks, FlipPressurePhaseGeometry workspace) {
 		double[] liquid = new double[pore.length];
 		for (int cell = 0; cell<domain.cellCount; cell++) {
 			int mask = masks == null ? domain.geometry.cutCells.mask(cell) : Byte.toUnsignedInt(masks[cell]);

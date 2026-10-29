@@ -13,9 +13,9 @@ import mmm.units.SignedDyadic;
  * thermal side is bound by its owner generation and exact dyadic inventory.
  */
 final class DomainInventoryLifecyclePlanner {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	DomainInventoryLifecyclePlanner(FluidDomain domain) {
+	DomainInventoryLifecyclePlanner(HostFluidState domain) {
 		this.domain = domain;
 	}
 
@@ -26,10 +26,10 @@ final class DomainInventoryLifecyclePlanner {
 	 * granular truth is independent of marker structure and the joint operator clear commits
 	 * the condensed side first.
 	 */
-	FluidDomain.GranularClearPlan planGranularClear() {
+	FluidDomainContracts.GranularClearPlan planGranularClear() {
 		long granularRevision = domain.granularState == null ? 0L : domain.granularState.mutationRevision();
 		if (domain.granularState == null || !domain.domainPhaseInventory.hasGranularInventory()) {
-			return new FluidDomain.GranularClearPlan(GranularAuditLedger.EMPTY,
+			return new FluidDomainContracts.GranularClearPlan(GranularAuditLedger.EMPTY,
 					domain.granularState == null ? GranularAuditLedger.EMPTY : domain.granularState.escapedSink,
 					0L, 0L, 0, 0,
 					SignedDyadic.ZERO, granularRevision);
@@ -40,7 +40,7 @@ final class DomainInventoryLifecyclePlanner {
 		GranularAuditLedger removed = GranularAuditLedger.captureInventory(
 				granular.registry, granular.parcels, granular.deposits, granular.compositions);
 		GranularAuditLedger sinkAfter = granular.escapedSink.plus(removed);
-		return new FluidDomain.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
+		return new FluidDomainContracts.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
 				granular.inventory.totalMassUnits(), granular.parcels.count(),
 				granular.deposits.groupCount(), domain.thermalState == null
 						? SignedDyadic.ZERO : domain.thermalState.granularColumn().exactEnergy(),
@@ -48,12 +48,12 @@ final class DomainInventoryLifecyclePlanner {
 	}
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
-	FluidDomain.OperatorClearPlan planOperatorClear() {
+	FluidDomainContracts.OperatorClearPlan planOperatorClear() {
 		if (domain.hasPendingPhaseMotionWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
 		}
-		FluidDomain.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
-		FluidDomain.GranularClearPlan granular = planGranularClear();
+		FluidDomainContracts.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
+		FluidDomainContracts.GranularClearPlan granular = planGranularClear();
 		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
 		if (domain.gasState.frame != null) {
 			domain.domainFlowFields.ensureInventoryGrid();
@@ -64,6 +64,6 @@ final class DomainInventoryLifecyclePlanner {
 		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(
 				thermalRevision, condensed.liquid().internalEnergy(), condensed.coherentEnergy(),
 				granular.internalEnergy(), gasTopology == null ? null : gasTopology.thermalPlan());
-		return new FluidDomain.OperatorClearPlan(condensed, granular, gasTopology, thermalRevision);
+		return new FluidDomainContracts.OperatorClearPlan(condensed, granular, gasTopology, thermalRevision);
 	}
 }

@@ -52,11 +52,18 @@ final class MinecraftRegionAvailability {
 					"存在未完成的跨域事务 WAL；恢复完成后才能继续");
 			return false;
 		}
+        if (region.pauseForUnavailableDevice()) return false;
 		boolean available = operations.ensureAvailable(
 				level, region, controllerFeatureEnabled.getAsBoolean(), regionTick::refreshRegionInputs,
 				snapshots::sendToLevel, snapshots::sendRemoval, inventoryDecrease);
-		if (available && world.hasCapability(WorldCapability.THERMAL)) activateThermalActivity(region);
-		return available;
+		if (!available) return false;
+		try { region.ensureDeviceResident(); }
+		catch (RuntimeException failure) {
+			region.blockNumerical("Vulkan 区域初始化失败：" + failure.getMessage());
+			return false;
+		}
+		if (world.hasCapability(WorldCapability.THERMAL)) activateThermalActivity(region);
+		return true;
 	}
 
 	static void activateThermalActivity(FluidRegion region) {

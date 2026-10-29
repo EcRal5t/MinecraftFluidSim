@@ -70,7 +70,7 @@ final class CellRemapMicroTopology {
 		return false;
 	}
 
-	static boolean needed(FluidDomain domain) {
+	static boolean needed(HostFluidState domain) {
 		for (int cell = 0; cell < domain.cellCount; cell++) if (COMPONENTS[domain.geometry.cutCells.mask(cell)].length > 1) return true;
 		return false;
 	}

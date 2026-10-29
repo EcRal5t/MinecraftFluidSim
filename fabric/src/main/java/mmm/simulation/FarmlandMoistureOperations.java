@@ -1,12 +1,14 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
 import mmm.MmmMod;
 import mmm.api.RegionAvailabilityReason;
 import mmm.chemistry.ChemicalTransferLedger;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.recovery.CrossDomainRecovery;
 import mmm.simulation.persistence.FarmlandJournalStore;
 import mmm.simulation.persistence.FarmlandJournalStore.Change;
@@ -97,13 +99,13 @@ public final class FarmlandMoistureOperations {
 		if(plots.isEmpty()) return true;
 		try {
 			if(!availability.ensure(level,region) || !phaseWork.settle(level,region)) return false;
-			FluidDomain candidate=FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+			HostFluidState candidate=region.beginHostEdit();
 			var changes=new ArrayList<Change>();
 			for(var position:plots) {
 				var state=level.getBlockState(position); if(!state.is(Blocks.FARMLAND)) continue;
 				int before=state.getValue(FarmlandBlock.MOISTURE);
 				var faces=faces(region,position);
-				long available=Math.round(candidate.waterContacts(faces).stream().mapToDouble(FluidDomain.WaterContact::waterVolumeCubicMetres).sum()*1e9);
+				long available=Math.round(candidate.waterContacts(faces).stream().mapToDouble(FluidDomainContracts.WaterContact::waterVolumeCubicMetres).sum()*1e9);
 				int levels=(int)Math.min(7-before,available/FarmlandJournalStore.NANOS_PER_LEVEL);
 				if(levels<=0) continue;
 				var moved=candidate.extractContactWater(faces,levels*FarmlandJournalStore.NANOS_PER_LEVEL);
@@ -137,13 +139,13 @@ public final class FarmlandMoistureOperations {
 	}
 
 	/** Four actual-height sides and the top at the solver's fixed collision resolution. */
-	static List<FluidDomain.WaterContactFace> faces(FluidRegion region,BlockPos soil) {
+	static List<FluidDomainContracts.WaterContactFace> faces(FluidRegion region,BlockPos soil) {
 		double x=soil.getX()-region.origin().getX(),y=soil.getY()-region.origin().getY(),z=soil.getZ()-region.origin().getZ();
-		return List.of(new FluidDomain.WaterContactFace(0,x,y,y+15.0/16,z,z+1,-1),
-				new FluidDomain.WaterContactFace(0,x+1,y,y+15.0/16,z,z+1,1),
-				new FluidDomain.WaterContactFace(2,z,x,x+1,y,y+15.0/16,-1),
-				new FluidDomain.WaterContactFace(2,z+1,x,x+1,y,y+15.0/16,1),
-				new FluidDomain.WaterContactFace(1,y+1,z,z+1,x,x+1,1));
+		return List.of(new FluidDomainContracts.WaterContactFace(0,x,y,y+15.0/16,z,z+1,-1),
+				new FluidDomainContracts.WaterContactFace(0,x+1,y,y+15.0/16,z,z+1,1),
+				new FluidDomainContracts.WaterContactFace(2,z,x,x+1,y,y+15.0/16,-1),
+				new FluidDomainContracts.WaterContactFace(2,z+1,x,x+1,y,y+15.0/16,1),
+				new FluidDomainContracts.WaterContactFace(1,y+1,z,z+1,x,x+1,1));
 	}
 	public void recoverIndexed() {
 		scans.keySet().removeIf(id->regions.region(id)==null);

@@ -2,7 +2,7 @@ package mmm.simulation;
 
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidMaterialRegistry;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidSolverConfig;
 import mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -28,7 +28,7 @@ final class FluidRegionFactory {
 			int blockSizeY,
 			int blockSizeZ
 	) {
-		FluidDomain domain = createDomain(
+		HostFluidState domain = createDomain(
 				blockSizeX, blockSizeY, blockSizeZ
 		);
 		return new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain);
@@ -43,11 +43,11 @@ final class FluidRegionFactory {
 
 	static FluidRegion createControllerRegion(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
 			FluidRegionFootprint footprint) {
-		FluidDomain domain = createDomain(footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ());
+		HostFluidState domain = createDomain(footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ());
 		return new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(), domain, footprint);
 	}
 
-	static FluidDomain createDomain(
+	static HostFluidState createDomain(
 			int blockSizeX,
 			int blockSizeY,
 			int blockSizeZ
@@ -56,7 +56,7 @@ final class FluidRegionFactory {
 		FluidSolverConfig config = new FluidSolverConfig(
 				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				240, 1.0E-4F, 2.0E-3F);
-		return new FluidDomain(
+		return new HostFluidState(
 				Math.multiplyExact(blockSizeX, CELLS_PER_BLOCK),
 				Math.multiplyExact(blockSizeY, CELLS_PER_BLOCK),
 				Math.multiplyExact(blockSizeZ, CELLS_PER_BLOCK),
@@ -64,16 +64,16 @@ final class FluidRegionFactory {
 	}
 
 	/** Shared production configuration for the transient air demonstration. */
-	static FluidDomain createAirDomain() {
-		return new FluidDomain(DemoSceneLayout.AIR_SIZE_X * CELLS_PER_BLOCK,
+	static HostFluidState createAirDomain() {
+		return new HostFluidState(DemoSceneLayout.AIR_SIZE_X * CELLS_PER_BLOCK,
 				DemoSceneLayout.AIR_SIZE_Y * CELLS_PER_BLOCK,
 				DemoSceneLayout.AIR_SIZE_Z * CELLS_PER_BLOCK,
 				new FluidSolverConfig(0.5F, 1000.0F, 9.81F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F));
 	}
 
 	/** Scaled wetting demonstration: two-cell capillary length with unchanged world cell size. */
-	static FluidDomain createTensionDomain() {
-		return new FluidDomain(MinecraftDebugFixtures.BLOCK_SIZE_X * CELLS_PER_BLOCK,
+	static HostFluidState createTensionDomain() {
+		return new HostFluidState(MinecraftDebugFixtures.BLOCK_SIZE_X * CELLS_PER_BLOCK,
 				MinecraftDebugFixtures.BLOCK_SIZE_Y * CELLS_PER_BLOCK,
 				MinecraftDebugFixtures.BLOCK_SIZE_Z * CELLS_PER_BLOCK,
 				new FluidSolverConfig(0.5F, 1000.0F, 0.981F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F));
@@ -83,7 +83,7 @@ final class FluidRegionFactory {
 	 * Gives a pure-water domain its default single-material column. It is a pure function of the
 	 * domain itself, so both controller activation and the debug fixtures share this one path.
 	 */
-	static void bindDefaultMaterialState(FluidDomain domain) {
+	static void bindDefaultMaterialState(HostFluidState domain) {
 		if (domain.hasMaterialState()) return;
 		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 	}
@@ -106,7 +106,8 @@ final class FluidRegionFactory {
 
 	/** Samples the same world water heights used by the Minecraft adapter. */
 	static int captureWater(FluidRegion region, java.util.function.Function<BlockPos, Float> waterHeightAt) {
-		FluidDomain domain = region.domain();
+		long generation = region.solverGeneration();
+		HostFluidState domain = region.beginHostEdit();
 		BlockPos origin = region.origin();
 		float cellSize = domain.config().cellSize();
 		int wetCells = 0;
@@ -132,6 +133,7 @@ final class FluidRegionFactory {
 			}
 		}
 		domain.setVolumes(volumes);
+		region.commitHostEdit(generation, domain);
 		return wetCells;
 	}
 }

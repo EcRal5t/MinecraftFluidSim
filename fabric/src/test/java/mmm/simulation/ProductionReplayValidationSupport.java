@@ -1,7 +1,9 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.fluid.BuiltinFluidMaterials;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.air.GasRegistry;
@@ -17,23 +19,23 @@ abstract class ProductionReplayValidationSupport {
 	static final int WARMUP_STEPS = 20;
 	static final double STEP_BUDGET_MILLIS = 40.0;
 
-	static FluidDomain createPouredControllerDomain() {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
+	static HostFluidState createPouredControllerDomain() {
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(
 				domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(3, 0, 0, 128.0F, 6);
+		FluidDomainContracts.VolumeAddition addition = domain.addVolumeNearBudgeted(3, 0, 0, 128.0F, 6);
 		require(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"fixture did not inject the complete 16 m³ source: " + addition);
 		return domain;
 	}
 
-	static FluidDomain createFullyBoundHalfFilledDomain(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = createEmptyFullyBoundController(registries);
+	static HostFluidState createFullyBoundHalfFilledDomain(FullCapabilityTestFixture.Registries registries) {
+		HostFluidState domain = createEmptyFullyBoundController(registries);
 		int[][] sources = {{3, 0, 0}, {4, 7, 7}};
 		for (int pour = 0; pour < sources.length; pour++) {
 			int[] source = sources[pour];
-			FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(
+			FluidDomainContracts.VolumeAddition addition = domain.addVolumeNearBudgeted(
 					source[0], source[1], source[2], 128.0F, 6);
 			require(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 					"full-capability fixture did not inject pour " + (pour + 1) + ": " + addition);
@@ -41,8 +43,8 @@ abstract class ProductionReplayValidationSupport {
 		return domain;
 	}
 
-	static FluidDomain createEmptyFullyBoundController(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
+	static HostFluidState createEmptyFullyBoundController(FullCapabilityTestFixture.Registries registries) {
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -50,8 +52,8 @@ abstract class ProductionReplayValidationSupport {
 		return domain;
 	}
 
-	static FluidDomain createFullyBoundPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
+	static HostFluidState createFullyBoundPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
@@ -64,8 +66,8 @@ abstract class ProductionReplayValidationSupport {
 		return domain;
 	}
 
-	static FluidDomain createFullyBoundCompressedPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
+	static HostFluidState createFullyBoundCompressedPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -79,8 +81,8 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	/** Maximum-fill solver-side shape and capability profile created by {@code /mmm demo} in empty space. */
-	static FluidDomain createFullyBoundDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig());
+	static HostFluidState createFullyBoundDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
+		HostFluidState domain = new HostFluidState(24, 16, 24, productionConfig());
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
@@ -95,15 +97,15 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	/** Production {@code /mmm demo} over four full collision layers, matching the world fixture. */
-	static FluidDomain createFullyBoundFloorDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig());
+	static HostFluidState createFullyBoundFloorDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
+		HostFluidState domain = new HostFluidState(24, 16, 24, productionConfig());
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-		var floor=new java.util.ArrayList<FluidDomain.CollisionEdit>();
+		var floor=new java.util.ArrayList<FluidDomainContracts.CollisionEdit>();
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 24; x++) {
-			floor.add(new FluidDomain.CollisionEdit(x,y,z,255));
+			floor.add(new FluidDomainContracts.CollisionEdit(x,y,z,255));
 		}
 		domain.beginCollisionEdits(domain.planCollisionEdits(floor));
-		for(FluidDomain.CollisionEdit edit:floor) domain.setSolidMicroMask(edit.x(),edit.y(),edit.z(),edit.mask());
+		for(FluidDomainContracts.CollisionEdit edit:floor) domain.setSolidMicroMask(edit.x(),edit.y(),edit.z(),edit.mask());
 		float[] volumes=new float[24*16*24];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
 			if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
@@ -116,9 +118,9 @@ abstract class ProductionReplayValidationSupport {
 		return domain;
 	}
 
-	static double kineticEnergy(FluidDomain domain) { return domain.liquidKineticEnergyJoules(); }
+	static double kineticEnergy(HostFluidState domain) { return domain.liquidKineticEnergyJoules(); }
 
-	static double centerOfMassY(FluidDomain domain) {
+	static double centerOfMassY(HostFluidState domain) {
 		double weighted=0; long mass=0;
 		for (var stock:domain.exportLiquidCellState().physicalStocks()) {
 			weighted+=stock.massUnits()*(stock.key().cell()/domain.sizeX()%domain.sizeY()+.5)*domain.config().cellSize();

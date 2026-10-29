@@ -5,21 +5,17 @@ import java.util.Arrays;
 import java.util.List;
 import mmm.world.MovingBodyFluidCoupling;
 
-/** Prescribed-body occupation, shared pore capacity and pressure incidence. */
+/** Prescribed-body geometry and pore capacity for host inventory edits. */
 final class EntityBodyCoupling {
-  private final FluidDomain domain;
+  private final HostFluidState domain;
   private EntityBodyState source;
   private FixedGeometrySnapshot fixed;
   private long[] occupied;
   private double[][] bodyCells = new double[0][];
   private double[][] bodyFaceArea = new double[0][];
   private double[] faceArea;
-  private int[] starts = new int[0], rows = new int[64];
-  private double[] coefficients = new double[64], affine = new double[0];
-  private int entries;
-  private MovingBodyFluidCoupling.Result result = MovingBodyFluidCoupling.Result.NONE;
 
-  EntityBodyCoupling(FluidDomain domain) {
+  EntityBodyCoupling(HostFluidState domain) {
     this.domain = domain;
   }
 
@@ -226,7 +222,6 @@ final class EntityBodyCoupling {
     }
     for(var request:requests)if(!retained.contains(request.bodyId())&&domain.activityGroups.bodyAvailable(request.bounds()))accepted.add(request);
     var target = new EntityBodyState(accepted);
-    result = MovingBodyFluidCoupling.Result.NONE;
     if (target.equals(domain.entityBodies)) return;
     domain.domainFlowFields.preparePhysicalState();
     ensure();
@@ -260,7 +255,6 @@ final class EntityBodyCoupling {
       restoreGeometry(nextGeometry);
       domain.markCellInventoryChanged();
     }
-    result = MovingBodyFluidCoupling.Result.NONE;
   }
 
   /** Geometry is immutable between pose changes; retain both candidates through displacement planning. */
@@ -285,214 +279,4 @@ final class EntityBodyCoupling {
     faceArea = geometry.faceArea();
   }
 
-  /** Local tangential shear uses the same wet body geometry and physical liquid viscosity. */
-  void applyShear(float dt) {
-    if (domain.entityBodies.bodies().isEmpty()) return;
-    ensure();
-    if (source.bodies().isEmpty() || domain.materialDefinitions == null) return;
-    var graph = domain.pressureSystem.faces;
-    double h = domain.config.cellSize();
-    for (int b = 0; b < source.bodies().size(); b++) {
-      var body = source.bodies().get(b);
-      if(!domain.activityGroups.bodyAvailable(body.bounds()))continue;
-      var wet = MovingBodyWetGeometry.capture(domain, body.bounds());
-      if (!(wet.sample().wetSurfaceAreaSquareMetres() > 0)) continue;
-      double[] target = {
-        body.velocityXMetresPerSecond(),
-        body.velocityYMetresPerSecond(),
-        body.velocityZMetresPerSecond()
-      };
-      double[] impulse = new double[3];
-      double work = 0;
-      for (int axis = 0; axis < 3; axis++) {
-        double area = wet.sample().wetSurfaceAreaSquareMetres() - wet.wetAreaByNormal()[axis];
-        double total = 0;
-        for (int face = graph.offsets[axis];
-            face < (axis == 2 ? graph.faceCount : graph.offsets[axis + 1]);
-            face++) total += bodyFaceArea[b][face];
-        if (!(total > 0 && area > 0)) continue;
-        float[] velocity =
-            axis == 0
-                ? domain.mac.velocityX
-                : axis == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
-        double[] masses =
-            axis == 0
-                ? domain.cellMacStage.massX
-                : axis == 1 ? domain.cellMacStage.massY : domain.cellMacStage.massZ;
-        for (int face = graph.offsets[axis];
-            face < (axis == 2 ? graph.faceCount : graph.offsets[axis + 1]);
-            face++) {
-          if (!(bodyFaceArea[b][face] > 0)) continue;
-          int local = graph.localFace[face],
-              first = graph.firstCell[face],
-              second = graph.secondCell[face];
-          if (first < 0 || second < 0 || !(masses[local] > 0)) continue;
-          double mu = 0;
-          int samples = 0;
-          if (domain.carrierPropertiesWorkspace.hasLiquid(first)) {
-            mu += domain.carrierPropertiesWorkspace.viscosityPascalSeconds(first);
-            samples++;
-          }
-          if (domain.carrierPropertiesWorkspace.hasLiquid(second)) {
-            mu += domain.carrierPropertiesWorkspace.viscosityPascalSeconds(second);
-            samples++;
-          }
-          if (samples == 0 || mu == 0) continue;
-          double conductance = mu / samples * area / h * bodyFaceArea[b][face] / total;
-          double before = velocity[local], blend = -Math.expm1(-dt * conductance / masses[local]);
-          float after = (float) (before + blend * (target[axis] - before));
-          double delta = (double) after - before;
-          double delivered = masses[local] * delta;
-          velocity[local] = after;
-          impulse[axis] += delivered;
-          work += target[axis] * delivered;
-          domain.cellMacStage.addMechanicalHeatAtFace(
-              axis, local, masses[local] * delta * (target[axis] - before - .5 * delta));
-        }
-      }
-      var reaction =
-          new MovingBodyFluidCoupling.BodyImpulse(
-              body.bodyId(), -impulse[0], -impulse[1], -impulse[2]);
-      result =
-          result.plus(
-              new MovingBodyFluidCoupling.Result(
-                  1,
-                  wet.sample().displacedVolumeCubicMetres(),
-                  impulse[0],
-                  impulse[1],
-                  impulse[2],
-                  work,
-                  List.of(reaction)));
-    }
-  }
-
-  void preparePressure(double datum) {
-    if (domain.entityBodies.bodies().isEmpty()) {
-      source = domain.entityBodies;
-      starts = new int[1];
-      entries = 0;
-      return;
-    }
-    ensure();
-    int contacts = 3 * source.bodies().size();
-    starts = new int[contacts + 1];
-    affine = new double[contacts];
-    entries = 0;
-    var graph = domain.pressureSystem.faces;
-    double h = domain.config.cellSize();
-    for (int b = 0; b < source.bodies().size(); b++)
-      for (int axis = 0; axis < 3; axis++) {
-        int contact = 3 * b + axis;
-        starts[contact] = entries;
-        affine[contact]=0;
-        if(!domain.activityGroups.bodyAvailable(source.bodies().get(b).bounds()))continue;
-        for (int face = graph.offsets[axis];
-            face < (axis == 2 ? graph.faceCount : graph.offsets[axis + 1]);
-            face++) {
-          double total = faceArea[face];
-          if (total <= 0 || bodyFaceArea[b][face] <= 0) continue;
-          int first = graph.firstCell[face], second = graph.secondCell[face];
-          if (first < 0 || second < 0) continue;
-          double geometric = domain.geometry.cutCells.openFaceField(axis)[graph.localFace[face]];
-          double area = Math.min(geometric, total) * bodyFaceArea[b][face] / total,
-              weight = area / h;
-          graph.forEachSide(
-              first, second, (r, w, fixed) -> add(contact, r, weight * w, fixed), ignored -> {});
-          graph.forEachSide(
-              second, first, (r, w, fixed) -> add(contact, r, -weight * w, fixed), ignored -> {});
-        }
-        if (datum != 0) {
-          double sum = 0;
-          for (int e = starts[contact]; e < entries; e++) sum += coefficients[e];
-          affine[contact] += datum * sum;
-        }
-      }
-    starts[contacts] = entries;
-  }
-
-  private void add(int contact, int row, double weight, double fixedPressure) {
-    affine[contact] += weight * fixedPressure;
-    if (row < 0 || weight == 0) return;
-    for (int e = starts[contact]; e < entries; e++)
-      if (rows[e] == row) {
-        coefficients[e] += weight;
-        return;
-      }
-    if (entries == rows.length) {
-      rows = Arrays.copyOf(rows, 2 * entries);
-      coefficients = Arrays.copyOf(coefficients, rows.length);
-    }
-    rows[entries] = row;
-    coefficients[entries++] = weight;
-  }
-
-  void addDivergence(double[] rhs, double factor) {
-    for (int b = 0; b < source.bodies().size(); b++) {
-      var body = source.bodies().get(b);
-      if(!domain.activityGroups.bodyAvailable(body.bounds()))continue;
-      double[] velocity = {
-        body.velocityXMetresPerSecond(),
-        body.velocityYMetresPerSecond(),
-        body.velocityZMetresPerSecond()
-      };
-      for (int axis = 0; axis < 3; axis++) {
-        int c = 3 * b + axis;
-        for (int e = starts[c]; e < starts[c + 1]; e++)
-          rhs[rows[e]] += factor * coefficients[e] * velocity[axis];
-      }
-    }
-  }
-
-  void markGasRows(boolean[] active) {
-    for (int e = 0; e < entries; e++)
-      if (rows[e] >= domain.cellCount && coefficients[e] != 0)
-        active[rows[e] - domain.cellCount] = true;
-  }
-
-  void finishPressure(double[] pressure, double dt) {
-    var reactions = new ArrayList<MovingBodyFluidCoupling.BodyImpulse>();
-    double[] impulse = new double[3];
-    double work = 0, h = domain.config.cellSize(), h3 = h * h * h;
-    for (int b = 0; b < source.bodies().size(); b++) {
-      var body = source.bodies().get(b);
-      if(!domain.activityGroups.bodyAvailable(body.bounds()))continue;
-      double[] bodyImpulse = new double[3];
-      double bodyWork = 0;
-      double[] velocity = {
-        body.velocityXMetresPerSecond(),
-        body.velocityYMetresPerSecond(),
-        body.velocityZMetresPerSecond()
-      };
-      for (int axis = 0; axis < 3; axis++) {
-        int c = 3 * b + axis;
-        double force = affine[c];
-        for (int e = starts[c]; e < starts[c + 1]; e++)
-          force += coefficients[e] * pressure[rows[e]];
-        double reaction = -dt * h3 * force;
-        impulse[axis] += reaction;
-        bodyImpulse[axis] = -reaction;
-        bodyWork += reaction * velocity[axis];
-      }
-      work += bodyWork;
-      reactions.add(
-          new MovingBodyFluidCoupling.BodyImpulse(
-              body.bodyId(), bodyImpulse[0], bodyImpulse[1], bodyImpulse[2]));
-      double total = 0;
-      for (int cell = 0; cell < domain.cellCount; cell++)
-        if (domain.liquidGrid.stockCount[cell] > 0) total += bodyCells[b][cell];
-      if (total > 0)
-        for (int cell = 0; cell < domain.cellCount; cell++)
-          if (domain.liquidGrid.stockCount[cell] > 0 && bodyCells[b][cell] > 0)
-            domain.mechanicalEnergy.recordExternalBodyWork(
-                cell, bodyWork * bodyCells[b][cell] / total);
-    }
-    result =
-        result.plus(
-            new MovingBodyFluidCoupling.Result(
-                reactions.size(), 0, impulse[0], impulse[1], impulse[2], work, reactions));
-  }
-
-  MovingBodyFluidCoupling.Result result() {
-    return result;
-  }
 }

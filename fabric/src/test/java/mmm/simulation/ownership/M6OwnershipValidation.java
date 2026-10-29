@@ -1,10 +1,11 @@
 package mmm.simulation.ownership;
 
+import mmm.simulation.TestHostAccess;
 import mmm.simulation.RegionCheckpointFixtures;
 
 import mmm.simulation.ownership.OwnershipCoordinator.FailureInjector;
 import mmm.simulation.ownership.OwnershipCoordinator.FailurePoint;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FluidSolverConfig;
 import mmm.simulation.FluidRegion;
@@ -324,7 +325,7 @@ public final class M6OwnershipValidation {
 
 	private static void testThermalNativeReturn() throws Exception {
 		var registries = mmm.simulation.FullCapabilityTestFixture.load();
-		var domain = new FluidDomain(6, 4, 4, CONFIG);
+		var domain = new HostFluidState(6, 4, 4, CONFIG);
 		domain.bindMaterialRegistry(registries.liquids());
 		domain.bindChemistry(registries.chemical());
 		var cells = new ArrayList<Integer>();
@@ -339,11 +340,11 @@ public final class M6OwnershipValidation {
 		check(domain.returnNativeWaterCells(cells), "normal reference-temperature pure water did not return");
 		check(domain.totalVolumeExact() == 0.25 && domain.exportLiquidCellState().stocks().equals(List.of(source)), "native return changed thermal tail inventory");
 		check(domain.exactInternalEnergy().add(domain.thermalAudit().externalSink()).equals(energy), "native return lost reference internal energy");
-		var hot = FluidDomain.restoreAuthoritativeState(original);
+		var hot = HostFluidState.restoreAuthoritativeState(original);
 		hot.setThermalTemperatureInCell(1, 1, 1, 320);
 		var hotBefore = hot.exportLiquidCellState();
 		check(!hot.returnNativeWaterCells(cells) && hot.exportLiquidCellState().stocks().equals(hotBefore.stocks()), "hot water was erased by native return");
-		var partial = FluidDomain.restoreAuthoritativeState(original);
+		var partial = HostFluidState.restoreAuthoritativeState(original);
 		partial.tryExtractExactChemical(1, 1, 1, 0.25F, 0);
 		var partialBefore = partial.exportLiquidCellState();
 		check(!partial.returnNativeWaterCells(cells) && partial.exportLiquidCellState().stocks().equals(partialBefore.stocks()), "partial water block was rounded into a source");
@@ -387,7 +388,7 @@ public final class M6OwnershipValidation {
 	}
 
 	private static RegionState nativeReturnState(UUID id) throws IOException {
-		var region = populatedRegion(id); var domain = region.domain();
+		var region = populatedRegion(id); var domain = TestHostAccess.editable(region);
 		// Replace the fixture liquid with one full physical block plus an unrelated fractional remainder.
 		domain.removeAllWaterExact();
 		var cells = new ArrayList<Integer>();
@@ -625,7 +626,7 @@ public final class M6OwnershipValidation {
 
 	private static FluidRegion populatedRegion(UUID id) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);

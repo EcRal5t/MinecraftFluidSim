@@ -47,6 +47,7 @@ final class MinecraftSimulationLoop {
 		containerRecovery.recoverIndexed();
 		takeover.maintainActive(server);
 		for (FluidRegion region : regions.regions()) {
+            if (region.pauseForUnavailableDevice()) continue;
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
 				operations.cancelRestore(region);
@@ -85,7 +86,7 @@ final class MinecraftSimulationLoop {
 	}
 
 	void checkpointForShutdown() {
-		operations.checkpointForShutdown(region -> !availability.hasPending(region.id()));
+		operations.checkpointForShutdown(region -> !region.pauseForUnavailableDevice() && !availability.hasPending(region.id()));
 	}
 
 	void restoreTakeover(MinecraftServer server) {

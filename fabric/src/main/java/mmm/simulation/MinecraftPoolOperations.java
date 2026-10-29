@@ -91,7 +91,7 @@ public final class MinecraftPoolOperations {
 				if(!pool.solverLoaded()) return say(player,"池体正在等待区块和存档加载，请稍后重试",false);
 				int blocks=operations.previewPoolWater(pool);
 				previews.put(player.getUUID(),new Preview(level.dimension().identifier().toString(),hit.immutable(),pool.footprint(),List.of(),pool.id(),tick+200));
-				return say(player,"当前可归还 "+blocks+" 个完整水块；现有液体 "+UnitFormat.volume(pool.domain().physicalVolumeCubicMetres(pool.domain().totalVolumeExact()))
+				return say(player,"当前可归还 "+blocks+" 个完整水块；现有液体 "+UnitFormat.volume(pool.liquidVolume() * Math.pow(pool.solverConfig().cellSize(), 3))
 						+"。温度、混合物、零头和仍在流动的水会保留。10秒内潜行右击确认；确认按当时库存执行，随后暂停池体供装取。",true);
 			}
 			var scan=FluidControllerRegions.scanPool(level,hit,maximumBlocks());

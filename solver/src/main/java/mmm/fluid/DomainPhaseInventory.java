@@ -22,15 +22,16 @@ import mmm.granular.GranularStateSnapshot;
 import mmm.granular.GranularTransferLedger;
 import mmm.thermal.ThermalAuditLedger;
 import mmm.thermal.ThermalCellGrid;
-import static mmm.fluid.FluidDomain.*;
+import static mmm.fluid.HostFluidState.*;
+import static mmm.fluid.FluidDomainContracts.*;
 
 /** Manages gas and granular inventories, common carrier properties and complete state handoff. */
 final class DomainPhaseInventory {
 	private record PreparedGranularBinding(GranularDomainState state, GranularDepositDynamics deposits,
 			GranularCouplingFields coupling, GranularCouplingFields nextCoupling, FlipGranularCollision collision,
 			GranularPhaseTransferEngine phaseTransfer, int[] previousCells) { }
-	private final FluidDomain domain;
-	DomainPhaseInventory(FluidDomain domain) { this.domain = domain; }
+	private final HostFluidState domain;
+	DomainPhaseInventory(HostFluidState domain) { this.domain = domain; }
 	public int sizeX() { return domain.sizeX; }
 	public int sizeY() { return domain.sizeY; }
 	public int sizeZ() { return domain.sizeZ; }
@@ -46,14 +47,14 @@ final class DomainPhaseInventory {
 		properties.prepareBuoyancy(domain.domainCapabilities.thermalMarkerContext(), domain.materialRegistry, domain.materialDefinitions, domain.thermalState);
 		return properties;
 	}
-	public FluidDomain.CarrierViscosityStats carrierViscosityStats() { return domain.carrierPropertiesWorkspace.stats(); }
+	public FluidDomainContracts.CarrierViscosityStats carrierViscosityStats() { return domain.carrierPropertiesWorkspace.stats(); }
 	public Double carrierViscosityPascalSeconds(int cell) {
 		LiquidCarrierProperties properties = derivedCarrierState();
 		return properties.hasLiquid(cell) ? properties.viscosityPascalSeconds(cell) : null;
 	}
 	public GasPressureBoundary gasBoundary() { return domain.gasBoundary; }
 	public int gasNodeAt(double x, double y, double z) { return DomainGasInventory.nodeAt(domain, x, y, z); }
-	public FluidDomain.GasEdit editGas(int node, String componentId, long nanos, double temperatureK, boolean extract) {
+	public FluidDomainContracts.GasEdit editGas(int node, String componentId, long nanos, double temperatureK, boolean extract) {
 		return DomainGasInventory.edit(domain, node, componentId, nanos, temperatureK, extract);
 	}
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) {
@@ -138,12 +139,12 @@ final class DomainPhaseInventory {
 		return domain.pendingPhaseMotion.capture();
 	}
 	public FluidDomainState captureAuthoritativeState() {
-		return FluidDomainStateMapper.capture((FluidDomain) domain);
+		return FluidDomainStateMapper.capture((HostFluidState) domain);
 	}
 	public FluidDomainState.Layout authoritativeLayout() {
-		return FluidDomainStateMapper.layout((FluidDomain) domain);
+		return FluidDomainStateMapper.layout((HostFluidState) domain);
 	}
-	public static FluidDomain restoreAuthoritativeState(FluidDomainState state) {
+	public static HostFluidState restoreAuthoritativeState(FluidDomainState state) {
 		return FluidDomainStateMapper.restore(state);
 	}
 	boolean collisionTransactionActive() { return domain.activeCollisionPlan != null; }
@@ -390,7 +391,7 @@ final class DomainPhaseInventory {
 		state.deposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> prepared.deposits().disturbCell(cell));
 		installGranularBinding(prepared, liquidRegistry, materialDefinitions);
 	}
-	static void requireJointCapacity(FluidDomain domain, SignedDyadic[] liquid, long[] occupied) {
+	static void requireJointCapacity(HostFluidState domain, SignedDyadic[] liquid, long[] occupied) {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var excess = liquid[cell].add(SignedDyadic.of(occupied[cell], -24))
 					.subtract(SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell)));

@@ -1,6 +1,6 @@
 package mmm.simulation;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 
 /** Shared initial inventories for the production debug commands and their automated replays. */
 public final class DebugScenarioInitialization {
@@ -19,13 +19,13 @@ public final class DebugScenarioInitialization {
 		return new mmm.fluid.MaterialRegistry(entries, original.pairTensions());
 	}
 
-	public static void bindTensionPalette(FluidDomain domain, mmm.fluid.MaterialRegistry definitions) {
+	public static void bindTensionPalette(HostFluidState domain, mmm.fluid.MaterialRegistry definitions) {
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(
 				mmm.fluid.BuiltinFluidMaterials.DEFAULT_PALETTE.stream()
 						.map(material -> definitions.entry(material.id()).material()).toList()));
 	}
 
-	public static void fillDam(FluidDomain domain, boolean layeredMaterials) {
+	public static void fillDam(HostFluidState domain, boolean layeredMaterials) {
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		int fillX = domain.sizeX() * 2 / 5;
 		int fillY = domain.sizeY() * 3 / 4;
@@ -42,7 +42,7 @@ public final class DebugScenarioInitialization {
 		domain.setVolumes(volumes,materials);
 	}
 
-	public static void assignChemistry(FluidDomain domain) {
+	public static void assignChemistry(HostFluidState domain) {
 		float[] positions = domain.exportChemicalParticleState().materials().copyPositionVolume();
 		float divider = domain.sizeX() * domain.config().cellSize() / 5.0F;
 		var stocks = domain.exportLiquidCellState().physicalStocks();
@@ -66,13 +66,13 @@ public final class DebugScenarioInitialization {
 	}
 
 	/** Presets the closed chamber above the water in the U-tube scaffold. */
-	public static int presetAirPressure(FluidDomain domain, boolean vacuum) {
+	public static int presetAirPressure(HostFluidState domain, boolean vacuum) {
 		return presetAirPressure(domain, vacuum ? AirPressure.VACUUM : AirPressure.PRESSURE);
 	}
 
 	public enum AirPressure { PRESSURE, AMBIENT, VACUUM }
 
-	public static int presetAirPressure(FluidDomain domain, AirPressure pressure) {
+	public static int presetAirPressure(HostFluidState domain, AirPressure pressure) {
 		int node = domain.airNodeAt(2, 6, 2);
 		if (node <= 0) return -1;
 		var gas = domain.gasBoundary();
@@ -85,7 +85,7 @@ public final class DebugScenarioInitialization {
 		return node;
 	}
 
-	public static void fillAirWater(FluidDomain domain) {
+	public static void fillAirWater(HostFluidState domain) {
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		int cellsPerBlock = FluidRegionFactory.CELLS_PER_BLOCK;
 		for (int z = 0; z < domain.sizeZ(); z++) for (int y = cellsPerBlock; y < 5 * cellsPerBlock / 2; y++)
@@ -95,7 +95,7 @@ public final class DebugScenarioInitialization {
 	}
 
 
-	public static void fillTensionCap(FluidDomain domain) {
+	public static void fillTensionCap(HostFluidState domain) {
 		int sx = domain.sizeX(), sy = domain.sizeY(), sz = domain.sizeZ();
 		float cellSize = domain.config().cellSize();
 		double wallY = 2.0 * cellSize;

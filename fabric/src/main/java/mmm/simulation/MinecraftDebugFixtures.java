@@ -3,7 +3,7 @@ package mmm.simulation;
 import mmm.application.RegionCatalog;
 import mmm.block.MmmBlocks;
 import mmm.block.FluidPortBlock;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.network.DemoPreset;
 import mmm.worldprofile.WorldCapability;
 import mmm.worldprofile.WorldCapabilityProfile;
@@ -36,10 +36,10 @@ public final class MinecraftDebugFixtures {
 		void stepMotion(FluidRegion region);
 
 		/** Binds the committed world capability registries to a freshly allocated domain. */
-		void bindCapabilityState(FluidDomain domain);
+		void bindCapabilityState(HostFluidState domain);
 
-		void bindTensionPalette(FluidDomain domain, int angleDegrees);
-		void bindTensionCapabilityState(FluidDomain domain, int angleDegrees);
+		void bindTensionPalette(HostFluidState domain, int angleDegrees);
+		void bindTensionCapabilityState(HostFluidState domain, int angleDegrees);
 
 		/** Activates or re-selects a controller; returns null on success or the failure text. */
 		ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition);
@@ -191,7 +191,8 @@ public final class MinecraftDebugFixtures {
 		return runTransient(level, origin, TransientKind.TENSION, context -> {
 			scaffolding.placeTensionFloor(level, origin);
 			runtime.refreshCollisions(level);
-			FluidDomain domain = regions.selected().domain();
+			long generation = regions.selected().solverGeneration();
+			HostFluidState domain = regions.selected().beginHostEdit();
 			for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
 				if (!domain.isSolid(x, 1, z)) reject("液滴演示需要完整实心地板；请在已加载的空旷区域重试");
 			}
@@ -199,6 +200,7 @@ public final class MinecraftDebugFixtures {
 			DebugScenarioInitialization.fillTensionCap(domain);
 			if (domain.totalVolume() <= 0.0F) reject("液滴演示没有可装水的开放空间；请在空旷处重试");
 			runtime.bindTensionCapabilityState(domain, angleDegrees);
+			regions.selected().commitHostEdit(generation, domain);
 		});
 	}
 
@@ -208,13 +210,17 @@ public final class MinecraftDebugFixtures {
 			scaffolding.requireAir(level, origin, DemoSceneLayout.AIR_SIZE_X, DemoSceneLayout.AIR_SIZE_Y, DemoSceneLayout.AIR_SIZE_Z);
 			scaffolding.placeAirDemo(level, origin);
 			runtime.refreshCollisions(level);
-			FluidDomain domain = regions.selected().domain();
+			long generation = regions.selected().solverGeneration();
+			HostFluidState domain = regions.selected().beginHostEdit();
 			DebugScenarioInitialization.fillAirWater(domain);
 			runtime.bindCapabilityState(domain);
+			regions.selected().commitHostEdit(generation, domain);
 			runtime.stepMotion(regions.selected());
-			domain = regions.selected().domain();
+			generation = regions.selected().solverGeneration();
+			domain = regions.selected().beginHostEdit();
 			if (DebugScenarioInitialization.presetAirPressure(domain, pressure) < 0)
 				reject("左侧气腔未密闭；请清理模拟区域后重试");
+			regions.selected().commitHostEdit(generation, domain);
 		});
 	}
 
@@ -223,9 +229,11 @@ public final class MinecraftDebugFixtures {
 		return runTransient(level, origin, TransientKind.FLOW, context -> {
 			scaffolding.placeFlowDemo(level, origin);
 			runtime.refreshCollisions(level);
-			FluidDomain domain = regions.selected().domain();
+			long generation = regions.selected().solverGeneration();
+			HostFluidState domain = regions.selected().beginHostEdit();
 			DemoSceneInitialization.fillFlow(domain);
 			runtime.bindCapabilityState(domain);
+			regions.selected().commitHostEdit(generation, domain);
 			regions.selected().setEntityPhysicsEnabled(true);
 		});
 	}
@@ -240,11 +248,13 @@ public final class MinecraftDebugFixtures {
 		ServerLevel level = player.level();
 		return runTransient(level, aimedOrigin(player), TransientKind.NORMAL, context -> {
 			runtime.refreshCollisions(level);
-			FluidDomain domain = regions.selected().domain();
+			long generation = regions.selected().solverGeneration();
+			HostFluidState domain = regions.selected().beginHostEdit();
 			if (profile.hasCapability(WorldCapability.MATERIALS)) FluidRegionFactory.bindDefaultMaterialState(domain);
 			DebugScenarioInitialization.fillDam(domain, false);
 			if (domain.totalVolume() <= 0.0F) reject("溃坝区域没有可装水的开放空间；请在空旷处重试");
 			runtime.bindCapabilityState(domain);
+			regions.selected().commitHostEdit(generation, domain);
 		});
 	}
 
@@ -256,7 +266,10 @@ public final class MinecraftDebugFixtures {
 			runtime.refreshCollisions(level);
 			counts[0] = FluidRegionFactory.captureVanillaWater(level, regions.selected(), takeOver);
 			if (counts[0] == 0) reject("附近没有可采集的原版水；请靠近水体重试");
-			runtime.bindCapabilityState(regions.selected().domain());
+			long generation = regions.selected().solverGeneration();
+			HostFluidState edit = regions.selected().beginHostEdit();
+			runtime.bindCapabilityState(edit);
+			regions.selected().commitHostEdit(generation, edit);
 			if (takeOver) {
 				MinecraftTakeoverAdapter.BeginResult result = takeover.begin(level, regions.selected(), FluidRegionFactory.CELLS_PER_BLOCK);
 				counts[1] = result.removedBlocks();
@@ -292,7 +305,7 @@ public final class MinecraftDebugFixtures {
 			lastFailure = "请先选择并替换已有气压或液滴演示，以恢复其脚手架";
 			return false;
 		}
-		FluidDomain domain = switch (kind) {
+		HostFluidState domain = switch (kind) {
 			case FLOW -> FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z);
 			case AIR -> FluidRegionFactory.createAirDomain();
 			case TENSION -> FluidRegionFactory.createTensionDomain();
@@ -323,6 +336,7 @@ public final class MinecraftDebugFixtures {
 			if (!admission.accepted()) reject(admission.failure());
 			admitted = true;
 			work.initialize(context);
+			candidate.ensureDeviceResident();
 			candidate.setPaused(true);
 			sendSnapshot(level);
 			if (replacing) snapshots.sendRemoval(level.getServer(), replaced);

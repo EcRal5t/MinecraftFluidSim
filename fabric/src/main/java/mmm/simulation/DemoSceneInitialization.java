@@ -1,12 +1,12 @@
 package mmm.simulation;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 
 /** Initial inventories shared by interactive demonstrations and their offline replays. */
 public final class DemoSceneInitialization {
 	private DemoSceneInitialization() { }
 
-	public static void fillFlow(FluidDomain domain) {
+	public static void fillFlow(HostFluidState domain) {
 		int subdivisions = FluidRegionFactory.CELLS_PER_BLOCK;
 		float[] volumes = new float[domain.sizeX() * domain.sizeY() * domain.sizeZ()];
 		for (int z = subdivisions; z < 5 * subdivisions; z++)

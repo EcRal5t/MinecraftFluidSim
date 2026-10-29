@@ -1,95 +1,165 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
-layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
-layout(binding=2,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; int count; } p;
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) readonly buffer Source {
+    uint sourceWords[];
+};
+layout(binding = 1, std430) buffer Candidate {
+    uint candidateWords[];
+};
+layout(binding = 2, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+}
+p;
 
 // DYADIC_LIBRARY
-const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,VOLUME_EXPONENTS=6,
-          VOLUME_LIMBS=7,MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,
-          SPECIES_AMOUNTS=13,MASS_RESIDUAL=14,NUMERIC_VOLUMES=15;
-const int ROUTE_DESCRIPTORS=0,ROUTE_MASS=1,ROUTE_ENERGY=2,ROUTE_MIXTURE=3,
-          ROUTE_SPECIES_AMOUNTS=4,ROUTE_SOURCE_OFFSETS=5,ROUTE_SLOTS=6,ROUTE_SOURCE_MASKS=8;
-const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
-int h(int field) { return int(candidateWords[p.header+field]); }
-int src(int field) { return h(16+field); }
-int dst(int field) { return h(35+field); }
-int route(int field) { return h(54+field); }
-int routeIndex(int stock,int slot){uint mask=candidateWords[route(ROUTE_SOURCE_MASKS)+stock];return (mask&(1u<<slot))==0u?-1:int(candidateWords[route(ROUTE_SOURCE_OFFSETS)+stock])+bitCount(mask&((1u<<slot)-1u));}
-uint dyadicWord(int bank,int index){return bank==0?sourceWords[index]:candidateWords[index];}
-void dyadicWrite(int index,uint value){candidateWords[index]=value;}
-int64_t longAt(int word) { return int64_t(uint64_t(candidateWords[word])|(uint64_t(candidateWords[word+1])<<32)); }
-void putLong(int word,int64_t value) { candidateWords[word]=uint(value);candidateWords[word+1]=uint(uint64_t(value)>>32); }
-double doubleAt(int word) { return packDouble2x32(uvec2(candidateWords[word],candidateWords[word+1])); }
-void putDouble(int word,double value) { uvec2 bits=unpackDouble2x32(value);candidateWords[word]=bits.x;candidateWords[word+1]=bits.y; }
-int64_t addQuantity(int64_t sum,int64_t value) {
-    if(value<int64_t(0)||sum>MAX_LONG-value){atomicOr(errors,32u);return sum;}
-    return sum+value;
+// HOST_LAYOUT
+
+const int64_t MAX_LONG = int64_t(0x7fffffffffffffffUL);
+int h(int field) {
+    return int(candidateWords[p.header + field]);
+}
+int src(int field) {
+    return h(SOURCE_FIELDS + field);
+}
+int dst(int field) {
+    return h(TARGET_FIELDS + field);
+}
+int route(int field) {
+    return h(ROUTE_FIELDS + field);
+}
+int routeIndex(int stock, int slot) {
+    uint mask = candidateWords[route(ROUTE_SOURCE_MASKS) + stock];
+    return (mask & (1u << slot)) == 0u
+               ? -1
+               : int(candidateWords[route(ROUTE_SOURCE_OFFSETS) + stock]) + bitCount(mask & ((1u << slot) - 1u));
+}
+uint dyadicWord(int bank, int index) {
+    return bank == 0 ? sourceWords[index] : candidateWords[index];
+}
+void dyadicWrite(int index, uint value) {
+    candidateWords[index] = value;
+}
+int64_t longAt(int word) {
+    return int64_t(uint64_t(candidateWords[word]) | (uint64_t(candidateWords[word + 1]) << 32));
+}
+void putLong(int word, int64_t value) {
+    candidateWords[word] = uint(value);
+    candidateWords[word + 1] = uint(uint64_t(value) >> 32);
+}
+double doubleAt(int word) {
+    return packDouble2x32(uvec2(candidateWords[word], candidateWords[word + 1]));
+}
+void putDouble(int word, double value) {
+    uvec2 bits = unpackDouble2x32(value);
+    candidateWords[word] = bits.x;
+    candidateWords[word + 1] = bits.y;
+}
+int64_t addQuantity(int64_t sum, int64_t value) {
+    if (value < int64_t(0) || sum > MAX_LONG - value) {
+        atomicOr(errors, 32u);
+        return sum;
+    }
+    return sum + value;
 }
 
 void clearStock(int stock) {
-    if(stock==0)candidateWords[dst(VOLUME_OFFSETS)+h(4)]=uint(4*h(4));
-    candidateWords[dst(VOLUME_OFFSETS)+stock]=uint(4*stock);
-    candidateWords[dst(VOLUME_COUNTS)+stock]=0u;
-    candidateWords[dst(VOLUME_EXPONENTS)+stock]=0u;
-    putLong(dst(MASS_UNITS)+2*stock,0l);putDouble(dst(ENERGY_BITS)+2*stock,0.0);
-    putLong(dst(MASS_RESIDUAL)+2*stock,0l);putDouble(dst(NUMERIC_VOLUMES)+2*stock,0.0);
-    candidateWords[dst(MIXTURE_PRESENT)+stock]=0u;
-    if(stock>=h(15)){candidateWords[dst(MATERIALS)+stock]=0u;candidateWords[dst(SUPPORT_MASKS)+stock]=0u;}
-    candidateWords[h(11)+stock]=0u;
-    for(int i=0;i<7;i++)candidateWords[h(10)+7*stock+i]=uint(-1);
-    for(int i=0;i<7;i++){putDouble(h(14)+14*stock+2*i,0.0);}
-}
-
-void sourceNeighbors(int stock,out int sources[7],out int directions[7]) {
-    int material=stock%h(9),cell=stock/h(9);
-    ivec3 shape=ivec3(h(0),h(1),h(2)),at=ivec3(cell%shape.x,cell/shape.x%shape.y,cell/(shape.x*shape.y));
-    for(int i=0;i<7;i++){
-        sources[i]=-1;directions[i]=0;ivec3 other=at;
-        if(i>0){int side=i-1;other[side/2]+=(side&1)==0?-1:1;directions[i]=(side^1)+1;}
-        if(any(lessThan(other,ivec3(0)))||any(greaterThanEqual(other,shape)))continue;
-        sources[i]=((other.z*shape.y+other.y)*shape.x+other.x)*h(9)+material;
+    if (stock == 0)
+        candidateWords[dst(STOCK_VOLUME_OFFSETS) + h(H_STOCK_CAPACITY)] = uint(4 * h(H_STOCK_CAPACITY));
+    candidateWords[dst(STOCK_VOLUME_OFFSETS) + stock] = uint(4 * stock);
+    candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = 0u;
+    candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = 0u;
+    putLong(dst(STOCK_MASS_UNITS) + 2 * stock, 0l);
+    putDouble(dst(STOCK_ENERGY_BITS) + 2 * stock, 0.0);
+    putLong(dst(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock, 0l);
+    putDouble(dst(STOCK_NUMERIC_VOLUMES) + 2 * stock, 0.0);
+    candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] = 0u;
+    if (stock >= h(H_SLOT_COUNT)) {
+        candidateWords[dst(STOCK_MATERIALS) + stock] = 0u;
+        candidateWords[dst(STOCK_SUPPORT_MASKS) + stock] = 0u;
+    }
+    candidateWords[h(H_SPECIES_COUNTS) + stock] = 0u;
+    for (int i = 0; i < 7; i++)
+        candidateWords[h(H_MEMBERS) + 7 * stock + i] = uint(-1);
+    for (int i = 0; i < 7; i++) {
+        putDouble(h(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, 0.0);
     }
 }
-int seekSpecies(int entry,int end,int direction) {
-    while(entry<end) {
-        int64_t amount=longAt(route(ROUTE_SPECIES_AMOUNTS)+2*(7*entry+direction));
-        if(amount>int64_t(0))break;
-        if(amount<int64_t(0))atomicOr(errors,32u);
+
+void sourceNeighbors(int stock, out int sources[7], out int directions[7]) {
+    int material = stock % h(H_MATERIAL_COUNT), cell = stock / h(H_MATERIAL_COUNT);
+    ivec3 shape = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z)),
+          at = ivec3(cell % shape.x, cell / shape.x % shape.y, cell / (shape.x * shape.y));
+    for (int i = 0; i < 7; i++) {
+        sources[i] = -1;
+        directions[i] = 0;
+        ivec3 other = at;
+        if (i > 0) {
+            int side = i - 1;
+            other[side / 2] += (side & 1) == 0 ? -1 : 1;
+            directions[i] = (side ^ 1) + 1;
+        }
+        if (any(lessThan(other, ivec3(0))) || any(greaterThanEqual(other, shape)))
+            continue;
+        sources[i] = ((other.z * shape.y + other.y) * shape.x + other.x) * h(H_MATERIAL_COUNT) + material;
+    }
+}
+int seekSpecies(int entry, int end, int direction) {
+    while (entry < end) {
+        int64_t amount = longAt(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * entry + direction));
+        if (amount > int64_t(0))
+            break;
+        if (amount < int64_t(0))
+            atomicOr(errors, 32u);
         entry++;
     }
     return entry;
 }
 
 // Each accepted route has sorted, unique species handles. Seven-way merge preserves that order.
-int mergeSpecies(int stock,int members[7],int outputStart,bool writing,out int64_t representedMass) {
-    int cursors[7],ends[7],sources[7],directions[7];representedMass=int64_t(0);
-    if(sourceWords[src(COUNTS)+1]==0u)return 0;
-    sourceNeighbors(stock,sources,directions);
-    for(int i=0;i<7;i++) {
-        cursors[i]=members[i]<0?0:int(sourceWords[src(SPECIES_OFFSETS)+sources[i]]);
-        ends[i]=members[i]<0?0:int(sourceWords[src(SPECIES_OFFSETS)+sources[i]+1]);
-        cursors[i]=seekSpecies(cursors[i],ends[i],directions[i]);
+int mergeSpecies(int stock, int members[7], int outputStart, bool writing, out int64_t representedMass) {
+    int cursors[7], ends[7], sources[7], directions[7];
+    representedMass = int64_t(0);
+    if (sourceWords[src(STOCK_COUNTS) + 1] == 0u)
+        return 0;
+    sourceNeighbors(stock, sources, directions);
+    for (int i = 0; i < 7; i++) {
+        cursors[i] = members[i] < 0 ? 0 : int(sourceWords[src(STOCK_SPECIES_OFFSETS) + sources[i]]);
+        ends[i] = members[i] < 0 ? 0 : int(sourceWords[src(STOCK_SPECIES_OFFSETS) + sources[i] + 1]);
+        cursors[i] = seekSpecies(cursors[i], ends[i], directions[i]);
     }
-    int count=0;
-    while(true) {
-        int handle=2147483647;bool found=false;
-        for(int i=0;i<7;i++)if(cursors[i]<ends[i]){handle=min(handle,int(sourceWords[src(SPECIES_HANDLES)+cursors[i]]));found=true;}
-        if(!found)break;
-        int64_t amount=int64_t(0);
-        for(int i=0;i<7;i++)if(cursors[i]<ends[i]&&int(sourceWords[src(SPECIES_HANDLES)+cursors[i]])==handle) {
-            amount=addQuantity(amount,longAt(route(ROUTE_SPECIES_AMOUNTS)+2*(7*cursors[i]+directions[i])));
-            cursors[i]=seekSpecies(cursors[i]+1,ends[i],directions[i]);
-        }
-        if(writing) {
-            candidateWords[dst(SPECIES_HANDLES)+outputStart+count]=uint(handle);
-            putLong(dst(SPECIES_AMOUNTS)+2*(outputStart+count),amount);
-            int64_t quantum=longAt(h(8)+2*handle);
-            if(quantum<int64_t(0)||(quantum>int64_t(0)&&amount>MAX_LONG/quantum))atomicOr(errors,32u);
-            else representedMass=addQuantity(representedMass,amount*quantum);
+    int count = 0;
+    while (true) {
+        int handle = 2147483647;
+        bool found = false;
+        for (int i = 0; i < 7; i++)
+            if (cursors[i] < ends[i]) {
+                handle = min(handle, int(sourceWords[src(STOCK_SPECIES_HANDLES) + cursors[i]]));
+                found = true;
+            }
+        if (!found)
+            break;
+        int64_t amount = int64_t(0);
+        for (int i = 0; i < 7; i++)
+            if (cursors[i] < ends[i] && int(sourceWords[src(STOCK_SPECIES_HANDLES) + cursors[i]]) == handle) {
+                amount =
+                    addQuantity(amount, longAt(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * cursors[i] + directions[i])));
+                cursors[i] = seekSpecies(cursors[i] + 1, ends[i], directions[i]);
+            }
+        if (writing) {
+            candidateWords[dst(STOCK_SPECIES_HANDLES) + outputStart + count] = uint(handle);
+            putLong(dst(STOCK_SPECIES_AMOUNTS) + 2 * (outputStart + count), amount);
+            int64_t quantum = longAt(h(H_SPECIES_MASS) + 2 * handle);
+            if (quantum < int64_t(0) || (quantum > int64_t(0) && amount > MAX_LONG / quantum))
+                atomicOr(errors, 32u);
+            else
+                representedMass = addQuantity(representedMass, amount * quantum);
         }
         count++;
     }
@@ -98,114 +168,187 @@ int mergeSpecies(int stock,int members[7],int outputStart,bool writing,out int64
 
 // Publish exact volumes in the same invocation that reads the accepted routes.
 // Overflow demand is accumulated even when this candidate has insufficient limb capacity.
-void gatherVolume(int stock,DyadicTerm items[7]){
-    int count,exponent;uvec4 limbs;
-    if(dyadicPositiveSum(items,7,count,exponent,limbs)){
-        candidateWords[dst(VOLUME_COUNTS)+stock]=uint(count);candidateWords[dst(VOLUME_EXPONENTS)+stock]=uint(exponent);
-        for(int word=0;word<count;word++)candidateWords[dst(VOLUME_LIMBS)+4*stock+word]=limbs[word];
+void gatherVolume(int stock, DyadicTerm items[7]) {
+    int count, exponent;
+    uvec4 limbs;
+    if (dyadicPositiveSum(items, 7, count, exponent, limbs)) {
+        candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = uint(count);
+        candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = uint(exponent);
+        for (int word = 0; word < count; word++)
+            candidateWords[dst(STOCK_VOLUME_LIMBS) + 4 * stock + word] = limbs[word];
         return;
     }
-    DyadicMeasure result=dyadicMeasure(items,7);
-    if(result.status==DYADIC_ZERO)return;
-    if(result.status!=DYADIC_POSITIVE){atomicOr(errors,32u);return;}
-    uint countWords=uint(result.words),offset=countWords<=4u?4u*uint(stock):atomicAdd(candidateWords[dst(VOLUME_OFFSETS)+h(4)],countWords);
-    candidateWords[dst(VOLUME_OFFSETS)+stock]=offset;candidateWords[dst(VOLUME_COUNTS)+stock]=countWords;
-    candidateWords[dst(VOLUME_EXPONENTS)+stock]=uint(result.exponent);
+    DyadicMeasure result = dyadicMeasure(items, 7);
+    if (result.status == DYADIC_ZERO)
+        return;
+    if (result.status != DYADIC_POSITIVE) {
+        atomicOr(errors, 32u);
+        return;
+    }
+    uint countWords = uint(result.words),
+         offset = countWords <= 4u
+                      ? 4u * uint(stock)
+                      : atomicAdd(candidateWords[dst(STOCK_VOLUME_OFFSETS) + h(H_STOCK_CAPACITY)], countWords);
+    candidateWords[dst(STOCK_VOLUME_OFFSETS) + stock] = offset;
+    candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = countWords;
+    candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = uint(result.exponent);
     // Finish publishes the complete allocator demand and rejects the private candidate.
     // No global error is raised here, so all rows still contribute their true overflow sizes.
-    if(offset>uint(h(6))||countWords>uint(h(6))-offset)return;
-    dyadicWriteSum(items,7,result,dst(VOLUME_LIMBS)+int(offset));
+    if (offset > uint(h(H_LIMB_CAPACITY)) || countWords > uint(h(H_LIMB_CAPACITY)) - offset)
+        return;
+    dyadicWriteSum(items, 7, result, dst(STOCK_VOLUME_LIMBS) + int(offset));
 }
 
-void gatherStock(int stock,int cell,int members[7]) {
-    candidateWords[dst(SUPPORT_MASKS)+stock]=(~candidateWords[h(7)+cell])&255u;
-    int64_t mass=int64_t(0);uint mixture=0u;precise double energy=0.0;DyadicTerm items[7];
-    for(int i=0;i<7;i++) {
-        items[i]=DyadicTerm(1,0,0,0,0);
-        int member=members[i];candidateWords[h(10)+7*stock+i]=uint(member);
-        if(member<0)continue;
-        mass=addQuantity(mass,longAt(route(ROUTE_MASS)+2*member));
-        mixture|=candidateWords[route(ROUTE_MIXTURE)+member];
-        precise double value=doubleAt(route(ROUTE_ENERGY)+2*member);
-        precise double next=energy+value;
-        precise double virtualValue=next-energy;
-        precise double remainder=(energy-(next-virtualValue))+(value-virtualValue);
-        putDouble(h(14)+14*stock+2*i,remainder);energy=next;
-        if(isnan(value)||isinf(value)||isnan(next)||isinf(next))atomicOr(errors,32u);
-        int descriptor=route(ROUTE_DESCRIPTORS)+5*member;
-        items[i]=DyadicTerm(int(candidateWords[descriptor]),int(candidateWords[descriptor+1]),int(candidateWords[descriptor+2]),
-                int(candidateWords[descriptor+3]),int(candidateWords[descriptor+4]));
+void gatherStock(int stock, int cell, int members[7]) {
+    candidateWords[dst(STOCK_SUPPORT_MASKS) + stock] = (~candidateWords[h(H_FIXED_MASK) + cell]) & 255u;
+    int64_t mass = int64_t(0);
+    uint mixture = 0u;
+    precise double energy = 0.0;
+    DyadicTerm items[7];
+    for (int i = 0; i < 7; i++) {
+        items[i] = DyadicTerm(1, 0, 0, 0, 0);
+        int member = members[i];
+        candidateWords[h(H_MEMBERS) + 7 * stock + i] = uint(member);
+        if (member < 0)
+            continue;
+        mass = addQuantity(mass, longAt(route(ROUTE_MASS_UNITS) + 2 * member));
+        mixture |= candidateWords[route(ROUTE_MIXTURE_PRESENT) + member];
+        precise double value = doubleAt(route(ROUTE_ENERGY_BITS) + 2 * member);
+        precise double next = energy + value;
+        precise double virtualValue = next - energy;
+        precise double remainder = (energy - (next - virtualValue)) + (value - virtualValue);
+        putDouble(h(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, remainder);
+        energy = next;
+        if (isnan(value) || isinf(value) || isnan(next) || isinf(next))
+            atomicOr(errors, 32u);
+        int descriptor = route(ROUTE_VOLUME_DESCRIPTORS) + 5 * member;
+        items[i] = DyadicTerm(int(candidateWords[descriptor]), int(candidateWords[descriptor + 1]),
+                              int(candidateWords[descriptor + 2]), int(candidateWords[descriptor + 3]),
+                              int(candidateWords[descriptor + 4]));
     }
-    gatherVolume(stock,items);
-    putLong(dst(MASS_UNITS)+2*stock,mass);putDouble(dst(ENERGY_BITS)+2*stock,energy);
-    candidateWords[dst(MIXTURE_PRESENT)+stock]=mixture;
+    gatherVolume(stock, items);
+    putLong(dst(STOCK_MASS_UNITS) + 2 * stock, mass);
+    putDouble(dst(STOCK_ENERGY_BITS) + 2 * stock, energy);
+    candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] = mixture;
     int64_t unused;
-    candidateWords[h(11)+stock]=uint(mergeSpecies(stock,members,0,false,unused));
+    candidateWords[h(H_SPECIES_COUNTS) + stock] = uint(mergeSpecies(stock, members, 0, false, unused));
 }
 
 // Fixed slots gather the same material from the retained route and six actual neighbors.
 void gatherSlot(int stock) {
-    int members[7],sources[7],directions[7];sourceNeighbors(stock,sources,directions);
-    for(int i=0;i<7;i++) {
-        members[i]=-1;if(sources[i]<0)continue;int entry=routeIndex(sources[i],directions[i]);
-        if(entry<0)continue;int sign=int(candidateWords[route(ROUTE_DESCRIPTORS)+5*entry+4]);
-        if(sign<0){atomicOr(errors,32u);return;}if(sign>0)members[i]=entry;
+    int members[7], sources[7], directions[7];
+    sourceNeighbors(stock, sources, directions);
+    for (int i = 0; i < 7; i++) {
+        members[i] = -1;
+        if (sources[i] < 0)
+            continue;
+        int entry = routeIndex(sources[i], directions[i]);
+        if (entry < 0)
+            continue;
+        int sign = int(candidateWords[route(ROUTE_VOLUME_DESCRIPTORS) + 5 * entry + 4]);
+        if (sign < 0) {
+            atomicOr(errors, 32u);
+            return;
+        }
+        if (sign > 0)
+            members[i] = entry;
     }
-    gatherStock(stock,stock/h(9),members);
+    gatherStock(stock, stock / h(H_MATERIAL_COUNT), members);
 }
-uint volumeWord(int begin,int count,int index) {
-    return index>=0&&index<count?candidateWords[dst(VOLUME_LIMBS)+begin+index]:0u;
+uint volumeWord(int begin, int count, int index) {
+    return index >= 0 && index < count ? candidateWords[dst(STOCK_VOLUME_LIMBS) + begin + index] : 0u;
 }
 
 // One ties-to-even conversion of the exact canonical significand, including subnormal doubles.
 // Canonical odd significands provide the sticky bit without scanning all discarded low limbs.
-double numericVolume(int begin,int count,int exponent) {
-    if(count==0)return 0.0;
-    int bits=32*(count-1)+findMSB(volumeWord(begin,count,count-1))+1;
-    int64_t highest=int64_t(exponent)+int64_t(bits-1);
-    if(highest>int64_t(1023)){atomicOr(errors,32u);return 0.0;}
-    if(highest<int64_t(-1075))return 0.0;
-    int unit=int(max(int64_t(-1074),highest-int64_t(52)));
-    int64_t discarded=int64_t(unit)-int64_t(exponent);
-    if(discarded<=int64_t(0)) {
-        uint64_t value=uint64_t(volumeWord(begin,count,0))|(uint64_t(volumeWord(begin,count,1))<<32);
-        return ldexp(double(value),exponent);
+double numericVolume(int begin, int count, int exponent) {
+    if (count == 0)
+        return 0.0;
+    int bits = 32 * (count - 1) + findMSB(volumeWord(begin, count, count - 1)) + 1;
+    int64_t highest = int64_t(exponent) + int64_t(bits - 1);
+    if (highest > int64_t(1023)) {
+        atomicOr(errors, 32u);
+        return 0.0;
     }
-    int at=int(discarded>>5),shift=int(discarded&int64_t(31));
-    uint low=volumeWord(begin,count,at)>>shift,high=volumeWord(begin,count,at+1)>>shift;
-    if(shift!=0){low|=volumeWord(begin,count,at+1)<<(32-shift);high|=volumeWord(begin,count,at+2)<<(32-shift);}
-    uint64_t rounded=uint64_t(low)|(uint64_t(high)<<32);
-    int guard=int(discarded-int64_t(1));
-    bool halfway=(volumeWord(begin,count,guard/32)&(1u<<(guard&31)))!=0u;
-    if(halfway&&(discarded>int64_t(1)||(rounded&uint64_t(1))!=uint64_t(0)))rounded++;
-    double value=ldexp(double(rounded),unit);
-    if(isnan(value)||isinf(value))atomicOr(errors,32u);
+    if (highest < int64_t(-1075))
+        return 0.0;
+    int unit = int(max(int64_t(-1074), highest - int64_t(52)));
+    int64_t discarded = int64_t(unit) - int64_t(exponent);
+    if (discarded <= int64_t(0)) {
+        uint64_t value = uint64_t(volumeWord(begin, count, 0)) | (uint64_t(volumeWord(begin, count, 1)) << 32);
+        return ldexp(double(value), exponent);
+    }
+    int at = int(discarded >> 5), shift = int(discarded & int64_t(31));
+    uint low = volumeWord(begin, count, at) >> shift, high = volumeWord(begin, count, at + 1) >> shift;
+    if (shift != 0) {
+        low |= volumeWord(begin, count, at + 1) << (32 - shift);
+        high |= volumeWord(begin, count, at + 2) << (32 - shift);
+    }
+    uint64_t rounded = uint64_t(low) | (uint64_t(high) << 32);
+    int guard = int(discarded - int64_t(1));
+    bool halfway = (volumeWord(begin, count, guard / 32) & (1u << (guard & 31))) != 0u;
+    if (halfway && (discarded > int64_t(1) || (rounded & uint64_t(1)) != uint64_t(0)))
+        rounded++;
+    double value = ldexp(double(rounded), unit);
+    if (isnan(value) || isinf(value))
+        atomicOr(errors, 32u);
     return value;
 }
 
 void finishStock(int stock) {
-    uint actual=uint(h(15));
-    uint species=candidateWords[dst(SPECIES_OFFSETS)+h(4)],limbs=candidateWords[dst(VOLUME_OFFSETS)+h(4)];
-    if(stock==0){candidateWords[dst(COUNTS)]=actual;candidateWords[dst(COUNTS)+1]=species;candidateWords[dst(COUNTS)+2]=limbs;}
-    if(actual>uint(h(4))||species>uint(h(5))||limbs>uint(h(6))){atomicOr(errors,64u);return;}
-    if((errors&(16u|32u))!=0u)return;
-    if(uint(stock)>=actual)return;
-    if(candidateWords[dst(VOLUME_COUNTS)+stock]==0u){
-        if(longAt(dst(MASS_UNITS)+2*stock)!=0l||candidateWords[h(11)+stock]!=0u||doubleAt(dst(ENERGY_BITS)+2*stock)!=0.0){atomicOr(errors,32u);return;}
-        candidateWords[dst(VOLUME_COUNTS)+stock]=0u;candidateWords[dst(VOLUME_EXPONENTS)+stock]=0u;candidateWords[dst(SUPPORT_MASKS)+stock]=0u;
-        candidateWords[dst(MIXTURE_PRESENT)+stock]=0u;putLong(dst(MASS_RESIDUAL)+2*stock,0l);putDouble(dst(NUMERIC_VOLUMES)+2*stock,0.0);return;
+    uint actual = uint(h(H_SLOT_COUNT));
+    uint species = candidateWords[dst(STOCK_SPECIES_OFFSETS) + h(H_STOCK_CAPACITY)],
+         limbs = candidateWords[dst(STOCK_VOLUME_OFFSETS) + h(H_STOCK_CAPACITY)];
+    if (stock == 0) {
+        candidateWords[dst(STOCK_COUNTS)] = actual;
+        candidateWords[dst(STOCK_COUNTS) + 1] = species;
+        candidateWords[dst(STOCK_COUNTS) + 2] = limbs;
     }
-    int exponent=int(candidateWords[dst(VOLUME_EXPONENTS)+stock]);
-    int begin=int(candidateWords[dst(VOLUME_OFFSETS)+stock]),end=begin+int(candidateWords[dst(VOLUME_COUNTS)+stock]);
-    putDouble(dst(NUMERIC_VOLUMES)+2*stock,numericVolume(begin,end-begin,exponent));
-    int members[7];for(int i=0;i<7;i++)members[i]=int(candidateWords[h(10)+7*stock+i]);
-    int64_t represented;mergeSpecies(stock,members,int(candidateWords[dst(SPECIES_OFFSETS)+stock]),true,represented);
-    int64_t mass=longAt(dst(MASS_UNITS)+2*stock);
-    putLong(dst(MASS_RESIDUAL)+2*stock,candidateWords[dst(MIXTURE_PRESENT)+stock]!=0u?mass-represented:int64_t(0));
+    if (actual > uint(h(H_STOCK_CAPACITY)) || species > uint(h(H_SPECIES_CAPACITY)) ||
+        limbs > uint(h(H_LIMB_CAPACITY))) {
+        atomicOr(errors, 64u);
+        return;
+    }
+    if ((errors & (16u | 32u)) != 0u)
+        return;
+    if (uint(stock) >= actual)
+        return;
+    if (candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] == 0u) {
+        if (longAt(dst(STOCK_MASS_UNITS) + 2 * stock) != 0l || candidateWords[h(H_SPECIES_COUNTS) + stock] != 0u ||
+            doubleAt(dst(STOCK_ENERGY_BITS) + 2 * stock) != 0.0) {
+            atomicOr(errors, 32u);
+            return;
+        }
+        candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = 0u;
+        candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = 0u;
+        candidateWords[dst(STOCK_SUPPORT_MASKS) + stock] = 0u;
+        candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] = 0u;
+        putLong(dst(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock, 0l);
+        putDouble(dst(STOCK_NUMERIC_VOLUMES) + 2 * stock, 0.0);
+        return;
+    }
+    int exponent = int(candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock]);
+    int begin = int(candidateWords[dst(STOCK_VOLUME_OFFSETS) + stock]),
+        end = begin + int(candidateWords[dst(STOCK_VOLUME_COUNTS) + stock]);
+    putDouble(dst(STOCK_NUMERIC_VOLUMES) + 2 * stock, numericVolume(begin, end - begin, exponent));
+    int members[7];
+    for (int i = 0; i < 7; i++)
+        members[i] = int(candidateWords[h(H_MEMBERS) + 7 * stock + i]);
+    int64_t represented;
+    mergeSpecies(stock, members, int(candidateWords[dst(STOCK_SPECIES_OFFSETS) + stock]), true, represented);
+    int64_t mass = longAt(dst(STOCK_MASS_UNITS) + 2 * stock);
+    putLong(dst(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock,
+            candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] != 0u ? mass - represented : int64_t(0));
 }
 
 void main() {
-    int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(index>=p.count||(errors!=0u&&p.stage!=3))return;
-    if(p.stage==0)clearStock(index);else if(p.stage==1)gatherSlot(index);else finishStock(index);
+    int index = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if (index >= p.count || (errors != 0u && p.stage != 3))
+        return;
+    if (p.stage == 0)
+        clearStock(index);
+    else if (p.stage == 1)
+        gatherSlot(index);
+    else
+        finishStock(index);
 }

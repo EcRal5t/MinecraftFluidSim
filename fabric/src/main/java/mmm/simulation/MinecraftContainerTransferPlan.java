@@ -92,7 +92,7 @@ final class MinecraftContainerTransferPlan {
 		// Vanilla water has no temperature component; its initial source temperature is room temperature.
 		// Keep the actor's actual stack unchanged and use this source copy for the energy ledger.
 		if (kind == MinecraftContainerTransferOperations.TransferKind.POUR
-				&& sourceStack.is(net.minecraft.world.item.Items.WATER_BUCKET) && region.domain().hasThermalState()
+				&& sourceStack.is(net.minecraft.world.item.Items.WATER_BUCKET) && region.hasThermalState()
 				&& MinecraftContainerTransferOperations.thermalContents(sourceStack) == null) {
 			sourceStack = sourceStack.copy();
 			try { world.attachLiquidThermalContents(sourceStack, mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K); }
@@ -123,7 +123,7 @@ final class MinecraftContainerTransferPlan {
 				}
 				case SCOOP -> {
 					base = MinecraftContainerTransferOperations.heldBaseVolumeNanos(sourceStack);
-					requested = MinecraftContainerTransferOperations.extractableNanos(region.domain(), cell,
+					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
 							MinecraftContainerTransferOperations.heldFreeNanos(sourceStack), 6, waterMaterial(region));
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的水体");
 				}
@@ -131,10 +131,10 @@ final class MinecraftContainerTransferPlan {
 					if (!world.hasCapability(WorldCapability.MATERIALS)) {
 						return new Resolution(null, "材料功能门未开启");
 					}
-					if (!region.domain().hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
+					if (!region.hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
 					if (sourceStack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
 						if (!world.hasCapability(WorldCapability.CHEMISTRY)
-								|| !region.domain().hasChemistryState()) {
+								|| !region.hasChemistryState()) {
 							return new Resolution(null, "化学桶只能倒入启用相同 registry 的化学区域");
 						}
 						chemical = MaterialBucketItem.chemicalContents(sourceStack, world.chemicalRegistry());
@@ -150,8 +150,8 @@ final class MinecraftContainerTransferPlan {
 					if (!world.hasCapability(WorldCapability.MATERIALS)) {
 						return new Resolution(null, "材料功能门未开启");
 					}
-					if (!region.domain().hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
-					requested = MinecraftContainerTransferOperations.extractableNanos(region.domain(), cell,
+					if (!region.hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
+					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
 							ContainerFluidLedger.NANOS_PER_BLOCK, 6, -1);
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的材料流体");
 				}
@@ -160,7 +160,7 @@ final class MinecraftContainerTransferPlan {
 						return new Resolution(null, "颗粒功能门本次启动未开启；干式容器保持不变");
 					}
 					if (!region.controllerManaged()) return new Resolution(null, "颗粒容器只允许在闭壳控制器区域转移");
-					if (!region.domain().hasGranularState()) return new Resolution(null, "该区域不是颗粒区域");
+					if (!region.hasGranularState()) return new Resolution(null, "该区域不是颗粒区域");
 					granular = ContainerItemStacks.granularContents(sourceStack, world.granularRegistry(),
 							world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
 					if (granular == null) return new Resolution(null, "颗粒容器没有有效库存");
@@ -171,7 +171,7 @@ final class MinecraftContainerTransferPlan {
 						return new Resolution(null, "颗粒功能门本次启动未开启；干式容器保持不变");
 					}
 					if (!region.controllerManaged()) return new Resolution(null, "颗粒容器只允许在闭壳控制器区域转移");
-					if (!region.domain().hasGranularState() || !GranularContainerItem.isEmpty(sourceStack)) {
+					if (!region.hasGranularState() || !GranularContainerItem.isEmpty(sourceStack)) {
 						return new Resolution(null, "干式容器不为空或该区域不是颗粒区域");
 					}
 					requested = SolidVolume.SVQ_PER_CUBIC_METER;
@@ -216,7 +216,16 @@ final class MinecraftContainerTransferPlan {
 	}
 
 	MinecraftContainerTransferOperations.TransferOutcome executeUnmanaged() {
-		return executeExact(region, requestedAmount, baseAmount);
+		long generation = region.solverGeneration();
+		var edit = region.beginHostEdit();
+		var candidate = region.lifecycleCandidate(edit, region.paused());
+		var outcome = executeExact(candidate, requestedAmount, baseAmount);
+		if (outcome != null && outcome.transferred()) {
+			region.commitHostEdit(generation, edit);
+			region.wakeForActivity();
+			if (outcome.thermalEnergy() != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
+		}
+		return outcome;
 	}
 
 	MinecraftContainerTransactionAdapter.Result executeManaged(
@@ -244,7 +253,7 @@ final class MinecraftContainerTransferPlan {
 
 	boolean filled() { return operation == ContainerTransferJournal.Operation.INSERT; }
 	private static int waterMaterial(FluidRegion region) {
-		return region.domain().hasMaterialState() ? region.domain().materialRegistry().handle("mmm:water") : 0;
+		return region.hasMaterialState() ? region.materialHandle("mmm:water") : 0;
 	}
 	long requestedAmount() { return requestedAmount; }
 	long baseAmount() { return baseAmount; }
@@ -253,7 +262,7 @@ final class MinecraftContainerTransferPlan {
 
 	private boolean chemistryEnabled() {
 		return world.hasCapability(WorldCapability.CHEMISTRY)
-				&& region.domain().hasChemistryState();
+				&& region.hasChemistryState();
 	}
 
 	record Resolution(MinecraftContainerTransferPlan plan, String diagnostic) {

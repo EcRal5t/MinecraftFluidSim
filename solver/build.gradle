@@ -33,28 +33,12 @@ tasks.withType(Test).configureEach {
 }
 
 tasks.register('runSolverValidation', JavaExec) {
-	group = 'verification'
-	description = 'Runs solver/cut-cell validation without Minecraft; --args="--fast" skips the 600-step flow, --args="--flow-only" runs it alone.'
-	dependsOn tasks.named('testClasses')
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'mmm.fluid.FlipCutCellValidation'
-	enableAssertions = true
-}
-
-['DeviceLiquidInventoryValidation', 'ComputeExecutionValidation', 'ComputeDeviceLossValidation'].each { validation ->
-	tasks.register("run${validation}", JavaExec) {
-		group = 'verification'
-		dependsOn tasks.named('testClasses')
-		classpath = sourceSets.test.runtimeClasspath
-		mainClass = "mmm.fluid.${validation}"
-		enableAssertions = true
-	}
-}
-
-tasks.register('runComputeHandoffValidation') {
-	group = 'verification'
-	description = 'Checks lossless device inventory, compute scopes and device-loss candidate recovery without GPU hardware.'
-	dependsOn 'runDeviceLiquidInventoryValidation', 'runComputeExecutionValidation', 'runComputeDeviceLossValidation'
+    group = 'verification'
+    description = 'Checks device inventory handoff without Minecraft.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.fluid.DeviceLiquidInventoryValidation'
+    enableAssertions = true
 }
 
 tasks.register('testJar', Jar) {

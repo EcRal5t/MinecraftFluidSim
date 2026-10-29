@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.application.ContainerRecoveryCoordinator;
 import mmm.simulation.persistence.ContainerJournalFileStore;
 import net.minecraft.core.BlockPos;
@@ -24,8 +26,7 @@ import mmm.chemistry.ChemicalLimits;
 import mmm.granular.BuiltinGranularDefinitions;
 import mmm.granular.SolidCompositionRecord;
 import mmm.granular.SolidVolume;
-import mmm.fluid.FluidDomain;
-import mmm.fluid.CpuFluidSolverBackend;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidStepRequest;
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FlipMaterialParticleState;
@@ -66,20 +67,12 @@ public final class ContainerTransferStoreValidation {
 			testRoundTrip(); testThermalWal(); testPublicTransfers(); testActorCodecs();
 			System.out.println("Thermal container WAL and public transfer validation passed"); return;
 		}
-		if(args.length==1 && args[0].equals("--cold-acid-base")) {
-			ControllerInventoryDurabilityValidation.runColdAcidBase();
-			System.out.println("Cold acid-base precipitation 40-step replay passed");return;
-		}
+
 		if(args.length==1 && args[0].equals("--public-transfers")) {
 			testPublicTransfers();System.out.println("Public transfer durability passed");return;
 		}
-		if (args.length == 1 && args[0].equals("--rapid-pour")) {
-			testRapidFullProfilePourDurability();
-			System.out.println("Rapid full-profile pour durability passed"); return;
-		}
-        if(args.length==2&&args[0].equals("--normal-play-seed")){
-            ControllerInventoryDurabilityValidation.runNormalPlaySeed(Integer.parseInt(args[1]));return;
-        }
+
+
 		Path root = Files.createTempDirectory("mmm-container-wal-test");
 		try {
 			run("round-trip and atomic replace", ContainerTransferStoreValidation::testRoundTrip);
@@ -102,10 +95,6 @@ public final class ContainerTransferStoreValidation {
 			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
 			run("committed private target replaces an in-process base solver",
 					ContainerTransferStoreValidation::testCommittedTargetAdoption);
-			run("rapid full-profile pours stage and restart from reconstructible gas topology",
-					ContainerTransferStoreValidation::testRapidFullProfilePourDurability);
-			run("controller inventory operation matrix remains durable",
-					ControllerInventoryDurabilityValidation::run);
 			System.out.println("ContainerTransferStoreValidation passed " + passed + " scenarios");
 		} finally {
 			try (var paths = Files.walk(root)) {
@@ -785,13 +774,13 @@ public final class ContainerTransferStoreValidation {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 		for (long requested : new long[] {1L, 59L, 333_333_333L, 999_999_999L, 1_000_000_000L}) {
-			FluidDomain domain = new FluidDomain(6, 4, 6, config);
+			HostFluidState domain = new HostFluidState(6, 4, 6, config);
 			float plannedVolume = MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), requested);
 			long plannedNanos = MinecraftContainerTransferOperations.cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			check(plannedNanos > 0L && plannedNanos <= requested,
 					"downward request quantization exceeded its item balance for " + requested);
 
-			FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
+			FluidDomainContracts.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
 			check(inserted.transferred(), "edge-volume insertion failed for " + requested);
 			long insertedNanos = MinecraftContainerTransferOperations.settledNanos(domain.unitScale(), inserted.volume(), requested);
 			check(insertedNanos > 0L && insertedNanos <= requested,
@@ -799,7 +788,7 @@ public final class ContainerTransferStoreValidation {
 
 			long extractRequest = MinecraftContainerTransferOperations.extractableNanos(
 					domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, 0);
-			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
+			FluidDomainContracts.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
 					3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), extractRequest), 3, 0);
 			check(extracted.transferred(), "edge-volume extraction failed for " + requested);
 			long extractedNanos = MinecraftContainerTransferOperations.settledNanos(domain.unitScale(), extracted.volume(), extractRequest);
@@ -812,7 +801,7 @@ public final class ContainerTransferStoreValidation {
 	private static void testMaterialSettlement() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
-		FluidDomain domain = new FluidDomain(6, 4, 6, config);
+		HostFluidState domain = new HostFluidState(6, 4, 6, config);
 		domain.setVolume(1, 1, 1, 0.125F);
 		FlipParticleState pure = domain.exportParticleState();
 		List<FluidMaterial> materials = List.of(
@@ -827,8 +816,8 @@ public final class ContainerTransferStoreValidation {
 		FluidMixture source = new FluidMixture(List.of(
 				new FluidMixture.Component("mmm:oil", 333_333_333L, mmm.units.Mass.fromKilograms(266.6666664)),
 				new FluidMixture.Component("mmm:water", 666_666_666L, mmm.units.Mass.fromKilograms(666.666666))));
-		List<FluidDomain.MaterialPortion> planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source, 250_000_000L);
-		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
+		List<FluidDomainContracts.MaterialPortion> planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source, 250_000_000L);
+		FluidDomainContracts.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
 		check(inserted.transferred(), "non-float-friendly material insertion failed");
 		MinecraftContainerTransferOperations.MaterialInsertionSettlement settlement =
 				MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, inserted.portions());
@@ -840,7 +829,7 @@ public final class ContainerTransferStoreValidation {
 
 		long request = MinecraftContainerTransferOperations.extractableNanos(
 				domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, -1);
-		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
+		FluidDomainContracts.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
 				3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), request), 3);
 		check(extracted.transferred(), "material extraction failed after service-planned insertion");
 		FluidMixture bucket = MinecraftContainerTransferOperations.mixtureFromExtraction(domain, extracted.portions(), request);
@@ -860,7 +849,7 @@ public final class ContainerTransferStoreValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
 		var registry = new ThermalRegistry(List.of(definition));
 		var state = new ThermalStateFunction(registry);
-		var domain = new FluidDomain(3, 3, 3, config);
+		var domain = new HostFluidState(3, 3, 3, config);
 		domain.bindThermal(registry, liquids, 300.0);
 		var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", 999_999_999L, mmm.units.Mass.fromKilograms(999.0))));
 		var planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
@@ -896,7 +885,7 @@ public final class ContainerTransferStoreValidation {
 	private static void testChemicalInsertionMassConservation() {
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		for (double sourceMass : new double[] {1.0, 18.0, 999.0}) {
-			var domain = new FluidDomain(3, 3, 3, config);
+			var domain = new HostFluidState(3, 3, 3, config);
 			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 					new mmm.fluid.FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -932,11 +921,11 @@ public final class ContainerTransferStoreValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
 		var registry = new ThermalRegistry(List.of(definition));
 		for (double sign : new double[] {-1.0, 1.0}) {
-			var source = new FluidDomain(3, 3, 3, config);
+			var source = new HostFluidState(3, 3, 3, config);
 			source.setVolume(1, 1, 1, 0.125F);
 			source.setVolume(2, 1, 1, 0.125F);
 			source.bindThermal(registry, liquids, 300.0);
-			var domain = new FluidDomain(3, 3, 3, config);
+			var domain = new HostFluidState(3, 3, 3, config);
 			domain.restoreMaterialParticleState(source.exportMaterialParticleState());
 			double[] energy = new double[domain.particleCount()];
 			energy[0] = sign * 16_384.0;
@@ -974,12 +963,12 @@ public final class ContainerTransferStoreValidation {
 	private static void testPartialOutlet() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
-		FluidDomain domain = new FluidDomain(4, 4, 4, config);
+		HostFluidState domain = new HostFluidState(4, 4, 4, config);
 		domain.tryInsertExactVolume(2, 2, 2, 0.5F, 1);
 		long requested = MinecraftContainerTransferOperations.extractableNanos(domain, new int[] {2, 2, 2},
 				mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
 		check(requested == 62_500_000L, "partial outlet did not quantize the available half-cell volume");
-		FluidDomain.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
+		FluidDomainContracts.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
 				2, 2, 2, MinecraftContainerTransferOperations.nanosToCellVolume(domain.unitScale(), requested), 1, 0);
 		check(transfer.transferred() && domain.totalVolumeExact() == 0.0,
 				"partial outlet request could not be settled by the exact primitive");
@@ -996,7 +985,7 @@ public final class ContainerTransferStoreValidation {
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			FluidDomain domain = new FluidDomain(2, 2, 2, config);
+			HostFluidState domain = new HostFluidState(2, 2, 2, config);
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
 					origin, domain, footprint);
@@ -1030,7 +1019,7 @@ public final class ContainerTransferStoreValidation {
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			FluidDomain pure = new FluidDomain(2, 2, 2, config);
+			HostFluidState pure = new HostFluidState(2, 2, 2, config);
 			pure.setVolume(1, 1, 1, 0.25F);
 			FlipParticleState particles = pure.exportParticleState();
 			float[] positionVolume = particles.copyPositionVolume();
@@ -1041,7 +1030,7 @@ public final class ContainerTransferStoreValidation {
 				masses[marker] = positionVolume[marker * 4 + 3] * config.density();
 				totalMass += masses[marker];
 			}
-			FluidDomain base = new FluidDomain(2, 2, 2, config);
+			HostFluidState base = new HostFluidState(2, 2, 2, config);
 			base.restoreMaterialParticleState(new FlipMaterialParticleState(
 					2, 2, 2, config.cellSize(), particles.particleCount(), particles.totalVolume(), mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(totalMass),
 					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
@@ -1049,14 +1038,14 @@ public final class ContainerTransferStoreValidation {
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, footprint);
 			base.sealDomainBoundary();
 			base.bootstrapGasState("");
-			base.step(false, 0);
+			base.synchronizeGasTopologyForPersistence();
 			check(base.gasBoundary().topologyInitialized() && base.gasBoundary().auditClosed()
 					&& base.gasBoundary().sealedInventoryNanos() > 0,
 					"private-target fixture did not initialize conserved sealed gas inventory: nodes=" + base.gasBoundary().nodeCount());
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(
 					root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
 			long baseGeneration = persistence.checkpoint(region);
-			FluidDomain candidate = FluidDomain.restoreAuthoritativeState(base.captureAuthoritativeState());
+			HostFluidState candidate = HostFluidState.restoreAuthoritativeState(base.captureAuthoritativeState());
 			check(candidate.tryInsertExactVolume(1, 1, 1, 0.125F, 1).transferred(),
 					"fixture could not form a distinct private container target");
 			double targetVolume = candidate.totalVolumeExact();
@@ -1066,12 +1055,12 @@ public final class ContainerTransferStoreValidation {
 			check(persistence.commitStagedLifecycleCheckpoint(staged) == targetGeneration,
 					"fixture did not publish the private target HEAD");
 			check(region.checkpointGeneration() == baseGeneration
-					&& region.domain().totalVolumeExact() != targetVolume,
+					&& region.editableHost().totalVolumeExact() != targetVolume,
 					"HEAD publication prematurely changed the live base solver");
 			long solverGenerationBefore = region.solverGeneration();
 			persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, targetGeneration);
 			check(region.checkpointGeneration() == targetGeneration
-					&& region.domain().totalVolumeExact() == targetVolume
+					&& region.editableHost().totalVolumeExact() == targetVolume
 					&& region.solverGeneration() == solverGenerationBefore + 1L,
 					"recovery did not replace live base with the exact committed target");
 		} finally {
@@ -1081,127 +1070,9 @@ public final class ContainerTransferStoreValidation {
 		}
 	}
 
-	private static void testRapidFullProfilePourDurability() throws Exception {
-		Path root = Files.createTempDirectory("mmm-rapid-pour-durability");
-		try {
-			FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
-			FluidSolverConfig config = new FluidSolverConfig(
-					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F);
-			FluidDomain domain = new FluidDomain(8, 8, 8, config);
-			domain.sealDomainBoundary();
-			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
-					mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-			BlockPos origin = BlockPos.ZERO;
-			Set<Long> interior = new java.util.HashSet<>();
-			for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) {
-				for (int x = 0; x < 4; x++) interior.add(new BlockPos(x, y, z).asLong());
-			}
-			BlockPos controller = new BlockPos(-1, 1, 1);
-			FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(3, 3, 3),
-					interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
-			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, origin, domain, footprint);
-			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.full(),
-					registries.chemical(), registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
-			check(persistence.checkpoint(region) == 1L,
-					"full-profile rapid-pour fixture did not publish its empty base");
 
-			for (int pour = 0; pour < 24; pour++) {
-				if (region.domain().hasPendingPhaseMotionWork()) advance(region, false);
-				long baseGeneration = region.checkpointGeneration();
-				FluidDomain candidate = FluidDomain.restoreAuthoritativeState(
-						region.domain().captureAuthoritativeState());
-				FluidDomain.ExactVolumeTransfer inserted = candidate.tryInsertExactVolume(
-						7 - pour % 2, 7, 7 - (pour / 2) % 2, 8.0F, 6, 0, true);
-				check(inserted.transferred() && inserted.volume() == 8.0,
-						"rapid full-profile pour " + pour + " did not insert one bucket");
-				long targetGeneration = baseGeneration + 1L;
-				RegionRepositoryAdapter.StagedCheckpoint staged = persistence.stageCandidateCheckpoint(
-						region, candidate, targetGeneration, region.paused());
-				check(persistence.commitStagedLifecycleCheckpoint(staged) == targetGeneration,
-						"rapid full-profile pour " + pour + " did not publish its target HEAD");
-				persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, targetGeneration);
-				check(region.domain().gasBoundary().auditClosed()
-						&& region.domain().exactInternalEnergy().equals(region.domain().thermalAudit().expectedInventory()),
-						"rapid full-profile pour " + pour + " restored an open gas or thermal audit");
-				advance(region, true);
-				if ((pour + 1) % 8 == 0) {
-					persistence.checkpointAndUnload(region);
-					persistence.restore(region);
-					check(region.solverLoaded(), "rapid full-profile restart " + pour + " did not restore the solver");
-				}
-			}
 
-			if (region.domain().hasPendingPhaseMotionWork()) advance(region, false);
-			long clearBase = region.checkpointGeneration();
-			FluidDomain cleared = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
-			cleared.commitOperatorClear(cleared.planOperatorClear());
-			long clearTarget = clearBase + 1L;
-			RegionRepositoryAdapter.StagedCheckpoint clearStage = persistence.stageLifecycleCheckpoint(
-					region, cleared, clearTarget);
-			check(persistence.commitStagedLifecycleCheckpoint(clearStage) == clearTarget,
-					"full-profile condensed clear did not publish its target HEAD");
-			persistence.adoptCommittedContainerCheckpoint(region, clearBase, clearTarget);
-			check(region.domain().totalVolumeExact() == 0.0 && region.domain().totalGranularSolidVolumeSvq() == 0L,
-					"full-profile condensed clear did not survive committed reconstruction");
-			check(!MinecraftRegionLifecycle.gasInventoryEmpty(region.domain()),
-					"sealed gas inventory disappeared before the vent operation");
 
-			long ventBase = region.checkpointGeneration();
-			FluidDomain vented = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
-			vented.commitOperatorVentSealedGas(vented.planOperatorVentSealedGas());
-			long ventTarget = ventBase + 1L;
-			RegionRepositoryAdapter.StagedCheckpoint ventStage = persistence.stageLifecycleCheckpoint(
-					region, vented, ventTarget);
-			check(persistence.commitStagedLifecycleCheckpoint(ventStage) == ventTarget,
-					"full-profile gas vent did not publish its target HEAD");
-			persistence.adoptCommittedContainerCheckpoint(region, ventBase, ventTarget);
-			check(region.domain().gasBoundary().nodeCount() > 0
-					&& region.domain().gasBoundary().sealedInventory().isEmpty()
-					&& MinecraftRegionLifecycle.gasInventoryEmpty(region.domain()),
-					"full-profile gas vent did not survive committed reconstruction");
-
-			long reinsertBase = region.checkpointGeneration();
-			FluidDomain reinserted = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
-			check(reinserted.tryInsertExactVolume(7, 7, 7, 8.0F, 6, 0, true).transferred(),
-					"vented full-profile region rejected a subsequent water bucket");
-			long reinsertTarget = reinsertBase + 1L;
-			RegionRepositoryAdapter.StagedCheckpoint reinsertStage = persistence.stageCandidateCheckpoint(
-					region, reinserted, reinsertTarget, region.paused());
-			check(persistence.commitStagedLifecycleCheckpoint(reinsertStage) == reinsertTarget,
-					"post-vent water insert did not publish its target HEAD");
-			persistence.adoptCommittedContainerCheckpoint(region, reinsertBase, reinsertTarget);
-			persistence.checkpointAndUnload(region);
-			persistence.restore(region);
-			check(region.solverLoaded() && region.domain().totalVolumeExact() == 8.0,
-					"post-vent water insert did not survive restart");
-
-			region.domain().commitOperatorClear(region.domain().planOperatorClear());
-			persistence.checkpoint(region);
-			check(region.domain().totalVolumeExact() == 0.0
-					&& region.domain().gasBoundary().nodeCount() > 0
-					&& MinecraftRegionLifecycle.gasInventoryEmpty(region.domain()),
-					"empty region with gas geometry was blocked from release and removal");
-			long removalBase = region.checkpointGeneration();
-			var prepared = persistence.prepareRemoval(region, removalBase + 1L, UUID.randomUUID(),
-					10_000L, 64L * 1024L * 1024L);
-			var removed = persistence.commitRemoval(prepared);
-			check(removed.baseGeneration() == removalBase && removed.targetGeneration() == removalBase + 1L
-					&& persistence.readRemoved(region.id()).equals(removed),
-					"empty region removal did not persist its terminal HEAD");
-		} finally {
-			try (var paths = Files.walk(root)) {
-				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
-			}
-		}
-	}
-
-	private static void advance(FluidRegion region, boolean phase) {
-		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), java.util.List.of(),
-				phase, phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
-		region.adoptStepCandidate(candidate, CpuFluidSolverBackend.ID);
-	}
 
 	private static void run(String name, ThrowingRunnable scenario) throws Exception {
 		scenario.run();

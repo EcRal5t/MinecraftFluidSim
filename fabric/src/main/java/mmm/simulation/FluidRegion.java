@@ -1,11 +1,12 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.api.RegionAvailabilityReason;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidDomainState;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.FiniteThermalDeviceInventory;
-import mmm.thermal.FiniteThermalExchange;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.FluidStepCandidate;
 import mmm.fluid.FluidThermalStepCandidate;
@@ -15,8 +16,6 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
 import java.util.Objects;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,7 +31,8 @@ public final class FluidRegion {
 	private FluidRegionFootprint footprint;
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
-	private FluidDomain domain;
+	private HostFluidState domain;
+	private mmm.fluid.FluidSolverBackend solverBackend;
 	private mmm.fluid.FluidStateAccess residentState;
 	private Runnable committedObservationListener = () -> { };
 	/** Runtime-only owner revision for synchronous backend candidates; HEAD generation remains independent. */
@@ -44,7 +44,7 @@ public final class FluidRegion {
 	private long snapshotSequence;
 	private long tick;
 	private double lastStepMilliseconds;
-	private FluidDomain.StepStats lastStats;
+	private FluidDomainContracts.StepStats lastStats;
 	private CollisionStats lastCollisionStats = CollisionStats.EMPTY;
 	private boolean collisionRefreshRequired;
 	private boolean entityPhysicsEnabled = true;
@@ -62,14 +62,43 @@ public final class FluidRegion {
 	private FiniteThermalDeviceInventory finiteThermalDevices;
 	private List<mmm.fluid.FluidStateAccess.DevicePort> finiteThermalPorts = List.of();
 	private List<int[]> activityConnections = List.of();
+	private boolean devicePortsDirty = true;
 	private boolean[] worldAvailability;
 	private boolean[] groupAvailability;
 	private double[] boundaryTemperatures;
+	private boolean boundaryTemperaturesKnown;
+
+	void solverBackend(mmm.fluid.FluidSolverBackend backend) { solverBackend = Objects.requireNonNull(backend); }
+
+    boolean pauseForUnavailableDevice() {
+        String reason = solverBackend == null ? null : solverBackend.unavailableReason();
+        if (reason == null) return false;
+        if (residentState != null) {
+            unloadedResumeState = lifecycle.state();
+            releaseResidentState();
+            domain = null;
+            finiteThermalDevices = null;
+            finiteThermalPorts = List.of();
+            lifecycle.requestUnload(true, true);
+        }
+        lifecycle.blockAvailability(RegionAvailabilityReason.NUMERICAL_PAUSE, "Vulkan 设备不可用：" + reason);
+        return true;
+    }
+
+	void ensureDeviceResident() {
+		if (domain == null || solverBackend == null || solverBackend.unavailableReason() != null) return;
+		try (var prepared = solverBackend.prepareState(null, domain.captureAuthoritativeState(), finiteThermalDevices, finiteThermalPorts)) {
+			boundaryTemperatures = domain.thermalBoundaryTemperatures();
+			boundaryTemperaturesKnown = true;
+			residentState = prepared.commit();
+			domain = null;
+		}
+	}
 
 	void committedObservationListener(Runnable listener) { committedObservationListener = Objects.requireNonNull(listener); }
 	void publishCommittedObservation() { committedObservationListener.run(); }
 
-	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FluidDomain domain) {
+	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, HostFluidState domain) {
 		this(id, dimension, origin, domain, null);
 	}
 
@@ -77,7 +106,7 @@ public final class FluidRegion {
 			UUID id,
 			ResourceKey<Level> dimension,
 			BlockPos origin,
-			FluidDomain domain,
+			HostFluidState domain,
 			FluidRegionFootprint footprint
 	) {
 		this(id, dimension, origin, Objects.requireNonNull(domain, "domain").sizeX(), domain.sizeY(), domain.sizeZ(),
@@ -94,7 +123,7 @@ public final class FluidRegion {
 			FluidSolverConfig solverConfig,
 			FluidRegionFootprint footprint,
 			long networkGeneration,
-			FluidDomain domain
+			HostFluidState domain
 	) {
 		this.id = Objects.requireNonNull(id, "id");
 		this.dimension = Objects.requireNonNull(dimension, "dimension");
@@ -158,20 +187,60 @@ public final class FluidRegion {
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public FluidSolverConfig solverConfig() { return solverConfig; }
-	/** Explicit editable host handoff, used by world edits and persistence. */
-	public FluidDomain domain() {
-		if (residentState != null) {
-			FluidDomain restored = FluidDomain.restoreAuthoritativeState(residentState.exportState());
-			var devices = residentState.finiteThermalDevices();
-			residentState.close(); residentState = null; domain = restored;
-			if (devices != null) finiteThermalDevices = devices;
-		}
+	/** Creates an independent host view of the committed device generation when needed. */
+	public HostFluidState hostSnapshot() {
+		return HostFluidState.restoreAuthoritativeState(captureHostState());
+	}
+
+	private FluidDomainState captureHostState() {
+		if (residentState != null) return residentState.exportState();
 		if (domain == null) throw new IllegalStateException("Region solver is unloaded");
+		return domain.captureAuthoritativeState();
+	}
+
+	/** Returns the editable state of a private host candidate or a newly initialized region. */
+	HostFluidState editableHost() {
+		if (residentState != null || domain == null) throw new IllegalStateException("Region has no editable host state");
 		return domain;
 	}
+
+	/** Creates a private editable successor; the committed generation remains available. */
+	HostFluidState beginHostEdit() { return hostSnapshot(); }
+
+	void commitHostEdit(long baseGeneration, HostFluidState successor) {
+		commitHostEdit(baseGeneration, successor, currentFiniteDevices(), finiteThermalPorts);
+	}
+
+	private FiniteThermalDeviceInventory currentFiniteDevices() {
+		return residentState == null ? finiteThermalDevices : residentState.finiteThermalDevices();
+	}
+
+	private void commitHostEdit(long baseGeneration, HostFluidState successor,
+			FiniteThermalDeviceInventory devices, List<mmm.fluid.FluidStateAccess.DevicePort> ports) {
+		if (!solverLoaded() || solverGeneration != baseGeneration || successor == domain)
+			throw new IllegalStateException("Host edit generation is stale");
+		long next = Math.addExact(baseGeneration, 1L);
+		if (residentState != null) {
+			if (solverBackend == null) throw new IllegalStateException("Region backend is unavailable");
+			try (var prepared = solverBackend.prepareState(residentState, successor.captureAuthoritativeState(), devices, ports)) {
+				var committed = prepared.commit();
+				releaseResidentState();
+				residentState = committed;
+				domain = null;
+			}
+		} else {
+			domain = successor;
+		}
+		finiteThermalDevices = devices;
+		boundaryTemperatures = successor.thermalBoundaryTemperatures();
+		boundaryTemperaturesKnown = true;
+		solverGeneration = next;
+		publishCommittedObservation();
+	}
+
 	mmm.fluid.FluidStateAccess captureSolverState() {
 		if (residentState != null) return residentState.retain();
-		var state = domain().captureAuthoritativeState();
+		var state = captureHostState();
 		var devices = finiteThermalDevices;
 		var ports = finiteThermalPorts;
 		return new mmm.fluid.FluidStateAccess() {
@@ -182,67 +251,145 @@ public final class FluidRegion {
 		};
 	}
 	mmm.fluid.FluidDomainState.Layout solverLayout() {
-		return residentState == null ? domain().authoritativeLayout() : residentState.layout();
+		return residentState == null ? editableHost().authoritativeLayout() : residentState.layout();
 	}
 	int solidMicroMask(int x,int y,int z) {
-		var device=deviceState(); return device==null?domain().solidMicroMask(x,y,z):device.fixedGeometry().mask((z*sizeY+y)*sizeX+x);
+		var device=deviceState(); return device==null?editableHost().solidMicroMask(x,y,z):device.fixedGeometry().mask((z*sizeY+y)*sizeX+x);
 	}
-	double fixedOpenVolume() { var device=deviceState(); return device==null?domain().fixedOpenVolumeExact():device.fixedGeometry().totalOpenCellVolume(); }
-	boolean worldCellAvailable(int cell) { return worldAvailability==null ? deviceResident() || domain().worldCellAvailable(cell) : worldAvailability[cell]; }
-	boolean groupAvailable(int cell) { return !deviceResident()?domain().groupAvailable(cell):groupAvailability==null || groupAvailability[cell]; }
+	double fixedOpenVolume() { var device=deviceState(); return device==null?editableHost().fixedOpenVolumeExact():device.fixedGeometry().totalOpenCellVolume(); }
+	boolean worldCellAvailable(int cell) { return worldAvailability==null ? deviceResident() || editableHost().worldCellAvailable(cell) : worldAvailability[cell]; }
+	boolean allWorldCellsAvailable() {
+		if (worldAvailability == null) return true;
+		for (boolean available : worldAvailability) if (!available) return false;
+		return true;
+	}
+	boolean groupAvailable(int cell) { return groupAvailability == null ? deviceResident() || editableHost().groupAvailable(cell) : groupAvailability[cell]; }
 	boolean prepareGroupAvailability(boolean[] available) {
-		if (deviceResident() && java.util.Arrays.equals(worldAvailability,available)) {
-			for(boolean value:groupAvailability) if(value)return true;
-			return false;
+		if (available == null || available.length != sizeX * sizeY * sizeZ)
+			throw new IllegalArgumentException("World availability has the wrong cell layout");
+		boolean allAvailable = true;
+		for (boolean cell : available) allAvailable &= cell;
+		worldAvailability = available.clone();
+		var device = deviceState();
+		if (allAvailable) {
+			groupAvailability = new boolean[available.length];
+			java.util.Arrays.fill(groupAvailability, true);
+		} else if (device != null) {
+			groupAvailability = device.activityGraph().available(available);
+		} else {
+			groupAvailability = new boolean[available.length];
 		}
-		var cpu=domain(); cpu.prepareGroupAvailability(available);
-		worldAvailability=available.clone(); groupAvailability=new boolean[available.length];
-		for(int cell=0;cell<available.length;cell++)groupAvailability[cell]=cpu.groupAvailable(cell);
-		return cpu.hasAvailableGroups();
+		if (allAvailable) return true;
+		if (device != null) for (int cell=0;cell<groupAvailability.length;cell++)
+			if (groupAvailability[cell] && device.fixedGeometry().mask(cell)!=255) return true;
+		return false;
 	}
+	boolean[] activityForBodies(List<mmm.world.MovingBodyFluidCoupling.Request> requested) {
+		if (worldAvailability == null) return null;
+		boolean all = true;
+		for (boolean available : worldAvailability) all &= available;
+		if (all) return null;
+		var device = deviceState();
+		if (device == null) return groupAvailability.clone();
+		var graph = device.activityGraph();
+		graph.joinBodyMotion(device.entityBodies(), new mmm.fluid.EntityBodyState(requested), solverConfig().cellSize());
+		groupAvailability = graph.available(worldAvailability);
+		return groupAvailability.clone();
+	}
+
 	double[] thermalBoundaryTemperatures() {
-		if(boundaryTemperatures==null && !deviceResident())boundaryTemperatures=domain().thermalBoundaryTemperatures();
-		return boundaryTemperatures==null?null:boundaryTemperatures.clone();
+		if (!boundaryTemperaturesKnown) {
+			boundaryTemperatures = residentState == null ? editableHost().thermalBoundaryTemperatures() : hostSnapshot().thermalBoundaryTemperatures();
+			boundaryTemperaturesKnown = true;
+		}
+		return boundaryTemperatures == null ? null : boundaryTemperatures.clone();
 	}
 	boolean replaceThermalBoundaryTemperatures(double[] temperatures) {
-		if(java.util.Arrays.equals(boundaryTemperatures,temperatures))return false;
-		boolean changed=domain().replaceThermalBoundaryTemperatures(temperatures);
-		boundaryTemperatures=temperatures.clone();return changed;
+		if (java.util.Arrays.equals(thermalBoundaryTemperatures(), temperatures)) return false;
+		long generation = solverGeneration;
+		if (residentState instanceof mmm.fluid.ResidentFluidState device) {
+			long next = Math.addExact(generation, 1L);
+			try (var prepared = solverBackend.prepareThermalBoundary(device, temperatures)) {
+				if (solverGeneration != generation || !prepared.layout().equals(solverLayout()))
+					throw new IllegalStateException("Thermal boundary candidate is stale");
+				var committed = prepared.commit();
+				releaseResidentState();
+				residentState = committed;
+				solverGeneration = next;
+			}
+			boundaryTemperatures = temperatures.clone();
+			boundaryTemperaturesKnown = true;
+			publishCommittedObservation();
+			return true;
+		}
+		var edit = beginHostEdit();
+		boolean changed = edit.replaceThermalBoundaryTemperatures(temperatures);
+		if (changed) commitHostEdit(generation, edit);
+		boundaryTemperatures = temperatures == null ? null : temperatures.clone();
+		boundaryTemperaturesKnown = true;
+		return changed;
 	}
+
 	private mmm.fluid.ResidentFluidState deviceState() {
 		return residentState instanceof mmm.fluid.ResidentFluidState device ? device : null;
 	}
 	mmm.fluid.ResidentFluidState.InventorySummary inventorySummary() { var device=deviceState(); return device==null?null:device.inventorySummary(); }
 	boolean hasThermalState() { return solverLoaded() && !solverLayout().thermalRegistryFingerprint().isEmpty(); }
-	mmm.fluid.EntityBodyState entityBodyState() { var device=deviceState(); return device==null?domain().entityBodyState():device.entityBodies(); }
-	mmm.thermal.ThermalAuditLedger thermalAudit() { var device=deviceState(); return device==null?domain().thermalAudit():device.thermalAudit(); }
-	boolean thermalAuditClosed() { var device=deviceState(); return device==null?domain().thermalAudit().acceptsInventory(domain().exactInternalEnergy()):device.observation().thermalAuditClosed(); }
-	boolean hasPendingPhaseMotionWork() { var device=deviceState(); return device==null?domain().hasPendingPhaseMotionWork():device.observation().pendingPhaseMotion(); }
-	float maximumSpeed() { var device=deviceState(); return device==null?domain().maximumParticleSpeed():device.observation().maximumSpeed(); }
-	boolean gasPressureFlow() { var device=deviceState(); return device==null?domain().gasBoundary().hasPressureDrivenFlow():device.observation().gasPressureFlow(); }
-	boolean granularQuiet() { var device=deviceState(); return device==null?domain().granularReadyForHydrostaticSleep():device.observation().granularQuiet(); }
-	int liquidRowCount() { var device=deviceState(); return device==null?domain().particleCount():device.observation().liquidRows(); }
-	double liquidVolume() { var device=deviceState(); return device==null?domain().totalVolumeExact():device.observation().liquidVolume(); }
+	boolean hasMaterialState() { return solverLoaded() && !solverLayout().materials().isEmpty(); }
+	boolean hasChemistryState() { return solverLoaded() && !solverLayout().chemicalRegistryFingerprint().isEmpty(); }
+	boolean hasGranularState() { return solverLoaded() && !solverLayout().granularRegistryFingerprint().isEmpty(); }
+	int materialHandle(String id) {
+		var materials = solverLayout().materials();
+		for (int i = 0; i < materials.size(); i++) if (materials.get(i).id().equals(id)) return i;
+		throw new IllegalArgumentException("Material is absent: " + id);
+	}
+	mmm.fluid.EntityBodyState entityBodyState() { var device=deviceState(); return device==null?editableHost().entityBodyState():device.entityBodies(); }
+	mmm.thermal.ThermalAuditLedger thermalAudit() { var device=deviceState(); return device==null?editableHost().thermalAudit():device.thermalAudit(); }
+	boolean thermalAuditClosed() { var device=deviceState(); return device==null?editableHost().thermalAudit().acceptsInventory(editableHost().exactInternalEnergy()):device.observation().thermalAuditClosed(); }
+	boolean hasPendingPhaseMotionWork() { var device=deviceState(); return device==null?editableHost().hasPendingPhaseMotionWork():device.observation().pendingPhaseMotion(); }
+	boolean hasPendingPhaseMotionWork(boolean[] active) {
+		var device=deviceState();return device==null?editableHost().hasPendingPhaseMotionWork():device.hasPendingPhaseMotion(active);
+	}
+	float maximumSpeed() { var device=deviceState(); return device==null?editableHost().maximumParticleSpeed():device.observation().maximumSpeed(); }
+	boolean gasPressureFlow() { var device=deviceState(); return device==null?editableHost().gasBoundary().hasPressureDrivenFlow():device.observation().gasPressureFlow(); }
+	boolean granularQuiet() { var device=deviceState(); return device==null?editableHost().granularReadyForHydrostaticSleep():device.observation().granularQuiet(); }
+	int liquidRowCount() { var device=deviceState(); return device==null?editableHost().particleCount():device.observation().liquidRows(); }
+	double liquidVolume() { var device=deviceState(); return device==null?editableHost().totalVolumeExact():device.observation().liquidVolume(); }
 	mmm.fluid.ResidentFluidState.Display display() {
 		var device=deviceState(); if(device!=null)return device.display();
-		var cpu=domain(); return new mmm.fluid.ResidentFluidState.Display(cpu.copyMaterialRenderSnapshot(),
+		var cpu=editableHost(); return new mmm.fluid.ResidentFluidState.Display(cpu.copyMaterialRenderSnapshot(),
 				cpu.hasChemistryState()?cpu.copyChemicalDisplaySnapshot():null,
 				cpu.hasGranularState()?cpu.copyGranularDisplaySnapshot():null,
 				cpu.hasThermalState()?cpu.copyThermalDisplaySnapshot():null);
 	}
-	mmm.fluid.FluidDomain.BodyFluidSample sampleBody(double x0,double y0,double z0,double x1,double y1,double z1) {
-		var device=deviceState(); return device==null?domain().sampleAxisAlignedBody(x0,y0,z0,x1,y1,z1):device.sampleBody(x0,y0,z0,x1,y1,z1);
+	mmm.fluid.FluidDomainContracts.BodyFluidSample sampleBody(double x0,double y0,double z0,double x1,double y1,double z1) {
+		var device=deviceState(); return device==null?editableHost().sampleAxisAlignedBody(x0,y0,z0,x1,y1,z1):device.sampleBody(x0,y0,z0,x1,y1,z1);
 	}
 	mmm.fluid.FluidCellInventoryView observeCellInventory(int x,int y,int z) {
-        var device=deviceState();return device==null?domain().observeCellInventory(x,y,z):device.observeCellInventory(x,y,z);
+        var device=deviceState();return device==null?editableHost().observeCellInventory(x,y,z):device.observeCellInventory(x,y,z);
     }
-    List<FluidDomain.WaterContact> waterContacts(List<FluidDomain.WaterContactFace> faces) {
-        var device=deviceState();return device==null?domain().waterContacts(faces):device.waterContacts(faces);
+    mmm.fluid.CellCarrierInventoryView observeCellCarriers(int x, int y, int z) {
+        var device = deviceState(); return device == null ? editableHost().observeCellCarriers(x, y, z) : device.observeCellCarriers(x, y, z);
+    }
+    boolean hasGranularOccupancy(int x, int y, int z) {
+        var device = deviceState(); return device == null ? editableHost().granularSolidVolumeSvq(x, y, z) > 0 : device.hasGranularOccupancy(x, y, z);
+    }
+    boolean hasCondensedInventory(int x, int y, int z) {
+        var device = deviceState();
+        if (device == null) return editableHost().hasCondensedInventoryInCell(x, y, z);
+        if (device.observeCellInventory(x, y, z) != null) return true;
+        var carriers = device.observeCellCarriers(x, y, z);
+        return carriers != null && !carriers.solids().isEmpty();
+    }
+    List<FluidDomainContracts.WaterContact> waterContacts(List<FluidDomainContracts.WaterContactFace> faces) {
+        var device=deviceState();return device==null?editableHost().waterContacts(faces):device.waterContacts(faces);
     }
 	boolean deviceResident() { return residentState != null; }
 	public boolean solverLoaded() { return domain != null || residentState != null; }
 	private void releaseResidentState() {
-		if (residentState != null) { residentState.close(); residentState = null; }
+		var previous = residentState;
+		residentState = null;
+		if (previous != null) previous.close();
 	}
 
 	/** Discards an unregistered transient region after its final removal has been published. */
@@ -260,37 +407,24 @@ public final class FluidRegion {
 	 */
 	void adoptStepCandidate(FluidStepCandidate candidate, String expectedBackendId) {
 		Objects.requireNonNull(candidate, "candidate");
-		var preparedDevice = candidate.claimPreparedDeviceState();
-		if (preparedDevice != null) {
-			adoptDeviceState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
-					candidate.layout(), preparedDevice, expectedBackendId);
-			return;
-		}
-		FluidDomain preparedCpuDomain = candidate.claimPreparedCpuDomain();
-		adoptCandidateState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
-				candidate.layout(), preparedCpuDomain,
-				preparedCpuDomain == null ? candidate.state() : null, expectedBackendId);
+		adoptDeviceState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
+				candidate.layout(), Objects.requireNonNull(candidate.claimPreparedDeviceState()), expectedBackendId);
 	}
 
-	/** Applies the same atomic identity/layout gate to a thermal-only private backend successor. */
 	void adoptThermalStepCandidate(FluidThermalStepCandidate candidate, String expectedBackendId) {
 		Objects.requireNonNull(candidate, "candidate");
-		var preparedDevice = candidate.claimPreparedDeviceState();
-		if (preparedDevice != null) {
-			adoptDeviceState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
-					candidate.layout(), preparedDevice, expectedBackendId);
-			return;
-		}
-		FluidDomain preparedCpuDomain = candidate.claimPreparedCpuDomain();
-		adoptCandidateState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
-				candidate.layout(), preparedCpuDomain,
-				preparedCpuDomain == null ? candidate.state() : null, expectedBackendId);
+		adoptDeviceState(candidate.backendId(), candidate.baseGeneration(), candidate.candidateGeneration(),
+				candidate.layout(), Objects.requireNonNull(candidate.claimPreparedDeviceState()), expectedBackendId);
 	}
 
 	private void adoptDeviceState(String backendId, long baseGeneration, long candidateGeneration,
 			FluidDomainState.Layout candidateLayout, mmm.fluid.PreparedFluidState prepared, String expectedBackendId) {
 		try (prepared) {
 			validateCandidateIdentity(backendId, baseGeneration, candidateGeneration, candidateLayout, expectedBackendId);
+			if (!boundaryTemperaturesKnown && domain != null) {
+				boundaryTemperatures = domain.thermalBoundaryTemperatures();
+				boundaryTemperaturesKnown = true;
+			}
 			var committed = prepared.commit();
 			releaseResidentState();
 			residentState = committed;
@@ -309,39 +443,12 @@ public final class FluidRegion {
 			throw new IllegalStateException("Backend candidate changed the live solver layout");
 	}
 
-	private void adoptCandidateState(
-			String backendId, long baseGeneration, long candidateGeneration,
-			FluidDomainState.Layout candidateLayout, FluidDomain preparedCpuDomain,
-			FluidDomainState materializedState, String expectedBackendId
-	) {
-		validateCandidateIdentity(backendId, baseGeneration, candidateGeneration, candidateLayout, expectedBackendId);
-		FluidDomain replacement = preparedCpuDomain == null
-				? FluidDomain.restoreAuthoritativeState(Objects.requireNonNull(materializedState, "materializedState"))
-				: preparedCpuDomain;
-		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
-				|| !replacement.config().equals(solverConfig)) {
-			throw new IllegalStateException("Backend candidate layout is incompatible with the live region");
-		}
-		releaseResidentState();
-		domain = replacement;
-		solverGeneration = candidateGeneration;
-		publishCommittedObservation();
+	void adoptCollisionCandidate(long baseGeneration, HostFluidState candidate) {
+		if (!candidate.authoritativeLayout().equals(solverLayout()))
+			throw new IllegalStateException("Collision candidate layout changed");
+		commitHostEdit(baseGeneration, candidate);
 	}
 
-
-	/** Validates all carrier topology before publishing a synchronous world-collision successor. */
-	void adoptCollisionCandidate(FluidDomain original, long baseGeneration, FluidDomain candidate) {
-		Objects.requireNonNull(candidate, "candidate");
-		if (domain != original || solverGeneration != baseGeneration || candidate == original
-				|| !candidate.authoritativeLayout().equals(domain.authoritativeLayout())) {
-			throw new IllegalStateException("Collision candidate identity, generation or layout changed");
-		}
-		long nextGeneration = Math.addExact(solverGeneration, 1L);
-		candidate.captureAuthoritativeState();
-		domain = candidate;
-		solverGeneration = nextGeneration;
-		publishCommittedObservation();
-	}
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
 	public long networkGeneration() { return networkGeneration; }
@@ -388,8 +495,8 @@ public final class FluidRegion {
 	long incrementTick() { return ++tick; }
 	long tick() { return tick; }
 	double lastStepMilliseconds() { return lastStepMilliseconds; }
-	FluidDomain.StepStats lastStats() { return lastStats; }
-	void recordStep(FluidDomain.StepStats stats, double milliseconds) {
+	FluidDomainContracts.StepStats lastStats() { return lastStats; }
+	void recordStep(FluidDomainContracts.StepStats stats, double milliseconds) {
 		lastStats = Objects.requireNonNull(stats, "stats");
 		lastStepMilliseconds = milliseconds;
 	}
@@ -472,17 +579,25 @@ public final class FluidRegion {
 		if (availabilityReason() == RegionAvailabilityReason.PERFORMANCE_PAUSE) setAvailabilityFailure(null);
 	}
 
+	boolean devicePortsDirty() { return devicePortsDirty; }
+
 	void replaceDevicePorts(List<mmm.fluid.FluidStateAccess.DevicePort> ports, List<int[]> connections) {
 		boolean changed = !finiteThermalPorts.equals(ports) || activityConnections.size() != connections.size();
 		for (int i=0; !changed && i<connections.size(); i++) changed = !java.util.Arrays.equals(activityConnections.get(i),connections.get(i));
-		if (!changed) return;
-		domain().replaceActivityConnections(connections);
+		if (!changed) { devicePortsDirty = false; return; }
+		long generation = solverGeneration;
+		var edit = beginHostEdit();
+		edit.replaceActivityConnections(connections);
+		commitHostEdit(generation, edit, currentFiniteDevices(), List.copyOf(ports));
 		finiteThermalPorts = List.copyOf(ports);
 		activityConnections = connections.stream().map(int[]::clone).toList();
+		devicePortsDirty = false;
+		worldAvailability = null;
+		groupAvailability = null;
 	}
 
 	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
-	boolean hasFiniteThermalDevices() { return finiteThermalDevices != null && !finiteThermalDevices.devices().isEmpty(); }
+	boolean hasFiniteThermalDevices() { var devices = currentFiniteDevices(); return devices != null && !devices.devices().isEmpty(); }
 
 	public FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint) {
 		FiniteThermalDeviceInventory current = residentState == null ? finiteThermalDevices : residentState.finiteThermalDevices();
@@ -506,96 +621,33 @@ public final class FluidRegion {
 			throw new IllegalStateException("Finite thermal device truth changed while restoring a checkpoint");
 		}
 		finiteThermalDevices = inventory;
+		devicePortsDirty = true;
 	}
 
-	public record FiniteThermalCellBinding(int ordinal, int cellX, int cellY, int cellZ) {
-		public FiniteThermalCellBinding {
-			if (ordinal < 0) throw new IllegalArgumentException("Finite thermal cell binding ordinal is invalid");
-		}
-	}
 
 	FluidRegion finiteDeviceCandidate(FiniteThermalDeviceInventory inventory, ThermalRegistry registry) {
 		inventory.requireCompatible(registry);
-		var candidate = lifecycleCandidate(FluidDomain.restoreAuthoritativeState(domain().captureAuthoritativeState()), paused());
+		var candidate = lifecycleCandidate(beginHostEdit(), paused());
 		candidate.finiteThermalDevices = inventory;
 		return candidate;
 	}
 
 	void adoptFiniteDeviceCandidate(FluidRegion candidate, long publishedGeneration) {
 		if (!id.equals(candidate.id)) throw new IllegalArgumentException("Finite device candidate belongs to another region");
-		adoptPublishedPrivateDomain(candidate.domain, publishedGeneration, candidate.paused());
-		finiteThermalDevices = candidate.finiteThermalDevices;
+		var devices = candidate.finiteThermalDevices;
+		var ports = finiteThermalPorts.stream().filter(port -> devices != null && devices.devices().stream()
+				.anyMatch(device -> device.providerId().equals(port.providerId()) && device.objectId().equals(port.objectId())))
+				.toList();
+		adoptPublishedPrivateDomain(candidate.domain, publishedGeneration, candidate.paused(), devices, ports);
+		finiteThermalPorts = ports;
+		devicePortsDirty = true;
+		activityConnections = List.of();
+		worldAvailability = null;
+		groupAvailability = null;
 		footprint = candidate.footprint;
 		wakeForActivity();
 	}
 
-	/** Atomically applies one already-planned body/cell exchange inside this live region. */
-	public boolean commitFiniteThermalExchange(
-			String providerId, String objectId, FiniteThermalExchange.Plan exchange,
-			List<FiniteThermalCellBinding> bindings, ThermalRegistry registry
-	) {
-		return commitFiniteThermalExchange(providerId, objectId, exchange, bindings, registry, null);
-	}
-
-	public boolean commitFiniteThermalPortExchange(String providerId, String objectId,
-			FiniteThermalExchange.Plan exchange, List<FluidDomain.ThermalPortRequest> ports, ThermalRegistry registry) {
-		var bindings = exchange.initialContacts().stream().map(contact -> {
-			int cell = contact.ordinal();
-			return new FiniteThermalCellBinding(cell, cell % sizeX, cell / sizeX % sizeY, cell / (sizeX * sizeY));
-		}).toList();
-		return commitFiniteThermalExchange(providerId, objectId, exchange, bindings, registry, List.copyOf(ports));
-	}
-
-	private boolean commitFiniteThermalExchange(
-			String providerId, String objectId, FiniteThermalExchange.Plan exchange,
-			List<FiniteThermalCellBinding> bindings, ThermalRegistry registry, List<FluidDomain.ThermalPortRequest> ports
-	) {
-		Objects.requireNonNull(exchange, "exchange");
-		Objects.requireNonNull(bindings, "bindings");
-		Objects.requireNonNull(registry, "registry");
-		if (domain == null || !domain.hasThermalState()) {
-			throw new IllegalStateException("Finite thermal exchange requires a loaded thermal region");
-		}
-		if (lifecycle.operatorPaused() || lifecycle.availabilityFailure() != null
-				|| thermalActivity != null && thermalActivity.state() == ThermalActivity.State.PAUSED) {
-			throw new IllegalStateException("Finite thermal exchange cannot modify a paused or locked region");
-		}
-		if (!exchange.changed()) return false;
-		ArrayList<FiniteThermalCellBinding> canonical = new ArrayList<>(bindings);
-		if (canonical.size() != exchange.contacts().size() || canonical.stream().anyMatch(Objects::isNull)) {
-			throw new IllegalArgumentException("Finite thermal cell bindings do not match the exchange plan");
-		}
-		canonical.sort(Comparator.comparingInt(FiniteThermalCellBinding::ordinal));
-		ArrayList<FluidDomain.ThermalCellEnergyDelta> deltas = new ArrayList<>(canonical.size());
-		ArrayList<FluidDomain.ThermalContactRequest> contacts = new ArrayList<>(canonical.size());
-		for (int index = 0; index < canonical.size(); index++) {
-			FiniteThermalCellBinding binding = canonical.get(index);
-			FiniteThermalExchange.ContactDelta contact = exchange.contacts().get(index);
-			if (binding.ordinal() != contact.ordinal()) {
-				throw new IllegalArgumentException("Finite thermal cell binding ordinal changed");
-			}
-			deltas.add(new FluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
-					contact.internalEnergyDeltaJ(),contact.carriers()));
-			contacts.add(new FluidDomain.ThermalContactRequest(binding.ordinal(),
-					binding.cellX(), binding.cellY(), binding.cellZ(),
-					exchange.initialContacts().get(index).conductanceWPerK()));
-		}
-		if (!(ports == null ? domain.finiteThermalContacts(contacts) : domain.finiteThermalPortContacts(ports))
-				.equals(exchange.initialContacts())) {
-			throw new IllegalArgumentException("Finite thermal fluid contact plan is stale");
-		}
-		FiniteThermalDeviceInventory current = finiteThermalDevices(registry.fingerprint());
-		FiniteThermalDeviceInventory candidate = current.applyExchange(providerId, objectId, exchange);
-		candidate.requireCompatible(registry);
-		FluidDomain.FiniteThermalCellPlan cellPlan = domain.planFiniteThermalCellExchange(deltas);
-		long nextSolverGeneration = Math.addExact(solverGeneration, 1L);
-		domain.commitFiniteThermalCellExchange(cellPlan);
-		finiteThermalDevices = candidate;
-		solverGeneration = nextSolverGeneration;
-		wakeForActivity();
-		wakeThermal(ThermalActivity.WakeReason.FINITE_DEVICE_EXCHANGE);
-		return true;
-	}
 
 	public PersistedRuntime persistedRuntime() {
 		FluidRegionLifecycle.State resumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
@@ -605,7 +657,7 @@ public final class FluidRegion {
 	}
 
 	/** Creates an unregistered private candidate carrying the same persistent identity and runtime intent. */
-	FluidRegion lifecycleCandidate(FluidDomain candidateDomain, boolean operatorPaused) {
+	FluidRegion lifecycleCandidate(HostFluidState candidateDomain, boolean operatorPaused) {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
 		PersistedRuntime runtime = persistedRuntime();
 		FluidRegion candidate = new FluidRegion(id, dimension, origin, sizeX, sizeY, sizeZ, solverConfig,
@@ -618,50 +670,79 @@ public final class FluidRegion {
 		candidate.debugOverlays = runtime.debugOverlays();
 		candidate.stepIntervalTicks = runtime.stepIntervalTicks();
 		candidate.tick = runtime.tick();
-		candidate.finiteThermalDevices = finiteThermalDevices;
+		candidate.finiteThermalDevices = currentFiniteDevices();
+		candidate.finiteThermalPorts = finiteThermalPorts;
 		candidate.lifecycle.initializeLoaded(runtime.resumeState(), operatorPaused, runtime.stepIntervalTicks());
 		return candidate;
 	}
 
-	FluidRegion ownershipCandidate(FluidDomain domain, FluidRegionFootprint footprint) {
+	FluidRegion ownershipCandidate(HostFluidState domain, FluidRegionFootprint footprint) {
 		FluidRegion candidate = lifecycleCandidate(domain, true);
 		candidate.footprint = footprint;
 		return candidate;
 	}
 
 	void adoptOwnershipCandidate(FluidRegion candidate, long generation) {
-		adoptPublishedPrivateDomain(candidate.domain(), generation, true);
+		adoptPublishedPrivateDomain(candidate.editableHost(), generation, true);
 		footprint = candidate.footprint;
 	}
 
 	/** Adopts the exact solver which was already encoded and published as the lifecycle HEAD. */
 	void adoptLifecycleCandidateDomain(
-			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+			HostFluidState candidateDomain, long publishedGeneration, boolean operatorPaused
 	) {
 		adoptPublishedPrivateDomain(candidateDomain, publishedGeneration, operatorPaused);
 	}
 
 	/** Adopts a HEAD-published private container successor and invalidates every older solver candidate. */
 	void adoptContainerCandidateDomain(
-			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+			HostFluidState candidateDomain, long publishedGeneration, boolean operatorPaused
 	) {
 		adoptPublishedPrivateDomain(candidateDomain, publishedGeneration, operatorPaused);
 	}
 
+	private void adoptPublishedPrivateDomain(HostFluidState candidateDomain, long publishedGeneration, boolean operatorPaused) {
+		adoptPublishedPrivateDomain(candidateDomain, publishedGeneration, operatorPaused, currentFiniteDevices(), finiteThermalPorts);
+	}
+
 	private void adoptPublishedPrivateDomain(
-			FluidDomain candidateDomain, long publishedGeneration, boolean operatorPaused
+			HostFluidState candidateDomain, long publishedGeneration, boolean operatorPaused, FiniteThermalDeviceInventory devices,
+			List<mmm.fluid.FluidStateAccess.DevicePort> ports
 	) {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
-		long nextSolverGeneration = Math.addExact(solverGeneration, 1L);
-		if (!controllerManaged() || !solverLoaded() || publishedGeneration <= checkpointGeneration
-				|| candidateDomain.sizeX() != sizeX || candidateDomain.sizeY() != sizeY
-				|| candidateDomain.sizeZ() != sizeZ
-				|| !candidateDomain.config().equals(solverConfig)) {
-			throw new IllegalStateException("Published private candidate is incompatible with the live region");
+		try {
+			if (!controllerManaged() || !solverLoaded() || publishedGeneration <= checkpointGeneration
+					|| candidateDomain.sizeX() != sizeX || candidateDomain.sizeY() != sizeY
+					|| candidateDomain.sizeZ() != sizeZ
+					|| !candidateDomain.config().equals(solverConfig)) {
+				throw new IllegalStateException("Published private candidate is incompatible with the live region");
+			}
+			commitHostEdit(solverGeneration, candidateDomain, devices, ports);
+		} catch (RuntimeException | Error failure) {
+			// HEAD is already durable. Discard the old live generation and reload that HEAD
+			// before accepting another step or checkpoint.
+			if (!controllerManaged() || publishedGeneration <= checkpointGeneration) throw failure;
+			checkpointGeneration = publishedGeneration;
+			checkpointMarkerCount = candidateDomain.particleCount();
+			checkpointVolume = candidateDomain.totalVolume();
+			unloadedResumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
+					? FluidRegionLifecycle.State.ACTIVE : lifecycle.state();
+			lifecycle.setOperatorPaused(operatorPaused, stepIntervalTicks);
+			try { releaseResidentState(); } catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }
+			domain = null;
+			finiteThermalDevices = null;
+			finiteThermalPorts = List.of();
+			devicePortsDirty = true;
+			activityConnections = List.of();
+			worldAvailability = null;
+			groupAvailability = null;
+			boundaryTemperatures = null;
+			boundaryTemperaturesKnown = false;
+			lifecycle.requestUnload(true, true);
+			lifecycle.blockAvailability(RegionAvailabilityReason.SECTION_LOADING, "正在恢复已提交区域代次");
+			try { publishCommittedObservation(); } catch (RuntimeException | Error notifyFailure) { failure.addSuppressed(notifyFailure); }
+			throw failure;
 		}
-		releaseResidentState();
-		domain = candidateDomain;
-		solverGeneration = nextSolverGeneration;
 		checkpointGeneration = publishedGeneration;
 		checkpointMarkerCount = candidateDomain.particleCount();
 		checkpointVolume = candidateDomain.totalVolume();
@@ -696,7 +777,7 @@ public final class FluidRegion {
 		if(solverLoaded()||lifecycle.state()!=FluidRegionLifecycle.State.UNLOADED)throw new IllegalStateException("Only an unloaded region can restore its solver");
 		if(generation!=checkpointGeneration)throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		if(state.sizeX()!=sizeX()||state.sizeY()!=sizeY()||state.sizeZ()!=sizeZ()||!state.config().equals(solverConfig()))throw new IllegalArgumentException("Checkpoint solver geometry changed");
-		domain=FluidDomain.restoreAuthoritativeState(state);collisionRefreshRequired=true;lifecycle.restoreFromUnloaded(unloadedResumeState,stepIntervalTicks);
+		domain=HostFluidState.restoreAuthoritativeState(state);boundaryTemperatures=domain.thermalBoundaryTemperatures();boundaryTemperaturesKnown=true;collisionRefreshRequired=true;lifecycle.restoreFromUnloaded(unloadedResumeState,stepIntervalTicks);
 		publishCommittedObservation();
 	}
 

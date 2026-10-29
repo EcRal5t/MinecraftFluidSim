@@ -16,38 +16,14 @@ public final class AirNetwork {
 	public interface NodeThermodynamics {
 		double gaugePressure(int nodeId);
 		double density(int nodeId);
-		/** Standard volume per actual source volume, including the source temperature. */
-		default double standardVolumeRatio(int nodeId) {
-			return (REFERENCE_PRESSURE + gaugePressure(nodeId)) / REFERENCE_PRESSURE;
-		}
+
 		/** Standard-volume storage dVstd/dP at the actual thermal state (m³/Pa). */
 		default double pressureStorage(int nodeId) { return Double.NaN; }
 		/** Donor fraction whose outgoing enthalpy leaves positive-temperature inventory. */
 		default double maximumOutflowFraction(int nodeId) { return Math.nextDown(1.0); }
-		/** Actual candidate pressures, indexed in batch node order; null selects isothermal storage. */
-		default PortThermodynamics portThermodynamics(int first, int second) { return null; }
 
 	}
 
-	/** Continuous two-cavity response; inventory encoding is applied once after this solve. */
-	public record PortThermodynamics(int source, int target, double pressureDrop, double sourceDensity,
-	                                 double sourceRatio, double maximumVolume, double quantum,
-	                                 java.util.function.DoubleUnaryOperator pressureAfterTransfer) { }
-
-	@FunctionalInterface
-	public interface BatchTransferPlanner { TransferCommit plan(FlowBatch batch); }
-	public record GasTransfer(int source, int target, GasInventory moved) { }
-	public record FlowBatch(List<Integer> nodeIds, List<GasInventory> inventories, List<GasInventory> retained, List<GasTransfer> transfers) {
-		public FlowBatch {
-			nodeIds = List.copyOf(nodeIds); inventories = List.copyOf(inventories); retained = List.copyOf(retained); transfers = List.copyOf(transfers);
-		}
-	}
-
-	/** A fully validated cross-owner commit. Implementations must only publish prepared values. */
-	@FunctionalInterface
-	public interface TransferCommit {
-		void commitPrepared();
-	}
 	/** Reference (ambient) absolute pressure in Pa; gauge zero matches the solver convention. */
 	public static final double REFERENCE_PRESSURE = 101_325.0;
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
@@ -361,150 +337,6 @@ public final class AirNetwork {
 		return density;
 	}
 
-	/**
-	 * Quasi-static finite-orifice flow with frozen conductance and simultaneous inventory allocation.
-	 * Thermal flow solves the committed inventory/energy EOS; isothermal flow uses linear storage.
-	 * This models cavity equilibration; acoustic waves and resolved jets belong to the carrier solver.
-	 */
-	public void stepEdges(double dt) { stepEdges(dt,id->true); }
-	public void stepEdges(double dt,java.util.function.IntPredicate activeNode) {
-		stepEdges(dt, new NodeThermodynamics() {
-			@Override public double gaugePressure(int id) { return AirNetwork.this.gaugePressure(id); }
-			@Override public double density(int id) { return AirNetwork.this.density(id); }
-		}, batch -> () -> { },activeNode);
-	}
-
-	public void stepEdges(double dt, NodeThermodynamics thermodynamics, BatchTransferPlanner thermalPlanner) { stepEdges(dt,thermodynamics,thermalPlanner,id->true); }
-	public void stepEdges(double dt, NodeThermodynamics thermodynamics, BatchTransferPlanner thermalPlanner,
-			java.util.function.IntPredicate activeNode) {
-		if (!(Double.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Gas flow dt must be positive and finite");
-		Objects.requireNonNull(thermodynamics, "thermodynamics"); Objects.requireNonNull(thermalPlanner, "thermalPlanner");
-		Objects.requireNonNull(activeNode,"Active gas node selection");
-		if (edges.isEmpty()) return;
-		List<AirEdge> edges = this.edges.stream().filter(edge->(edge.firstNode()==0 || activeNode.test(edge.firstNode()))
-				&& (edge.secondNode()==0 || activeNode.test(edge.secondNode()))).sorted(java.util.Comparator
-				.comparingInt((AirEdge edge) -> Math.min(edge.firstNode(), edge.secondNode()))
-				.thenComparingInt(edge -> Math.max(edge.firstNode(), edge.secondNode()))).toList();
-		if(edges.isEmpty()) return;
-		if (thermodynamics.portThermodynamics(edges.getFirst().firstNode(), edges.getFirst().secondNode()) != null) {
-			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < edges.size(); j++) {
-				AirEdge edge = edges.get(pass == 0 ? j : edges.size() - 1 - j);
-				var port = thermodynamics.portThermodynamics(edge.firstNode(), edge.secondNode());
-				double amount = GasOrificeFlow.solveThermalPort(dt * .5, edge, port);
-				if (amount == 0) continue;
-				var ids = new ArrayList<Integer>(2);
-				if (edge.firstNode() != 0) ids.add(edge.firstNode());
-				if (edge.secondNode() != 0) ids.add(edge.secondNode());
-				ids.sort(Integer::compare);
-				var index = new java.util.HashMap<Integer, Integer>(); index.put(0, 0);
-				for (int i = 0; i < ids.size(); i++) index.put(ids.get(i), i + 1);
-				var batch = flowBatch(ids, index, new int[]{index.get(edge.firstNode())},
-						new int[]{index.get(edge.secondNode())},
-						new double[]{port.source() == edge.firstNode() ? amount : -amount}, thermodynamics);
-				commitPortFlow(batch, thermalPlanner);
-			}
-			return;
-		}
-		List<Integer> ids = nodeIds(); int count = ids.size();
-		var index = new java.util.HashMap<Integer, Integer>(); index.put(0, 0);
-		double[] pressure = new double[count + 1], storage = new double[count + 1], density = new double[count + 1], ratio = new double[count + 1];
-		density[0] = thermodynamics.density(0); ratio[0] = thermodynamics.standardVolumeRatio(0);
-		for (int i = 1; i <= count; i++) {
-			int id = ids.get(i - 1); index.put(id, i);
-			pressure[i] = thermodynamics.gaugePressure(id);
-			storage[i] = flowStorage(id, thermodynamics, pressure[i]);
-			density[i] = thermodynamics.density(id); ratio[i] = thermodynamics.standardVolumeRatio(id);
-		}
-		int[] first = new int[edges.size()], second = new int[edges.size()];
-		for (int e = 0; e < edges.size(); e++) { first[e] = index.get(edges.get(e).firstNode()); second[e] = index.get(edges.get(e).secondNode()); }
-		double[] transported = GasOrificeFlow.solve(dt, edges, first, second, pressure, storage, density, ratio);
-		FlowBatch batch = flowBatch(ids, index, first, second, transported, thermodynamics);
-		commitFlowBatch(batch, thermalPlanner);
-	}
-
-	/** Local exact-column closure prepares both owners before either publishes the port. */
-	private void commitPortFlow(FlowBatch batch, BatchTransferPlanner thermalPlanner) {
-		if (batch.transfers().isEmpty()) return;
-		var transfer = batch.transfers().getFirst();
-		var source = transfer.source() == 0 ? transfer.moved() : GasInventory.EMPTY;
-		var sink = transfer.target() == 0 ? transfer.moved() : GasInventory.EMPTY;
-		var before = batch.nodeIds().stream().map(this::inventory).toList();
-		for (var inventory : batch.inventories()) registry.requireCompatible(inventory);
-		GasRegionAudit.requireClosure(GasRegionAudit.aggregate(before), GasRegionAudit.aggregate(batch.inventories()),
-				GasAuditLedger.of(source), GasAuditLedger.of(sink));
-		var sourceAfter = externalSource.add(source); var sinkAfter = escapedSink.add(sink);
-		sourceAfter.standardVolumeNanos(); sinkAfter.standardVolumeNanos();
-		long expectedRevision = revision;
-		TransferCommit thermal = Objects.requireNonNull(thermalPlanner.plan(batch), "Gas thermal port plan");
-		if (revision != expectedRevision) throw new IllegalStateException("Gas port source changed after planning");
-		thermal.commitPrepared();
-		for (int i = 0; i < batch.nodeIds().size(); i++) nodes.get(batch.nodeIds().get(i)).setInventory(batch.inventories().get(i));
-		externalSource = sourceAfter; escapedSink = sinkAfter; lastCommittedPhasePlan = null; revision++;
-	}
-
-	private void commitFlowBatch(FlowBatch batch, BatchTransferPlanner thermalPlanner) {
-		if (batch.transfers().isEmpty()) return;
-		ArrayList<GasInventory> sources = new ArrayList<>(), sinks = new ArrayList<>();
-		for (var transfer : batch.transfers()) {
-			if (transfer.source() == 0) sources.add(transfer.moved());
-			if (transfer.target() == 0) sinks.add(transfer.moved());
-		}
-		InventoryBatchPlan gas = planInventoryBatch(batch.nodeIds(), batch.inventories(), GasRegionAudit.aggregate(sources), GasRegionAudit.aggregate(sinks));
-		TransferCommit thermal = Objects.requireNonNull(thermalPlanner.plan(batch), "Gas thermal flow plan");
-		requireInventoryBatchCurrent(gas);
-		thermal.commitPrepared(); commitInventoryBatch(gas);
-	}
-
-	private FlowBatch flowBatch(List<Integer> ids, java.util.Map<Integer, Integer> index,
-	                           int[] first, int[] second, double[] transported, NodeThermodynamics thermodynamics) {
-		ArrayList<ArrayList<Integer>> outgoing = new ArrayList<>();
-		for (int i = 0; i <= ids.size(); i++) outgoing.add(new ArrayList<>());
-		for (int e = 0; e < transported.length; e++) if (transported[e] != 0)
-			outgoing.get(transported[e] > 0 ? first[e] : second[e]).add(e);
-		GasInventory[] retained = new GasInventory[ids.size() + 1]; retained[0] = GasInventory.EMPTY;
-		for (int i = 1; i <= ids.size(); i++) retained[i] = inventory(ids.get(i - 1));
-		ArrayList<GasTransfer> transfers = new ArrayList<>();
-		long sourceCursor = externalSource.standardVolumeNanos();
-		for (int i = 0; i <= ids.size(); i++) {
-			var ports = outgoing.get(i); if (ports.isEmpty()) continue;
-			int id = i == 0 ? 0 : ids.get(i - 1);
-			if (i == 0) {
-				for (int edge : ports) {
-					long amount = quantizedVolume(Math.abs(transported[edge]));
-					if (amount == 0) continue;
-					int target = first[edge] == 0 ? second[edge] : first[edge];
-					var moved = registry.createAmbientInterval(sourceCursor, amount); sourceCursor = Math.addExact(sourceCursor, amount);
-					transfers.add(new GasTransfer(0, ids.get(target - 1), moved));
-				}
-				continue;
-			}
-			GasInventory donor = retained[i]; if (donor.isEmpty()) continue;
-			double requested = 0; for (int edge : ports) requested += Math.abs(transported[edge]);
-			double fraction = Math.min(Math.nextDown(1.0), thermodynamics.maximumOutflowFraction(id));
-			if (!(Double.isFinite(fraction) && fraction >= 0)) throw new IllegalArgumentException("Gas donor thermal fraction is invalid");
-			double scale = Math.min(1, cubicMeters(donor.standardVolumeNanos()) * fraction / requested);
-			long[] weights = new long[ports.size() + 1]; long total = 1L << 52, used = 0;
-			for (int j = 0; j < ports.size(); j++) {
-				double share = Math.abs(transported[ports.get(j)]) * scale / cubicMeters(donor.standardVolumeNanos());
-				weights[j + 1] = Math.min(total - 1 - used, Math.max(0, (long) Math.floor(share * total)));
-				used += weights[j + 1];
-			}
-			weights[0] = total - used;
-			var shares = donor.partitionTransport(weights, externalSource.standardVolumeNanos() ^ Long.rotateLeft(escapedSink.standardVolumeNanos(), 23)); retained[i] = shares.getFirst();
-			for (int j = 0; j < ports.size(); j++) {
-				var moved = shares.get(j + 1); if (moved.isEmpty()) continue;
-				int edge = ports.get(j), target = first[edge] == i ? second[edge] : first[edge];
-				transfers.add(new GasTransfer(id, target == 0 ? 0 : ids.get(target - 1), moved));
-			}
-		}
-		var donorRemainders = List.copyOf(java.util.Arrays.asList(java.util.Arrays.copyOfRange(retained, 1, retained.length)));
-		for (var transfer : transfers) if (transfer.target() != 0) {
-			int target = index.get(transfer.target()); retained[target] = retained[target].merge(transfer.moved());
-		}
-		var after = java.util.Arrays.asList(java.util.Arrays.copyOfRange(retained, 1, retained.length));
-		return new FlowBatch(ids, after, donorRemainders, transfers);
-	}
-
 	private double flowStorage(int node, NodeThermodynamics thermal, double pressure) {
 		double value = thermal == null ? Double.NaN : thermal.pressureStorage(node);
 		if (Double.isNaN(value)) {
@@ -522,11 +354,6 @@ public final class AirNetwork {
 			minimum = Math.min(minimum, nanosForMass * inventory.standardVolumeNanos() / component.standardVolumeNanos());
 		}
 		return minimum * AirNode.NANO_VOLUME;
-	}
-
-	private static long quantizedVolume(double volume) {
-		if (!(volume >= 0 && Double.isFinite(volume))) throw new IllegalArgumentException("Gas transported volume is invalid");
-		return volume >= cubicMeters(Long.MAX_VALUE) ? Long.MAX_VALUE : (long) Math.floor(volume / AirNode.NANO_VOLUME);
 	}
 
 	/** Fixed-node inventory replacement shared by flow and batched phase changes. */

@@ -5,7 +5,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import mmm.application.RegionCatalog;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidSolverConfig;
 import mmm.network.DemoAction;
 import mmm.network.DemoActionPayload;
@@ -245,6 +245,6 @@ public final class DemoInteractionValidation {
 		public boolean setPaused(boolean paused) { if (failPause) return false; manager.selected().setPaused(paused); return true; }
 		public int step() { if (failStep) return 0; steps++; return 1; }
 		private ResourceKey<Level> key() { return ResourceKey.create(Registries.DIMENSION, Identifier.parse(dimension)); }
-		private FluidDomain domain() { return new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 48, 1e-4F, .002F)); }
+		private HostFluidState domain() { return new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 48, 1e-4F, .002F)); }
 	}
 }

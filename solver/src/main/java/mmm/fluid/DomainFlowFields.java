@@ -3,12 +3,13 @@ package mmm.fluid;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Comparator;
-import static mmm.fluid.FluidDomain.*;
+import static mmm.fluid.HostFluidState.*;
+import static mmm.fluid.FluidDomainContracts.*;
 
 /** Rebuilds the liquid inventory grid, shared geometry, velocity and surface-tension fields. */
 final class DomainFlowFields {
-	private final FluidDomain domain;
-	DomainFlowFields(FluidDomain domain) { this.domain = domain; }
+	private final HostFluidState domain;
+	DomainFlowFields(HostFluidState domain) { this.domain = domain; }
 	float pressureDensityScale(int first, int second) {
 		if (isFluid(first) && isFluid(second)) {
 			return (float) (domain.config.density() / materialFaceEffectiveDensity(first, second));
@@ -47,7 +48,7 @@ final class DomainFlowFields {
 	private double materialFaceDensityFraction(int first, int second) {
 		double fraction = 0.5;
 		int firstPhase = dominantPhase(first), secondPhase = dominantPhase(second);
-		if (firstPhase != FluidDomain.NO_PHASE && secondPhase != FluidDomain.NO_PHASE && firstPhase != secondPhase) {
+		if (firstPhase != HostFluidState.NO_PHASE && secondPhase != HostFluidState.NO_PHASE && firstPhase != secondPhase) {
 			double firstSigned = phaseFraction(first, firstPhase) - 0.5;
 			double secondSigned = phaseFraction(second, firstPhase) - 0.5;
 			double denominator = firstSigned - secondSigned;
@@ -58,7 +59,7 @@ final class DomainFlowFields {
 		return fraction;
 	}
 	int dominantPhase(int cell) {
-		int dominant = FluidDomain.NO_PHASE;
+		int dominant = HostFluidState.NO_PHASE;
 		double dominantVolume = -1.0;
 		for (int entry = domain.liquidGrid.cellPhaseHead[cell]; entry >= 0; entry = domain.liquidGrid.phaseEntryNext[entry]) {
 			double candidateVolume = domain.liquidGrid.phaseEntryVolume[entry];
@@ -254,7 +255,7 @@ final class DomainFlowFields {
 		if (!Float.isFinite(amount) || amount < 0.0F) throw new IllegalArgumentException("amount must be finite and non-negative");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 	}
-	void validateMaterialPortion(FluidDomain.MaterialPortion portion) {
+	void validateMaterialPortion(FluidDomainContracts.MaterialPortion portion) {
 		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
 				&& portion.volume() <= Float.MAX_VALUE)
 				|| portion.massUnits() < 0L) {

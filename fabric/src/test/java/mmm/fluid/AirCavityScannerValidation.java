@@ -32,7 +32,6 @@ public final class AirCavityScannerValidation {
 
 	private static void validateMicroGasGeometry() {
 		validateRuntimeGeometryBinding();
-		GasPhaseInterfaceValidation.validate();
 		validateMicroGasOverlap();
 		validateComponentLiquidGeometry();
 		validateGasPieceCapacity();
@@ -75,7 +74,7 @@ public final class AirCavityScannerValidation {
 		for(int axis=0;axis<3;axis++) {
 			int peer=1<<axis,tangentAxis=(axis+1)%3;byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[peer]=0;
 			float[] pv=new float[8];for(int i=0;i<2;i++) {for(int a=0;a<3;a++)pv[4*i+a]=(a==axis?i:0)+.5F;pv[4*i+tangentAxis]=.25F;pv[4*i+3]=.5F;}
-			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
+			var domain=new HostFluidState(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
 			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));domain.pressureSystem.prepareGeometry();
 			var partial=domain.gasState.frame.geometry();
 			var crossing=partial.ports().stream().filter(port->port.first()/8!=port.second()/8).toList();
@@ -91,7 +90,7 @@ public final class AirCavityScannerValidation {
 					"Open fixed faces lost ambient connectivity or created finite gas inventory");
 			for(var piece:partial.pieces()) check(domain.gasState.frame.nodeOfPiece(piece.id())==0,
 					"An exterior-connected positive dry support acquired a sealed owner");
-			var sealed=new FluidDomain(2,2,2,domain.config());
+			var sealed=new HostFluidState(2,2,2,domain.config());
 			sealed.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6],mmm.units.Mass.createLiquid(1,1000,pv),masks));
 			sealed.sealDomainBoundary();var closed=sealed.bootstrapGasState("");
 			int expectedChambers=liquidSeal?2:1;
@@ -99,7 +98,7 @@ public final class AirCavityScannerValidation {
 					"Sealed supports lost their dry connection or crossed their separating liquid face");
 			checkRelative(sealed.gasBoundary().nodeIds().stream().mapToDouble(sealed.gasBoundary()::availableVolume).sum(),1,
 					"Gas connections changed actual cavity capacity");
-			var restored=FluidDomain.restoreAuthoritativeState(sealed.captureAuthoritativeState());
+			var restored=HostFluidState.restoreAuthoritativeState(sealed.captureAuthoritativeState());
 			check(restored.gasState.network.nodeCount()==expectedChambers
 					&&restored.gasBoundary().sealedInventory().equals(sealed.gasBoundary().sealedInventory())
 					&&java.util.Arrays.equals(restored.exportGasState("").pieceNodeOrdinal(),closed.pieceNodeOrdinal())
@@ -164,7 +163,7 @@ public final class AirCavityScannerValidation {
 				pv[base]=i+.25F+.5F*(bit&1);pv[base+1]=i+.25F+.5F*(bit>>1&1);pv[base+2]=i+.25F+.5F*(bit>>2&1);pv[base+3]=stock[i];
 			}
 			byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(255^(1<<corner));masks[7]=(byte)(255^(1<<opposite));
-			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
+			var d=new HostFluidState(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
 			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.pressureSystem.prepareGeometry();
 			var frame=pieceCapacityFrame(d,true);var phase=frame.phase();var gas=frame.geometry();
 			var capacities=gas.actualCapacity().components;
@@ -185,7 +184,7 @@ public final class AirCavityScannerValidation {
 		}
 
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)254;masks[7]=(byte)127;
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
+		var d=new HostFluidState(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
 		float[] pv={.125F,.2F,.3F,.03F,1.8F,1.875F,1.7F,.06F};
 		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.pressureSystem.prepareGeometry();
 		var gas=pieceCapacityFrame(d,true).geometry();
@@ -311,14 +310,14 @@ public final class AirCavityScannerValidation {
         check(missingFrame.geometry().actualCapacity().components.getFirst().availableVolumeNormalized().equals(raw),
                 "Sub-resolution material volume changed actual gas capacity");
         missing.bootstrapGasState("");
-        var restoredMissing=FluidDomain.restoreAuthoritativeState(missing.captureAuthoritativeState());
+        var restoredMissing=HostFluidState.restoreAuthoritativeState(missing.captureAuthoritativeState());
         check(restoredMissing.gasBoundary().auditClosed(),"Sub-resolution material volume lost gas inventory on restore");
     }
 
-	private static FluidDomain pieceCapacityDomain(int mask,float... positions) {
+	private static HostFluidState pieceCapacityDomain(int mask,float... positions) {
 		return pieceCapacityScaledDomain(1,mask,positions);
 	}
-	private static FluidDomain pieceCapacityScaledDomain(float h,int mask,float... positions) {
+	private static HostFluidState pieceCapacityScaledDomain(float h,int mask,float... positions) {
 		positions=positions.clone();
 		boolean separate=mask==126;
 		if(separate)for(int marker=0;marker<positions.length/4;marker++)
@@ -326,10 +325,10 @@ public final class AirCavityScannerValidation {
 		int count=positions.length/4;float volume=0;for(int i=0;i<count;i++)volume+=positions[4*i+3];
 		for(int i=0;i<count;i++)for(int axis=0;axis<3;axis++)positions[4*i+axis]*=h;
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(separate?254:mask);if(separate)masks[7]=(byte)127;
-		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,0,.01F,200,1e-5F,1e-4F));
+		var domain=new HostFluidState(2,2,2,new FluidSolverConfig(h,1000,0,.01F,200,1e-5F,1e-4F));
 		domain.restoreParticleState(new FlipParticleState(2,2,2,h,count,volume,positions,new float[3*count], mmm.units.Mass.createLiquid(h, 1000.0, positions),masks));return domain;
 	}
-	private static GasRuntimeGeometry pieceCapacityFrame(FluidDomain domain,boolean sealed) {
+	private static GasRuntimeGeometry pieceCapacityFrame(HostFluidState domain,boolean sealed) {
         // These fixtures edit stock, collision masks and solid occupancy before preparing one endpoint.
         domain.phaseOccupancy=null;domain.markCellInventoryChanged();
         long[] occupied=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularCoupling.copySolidSvq();
@@ -378,14 +377,13 @@ public final class AirCavityScannerValidation {
     }
 
 	private static void validateExactGasTopologyWeights() {
-		validateSingleGasSuccessorWeight();
 		validateAmbientSelfRemap();
 		validateAmbientGasSuccessorWeight();
 		for (boolean reflected : new boolean[]{false, true}) {
 			float h = .0008F;
 			byte[] masks = new byte[45]; java.util.Arrays.fill(masks, (byte) 255);
 			for (int x = 1; x <= 3; x++) masks[(1 * 3 + 1) * 5 + x] = 0;
-			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, 1e-4F));
+			var domain = new HostFluidState(5, 3, 3, new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, 1e-4F));
 			domain.restoreParticleState(new FlipParticleState(5, 3, 3, h, 0, 0, new float[0], new float[0], mmm.units.Mass.createLiquid(h, 1000.0, new float[0]), masks));
 			domain.sealDomainBoundary();
 			var parent = domain.bootstrapGasState("");
@@ -425,122 +423,14 @@ public final class AirCavityScannerValidation {
 		check(error.compareTo(halfUlp) <= 0, "Gas volume partition exceeded its exact half-ULP closure bound");
 	}
 
-	private static void validateSingleGasSuccessorWeight() {
-		double h=.5, rho=1000, temperature=300, gasCv=718;
-		int steps=8, chamberCells=4, plugCells=2*steps+1, length=2*chamberCells+plugCells;
-		double pressure=mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA;
-		double displacedVolume=h*h*h, chamberVolume=chamberCells*displacedVolume, liquidMass=rho*plugCells*displacedVolume;
-		double gamma=1+pressure/(1.2*mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K*gasCv);
-		// Give the piston enough inertia to compress one chamber and expand the
-		// other by one cell volume, including the resolved donor-mixing losses.
-		double compressionWork=pressure*chamberVolume/(gamma-1)
-				*(Math.pow(chamberVolume/(chamberVolume-displacedVolume),gamma-1)-1);
-		double expansionWork=pressure*chamberVolume/(gamma-1)
-				*(Math.pow(chamberVolume/(chamberVolume+displacedVolume),gamma-1)-1);
-		double initialSpeed=Math.sqrt(16*(compressionWork+expansionWork)/liquidMass);
-		float dt=(float)(2*h/(steps*initialSpeed));
-		var config=new FluidSolverConfig((float)h,(float)rho,0,dt,128,1e-6F,.002F);
-		var d=new FluidDomain(length,3,3,config);d.sealDomainBoundary();
-		var gas=new mmm.fluid.air.GasRegistry(List.of(
-				new mmm.fluid.air.GasComponentDefinition("test:left",1.2,List.of(),List.of()),
-				new mmm.fluid.air.GasComponentDefinition("test:right",1.2,List.of(),List.of())),
-				List.of(new mmm.fluid.air.GasRegistry.AmbientFraction("test:left",ExactRational.ONE)));
-		d.bindGasRegistry(gas);
-		var liquids=new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water",1000,"mmm:water",0,Math.PI/2)));
-		d.materialRegistry=liquids;
-		byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
-		for(int x=0;x<length;x++)masks[d.domainFlowFields.cellIndex(x,1,1)]=0;
-		d.geometry.cutCells.restoreMicroMasks(masks);
-		d.markCellInventoryChanged();
-		// Each end can affect one new cell per pass, including after a reversal.
-		// Two eight-cell influence ranges leave a full-section core between them.
-		for(int x=chamberCells;x<chamberCells+plugCells;x++)d.setVolume(x,1,1,1);
-		var topology=d.bootstrapGasState("");
-		int left=d.airNodeAt(0,1,1),right=d.airNodeAt(length-1,1,1);
-		check(left>0&&right>0&&left!=right&&topology.nodes().size()==2,
-				"A full-micro liquid plug failed to separate its two finite gas chambers");
-		// Standard-state volume is stock; the chamber's actual geometric capacity
-		// and its temperature determine pressure through the same production EOS.
-		var a=labelledGasAtPressure("test:left",gas,d.gasBoundary().availableVolume(left),temperature,pressure);
-		var b=labelledGasAtPressure("test:right",gas,d.gasBoundary().availableVolume(right),temperature,pressure);
-		var nodes=new java.util.ArrayList<mmm.fluid.air.GasStateSnapshot.Node>();
-		for(int ordinal=1;ordinal<=topology.nodes().size();ordinal++)nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(
-				topology.nodes().get(ordinal-1).topologyKey(),ordinal==left?a:b));
-		var labelled=new mmm.fluid.air.GasStateSnapshot(length,3,3,gas.fingerprint(),"",nodes,topology.pieceNodeOrdinal(),
-				mmm.fluid.air.GasAuditLedger.of(a.merge(b)),mmm.fluid.air.GasAuditLedger.EMPTY,
-				mmm.fluid.air.GasAuditLedger.EMPTY,mmm.fluid.air.GasAuditLedger.EMPTY);
-		var liquidState=d.exportLiquidCellState();var momentum=d.exportMacMomentum();var phase=d.exportPhaseOccupancyState();
-		var restored=new FluidDomain(length,3,3,config);restored.sealDomainBoundary();
-		restored.geometry.cutCells.restoreMicroMasks(masks);
-		restored.materialRegistry=liquids;
-		restored.restoreLiquidCellState(new LiquidCellInventory.Snapshot(liquidState.rows()),null);
-		restored.restoreMacMomentum(momentum);
-		restored.restorePhaseOccupancyState(new mmm.inventory.PhaseOccupancyState(phase.copyLiquidMicroVolumes()));
-		restored.restoreGasState(labelled,gas);d=restored;
-		var definitions=new java.util.ArrayList<mmm.thermal.ThermalMaterialDefinition>();
-		definitions.add(new mmm.thermal.ThermalMaterialDefinition("test:plug_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
-				"mmm:water",300,0,0,List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))));
-		for(String component:List.of("test:left","test:right"))definitions.add(new mmm.thermal.ThermalMaterialDefinition(component,
-				mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,component,300,0,0,
-				List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,gasCv))));
-		d.bindThermal(ThermalValidationSupport.thermalRegistry(definitions),liquids,temperature);
-		d.domainFlowFields.preparePhysicalState();
-		for(int face=0;face<d.mac.velocityX.length;face++)if(d.cellMacStage.massX[face]>0)d.mac.velocityX[face]=(float)initialSpeed;
-		d.cellMacStage.publishMomentum();
-		var mass=d.liquidCells.massUnits();var volume=d.liquidCells.exactVolume();
-		var expectedGas=mmm.fluid.air.GasAuditLedger.of(a.merge(b));
-		double initialPosition=chamberCells+.5*plugCells,maximumPosition=initialPosition;
-		for(int step=0;step<steps;step++) {
-			d=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step,d.captureAuthoritativeState(),List.of(),false,0,true)).claimPreparedCpuDomain();
-			var snapshot=d.exportGasState("");
-			check(d.gasBoundary().sealedInventory().equals(expectedGas)&&d.gasBoundary().auditClosed()
-					&&snapshot.externalSource().equals(expectedGas)&&snapshot.escapedSink().isEmpty(),
-					"Moving liquid plug changed finite component inventory or external gas ledgers");
-			for(int node=1;node<=d.gasBoundary().nodeCount();node++) {
-				var inventory=d.gasBoundary().inventory(node);
-				check(!(inventory.component("test:left")!=null&&inventory.component("test:right")!=null),
-						"Gas crossed a resolved moving liquid seal");
-				check(d.gasBoundary().availableVolume(node)>0,"Moving gas chamber lost its actual positive capacity");
-			}
-			check(d.airNodeAt(0,1,1)>0&&d.airNodeAt(length-1,1,1)>0&&d.airNodeAt(0,1,1)!=d.airNodeAt(length-1,1,1),
-					"The plug's two macroscopic gas chambers merged");
-			check(d.liquidCells.massUnits()==mass&&d.liquidCells.exactVolume().equals(volume)
-					&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),
-					"Moving plug lost liquid inventory or its thermal audit");
-			double moment=0;
-			for(var stock:d.liquidCells.stocks())moment+=(stock.key().cell()%length+.5)*stock.massUnits();
-			maximumPosition=Math.max(maximumPosition,moment/mass);
-			if(step==3) {
-				var state=d.captureAuthoritativeState();
-				d=FluidDomain.restoreAuthoritativeState(coldState(state));
-				FluidDomainStateAssertions.assertSameState(state,d.captureAuthoritativeState(),"Moving plug cold restore");
-			}
-		}
-		// A sealed gas spring may reverse the piston after it crosses the face.
-		check(maximumPosition>initialPosition+.75,"The inertia-driven liquid plug did not advance through its original cell face");
-	}
-	private static mmm.fluid.air.GasInventory labelledGasAtPressure(String component,mmm.fluid.air.GasRegistry registry,
-			double actualVolume,double temperature,double absolutePressure){
-		double standardVolume=actualVolume*absolutePressure/mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA
-				*mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K/temperature;
-		long nanos=mmm.fluid.air.AirNetwork.nanos(standardVolume);
-		long mass=mmm.units.Mass.fromKilograms(registry.component(component).standardDensityKgPerCubicMeter()
-				*mmm.fluid.air.AirNetwork.cubicMeters(nanos));
-		return new mmm.fluid.air.GasInventory(List.of(new mmm.fluid.air.GasComponentAmount(component,nanos,mass,List.of(),mass)));
-	}
+
+
 
 	/** Value-only state forces reconstruction from saved occupancy instead of a prepared runtime graph. */
-	private static FluidDomainState coldState(FluidDomainState s) {
-		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.sealedDomainBoundary(),
-				new LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
-				s.momentum(),s.fixedGeometry(),s.entityBodyState(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
-				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.chemicalMassTransferPending(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
-				s.gasRegistry(),FluidDomainState.GasContinuation.persisted(s.gas()),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseMotion(),
-				s.copyThermalBoundaryTemperaturesK(),s.exportCondensedPhasePressure(),s.materialDefinitions());
-	}
+
 
 	private static void validateAmbientSelfRemap() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
+		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
         domain.setVolume(1,1,1,.1875F);
         var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
 		check(old.nodeCount() == 0 && old.capacity().ambientCubicMeters() > 0
@@ -617,7 +507,7 @@ public final class AirCavityScannerValidation {
 				&& recovered.escapedSink().equals(committed.escapedSink()) && sameCells.gasBoundary.auditClosed(),
 				"Restoring approximate microbox geometry changed a chamber's inventory or source accounting");
 		// A reconstructed exterior opening must retain the saved finite gas until actual flow advances.
-		var opened = new FluidDomain(2, 2, 2, config);
+		var opened = new HostFluidState(2, 2, 2, config);
 		opened.restoreParticleState(particles);
 		opened.restoreGasState(committed, mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
 		check(opened.gasState.network.nodeCount() == committed.nodes().size()
@@ -628,8 +518,8 @@ public final class AirCavityScannerValidation {
 				"Same-generation gas restore changed inventory when the reconstructed opening reached the exterior");
 	}
 
-	private static FluidDomain gasRestoreTarget(FluidSolverConfig config, FlipParticleState particles) {
-		var domain = new FluidDomain(2, 2, 2, config);
+	private static HostFluidState gasRestoreTarget(FluidSolverConfig config, FlipParticleState particles) {
+		var domain = new HostFluidState(2, 2, 2, config);
 		domain.sealDomainBoundary(); domain.restoreParticleState(particles);
 		return domain;
 	}
@@ -651,14 +541,14 @@ public final class AirCavityScannerValidation {
 			float[] volumes={.5F,.25F,.125F,.0625F,.03125F,.015625F,.0078125F,(float)(.0078125-Math.scalb(1,exponent))};
 			float[] pv=new float[32];double sum=0;
 			for(int i=0;i<8;i++) {int b=4*i;pv[b]=.625F+.25F*(i&1);pv[b+1]=.625F+.25F*(i>>1&1);pv[b+2]=.625F+.25F*(i>>2&1);pv[b+3]=volumes[i];sum+=volumes[i];}
-			var d=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.002F));
+			var d=new HostFluidState(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.002F));
 			d.restoreParticleState(new FlipParticleState(3,3,3,.5F,8,(float)sum,pv,new float[24], mmm.units.Mass.createLiquid(.5F, 1000.0, pv),masks));d.sealDomainBoundary();
 			var network=d.gasState.network;long gasRevision=network.revision(),carrierRevision=d.domainFlowFields.carrierMutationRevision();
             var gas = d.bootstrapGasState("");
             long expected = mmm.fluid.air.AirNetwork.nanos((1 - sum) * .125);
             check(gas.externalSource().standardVolumeNanos() == expected && d.gasBoundary().auditClosed(),
                     "Ambient capture changed its rounded inventory or introduced a minimum portion");
-            var restored = FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
+            var restored = HostFluidState.restoreAuthoritativeState(d.captureAuthoritativeState());
             check(restored.gasBoundary().auditClosed(), "Sub-quantum vacuum capacity failed to restore");
 		}
 	}

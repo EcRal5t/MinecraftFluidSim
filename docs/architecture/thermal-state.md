@@ -4,62 +4,11 @@
 
 ## 修改入口
 
-- **内能状态与流体数据映射**
-  - 代码入口：
-    - [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)：热状态、共同审计和批能量事务
-    - [LiquidEnergyColumn](../../model/src/main/java/mmm/thermal/LiquidEnergyColumn.java)：库存内能访问与派生热学缓存
-    - [ThermalRegistry](../../model/src/main/java/mmm/thermal/ThermalRegistry.java)、[ThermalReferenceEnergyCache](../../model/src/main/java/mmm/thermal/ThermalReferenceEnergyCache.java)：注册物种的每微摩尔参考能系数
-    - [ThermalCellOperations](../../model/src/main/java/mmm/thermal/ThermalCellOperations.java)：同代热网格、相变候选与能量分配
-    - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)
-    - [ThermalOwnerSnapshot](../../model/src/main/java/mmm/thermal/ThermalOwnerSnapshot.java)
-    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)
-  - 测试选择器：`thermal`
-
-- **热浮力有效范围与分层**
-  - 代码入口：
-    - [LiquidThermalExpansion](../../model/src/main/java/mmm/thermal/LiquidThermalExpansion.java)
-    - [LiquidCarrierProperties](../../solver/src/main/java/mmm/fluid/LiquidCarrierProperties.java)
-    - [LiquidStratificationValidation](../../fabric/src/test/java/mmm/fluid/LiquidStratificationValidation.java)
-  - 测试选择器：`materials,thermal`
-
-- **传热与反应顺序**
-  - 代码入口：
-    - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)
-    - [ThermalCarrierTransport](../../model/src/main/java/mmm/thermal/ThermalCarrierTransport.java)
-    - [CarrierThermalConduction](../../solver/src/main/java/mmm/fluid/CarrierThermalConduction.java)
-  - 测试选择器：`thermal`
-
-- **固液和气液相变**
-  - 代码入口：
-    - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)
-    - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)
-    - [GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java)
-  - 测试选择器：`thermal`
-
-- **相变待推进格的恢复与力学同步**
-  - 代码入口：[PendingPhaseMotionWork](../../solver/src/main/java/mmm/fluid/PendingPhaseMotionWork.java)
-  - 测试选择器：`runThermalValidation --args="--phase-motion"`、`region-state`
-
-- **有限热容量设备**
-  - 代码入口：
-    - [FiniteThermalDeviceInventory](../../model/src/main/java/mmm/thermal/FiniteThermalDeviceInventory.java)
-    - [FiniteThermalExchange](../../model/src/main/java/mmm/thermal/FiniteThermalExchange.java)
-    - [FiniteThermalDeviceCodec](../../fabric/src/main/java/mmm/simulation/persistence/FiniteThermalDeviceCodec.java)
-  - 测试选择器：`thermal,region-state`
-
-- **恒温源调节**
-  - 代码入口：
-    - [ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java)
-    - [ThermalReservoirScreen](../../fabric/src/client/java/mmm/client/ThermalReservoirScreen.java)
-  - 测试选择器：`protocol,thermal`
-
-- **气体热力学与定义**
-  - 代码入口：
-    - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)
-    - [ThermalRegistryCodec](../../fabric/src/main/java/mmm/thermal/ThermalRegistryCodec.java)
-  - 测试选择器：`thermal`
-
-执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+- 内能、状态函数和热账：[ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)、[ThermalRegistry](../../model/src/main/java/mmm/thermal/ThermalRegistry.java)。
+- 设备热接触与导热：[VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)。
+- 设备反应与相变：[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)、[VulkanSolidLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSolidLiquidReactions.java)。
+- 库存编辑及恢复：[HostFluidState](../../solver/src/main/java/mmm/fluid/HostFluidState.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)。
+- 验证：`runGpuThermalPhaseValidation`、GPU 演示和 `region-state`，按改动范围选择。
 
 ## 本文内容
 
@@ -177,22 +126,11 @@ U_h(T) = m * u_ref,h
 普通世界外壳默认绝热，注册表声明的恒温方块与 `thermal_reservoir` 按相邻面热流计入外部源汇。
 世界采样得到的面温度是本次计算输入，下一次采样替换。
 
-`ThermalContactExchange` 对单个接触求解后向 Euler 热流。
-接触对象复用同一初态温度和热容，常比热段采用解析响应，跨比热分段采用固定成本的有界 Newton 求解。
-热流方程按宏观温差精度停止，次数用尽时使用保持温度顺序的区间下端；质量、物种及两侧等大反向热量保持原结算。
-进入第一侧的热量 `q` 满足：
-
-```text
-q = G * dt * (T_second(U_second - q) - T_first(U_first + q))
-```
-
-正热容保证有限接触的平衡方向。显式推进受最小载体热容量与总热导限制；
-所需子步较多时改用正反向隐式接触扫描。这是时间一阶分裂，误差通过时间细化观察。
-提交前验证全部拟存储状态，热浴交换和实际舍入差分别入账。
+热导接触由设备读取同代材料、质量、内能与温度，统一结算热浴交换和舍入账。设备导热采用下述显隐分区方法，正热容决定热交换的方向与时间响应。
 
 ### 共同凝聚相有限体积导热
 
-`CarrierThermalConduction` 按实际库存体积和固定开放连通分量，为液体与固相建立同一组正对称热接触。
+`VulkanThermalContacts` 按实际库存体积和固定开放连通分量，为液体与固相建立正对称热接触。
 相邻单元按共享开放微面和各载体占据份额分配热导；全开满液单元得到标准有限体积面热导。
 同格载体使用单元尺度的混合长度，切格隔墙隔离接触；恒温面按对应固壁面积与半格热阻换热。
 绝热外壳保持零外部热流，材料导热率采用调和平均。
@@ -223,9 +161,7 @@ U_i(new) = U_i(old) + sum_j(q_ij)
 设备定位信息由 `FiniteThermalDeviceState` 保存；完整设备库存随 region HEAD 提交。
 世界对象负责定位和接触，设备内能由区域库存持有。
 
-`FiniteThermalExchange` 联合规划设备与有限流体端口的换热。
-设备接触保存每个实际载体的质量、参考能、内能与完整比热曲线；`ThermalCarrierTransport` 统一推进设备和载体，逐载体写回对应热量，跨比热段与刚性接触使用同一求解规则。设备查询独立准备接触视图，凝聚相相变网格保持原内容。
-设备、流体实际内能及双方审计全部通过预检后一起提交，成功交换使旧计算候选失效。
+`VulkanThermalContacts` 将有限设备与流体端口纳入同一接触图，`VulkanThermalConduction` 依据各载体的质量、参考能、内能及比热曲线计算换热。设备和流体内能随完整设备候选一起提交，外部设备交接沿 HEAD 与 WAL 协调。
 跨区域设备需要协调所有区域的提交。
 
 `FiniteHeatExchangerOperations` 将有限换热器安装到已启用区域的围墙槽位，固定北／南端口读取同一区域实际载体接触。`FluidDomain.finiteThermalPortContacts` 提供端口视图，`FluidRegion.commitFiniteThermalPortExchange` 联合提交设备与载体内能。区域成功步采用同一逻辑时长推进设备，暂停、不可用或有待恢复事务时保留库存；设备成本纳入区域原有完整步调度。
@@ -234,8 +170,7 @@ U_i(new) = U_i(old) + sum_j(q_ij)
 
 ### 有限体积离散
 
-生产接触图统一由 `CarrierThermalConduction` 建立，`ThermalCarrierTransport` 推进实际载体内能。
-一次导热批次采集材料、质量、参考能、内能与初温，接触图和数值求解共享该批次。全部终态和源汇、舍入账准备完毕后共同发布内能；异常发生在实际载体写入之前。
+`VulkanThermalContacts` 建立接触图，`VulkanThermalConduction` 推进实际载体内能。接触图和数值求解使用同代材料、质量、参考能、内能与温度；终态、源汇和舍入账随候选共同提交。
 热导使用材料调和平均、固定开放面积及实际库存占据份额；同格与固壁采用半格混合长度，相邻格采用一格长度：
 
 ```text
@@ -246,7 +181,7 @@ Delta U_p = G*(T_q-T_p)*dt; Delta U_q = -Delta U_p
 
 接触求解期间保持位置、质量、材料和组成不变，直接推进对应载体内能。
 零导热载体随物质搬运内能；同格温差按有限速率消散。
-气体孔流由气体处理器执行。气腔壁面、液面及有限设备热交换进入共同热载体接触图；`ThermalGasCarriers` 按格内实际干容分配集总气腔的接触样本，成对结算热量后归并气腔内能。每个气腔在同一支撑上的混合物共用一次几何面积，组分比热与参考能共同决定温度，导热率按标准体积分数混合。该空间采样采用一阶近似。
+气体孔流由气体处理器执行。气腔壁面、液面及有限设备热交换进入共同热载体接触图；设备按格内实际干容分配集总气腔的接触样本，成对结算热量后归并气腔内能。每个气腔在同一支撑上的混合物共用一次几何面积，组分比热与参考能共同决定温度，导热率按标准体积分数混合。该空间采样采用一阶近似。
 
 内置物性的数值与采样分段以数据定义为准。
 N₂、O₂、CO₂ 的热容由 [NIST Shomate 系数](https://webbook.nist.gov/chemistry/)积分，H₂O 蒸气采用 [JANAF 气态水焓表](https://janaf.nist.gov/tables/H-064.html)。分段保存 100–1700 K 的平均定容质量比热 `Cv=(ΔHm/ΔT−R)/M`，模型摩尔质量与气体库存一致；CO₂ 在 298 K 以下沿用端点 Cp，温区外按现有端点热容延拓。导热率保持各组分 300 K 稀薄气体参考值的常数近似，混合物按标准体积分数加权。生成工具同时推导水蒸气相变批次体积、保持常压汽化潜焓和液水参考能关系，见[Python 工具](../maintenance/pytool.md)。

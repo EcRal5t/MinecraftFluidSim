@@ -14,25 +14,24 @@
   - 测试选择器：`air-cavity`
 
 - **气体库存与孔流**
-  - 代码入口：[AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
-  - 测试选择器：`air-network`
+  - 代码入口：[AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)、[VulkanGasFlow](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasFlow.java)
+  - 验证入口：`air-network` 和 GPU 孔流场景
 
 - **气液相变库存与账本提交计划**
   - 代码入口：[AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java) 的批量库存计划与一次重映射接口、
-    [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)
-  - 测试选择器：`thermal`、`air-network`
+    [VulkanGasPhaseChange](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasPhaseChange.java)
+  - 验证入口：GPU 热相变场景及 `air-network`
 
-- **局部隐式孔流与焓交接**
+- **孔流压力与库存交接**
   - 代码入口：
-    - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)：`thermodynamics`、`planFlow` 组装孔口响应并提交成对焓流
-    - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)：`portThermodynamics` 准备两个气腔的连续状态函数
-    - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
-    - [GasTransferValidation](../../fabric/src/test/java/mmm/thermal/GasTransferValidation.java)
-  - 测试选择器：`thermal`
+    - [VulkanGasFlow](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasFlow.java)：孔流压力系统与转移路线
+    - [VulkanGasRemap](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasRemap.java)：组分库存与内能交接
+    - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)：宿主物性与状态函数
+  - 验证入口：GPU 气体孔流及热相变场景
 
 - **温度、压力和声学状态**
   - 代码入口：[GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)
-  - 测试选择器：`thermal`
+  - 验证入口：GPU 热相变及气体场景
 
 - **气液压力耦合**
   - 代码入口：
@@ -260,7 +259,7 @@ integral(Cv(T)/T dT) = R_total * ln(V_initial/V_final)
 ```
 
 各比热段解析衔接，温区外沿端点热容延拓，内能变化记机械功。
-孔流搬运源侧焓 `h = u + p*v`，每孔有限排气量沿供体等熵温度变化积分，多个出口按规范正逆半步依次推进。隐式孔流在两腔连续状态中计算终态压力，预览与提交共用同一状态方程。
+孔流搬运源侧能量与物质，气腔状态方程用于求解压力响应和内能交接。
 拆分气腔按原共同温度分配能量，合并汇总原始内能，存储舍入差单独入账。
 
 压力曲线沿同一分段热容积分求解 `integral(Cp(T)/T dT) = R_total * ln(p_final/p_initial)`，再由状态方程派生正体积与顺应性。
@@ -278,22 +277,9 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 实际体积流量按源库存和容量换算为标准体积流量，环境流入同时考虑环境温度。
 节点间交换为内部转移，环境流入流出分别记外部源汇。
 
-热状态孔流按节点编号规范排列孔口，依次正序推进半步、逆序推进半步。每个孔口读取当时两腔的库存、内能与容量，冻结该孔口的正导通率，求解两个腔的局部隐式响应：
+`VulkanGasFlow` 依据同代气腔压力、储容和孔口导通率组装共同压力系统，并生成实际转移路线。`VulkanGasRemap` 按供体库存分配各条路线的标准体积、整数质量、物种和内能；环境交接记入对应源汇。库存和能量随设备候选共同提交，气腔几何变化再沿拓扑交接处理。
 
-```text
-q_standard = dt_port * g * (p_source(q_standard) - p_target(q_standard))
-p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
-```
-
-连续工作状态按原组分的实数质量份额建立。有限供体沿等熵排气曲线计算剩余温度和内能，移出的总能量作为同一笔焓流进入接收腔；接收腔由原库存与流入组分共同反演温度。环境供体保持世界规定的温度、组成和绝对压力，环境接收端保持标准绝对压力。
-
-`GasOrificeFlow.solveThermalPort` 在可用供体范围内求连续流量，终止尺度来自标准体积与整数质量的可执行分辨率。有限供体的整数输运使用共同系统舍入，舍入位置由已提交库存和源汇派生，各列总量精确闭合，避免逐步向下取整持续截留微量组分。量化误差按标准体积、质量和物种各自的编码尺度评价。局部试算直接读取两腔的状态函数；求根完成后，`GasInventory.partitionTransport` 才生成实际整数转移，余量留在供体。`GasEnergyStore.planFlow` 从这份实际供体余量重新计算等熵排气能量，将同一能量写入接收端或环境热汇，并与实际物质转移共同提交。连续流量与最终库存之间的差异按编码分辨率评价。 每次端口提交只准备参与交换的气腔，局部物质闭合、源汇和内能全部准备成功后发布；全网络库存重建留给拓扑重分配。
-
-每个孔口提交后，下一个孔口读取已更新状态，流入气体可继续沿串联气路流动。规范孔口顺序及正逆半步组合保持插孔顺序和边端点方向的一致性；多孔组合保留时间一阶分步误差。每次交接预检实际温度、EOS、物质与热账。
-
-无热状态的等温路径采用全网络线性储容方程，同一供体的全部出边联合分配库存。两条路径共用整数分配、库存提交及环境源汇规则。有限排气保存正温度的供体余量；显式排气操作可将气腔清为零库存、零内能的真空。
-
-该集总模型适用准静态气腔均压和有限孔口传质，冻结物性及算子分裂带来时间一阶温压误差。
+该集总模型适用准静态气腔均压和有限孔口传质，冻结物性及分步推进带来时间离散误差。
 验收检查宏观压差响应、正温、液封、库存与热账，并用时间细化评价误差。
 无开放端口的液封气腔保持独立，腔内声波和喷流形状受当前模型解析度限制。
 活动检查读取同代节点状态与可表示的压力驱动份额，维持微小孔流的连续推进。
@@ -305,7 +291,7 @@ p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
 运行状态按固定开放分量保存节点归属，捕获存盘状态时展开这份微盒索引。
 节点按最小干微盒编号排序，库存和内能采用同一顺序。
 
-恢复保留快照中每单元的同代气腔成员，按宿主重建的几何生成实际容量和开口。节点按规范顺序排列时，气体库存与内能同步排列；读取快照保持四项收支不变。CPU 与 GPU 重建薄气层时产生的开口差异由后续真实推进处理。
+恢复保留快照中每单元的同代气腔成员，按宿主重建的几何生成实际容量和开口。节点按规范顺序排列时，气体库存与内能同步排列；读取快照保持四项收支不变。宿主编辑与设备重建薄气层时产生的开口差异由后续推进处理。
 保存的成员若完全失去正容积且仍携带库存，恢复明确失败。成员、容量、气体库存和热账完成后一起发布。
 载荷还绑定注册表指纹、单位与组分定义，字段校验见[存档参考](region-state.md)。
 连接、压力、温度和孔流从恢复后的实际状态派生。

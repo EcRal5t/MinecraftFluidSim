@@ -8,11 +8,10 @@ layout(binding=0,std430)buffer Arena{uint words[];};
 layout(binding=1,std430)buffer Errors{uint errors;};
 layout(binding=2,std430)buffer FrozenConductance{double frozenG[];};
 layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
-const int OF=0,OP=1,OK=2,OI=3,KC=4,TERMS=5,SF=6,SP=7,SO=8,SC=9,SM=10,SFR=11,
- CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25,DM=26,PC=27,PO=28,PU=29,PR=30,MF_DATA=31,MF_POW=32,BC=33,BO=34,BG=35,BT=36,MF_DISPATCH=37,FAC=38,CACHE_COUNTS=39,CACHE_OFFSETS=40,IMEX_SAMPLES=41,IMEX_FLAGS=42,IMEX_AFFECTED=43,IMEX_BASE=44;
+// HOST_LAYOUT
 shared dvec4 mfBounds[128];
-int h(int n){return int(words[p.header+n]);}int f(int n){return h(48+n);}
-int ch(int i){return int(words[h(151)+i]);}int cf(int field){return ch(8+field);}
+int h(int n){return int(words[p.header+n]);}int f(int n){return h(WORK_FIELDS+n);}
+int ch(int i){return int(words[h(H_CONDUCTION_HEADER)+i]);}int cf(int field){return ch(CONDUCTION_FIELDS+field);}
 // Reserve the first lane's shared destination once for the participating subgroup.
 uint reserveIncident(int address){
  uvec4 participants=subgroupBallot(true);uint first=subgroupBallotFindLSB(participants);
@@ -25,95 +24,96 @@ double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 void put(int at,double value){uvec2 b=unpackDouble2x32(value);words[at]=b.x;words[at+1]=b.y;}
 uint64_t quantity(int at){return uint64_t(words[at])|(uint64_t(words[at+1])<<32);}
 bool finite(double v){return !isnan(v)&&!isinf(v);}void invalid(){atomicOr(errors,2097152u);}
-double cellSize(){return number(p.header+128);}
-int liveLiquid(){return int(words[h(14)]);}int liveGas(){return h(15)<0?0:int(words[h(15)]);}
-int liveParticle(){return h(16)<0?0:int(words[h(16)]);}int liveDeposit(){return h(16)<0?0:int(words[h(16)+1]);}
-int liveCoherent(){return h(46)<0?0:int(words[h(46)]);}
-int liveDevice(){return h(133)<0?0:int(words[h(133)]);}
-int livePorts(){return h(133)<0?0:int(words[h(133)+1]);}
-int deviceBase(){return h(0)+h(1)+h(2)+h(3)+h(45);}
-int liveOwners(){return int(words[f(OP)+h(9)]);}int liveSamples(){return int(words[f(SP)+h(8)]);}
-int openMask(int cell){return int((~words[h(11)+cell])&255u);}
-int material(int kind,int handle){int count=kind==0?h(41):kind==1?h(42):kind==2?h(43):kind==3?h(44):h(47),map=kind==0?f(LM):kind==1?f(GM):kind==2?f(PM):kind==3?f(CM):f(DM);
+double cellSize(){return number(p.header+H_CELL_SIZE);}
+int liveLiquid(){return int(words[h(H_LIQUID_COUNTS)]);}int liveGas(){return h(H_GAS_COUNTS)<0?0:int(words[h(H_GAS_COUNTS)]);}
+int liveParticle(){return h(H_GRANULAR_COUNTS)<0?0:int(words[h(H_GRANULAR_COUNTS)]);}int liveDeposit(){return h(H_GRANULAR_COUNTS)<0?0:int(words[h(H_GRANULAR_COUNTS)+1]);}
+int liveCoherent(){return h(H_COHERENT_COUNTS)<0?0:int(words[h(H_COHERENT_COUNTS)]);}
+int liveDevice(){return h(H_DEVICE_COUNTS)<0?0:int(words[h(H_DEVICE_COUNTS)]);}
+int livePorts(){return h(H_DEVICE_COUNTS)<0?0:int(words[h(H_DEVICE_COUNTS)+1]);}
+int deviceBase(){return h(H_LIQUID_CAPACITY)+h(H_GAS_CAPACITY)+h(H_PARTICLE_CAPACITY)+h(H_DEPOSIT_CAPACITY)+h(H_COHERENT_CAPACITY);}
+int liveOwners(){return int(words[f(FIELD_OWNER_PREFIX)+h(H_OWNER_CAPACITY)]);}int liveSamples(){return int(words[f(FIELD_SAMPLE_PREFIX)+h(H_SAMPLE_CAPACITY)]);}
+int openMask(int cell){return int((~words[h(H_FIXED_MASKS)+cell])&255u);}
+bool activeCell(int cell){return h(H_ACTIVITY_CELLS)<0||words[h(H_ACTIVITY_CELLS)+cell]!=0u;}
+int material(int kind,int handle){int count=kind==0?h(H_LIQUID_MATERIAL_COUNT):kind==1?h(H_GAS_MATERIAL_COUNT):kind==2?h(H_GRANULAR_MATERIAL_COUNT):kind==3?h(H_COHERENT_MATERIAL_COUNT):h(H_DEVICE_MATERIAL_COUNT),map=kind==0?f(FIELD_LIQUID_MATERIAL):kind==1?f(FIELD_GAS_MATERIAL):kind==2?f(FIELD_GRANULAR_MATERIAL):kind==3?f(FIELD_COHERENT_MATERIAL):f(FIELD_DEVICE_MATERIAL);
  if(handle<0||handle>=count){invalid();return 0;}return int(words[map+handle]);}
 void ownerAddress(int candidate,out int kind,out int row,out bool exists){
  kind=0;row=candidate;exists=row<liveLiquid();
- if(candidate>=h(0)){kind=1;row=candidate-h(0);exists=row<liveGas();}
- if(candidate>=h(0)+h(1)){kind=2;row=candidate-h(0)-h(1);exists=row<h(2)?row<liveParticle():row-h(2)<liveDeposit();}
- if(candidate>=h(0)+h(1)+h(2)+h(3)){kind=3;row=candidate-h(0)-h(1)-h(2)-h(3);exists=row<liveCoherent();}
+ if(candidate>=h(H_LIQUID_CAPACITY)){kind=1;row=candidate-h(H_LIQUID_CAPACITY);exists=row<liveGas();}
+ if(candidate>=h(H_LIQUID_CAPACITY)+h(H_GAS_CAPACITY)){kind=2;row=candidate-h(H_LIQUID_CAPACITY)-h(H_GAS_CAPACITY);exists=row<h(H_PARTICLE_CAPACITY)?row<liveParticle():row-h(H_PARTICLE_CAPACITY)<liveDeposit();}
+ if(candidate>=h(H_LIQUID_CAPACITY)+h(H_GAS_CAPACITY)+h(H_PARTICLE_CAPACITY)+h(H_DEPOSIT_CAPACITY)){kind=3;row=candidate-h(H_LIQUID_CAPACITY)-h(H_GAS_CAPACITY)-h(H_PARTICLE_CAPACITY)-h(H_DEPOSIT_CAPACITY);exists=row<liveCoherent();}
  if(candidate>=deviceBase()){kind=4;row=candidate-deviceBase();exists=row<liveDevice();}
 }
-bool hasMass(int kind,int row){if(kind==4)return quantity(h(135)+2*row)>uint64_t(0);if(kind==0)return quantity(h(21)+2*row)>uint64_t(0);if(kind==2)return quantity(h(35)+2*row)>uint64_t(0);if(kind==3)return quantity(h(112)+2*row)>uint64_t(0);
- for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++)if(quantity(h(27)+2*c)>uint64_t(0))return true;return false;}
-int ownerFor(int candidate){return candidate>=0&&candidate<h(9)&&words[f(OF)+candidate]!=0u?int(words[f(OP)+candidate]):-1;}
+bool hasMass(int kind,int row){if(kind==4)return quantity(h(H_DEVICE_MASS)+2*row)>uint64_t(0);if(kind==0)return quantity(h(H_LIQUID_MASS)+2*row)>uint64_t(0);if(kind==2)return quantity(h(H_GRANULAR_MASS)+2*row)>uint64_t(0);if(kind==3)return quantity(h(H_COHERENT_MASS)+2*row)>uint64_t(0);
+ for(int c=int(words[h(H_GAS_COMPONENT_OFFSETS)+row]);c<int(words[h(H_GAS_COMPONENT_OFFSETS)+row+1]);c++)if(quantity(h(H_GAS_MASS)+2*c)>uint64_t(0))return true;return false;}
+int ownerFor(int candidate){return candidate>=0&&candidate<h(H_OWNER_CAPACITY)&&words[f(FIELD_OWNER_FLAGS)+candidate]!=0u?int(words[f(FIELD_OWNER_PREFIX)+candidate]):-1;}
 void clear(int id){
- if(id<h(9))words[f(OF)+id]=0u;
- if(id<h(132)){put(h(140)+4*id,0.0);put(h(140)+4*id+2,0.0);}
- if(id<h(106)){words[f(TERMS)+id]=0u;words[cf(18)+id]=0u;words[cf(20)+id]=0u;}
- if(id<h(8)){words[f(EC)+id]=0u;words[f(SF)+id]=0u;}
- if(id<h(4)){words[f(CC)+id]=0u;words[f(CU)+id]=0u;words[f(PC)+id]=0u;words[f(PU)+id]=0u;}
- if(id==0){words[h(151)+7]=uint(p.step==2?2:1);words[h(151)+76]=uint(p.header);words[cf(26)+1]=0u;for(int i=0;i<15;i++)words[cf(31)+i]=0u;for(int i=0;i<7;i++)words[f(REQ)+i]=0u;for(int i=0;i<3;i++)words[h(96)+i]=0u;
-  if(liveLiquid()<0||liveLiquid()>h(0)||liveGas()<0||liveGas()>h(1)||liveParticle()<0||liveParticle()>h(2)||liveDeposit()<0||liveDeposit()>h(3)||liveCoherent()<0||liveCoherent()>h(45)||liveDevice()<0||liveDevice()>h(132)||livePorts()<0||livePorts()>h(147))invalid();}
+ if(id<h(H_OWNER_CAPACITY))words[f(FIELD_OWNER_FLAGS)+id]=0u;
+ if(id<h(H_DEVICE_CAPACITY)){put(h(H_DEVICE_ENERGY_CHANGE)+4*id,0.0);put(h(H_DEVICE_ENERGY_CHANGE)+4*id+2,0.0);}
+ if(id<h(H_CONDUCTION_OWNER_CAPACITY)){words[f(FIELD_TERM_COUNTS)+id]=0u;words[cf(CONDUCTION_DEGREE_COUNTS)+id]=0u;words[cf(CONDUCTION_DEGREE_CURSORS)+id]=0u;}
+ if(id<h(H_SAMPLE_CAPACITY)){words[f(FIELD_CONTACT_COUNTS)+id]=0u;words[f(FIELD_SAMPLE_FLAGS)+id]=0u;}
+ if(id<h(H_CELL_COUNT)){words[f(FIELD_CELL_COUNTS)+id]=0u;words[f(FIELD_CELL_CURSORS)+id]=0u;words[f(FIELD_PORT_COUNTS)+id]=0u;words[f(FIELD_PORT_CURSORS)+id]=0u;}
+ if(id==0){words[h(H_CONDUCTION_HEADER)+7]=uint(p.step==2?2:1);words[h(H_CONDUCTION_HEADER)+76]=uint(p.header);words[cf(CONDUCTION_MODE)+1]=0u;for(int i=0;i<15;i++)words[cf(CONDUCTION_DISPATCH)+i]=0u;for(int i=0;i<7;i++)words[f(FIELD_REQUIREMENTS)+i]=0u;for(int i=0;i<3;i++)words[h(H_CONDUCTION_COUNTS)+i]=0u;
+  if(liveLiquid()<0||liveLiquid()>h(H_LIQUID_CAPACITY)||liveGas()<0||liveGas()>h(H_GAS_CAPACITY)||liveParticle()<0||liveParticle()>h(H_PARTICLE_CAPACITY)||liveDeposit()<0||liveDeposit()>h(H_DEPOSIT_CAPACITY)||liveCoherent()<0||liveCoherent()>h(H_COHERENT_CAPACITY)||liveDevice()<0||liveDevice()>h(H_DEVICE_CAPACITY)||livePorts()<0||livePorts()>h(H_PORT_CAPACITY))invalid();}
 }
-void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[f(OF)+id]=exists&&hasMass(kind,row)?1u:0u;}
+void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[f(FIELD_OWNER_FLAGS)+id]=exists&&hasMass(kind,row)?1u:0u;}
 void prepareOwner(int candidate){
- if(candidate==0){int n=liveOwners();words[f(REQ)]=uint(n);words[h(96)]=uint(n);if(n>h(106))atomicOr(errors,64u);}
- if(words[f(OF)+candidate]==0u)return;int owner=int(words[f(OP)+candidate]);if(owner>=h(106))return;
- int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);words[f(OK)+owner]=uint(kind);words[f(OI)+owner]=uint(row);
+ if(candidate==0){int n=liveOwners();words[f(FIELD_REQUIREMENTS)]=uint(n);words[h(H_CONDUCTION_COUNTS)]=uint(n);if(n>h(H_CONDUCTION_OWNER_CAPACITY))atomicOr(errors,64u);}
+ if(words[f(FIELD_OWNER_FLAGS)+candidate]==0u)return;int owner=int(words[f(FIELD_OWNER_PREFIX)+candidate]);if(owner>=h(H_CONDUCTION_OWNER_CAPACITY))return;
+ int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);words[f(FIELD_OWNER_KIND)+owner]=uint(kind);words[f(FIELD_OWNER_INDEX)+owner]=uint(row);
  double energy=0.0,temperature=0.0,k=0.0;int terms=1;
- if(kind==0){energy=number(h(22)+2*row);temperature=number(h(23)+2*row);k=number(f(K)+2*material(kind,int(words[h(18)+row])));}
- else if(kind==2){energy=number(h(36)+2*row);temperature=number(h(37)+2*row);k=number(f(K)+2*material(kind,int(words[h(33)+row])));}
- else if(kind==4){energy=number(h(134)+2*row);temperature=number(h(137)+2*row);k=number(f(K)+2*material(kind,int(words[h(136)+row])));}
- else if(kind==3){energy=number(h(113)+2*row);temperature=number(h(114)+2*row);k=number(f(K)+2*material(kind,int(words[h(110)+row])));}
- else{energy=number(h(28)+2*row);temperature=number(h(29)+18*row);terms=0;double total=0.0;
-  for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++){double n=double(quantity(h(26)+2*c));if(n==0.0)continue;k+=n*number(f(K)+2*material(kind,int(words[h(25)+c])));total+=n;if(quantity(h(27)+2*c)>uint64_t(0))terms++;}k/=total;}
+ if(kind==0){energy=number(h(H_LIQUID_ENERGY)+2*row);temperature=number(h(H_LIQUID_TEMPERATURE)+2*row);k=number(f(FIELD_CONDUCTIVITY)+2*material(kind,int(words[h(H_LIQUID_MATERIALS)+row])));}
+ else if(kind==2){energy=number(h(H_GRANULAR_ENERGY)+2*row);temperature=number(h(H_GRANULAR_TEMPERATURE)+2*row);k=number(f(FIELD_CONDUCTIVITY)+2*material(kind,int(words[h(H_GRANULAR_MATERIAL)+row])));}
+ else if(kind==4){energy=number(h(H_DEVICE_ENERGY)+2*row);temperature=number(h(H_DEVICE_TEMPERATURE)+2*row);k=number(f(FIELD_CONDUCTIVITY)+2*material(kind,int(words[h(H_DEVICE_MATERIAL)+row])));}
+ else if(kind==3){energy=number(h(H_COHERENT_ENERGY)+2*row);temperature=number(h(H_COHERENT_TEMPERATURE)+2*row);k=number(f(FIELD_CONDUCTIVITY)+2*material(kind,int(words[h(H_COHERENT_MATERIAL)+row])));}
+ else{energy=number(h(H_GAS_ENERGY)+2*row);temperature=number(h(H_GAS_STATES)+18*row);terms=0;double total=0.0;
+  for(int c=int(words[h(H_GAS_COMPONENT_OFFSETS)+row]);c<int(words[h(H_GAS_COMPONENT_OFFSETS)+row+1]);c++){double n=double(quantity(h(H_GAS_STANDARD_VOLUME)+2*c));if(n==0.0)continue;k+=n*number(f(FIELD_CONDUCTIVITY)+2*material(kind,int(words[h(H_GAS_COMPONENT_HANDLES)+c])));total+=n;if(quantity(h(H_GAS_MASS)+2*c)>uint64_t(0))terms++;}k/=total;}
  if(!(finite(energy)&&finite(temperature)&&temperature>0.0&&finite(k)&&k>=0.0&&terms>0)){invalid();return;}
- put(h(97)+2*owner,energy);put(h(98)+2*owner,temperature);put(f(KC)+2*owner,k);words[f(TERMS)+owner]=uint(terms);
+ put(h(H_CONDUCTION_ENERGY)+2*owner,energy);put(h(H_CONDUCTION_INITIAL_T)+2*owner,temperature);put(f(FIELD_OWNER_K)+2*owner,k);words[f(FIELD_TERM_COUNTS)+owner]=uint(terms);
 }
 void prepareTerms(int candidate){
- if(candidate==0){uint total=words[h(99)+h(106)];words[f(REQ)+1]=total;words[h(96)+1]=total;if(total>uint(h(107)))atomicOr(errors,64u);}
- if(errors!=0u||words[h(99)+h(106)]>uint(h(107))||words[f(OF)+candidate]==0u)return;int owner=int(words[f(OP)+candidate]);if(owner>=h(106))return;
- int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);int outAt=int(words[h(99)+owner]);
- if(kind!=1){int handle=int(words[(kind==0?h(18):kind==2?h(33):kind==3?h(110):h(136))+row]);words[h(100)+outAt]=uint(material(kind,handle));put(h(101)+2*outAt,double(quantity((kind==0?h(21):kind==2?h(35):kind==3?h(112):h(135))+2*row))*1e-10LF);}
- else for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++)if(quantity(h(27)+2*c)>uint64_t(0)){
-  words[h(100)+outAt]=uint(material(kind,int(words[h(25)+c])));put(h(101)+2*outAt,double(quantity(h(27)+2*c))*1e-10LF);outAt++;}
+ if(candidate==0){uint total=words[h(H_CONDUCTION_TERM_OFFSETS)+h(H_CONDUCTION_OWNER_CAPACITY)];words[f(FIELD_REQUIREMENTS)+1]=total;words[h(H_CONDUCTION_COUNTS)+1]=total;if(total>uint(h(H_CONDUCTION_TERM_CAPACITY)))atomicOr(errors,64u);}
+ if(errors!=0u||words[h(H_CONDUCTION_TERM_OFFSETS)+h(H_CONDUCTION_OWNER_CAPACITY)]>uint(h(H_CONDUCTION_TERM_CAPACITY))||words[f(FIELD_OWNER_FLAGS)+candidate]==0u)return;int owner=int(words[f(FIELD_OWNER_PREFIX)+candidate]);if(owner>=h(H_CONDUCTION_OWNER_CAPACITY))return;
+ int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);int outAt=int(words[h(H_CONDUCTION_TERM_OFFSETS)+owner]);
+ if(kind!=1){int handle=int(words[(kind==0?h(H_LIQUID_MATERIALS):kind==2?h(H_GRANULAR_MATERIAL):kind==3?h(H_COHERENT_MATERIAL):h(H_DEVICE_MATERIAL))+row]);words[h(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,handle));put(h(H_CONDUCTION_TERM_MASS)+2*outAt,double(quantity((kind==0?h(H_LIQUID_MASS):kind==2?h(H_GRANULAR_MASS):kind==3?h(H_COHERENT_MASS):h(H_DEVICE_MASS))+2*row))*1e-10LF);}
+ else for(int c=int(words[h(H_GAS_COMPONENT_OFFSETS)+row]);c<int(words[h(H_GAS_COMPONENT_OFFSETS)+row+1]);c++)if(quantity(h(H_GAS_MASS)+2*c)>uint64_t(0)){
+  words[h(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,int(words[h(H_GAS_COMPONENT_HANDLES)+c])));put(h(H_CONDUCTION_TERM_MASS)+2*outAt,double(quantity(h(H_GAS_MASS)+2*c))*1e-10LF);outAt++;}
 }
-int liquidCell(int row){int lo=0,hi=h(4);while(lo<hi){int mid=(lo+hi)/2;if(int(words[h(17)+mid+1])<=row)lo=mid+1;else hi=mid;}return lo<h(4)?lo:-1;}
+int liquidCell(int row){int lo=0,hi=h(H_CELL_COUNT);while(lo<hi){int mid=(lo+hi)/2;if(int(words[h(H_LIQUID_CELL_OFFSETS)+mid+1])<=row)lo=mid+1;else hi=mid;}return lo<h(H_CELL_COUNT)?lo:-1;}
 void sampleAddress(int id,out int owner,out int cell,out int mask,out double volume){
  owner=-1;cell=-1;mask=0;volume=0.0;
- if(id<h(0)){owner=ownerFor(id);if(owner<0)return;cell=liquidCell(id);if(cell<0){invalid();return;}mask=int(words[h(19)+id]);if(mask==0)mask=openMask(cell);volume=number(h(20)+2*id);return;}
- id-=h(0);int gasSamples=h(15)<0?0:h(4);
- if(id<gasSamples){cell=id;int node=int(words[h(30)+cell]);if(node<=0)return;owner=ownerFor(h(0)+node-1);mask=int(words[h(32)+cell]);double h3=cellSize()*cellSize()*cellSize();volume=number(h(31)+2*cell)/h3;return;}
+ if(id<h(H_LIQUID_CAPACITY)){owner=ownerFor(id);if(owner<0)return;cell=liquidCell(id);if(cell<0){invalid();return;}mask=int(words[h(H_LIQUID_SUPPORT_MASKS)+id]);if(mask==0)mask=openMask(cell);volume=number(h(H_LIQUID_VOLUMES)+2*id);return;}
+ id-=h(H_LIQUID_CAPACITY);int gasSamples=h(H_GAS_COUNTS)<0?0:h(H_CELL_COUNT);
+ if(id<gasSamples){cell=id;int node=int(words[h(H_GAS_CELL_NODES)+cell]);if(node<=0)return;owner=ownerFor(h(H_LIQUID_CAPACITY)+node-1);mask=int(words[h(H_GAS_DRY_MASKS)+cell]);double h3=cellSize()*cellSize()*cellSize();volume=number(h(H_GAS_DRY_VOLUMES)+2*cell)/h3;return;}
  id-=gasSamples;
- if(id<8*h(2)){int particle=id/8,slot=id%8;owner=ownerFor(h(0)+h(1)+particle);if(owner<0)return;cell=int(words[h(38)+8*particle+slot]);uint64_t q=quantity(h(39)+2*(8*particle+slot));if(q==uint64_t(0)){owner=-1;return;}if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(q)/16777216.0LF;return;}
- id-=8*h(2);if(id<h(3)){owner=ownerFor(h(0)+h(1)+h(2)+id);if(owner<0)return;cell=int(words[h(40)+id]);if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(34)+2*(h(2)+id)))/16777216.0LF;return;}
- id-=h(3);if(id<h(45)){owner=ownerFor(h(0)+h(1)+h(2)+h(3)+id);if(owner<0)return;cell=int(words[h(109)+id]);if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(111)+2*id))/16777216.0LF;}
+ if(id<8*h(H_PARTICLE_CAPACITY)){int particle=id/8,slot=id%8;owner=ownerFor(h(H_LIQUID_CAPACITY)+h(H_GAS_CAPACITY)+particle);if(owner<0)return;cell=int(words[h(H_GRANULAR_SUPPORT_CELLS)+8*particle+slot]);uint64_t q=quantity(h(H_GRANULAR_SUPPORT_QUOTAS)+2*(8*particle+slot));if(q==uint64_t(0)){owner=-1;return;}if(cell<0||cell>=h(H_CELL_COUNT)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(q)/16777216.0LF;return;}
+ id-=8*h(H_PARTICLE_CAPACITY);if(id<h(H_DEPOSIT_CAPACITY)){owner=ownerFor(h(H_LIQUID_CAPACITY)+h(H_GAS_CAPACITY)+h(H_PARTICLE_CAPACITY)+id);if(owner<0)return;cell=int(words[h(H_DEPOSIT_CELL)+id]);if(cell<0||cell>=h(H_CELL_COUNT)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(H_GRANULAR_VOLUME)+2*(h(H_PARTICLE_CAPACITY)+id)))/16777216.0LF;return;}
+ id-=h(H_DEPOSIT_CAPACITY);if(id<h(H_COHERENT_CAPACITY)){owner=ownerFor(h(H_LIQUID_CAPACITY)+h(H_GAS_CAPACITY)+h(H_PARTICLE_CAPACITY)+h(H_DEPOSIT_CAPACITY)+id);if(owner<0)return;cell=int(words[h(H_COHERENT_CELL)+id]);if(cell<0||cell>=h(H_CELL_COUNT)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(H_COHERENT_VOLUME)+2*id))/16777216.0LF;}
 }
 void flagSample(int id){int owner,cell,mask;double volume;sampleAddress(id,owner,cell,mask,volume);
- bool exists=owner>=0&&volume>0.0&&mask!=0;if(owner>=0&&(!finite(volume)||volume<0.0||(volume>0.0&&mask==0)))invalid();words[f(SF)+id]=exists?1u:0u;}
+ bool exists=owner>=0&&volume>0.0&&mask!=0&&activeCell(cell);if(owner>=0&&(!finite(volume)||volume<0.0||(volume>0.0&&mask==0)))invalid();words[f(FIELD_SAMPLE_FLAGS)+id]=exists?1u:0u;}
 void prepareSample(int id){
- if(id==0)words[f(REQ)+2]=uint(liveSamples());if(words[f(SF)+id]==0u)return;int outAt=int(words[f(SP)+id]),owner,cell,mask;double volume;sampleAddress(id,owner,cell,mask,volume);
- words[f(SO)+outAt]=uint(owner);words[f(SC)+outAt]=uint(cell);words[f(SM)+outAt]=uint(mask);put(f(SFR)+2*outAt,volume/(.125LF*double(bitCount(uint(mask)))));atomicAdd(words[f(CC)+cell],1u);
- words[f(MF_POW)+outAt]=floatBitsToUint(pow(float(volume/(.125LF*double(bitCount(uint(mask))))),2.0/3.0));
- if(ch(7)==2)reserveIncident(cf(18)+owner);
+ if(id==0)words[f(FIELD_REQUIREMENTS)+2]=uint(liveSamples());if(words[f(FIELD_SAMPLE_FLAGS)+id]==0u)return;int outAt=int(words[f(FIELD_SAMPLE_PREFIX)+id]),owner,cell,mask;double volume;sampleAddress(id,owner,cell,mask,volume);
+ words[f(FIELD_SAMPLE_OWNER)+outAt]=uint(owner);words[f(FIELD_SAMPLE_CELL)+outAt]=uint(cell);words[f(FIELD_SAMPLE_MASK)+outAt]=uint(mask);put(f(FIELD_SAMPLE_FRACTION)+2*outAt,volume/(.125LF*double(bitCount(uint(mask)))));atomicAdd(words[f(FIELD_CELL_COUNTS)+cell],1u);
+ words[f(FIELD_MF_POW)+outAt]=floatBitsToUint(pow(float(volume/(.125LF*double(bitCount(uint(mask))))),2.0/3.0));
+ if(ch(7)==2)reserveIncident(cf(CONDUCTION_DEGREE_COUNTS)+owner);
 }
-void scatterSample(int id){if(id>=liveSamples())return;int cell=int(words[f(SC)+id]),slot=int(atomicAdd(words[f(CU)+cell],1u)),at=int(words[f(CO)+cell])+slot;words[f(CS)+at]=uint(id);}
-double fraction(int point){return number(f(SFR)+2*point);}
-int family(int owner){int kind=int(words[f(OK)+owner]);return kind<2?kind:2;}
+void scatterSample(int id){if(id>=liveSamples())return;int cell=int(words[f(FIELD_SAMPLE_CELL)+id]),slot=int(atomicAdd(words[f(FIELD_CELL_CURSORS)+cell],1u)),at=int(words[f(FIELD_CELL_OFFSETS)+cell])+slot;words[f(FIELD_CELL_SAMPLES)+at]=uint(id);}
+double fraction(int point){return number(f(FIELD_SAMPLE_FRACTION)+2*point);}
+int family(int owner){int kind=int(words[f(FIELD_OWNER_KIND)+owner]);return kind<2?kind:2;}
 void coverage(int cell){double sums[32];for(int i=0;i<32;i++)sums[i]=0.0;
- for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
-  int point=int(words[f(CS)+at]),mask=int(words[f(SM)+point]),fam=family(int(words[f(SO)+point]));double portion=fraction(point);
-  for(int bit=0;bit<8;bit++)if((mask&(1<<bit))!=0){sums[bit]+=portion;if(h(133)>=0&&words[f(PC)+cell]>0u)sums[8+8*fam+bit]+=portion*.125LF;}
+ for(int at=int(words[f(FIELD_CELL_OFFSETS)+cell]);at<int(words[f(FIELD_CELL_OFFSETS)+cell+1]);at++){
+  int point=int(words[f(FIELD_CELL_SAMPLES)+at]),mask=int(words[f(FIELD_SAMPLE_MASK)+point]),fam=family(int(words[f(FIELD_SAMPLE_OWNER)+point]));double portion=fraction(point);
+  for(int bit=0;bit<8;bit++)if((mask&(1<<bit))!=0){sums[bit]+=portion;if(h(H_DEVICE_COUNTS)>=0&&words[f(FIELD_PORT_COUNTS)+cell]>0u)sums[8+8*fam+bit]+=portion*.125LF;}
  }
- for(int bit=0;bit<8;bit++)put(f(COVER)+2*(8*cell+bit),sums[bit]);
- if(h(133)>=0)for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
-  int port=int(words[f(PR)+at]);for(int i=0;i<24;i++)put(f(COVER)+2*(8*h(4)+24*port+i),sums[8+i]);
+ for(int bit=0;bit<8;bit++)put(f(FIELD_COVERAGE)+2*(8*cell+bit),sums[bit]);
+ if(h(H_DEVICE_COUNTS)>=0)for(int at=int(words[f(FIELD_PORT_OFFSETS)+cell]);at<int(words[f(FIELD_PORT_OFFSETS)+cell+1]);at++){
+  int port=int(words[f(FIELD_PORT_ROWS)+at]);for(int i=0;i<24;i++)put(f(FIELD_COVERAGE)+2*(8*h(H_CELL_COUNT)+24*port+i),sums[8+i]);
  }
 }
 double harmonic(double a,double b){if(a==0.0||b==0.0)return 0.0;double lo=min(a,b),hi=max(a,b);return lo*(2.0LF/(1.0LF+lo/hi));}
-ivec3 shape(){return ivec3(h(5),h(6),h(7));}ivec3 xyz(int cell){ivec3 s=shape();return ivec3(cell%s.x,cell/s.x%s.y,cell/(s.x*s.y));}
+ivec3 shape(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}ivec3 xyz(int cell){ivec3 s=shape();return ivec3(cell%s.x,cell/s.x%s.y,cell/(s.x*s.y));}
 int neighbor(int cell,int axis,int side){ivec3 q=xyz(cell),s=shape();q[axis]+=side==0?-1:1;if(any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s)))return -1;return (q.z*s.y+q.y)*s.x+q.x;}
-double blocked(int cell,int axis,int side){if(h(13)>=0)return 1.0LF-number(h(13)+2*(6*cell+2*axis+side));int other=neighbor(cell,axis,side);if(other<0)return 1.0;
+double blocked(int cell,int axis,int side){if(h(H_OPEN_FACE_FRACTIONS)>=0)return 1.0LF-number(h(H_OPEN_FACE_FRACTIONS)+2*(6*cell+2*axis+side));int other=neighbor(cell,axis,side);if(other<0)return 1.0;
  int a=openMask(cell),b=openMask(other),ports=0;for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(a&(1<<bit))!=0&&(b&(1<<(bit^(1<<axis))))!=0)ports++;return 1.0LF-double(ports)*.25LF;}
 int clipPort(inout vec2 polygon[8],int count,vec3 plane){
  vec2 next[8],previous=polygon[count-1];float before=dot(plane.xy,previous)-plane.z;int n=0;
@@ -121,72 +121,72 @@ int clipPort(inout vec2 polygon[8],int count,vec3 plane){
  for(int i=0;i<n;i++)polygon[i]=next[i];return n;
 }
 double dryPort(int cell,int bit,int axis,int side){
- if(h(148)<0)return 0.0;double pore=number(h(149)+8*cell+4),fill=number(h(149)+8*cell+6);
+ if(h(H_GAS_PLANES)<0)return 0.0;double pore=number(h(H_GAS_CELLS)+8*cell+4),fill=number(h(H_GAS_CELLS)+8*cell+6);
  if(fill>0.0&&fill<1.0&&fill<=.015625&&pore>0.0)return .25;
- double microPore=pore/double(bitCount(uint(openMask(cell)))),fraction=microPore>0.0?number(h(150)+2*(8*cell+bit))/microPore:1.0;
+ double microPore=pore/double(bitCount(uint(openMask(cell)))),fraction=microPore>0.0?number(h(H_GAS_MICRO)+2*(8*cell+bit))/microPore:1.0;
  if(fraction<=0.0)return .25;if(fraction>=1.0)return 0.0;
- int tangent=(axis+1)%3,other=(axis+2)%3;vec4 plane=vec4(number(h(148)+8*cell),number(h(148)+8*cell+2),number(h(148)+8*cell+4),number(h(148)+8*cell+6));
+ int tangent=(axis+1)%3,other=(axis+2)%3;vec4 plane=vec4(number(h(H_GAS_PLANES)+8*cell),number(h(H_GAS_PLANES)+8*cell+2),number(h(H_GAS_PLANES)+8*cell+4),number(h(H_GAS_PLANES)+8*cell+6));
  float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float((bit>>tangent)&1))-plane[other]*(.5*float((bit>>other)&1));
  vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);int n=clipPort(polygon,4,vec3(plane[tangent],plane[other],offset));float twice=0.0;
  for(int i=1;i+1<n;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}return double(clamp(abs(twice)*.5,0.0,.25));
 }
 double sameConductance(int point,int q){
- int owner=int(words[f(SO)+point]),other=int(words[f(SO)+q]);int overlap=bitCount(words[f(SM)+point]&words[f(SM)+q]);
+ int owner=int(words[f(FIELD_SAMPLE_OWNER)+point]),other=int(words[f(FIELD_SAMPLE_OWNER)+q]);int overlap=bitCount(words[f(FIELD_SAMPLE_MASK)+point]&words[f(FIELD_SAMPLE_MASK)+q]);
  if(owner==other||overlap==0)return 0.0;double fp=fraction(point),fq=fraction(q);
- float radius=uintBitsToFloat(words[f(MF_POW)+(fp<=fq?point:q)]);
- precise double g=2.0LF*harmonic(number(f(KC)+2*owner),number(f(KC)+2*other))*cellSize()*(.125LF*double(overlap)*double(radius));return g;
+ float radius=uintBitsToFloat(words[f(FIELD_MF_POW)+(fp<=fq?point:q)]);
+ precise double g=2.0LF*harmonic(number(f(FIELD_OWNER_K)+2*owner),number(f(FIELD_OWNER_K)+2*other))*cellSize()*(.125LF*double(overlap)*double(radius));return g;
 }
 double crossConductance(int point,int q,int axis){
- int owner=int(words[f(SO)+point]),otherOwner=int(words[f(SO)+q]);if(owner==otherOwner)return 0.0;
- int cell=int(words[f(SC)+point]),faceMask=axis==0?170:axis==1?204:240;
- int overlap=int(words[f(SM)+point])&faceMask&(int(words[f(SM)+q])<<(1<<axis));if(overlap==0)return 0.0;
- int base=f(FAC)+2*(15*cell+5*axis),lowBits=(1<<axis)-1;
+ int owner=int(words[f(FIELD_SAMPLE_OWNER)+point]),otherOwner=int(words[f(FIELD_SAMPLE_OWNER)+q]);if(owner==otherOwner)return 0.0;
+ int cell=int(words[f(FIELD_SAMPLE_CELL)+point]),faceMask=axis==0?170:axis==1?204:240;
+ int overlap=int(words[f(FIELD_SAMPLE_MASK)+point])&faceMask&(int(words[f(FIELD_SAMPLE_MASK)+q])<<(1<<axis));if(overlap==0)return 0.0;
+ int base=f(FIELD_FACE_FACTORS)+2*(15*cell+5*axis),lowBits=(1<<axis)-1;
  precise double numerator=.25LF*fraction(point)*fraction(q);double totalWeight=number(base+8),area=0.0;
  if(overlap==faceMask&&totalWeight>=0.0)area=numerator*totalWeight;
  else for(int remaining=overlap;remaining!=0;remaining&=remaining-1){
   int bit=findLSB(remaining),port=(bit&lowBits)|((bit>>(axis+1))<<axis);double factor=number(base+2*port);
   area+=factor>=0.0?numerator*factor:numerator/(-factor);
  }
- precise double g=harmonic(number(f(KC)+2*owner),number(f(KC)+2*otherOwner))*cellSize()*area;return g;
+ precise double g=harmonic(number(f(FIELD_OWNER_K)+2*owner),number(f(FIELD_OWNER_K)+2*otherOwner))*cellSize()*area;return g;
 }
 double bathConductance(int point,int axis,int side){
- int cell=int(words[f(SC)+point]),mask=int(words[f(SM)+point]),pieces=0;
+ int cell=int(words[f(FIELD_SAMPLE_CELL)+point]),mask=int(words[f(FIELD_SAMPLE_MASK)+point]),pieces=0;
  for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0)pieces++;
- precise double g=2.0LF*number(f(KC)+2*int(words[f(SO)+point]))*cellSize()*.25LF*double(pieces)*fraction(point)*blocked(cell,axis,side);return g;
+ precise double g=2.0LF*number(f(FIELD_OWNER_K)+2*int(words[f(FIELD_SAMPLE_OWNER)+point]))*cellSize()*.25LF*double(pieces)*fraction(point)*blocked(cell,axis,side);return g;
 }
 double deviceConductance(int point,int port){
- int mask=int(words[f(SM)+point]),owner=int(words[f(SO)+point]),fam=family(owner);
- double k=number(f(KC)+2*owner);if(k==0.0)return 0.0;
- int direction=int(words[h(143)+port]),axis=direction/2,side=direction&1;double area=0.0,fp=fraction(point);
+ int mask=int(words[f(FIELD_SAMPLE_MASK)+point]),owner=int(words[f(FIELD_SAMPLE_OWNER)+point]),fam=family(owner);
+ double k=number(f(FIELD_OWNER_K)+2*owner);if(k==0.0)return 0.0;
+ int direction=int(words[h(H_PORT_DIRECTION)+port]),axis=direction/2,side=direction&1;double area=0.0,fp=fraction(point);
  for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0){
-  double factor=number(f(COVER)+2*(8*h(4)+24*port+8*fam+bit));
+  double factor=number(f(FIELD_COVERAGE)+2*(8*h(H_CELL_COUNT)+24*port+8*fam+bit));
   if(factor>=0.0)area+=factor*fp;
-  else{int cell=int(words[f(SC)+point]);double covered=-factor,dry=dryPort(cell,bit,axis,side),pore=h(149)<0?.125LF*double(bitCount(uint(openMask(cell)))):number(h(149)+8*cell+4);
+  else{int cell=int(words[f(FIELD_SAMPLE_CELL)+point]);double covered=-factor,dry=dryPort(cell,bit,axis,side),pore=h(H_GAS_CELLS)<0?.125LF*double(bitCount(uint(openMask(cell)))):number(h(H_GAS_CELLS)+8*cell+4);
    double porosity=pore/(.125LF*double(bitCount(uint(openMask(cell))))),physical=fam==0?(.25LF-dry)*porosity:fam==1?dry*porosity:.25LF*min(1.0LF,covered/.125LF);
    area+=physical*(fp*.125LF)/covered;
   }
  }
- precise double g=cellSize()*cellSize()*area/(number(h(144)+2*port)/number(h(145)+2*port)+number(h(146)+2*port)/k);return g;
+ precise double g=cellSize()*cellSize()*area/(number(h(H_PORT_WALL_THICKNESS)+2*port)/number(h(H_PORT_WALL_CONDUCTIVITY)+2*port)+number(h(H_PORT_FILM_THICKNESS)+2*port)/k);return g;
 }
 // Port weights are geometry alone. The material conductivity and finite owner temperatures
 // remain in the one canonical pair evaluator used by both explicit and implicit conduction.
 void projectContactGeometry(int id){
- if(id<h(4))for(int axis=0;axis<3;axis++){
-  int other=neighbor(id,axis,1),base=f(FAC)+2*(15*id+5*axis),lowBits=(1<<axis)-1;double sum=0.0;bool reciprocal=true;
+ if(id<h(H_CELL_COUNT))for(int axis=0;axis<3;axis++){
+  int other=neighbor(id,axis,1),base=f(FIELD_FACE_FACTORS)+2*(15*id+5*axis),lowBits=(1<<axis)-1;double sum=0.0;bool reciprocal=true;
   for(int port=0;port<4;port++){
    double inverse=0.0;
    if(other>=0){int bit=(port&lowBits)|((port&~lowBits)<<1)|(1<<axis);
-    double covered=max(number(f(COVER)+2*(8*id+bit)),number(f(COVER)+2*(8*other+(bit^(1<<axis)))));if(covered>0.0){inverse=1.0LF/covered;if(!(finite(inverse)&&inverse>0.0))inverse=-covered;}
+    double covered=max(number(f(FIELD_COVERAGE)+2*(8*id+bit)),number(f(FIELD_COVERAGE)+2*(8*other+(bit^(1<<axis)))));if(covered>0.0){inverse=1.0LF/covered;if(!(finite(inverse)&&inverse>0.0))inverse=-covered;}
    }
    put(base+2*port,inverse);if(inverse<0.0)reciprocal=false;else sum+=inverse;
   }
   put(base+8,reciprocal&&finite(sum)?sum:-1.0);
  }
  if(id<livePorts()){
-  int cell=int(words[h(142)+id]),direction=int(words[h(143)+id]),axis=direction/2,side=direction&1,open=bitCount(uint(openMask(cell)));
-  double pore=h(149)<0?.125LF*double(open):number(h(149)+8*cell+4),porosity=open==0?0.0:pore/(.125LF*double(open));
+  int cell=int(words[h(H_PORT_CELL)+id]),direction=int(words[h(H_PORT_DIRECTION)+id]),axis=direction/2,side=direction&1,open=bitCount(uint(openMask(cell)));
+  double pore=h(H_GAS_CELLS)<0?.125LF*double(open):number(h(H_GAS_CELLS)+8*cell+4),porosity=open==0?0.0:pore/(.125LF*double(open));
   for(int bit=0;bit<8;bit++){
-   int base=f(COVER)+2*(8*h(4)+24*id+bit);
+   int base=f(FIELD_COVERAGE)+2*(8*h(H_CELL_COUNT)+24*id+bit);
    double liquid=number(base),gas=number(base+16),solid=number(base+32);
    double liquidWeight=0.0,gasWeight=0.0,solidWeight=0.0;
    if(((bit>>axis)&1)==side&&open>0){
@@ -202,77 +202,77 @@ void projectContactGeometry(int id){
 // The spatial producer emits adjacency degrees and the bath index alongside
 // each contact, so conduction need not traverse the complete edge set to count it.
 void writeContact(int at,int a,int b,double g,double bath){
- words[h(102)+at]=uint(a);words[h(103)+at]=uint(b);put(h(104)+2*at,g);put(h(105)+2*at,bath);put(cf(23)+2*at,0.0);
- reserveIncident(cf(18)+a);if(b>=0)reserveIncident(cf(18)+b);
- else{uint index=reserveIncident(cf(26)+1);words[cf(47)+at]=index;if(index>=uint(ch(6)))atomicOr(errors,64u);else words[cf(48)+index]=uint(at);}
+ words[h(H_CONDUCTION_CONTACT_A)+at]=uint(a);words[h(H_CONDUCTION_CONTACT_B)+at]=uint(b);put(h(H_CONDUCTION_CONTACT_G)+2*at,g);put(h(H_CONDUCTION_BATH_T)+2*at,bath);put(cf(CONDUCTION_FLUX)+2*at,0.0);
+ reserveIncident(cf(CONDUCTION_DEGREE_COUNTS)+a);if(b>=0)reserveIncident(cf(CONDUCTION_DEGREE_COUNTS)+b);
+ else{uint index=reserveIncident(cf(CONDUCTION_MODE)+1);words[cf(CONDUCTION_BATH_INDEX)+at]=index;if(index>=uint(ch(6)))atomicOr(errors,64u);else words[cf(CONDUCTION_BATH_EDGES)+index]=uint(at);}
 }
 void deviceEdges(int point,bool writing,inout int count){
- int cell=int(words[f(SC)+point]),a=int(words[f(SO)+point]);
- for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
-  int port=int(words[f(PR)+at]),b=ownerFor(deviceBase()+int(words[h(141)+port]));if(b<0){invalid();continue;}
+ int cell=int(words[f(FIELD_SAMPLE_CELL)+point]),a=int(words[f(FIELD_SAMPLE_OWNER)+point]);
+ for(int at=int(words[f(FIELD_PORT_OFFSETS)+cell]);at<int(words[f(FIELD_PORT_OFFSETS)+cell+1]);at++){
+  int port=int(words[f(FIELD_PORT_ROWS)+at]),b=ownerFor(deviceBase()+int(words[h(H_PORT_DEVICE)+port]));if(b<0){invalid();continue;}
   double g=deviceConductance(point,port);if(!(finite(g)&&g>=0.0)){invalid();continue;}if(g==0.0)continue;
-  if(writing){int outAt=int(words[f(EO)+point])+count;if(outAt>=h(108)){atomicOr(errors,64u);return;}writeContact(outAt,min(a,b),max(a,b),g,0.0);}count++;
+  if(writing){int outAt=int(words[f(FIELD_CONTACT_OFFSETS)+point])+count;if(outAt>=h(H_CONDUCTION_CONTACT_CAPACITY)){atomicOr(errors,64u);return;}writeContact(outAt,min(a,b),max(a,b),g,0.0);}count++;
  }
 }
-void portCount(int id){if(id>=livePorts())return;int cell=int(words[h(142)+id]),device=int(words[h(141)+id]),dir=int(words[h(143)+id]);if(cell<0||cell>=h(4)||device<0||device>=liveDevice()||dir<0||dir>5){invalid();return;}atomicAdd(words[f(PC)+cell],1u);if(ch(7)==2){int owner=ownerFor(deviceBase()+device);if(owner>=0)reserveIncident(cf(18)+owner);}}
-void portScatter(int id){if(id>=livePorts())return;int cell=int(words[h(142)+id]);words[f(PR)+words[f(PO)+cell]+atomicAdd(words[f(PU)+cell],1u)]=uint(id);}
+void portCount(int id){if(id>=livePorts())return;int cell=int(words[h(H_PORT_CELL)+id]),device=int(words[h(H_PORT_DEVICE)+id]),dir=int(words[h(H_PORT_DIRECTION)+id]);if(cell<0||cell>=h(H_CELL_COUNT)||device<0||device>=liveDevice()||dir<0||dir>5){invalid();return;}if(!activeCell(cell))return;atomicAdd(words[f(FIELD_PORT_COUNTS)+cell],1u);if(ch(7)==2){int owner=ownerFor(deviceBase()+device);if(owner>=0)reserveIncident(cf(CONDUCTION_DEGREE_COUNTS)+owner);}}
+void portScatter(int id){if(id>=livePorts())return;int cell=int(words[h(H_PORT_CELL)+id]);if(!activeCell(cell))return;words[f(FIELD_PORT_ROWS)+words[f(FIELD_PORT_OFFSETS)+cell]+atomicAdd(words[f(FIELD_PORT_CURSORS)+cell],1u)]=uint(id);}
 void edge(int point,int other,double g,double bath,bool writing,inout int count){
- if(!(finite(g)&&g>=0.0)){invalid();return;}if(g==0.0)return;int a=int(words[f(SO)+point]),b=other<0?-1:int(words[f(SO)+other]);if(a==b)return;
- if(writing){int at=int(words[f(EO)+point])+count;if(at>=h(108)){atomicOr(errors,64u);return;}writeContact(at,b>=0?min(a,b):a,b>=0?max(a,b):-1,g,bath);}count++;
+ if(!(finite(g)&&g>=0.0)){invalid();return;}if(g==0.0)return;int a=int(words[f(FIELD_SAMPLE_OWNER)+point]),b=other<0?-1:int(words[f(FIELD_SAMPLE_OWNER)+other]);if(a==b)return;
+ if(writing){int at=int(words[f(FIELD_CONTACT_OFFSETS)+point])+count;if(at>=h(H_CONDUCTION_CONTACT_CAPACITY)){atomicOr(errors,64u);return;}writeContact(at,b>=0?min(a,b):a,b>=0?max(a,b):-1,g,bath);}count++;
 }
 void contacts(int point,bool writing){
- if(point>=liveSamples())return; int cell=int(words[f(SC)+point]),mask=int(words[f(SM)+point]),owner=int(words[f(SO)+point]),count=0;double fp=fraction(point),kp=number(f(KC)+2*owner),hcell=cellSize();
- if(kp==0.0){if(!writing)words[f(EC)+point]=0u;return;}
- for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
-  int q=int(words[f(CS)+at]);if(q<=point||words[f(SO)+q]==uint(owner))continue;double kq=number(f(KC)+2*int(words[f(SO)+q]));
-  int overlap=bitCount(uint(mask)&words[f(SM)+q]);if(overlap==0||kq==0.0)continue;
+ if(point>=liveSamples())return; int cell=int(words[f(FIELD_SAMPLE_CELL)+point]),mask=int(words[f(FIELD_SAMPLE_MASK)+point]),owner=int(words[f(FIELD_SAMPLE_OWNER)+point]),count=0;double fp=fraction(point),kp=number(f(FIELD_OWNER_K)+2*owner),hcell=cellSize();
+ if(kp==0.0){if(!writing)words[f(FIELD_CONTACT_COUNTS)+point]=0u;return;}
+ for(int at=int(words[f(FIELD_CELL_OFFSETS)+cell]);at<int(words[f(FIELD_CELL_OFFSETS)+cell+1]);at++){
+  int q=int(words[f(FIELD_CELL_SAMPLES)+at]);if(q<=point||words[f(FIELD_SAMPLE_OWNER)+q]==uint(owner))continue;double kq=number(f(FIELD_OWNER_K)+2*int(words[f(FIELD_SAMPLE_OWNER)+q]));
+  int overlap=bitCount(uint(mask)&words[f(FIELD_SAMPLE_MASK)+q]);if(overlap==0||kq==0.0)continue;
   double g=sameConductance(point,q);
   edge(point,q,g,0.0,writing,count);
  }
  for(int axis=0;axis<3;axis++){
-  int other=neighbor(cell,axis,1);if(other>=0)for(int at=int(words[f(CO)+other]);at<int(words[f(CO)+other+1]);at++){
-   int q=int(words[f(CS)+at]);if(words[f(SO)+q]==uint(owner))continue;
-   int faceMask=axis==0?170:axis==1?204:240,overlap=mask&faceMask&(int(words[f(SM)+q])<<(1<<axis));
-   double kq=number(f(KC)+2*int(words[f(SO)+q]));if(overlap==0||kq==0.0)continue;
+  int other=neighbor(cell,axis,1);if(other>=0)for(int at=int(words[f(FIELD_CELL_OFFSETS)+other]);at<int(words[f(FIELD_CELL_OFFSETS)+other+1]);at++){
+   int q=int(words[f(FIELD_CELL_SAMPLES)+at]);if(words[f(FIELD_SAMPLE_OWNER)+q]==uint(owner))continue;
+   int faceMask=axis==0?170:axis==1?204:240,overlap=mask&faceMask&(int(words[f(FIELD_SAMPLE_MASK)+q])<<(1<<axis));
+   double kq=number(f(FIELD_OWNER_K)+2*int(words[f(FIELD_SAMPLE_OWNER)+q]));if(overlap==0||kq==0.0)continue;
    double g=crossConductance(point,q,axis);
    edge(point,q,g,0.0,writing,count);
   }
-  if(h(12)>=0)for(int side=0;side<2;side++){
-   double temperature=number(h(12)+2*(6*cell+2*axis+side));if(isnan(temperature))continue;if(!(finite(temperature)&&temperature>0.0)){invalid();continue;}
+  if(h(H_BATH_TEMPERATURES)>=0)for(int side=0;side<2;side++){
+   double temperature=number(h(H_BATH_TEMPERATURES)+2*(6*cell+2*axis+side));if(isnan(temperature))continue;if(!(finite(temperature)&&temperature>0.0)){invalid();continue;}
    int pieces=0;for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0)pieces++;
    edge(point,-1,bathConductance(point,axis,side),temperature,writing,count);
   }
  }
- if(h(133)>=0)deviceEdges(point,writing,count);
- if(!writing)words[f(EC)+point]=uint(count);
+ if(h(H_DEVICE_COUNTS)>=0)deviceEdges(point,writing,count);
+ if(!writing)words[f(FIELD_CONTACT_COUNTS)+point]=uint(count);
 }
-void writeContacts(int id){if(id==0){uint count=words[f(EO)+h(8)];words[f(REQ)+3]=count;words[h(96)+2]=count;if(count>uint(h(108)))atomicOr(errors,64u);}
- if((errors&~64u)!=0u||words[f(EO)+h(8)]>uint(h(108)))return;contacts(id,true);}
-bool imexFast(int owner){return 2.0*p.dt*number(cf(22)+2*owner)>number(cf(13)+2*owner);}
+void writeContacts(int id){if(id==0){uint count=words[f(FIELD_CONTACT_OFFSETS)+h(H_SAMPLE_CAPACITY)];words[f(FIELD_REQUIREMENTS)+3]=count;words[h(H_CONDUCTION_COUNTS)+2]=count;if(count>uint(h(H_CONDUCTION_CONTACT_CAPACITY)))atomicOr(errors,64u);}
+ if((errors&~64u)!=0u||words[f(FIELD_CONTACT_OFFSETS)+h(H_SAMPLE_CAPACITY)]>uint(h(H_CONDUCTION_CONTACT_CAPACITY)))return;contacts(id,true);}
+bool imexFast(int owner){return 2.0*p.dt*number(cf(CONDUCTION_DEGREE)+2*owner)>number(cf(CONDUCTION_MIN_CP)+2*owner);}
 // Spatial explicit conduction keeps one U/T/Cp owner and only one incident per sample.
 void scatterOwnerSample(int id){
  int owner=-1;
- if(id<h(8)){if(id>=liveSamples())return;owner=int(words[f(SO)+id]);}
- else{int port=id-h(8);if(port>=livePorts())return;owner=ownerFor(deviceBase()+int(words[h(141)+port]));}
- if(owner<0)return;int slot=int(reserveIncident(cf(20)+owner));words[cf(21)+words[cf(19)+owner]+slot]=uint(id);
+ if(id<h(H_SAMPLE_CAPACITY)){if(id>=liveSamples())return;owner=int(words[f(FIELD_SAMPLE_OWNER)+id]);}
+ else{int port=id-h(H_SAMPLE_CAPACITY);if(port>=livePorts()||!activeCell(int(words[h(H_PORT_CELL)+port])))return;owner=ownerFor(deviceBase()+int(words[h(H_PORT_DEVICE)+port]));}
+ if(owner<0)return;int slot=int(reserveIncident(cf(CONDUCTION_DEGREE_CURSORS)+owner));words[cf(CONDUCTION_INCIDENT)+words[cf(CONDUCTION_DEGREE_OFFSETS)+owner]+slot]=uint(id);
 }
 void countBaths(int point){
- if(point>=liveSamples())return;int count=0,cell=int(words[f(SC)+point]);
- if(h(12)>=0&&number(f(KC)+2*int(words[f(SO)+point]))>0.0)for(int direction=0;direction<6;direction++){
-  double t=number(h(12)+2*(6*cell+direction));if(isnan(t))continue;if(!(finite(t)&&t>0.0)){invalid();continue;}
+ if(point>=liveSamples())return;int count=0,cell=int(words[f(FIELD_SAMPLE_CELL)+point]);
+ if(h(H_BATH_TEMPERATURES)>=0&&number(f(FIELD_OWNER_K)+2*int(words[f(FIELD_SAMPLE_OWNER)+point]))>0.0)for(int direction=0;direction<6;direction++){
+  double t=number(h(H_BATH_TEMPERATURES)+2*(6*cell+direction));if(isnan(t))continue;if(!(finite(t)&&t>0.0)){invalid();continue;}
   double g=bathConductance(point,direction/2,direction&1);if(!(finite(g)&&g>=0.0)){invalid();continue;}if(g>0.0)count++;
  }
- words[f(BC)+point]=uint(count);
+ words[f(FIELD_BATH_COUNTS)+point]=uint(count);
 }
 void writeBaths(int point){
- int count=int(words[f(BO)+h(8)]);
- if(point==0){words[f(REQ)+4]=uint(count);words[cf(26)+1]=uint(count);if(count>ch(6))atomicOr(errors,64u);}
+ int count=int(words[f(FIELD_BATH_OFFSETS)+h(H_SAMPLE_CAPACITY)]);
+ if(point==0){words[f(FIELD_REQUIREMENTS)+4]=uint(count);words[cf(CONDUCTION_MODE)+1]=uint(count);if(count>ch(6))atomicOr(errors,64u);}
  if(point>=liveSamples()||count>ch(6)||errors!=0u)return;
- int cell=int(words[f(SC)+point]),outAt=int(words[f(BO)+point]);
- if(h(12)>=0&&number(f(KC)+2*int(words[f(SO)+point]))>0.0)for(int direction=0;direction<6;direction++){
-  double t=number(h(12)+2*(6*cell+direction));if(isnan(t))continue;
+ int cell=int(words[f(FIELD_SAMPLE_CELL)+point]),outAt=int(words[f(FIELD_BATH_OFFSETS)+point]);
+ if(h(H_BATH_TEMPERATURES)>=0&&number(f(FIELD_OWNER_K)+2*int(words[f(FIELD_SAMPLE_OWNER)+point]))>0.0)for(int direction=0;direction<6;direction++){
+  double t=number(h(H_BATH_TEMPERATURES)+2*(6*cell+direction));if(isnan(t))continue;
   double g=bathConductance(point,direction/2,direction&1);if(g<=0.0)continue;
-  put(f(BG)+2*outAt,g);put(f(BT)+2*outAt,t);outAt++;
+  put(f(FIELD_BATH_G)+2*outAt,g);put(f(FIELD_BATH_T)+2*outAt,t);outAt++;
  }
 }
 dvec2 mfAdd(dvec2 a,double b){precise double next=a.x+b,v=next-a.x,error=(a.x-(next-v))+(b-v);precise double lo=error+a.y,sum=next+lo,virtualLo=sum-next,remainder=(next-(sum-virtualLo))+(lo-virtualLo);return dvec2(sum,remainder);}
@@ -280,13 +280,13 @@ int imexPoint,imexCursor;
 void pairFlux(int owner,int other,int otherPoint,double g,double dt,inout dvec2 degree,inout dvec2 delta){
  if(owner==other||g==0.0)return;if(!(finite(g)&&g>0.0)){invalid();return;}
  if(p.stage==41||p.stage==42){
-  if(p.stage==41){atomicOr(words[f(IMEX_FLAGS)+otherPoint],1u);if(imexFast(other)){atomicOr(words[cf(53)+owner],1u);degree.x+=1.0;}}
+  if(p.stage==41){atomicOr(words[f(FIELD_IMEX_AFFECTED_FLAGS)+otherPoint],1u);if(imexFast(other)){atomicOr(words[cf(CONDUCTION_IMEX_COUPLED)+owner],1u);degree.x+=1.0;}}
   else if(imexFast(other)){frozenG[2*imexCursor]=g;frozenG[2*imexCursor+1]=double(other);imexCursor++;}
   return;
  }
  if(p.stage==43){
-  int a=min(owner,other),b=max(owner,other);double oldA=number(cf(2)+2*a),oldB=number(cf(2)+2*b);
-  double newA=imexFast(a)?number(cf(16)+2*a):oldA,newB=imexFast(b)?number(cf(16)+2*b):oldB;
+  int a=min(owner,other),b=max(owner,other);double oldA=number(cf(CONDUCTION_OWNER_INITIAL_T)+2*a),oldB=number(cf(CONDUCTION_OWNER_INITIAL_T)+2*b);
+  double newA=imexFast(a)?number(cf(CONDUCTION_TEMPERATURE)+2*a):oldA,newB=imexFast(b)?number(cf(CONDUCTION_TEMPERATURE)+2*b):oldB;
   precise double oldQ=g*(oldB-oldA)*dt,newQ=g*(newB-newA)*dt;
   delta=mfAdd(delta,owner==a?newQ-oldQ:oldQ-newQ);return;
  }
@@ -298,91 +298,91 @@ void pairFlux(int owner,int other,int otherPoint,double g,double dt,inout dvec2 
 }
 void spatialFlux(int id,bool preparing){
  double dt=p.dt;dvec2 degree=dvec2(0.0),delta=dvec2(0.0);
- if(id<h(8)){
-  if(id>=liveSamples())return;int owner=int(words[f(SO)+id]),cell=int(words[f(SC)+id]);
-  if(number(f(KC)+2*owner)>0.0){
-   for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
-    int q=int(words[f(CS)+at]);if(q==id||int(words[f(SO)+q])==owner)continue;
-    pairFlux(owner,int(words[f(SO)+q]),q,sameConductance(min(id,q),max(id,q)),dt,degree,delta);
+ if(id<h(H_SAMPLE_CAPACITY)){
+  if(id>=liveSamples())return;int owner=int(words[f(FIELD_SAMPLE_OWNER)+id]),cell=int(words[f(FIELD_SAMPLE_CELL)+id]);
+  if(number(f(FIELD_OWNER_K)+2*owner)>0.0){
+   for(int at=int(words[f(FIELD_CELL_OFFSETS)+cell]);at<int(words[f(FIELD_CELL_OFFSETS)+cell+1]);at++){
+    int q=int(words[f(FIELD_CELL_SAMPLES)+at]);if(q==id||int(words[f(FIELD_SAMPLE_OWNER)+q])==owner)continue;
+    pairFlux(owner,int(words[f(FIELD_SAMPLE_OWNER)+q]),q,sameConductance(min(id,q),max(id,q)),dt,degree,delta);
    }
    for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
     int other=neighbor(cell,axis,side);if(other<0)continue;
-    for(int at=int(words[f(CO)+other]);at<int(words[f(CO)+other+1]);at++){
-     int q=int(words[f(CS)+at]),b=int(words[f(SO)+q]);if(b==owner)continue;
+    for(int at=int(words[f(FIELD_CELL_OFFSETS)+other]);at<int(words[f(FIELD_CELL_OFFSETS)+other+1]);at++){
+     int q=int(words[f(FIELD_CELL_SAMPLES)+at]),b=int(words[f(FIELD_SAMPLE_OWNER)+q]);if(b==owner)continue;
      double g=side==1?crossConductance(id,q,axis):crossConductance(q,id,axis);pairFlux(owner,b,q,g,dt,degree,delta);
     }
    }
-   if(h(133)>=0)for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
-    int port=int(words[f(PR)+at]),b=ownerFor(deviceBase()+int(words[h(141)+port]));if(b<0){invalid();continue;}
-    pairFlux(owner,b,h(8)+port,deviceConductance(id,port),dt,degree,delta);
+   if(h(H_DEVICE_COUNTS)>=0)for(int at=int(words[f(FIELD_PORT_OFFSETS)+cell]);at<int(words[f(FIELD_PORT_OFFSETS)+cell+1]);at++){
+    int port=int(words[f(FIELD_PORT_ROWS)+at]),b=ownerFor(deviceBase()+int(words[h(H_PORT_DEVICE)+port]));if(b<0){invalid();continue;}
+    pairFlux(owner,b,h(H_SAMPLE_CAPACITY)+port,deviceConductance(id,port),dt,degree,delta);
    }
   }
-  if(p.stage!=41&&p.stage!=42)for(int bath=int(words[f(BO)+id]);bath<int(words[f(BO)+id+1]);bath++){
-   double g=number(f(BG)+2*bath);precise double q=g*(number(f(BT)+2*bath)-number(cf(16)+2*owner))*dt;
-   if(p.stage==43){double oldQ=number(cf(25)+2*bath*ch(5));delta=mfAdd(delta,q-oldQ);put(cf(25)+2*bath*ch(5),q);}else{degree=mfAdd(degree,g);delta=mfAdd(delta,q);}if(preparing)put(cf(25)+2*bath*ch(5),q);
+  if(p.stage!=41&&p.stage!=42)for(int bath=int(words[f(FIELD_BATH_OFFSETS)+id]);bath<int(words[f(FIELD_BATH_OFFSETS)+id+1]);bath++){
+   double g=number(f(FIELD_BATH_G)+2*bath);precise double q=g*(number(f(FIELD_BATH_T)+2*bath)-number(cf(CONDUCTION_TEMPERATURE)+2*owner))*dt;
+   if(p.stage==43){double oldQ=number(cf(CONDUCTION_RESERVOIR_CHANGE)+2*bath*ch(5));delta=mfAdd(delta,q-oldQ);put(cf(CONDUCTION_RESERVOIR_CHANGE)+2*bath*ch(5),q);}else{degree=mfAdd(degree,g);delta=mfAdd(delta,q);}if(preparing)put(cf(CONDUCTION_RESERVOIR_CHANGE)+2*bath*ch(5),q);
   }
  }else{
-  int port=id-h(8);if(port>=livePorts())return;int owner=ownerFor(deviceBase()+int(words[h(141)+port]));if(owner<0)return;
-  int cell=int(words[h(142)+port]);
-  for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
-   int point=int(words[f(CS)+at]);pairFlux(owner,int(words[f(SO)+point]),point,deviceConductance(point,port),dt,degree,delta);
+  int port=id-h(H_SAMPLE_CAPACITY);if(port>=livePorts()||!activeCell(int(words[h(H_PORT_CELL)+port])))return;int owner=ownerFor(deviceBase()+int(words[h(H_PORT_DEVICE)+port]));if(owner<0)return;
+  int cell=int(words[h(H_PORT_CELL)+port]);
+  for(int at=int(words[f(FIELD_CELL_OFFSETS)+cell]);at<int(words[f(FIELD_CELL_OFFSETS)+cell+1]);at++){
+   int point=int(words[f(FIELD_CELL_SAMPLES)+at]);pairFlux(owner,int(words[f(FIELD_SAMPLE_OWNER)+point]),point,deviceConductance(point,port),dt,degree,delta);
   }
  }
- if(p.stage==41){words[f(CACHE_COUNTS)+imexPoint]=uint(degree.x);return;}
+ if(p.stage==41){words[f(FIELD_CACHE_COUNTS)+imexPoint]=uint(degree.x);return;}
  if(p.stage==42)return;
- if(p.stage==43){delta=mfAdd(delta,number(f(IMEX_BASE)+4*id));delta=mfAdd(delta,number(f(IMEX_BASE)+4*id+2));}
- int target=f(MF_DATA)+8*id;if(preparing){put(target,degree.x);put(target+2,degree.y);}put(target+4,delta.x);put(target+6,delta.y);
+ if(p.stage==43){delta=mfAdd(delta,number(f(FIELD_IMEX_BASE)+4*id));delta=mfAdd(delta,number(f(FIELD_IMEX_BASE)+4*id+2));}
+ int target=f(FIELD_MF_DATA)+8*id;if(preparing){put(target,degree.x);put(target+2,degree.y);}put(target+4,delta.x);put(target+6,delta.y);
 }
 void bathSummary(int block,int lane){
- int id=128*block+lane,count=int(words[cf(26)+1]);double huge=1.7976931348623157e308LF;
- double t=id<count?number(f(BT)+2*id):0.0;mfBounds[lane]=id<count?dvec4(t,t,0.0,0.0):dvec4(huge,-huge,0.0,0.0);barrier();
+ int id=128*block+lane,count=int(words[cf(CONDUCTION_MODE)+1]);double huge=1.7976931348623157e308LF;
+ double t=id<count?number(f(FIELD_BATH_T)+2*id):0.0;mfBounds[lane]=id<count?dvec4(t,t,0.0,0.0):dvec4(huge,-huge,0.0,0.0);barrier();
  for(int width=64;width>0;width/=2){if(lane<width){mfBounds[lane].x=min(mfBounds[lane].x,mfBounds[lane+width].x);mfBounds[lane].y=max(mfBounds[lane].y,mfBounds[lane+width].y);}barrier();}
- if(lane==0)for(int i=0;i<4;i++)put(cf(30)+2*(4*block+i),mfBounds[0][i]);
+ if(lane==0)for(int i=0;i<4;i++)put(cf(CONDUCTION_BATH_PARTIALS)+2*(4*block+i),mfBounds[0][i]);
 }
 void spatialDispatch(){
  bool run=errors==0u;
  int groups=run?(liveSamples()+livePorts()+127)/128:0;
- words[f(MF_DISPATCH)]=uint(min(groups,65535));words[f(MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(MF_DISPATCH)+2]=1u;
+ words[f(FIELD_MF_DISPATCH)]=uint(min(groups,65535));words[f(FIELD_MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(FIELD_MF_DISPATCH)+2]=1u;
 }
-void graphInitialize(int row){if(row<h(106)){words[cf(18)+row]=0u;words[cf(20)+row]=0u;}if(row==0){words[h(151)+7]=1u;words[cf(26)+1]=0u;words[h(96)+2]=0u;}}
-void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);double value=number(h(97)+2*owner);
- int address=(kind==0?h(22):kind==1?h(28):kind==2?h(36):kind==3?h(113):h(134))+2*row;
- if(kind==4){double old=number(address);put(h(140)+4*row,value);put(h(140)+4*row+2,-old);if(quantity(address)!=quantity(h(97)+2*owner)){uint64_t generation=quantity(h(139)+2*row)+uint64_t(1);words[h(138)+2*row]=uint(generation);words[h(138)+2*row+1]=uint(generation>>32);}}
+void graphInitialize(int row){if(row<h(H_CONDUCTION_OWNER_CAPACITY)){words[cf(CONDUCTION_DEGREE_COUNTS)+row]=0u;words[cf(CONDUCTION_DEGREE_CURSORS)+row]=0u;}if(row==0){words[h(H_CONDUCTION_HEADER)+7]=1u;words[cf(CONDUCTION_MODE)+1]=0u;words[h(H_CONDUCTION_COUNTS)+2]=0u;}}
+void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(FIELD_OWNER_KIND)+owner]),row=int(words[f(FIELD_OWNER_INDEX)+owner]);double value=number(h(H_CONDUCTION_ENERGY)+2*owner);
+ int address=(kind==0?h(H_LIQUID_ENERGY):kind==1?h(H_GAS_ENERGY):kind==2?h(H_GRANULAR_ENERGY):kind==3?h(H_COHERENT_ENERGY):h(H_DEVICE_ENERGY))+2*row;
+ if(kind==4){double old=number(address);put(h(H_DEVICE_ENERGY_CHANGE)+4*row,value);put(h(H_DEVICE_ENERGY_CHANGE)+4*row+2,-old);if(quantity(address)!=quantity(h(H_CONDUCTION_ENERGY)+2*owner)){uint64_t generation=quantity(h(H_DEVICE_REQUEST_GENERATION)+2*row)+uint64_t(1);words[h(H_DEVICE_GENERATION)+2*row]=uint(generation);words[h(H_DEVICE_GENERATION)+2*row+1]=uint(generation>>32);}}
  put(address,value);
 }
 void imexCompact(int id){
- if(id>=p.count)return;words[f(IMEX_FLAGS)+id]=0u;
- bool live=id<h(8)?id<liveSamples():id-h(8)<livePorts();if(!live)return;
- int owner=id<h(8)?int(words[f(SO)+id]):ownerFor(deviceBase()+int(words[h(141)+id-h(8)]));if(owner<0)return;
- put(f(IMEX_BASE)+4*id,number(f(MF_DATA)+8*id+4));put(f(IMEX_BASE)+4*id+2,number(f(MF_DATA)+8*id+6));
- if(imexFast(owner)){uint slot=atomicAdd(words[cf(49)+1],1u);words[f(IMEX_SAMPLES)+slot]=uint(id);}
+ if(id>=p.count)return;words[f(FIELD_IMEX_AFFECTED_FLAGS)+id]=0u;
+ bool live=id<h(H_SAMPLE_CAPACITY)?id<liveSamples():id-h(H_SAMPLE_CAPACITY)<livePorts();if(!live)return;
+ int owner=id<h(H_SAMPLE_CAPACITY)?int(words[f(FIELD_SAMPLE_OWNER)+id]):ownerFor(deviceBase()+int(words[h(H_PORT_DEVICE)+id-h(H_SAMPLE_CAPACITY)]));if(owner<0)return;
+ put(f(FIELD_IMEX_BASE)+4*id,number(f(FIELD_MF_DATA)+8*id+4));put(f(FIELD_IMEX_BASE)+4*id+2,number(f(FIELD_MF_DATA)+8*id+6));
+ if(imexFast(owner)){uint slot=atomicAdd(words[cf(CONDUCTION_IMEX_COUNTS)+1],1u);words[f(FIELD_IMEX_SAMPLES)+slot]=uint(id);}
 }
 void imexCacheValue(int ordinal,bool product){
- int id=int(words[f(IMEX_SAMPLES)+ordinal]);dvec2 sum=dvec2(0.0);int n=int(words[cf(49)]);
- for(int edge=int(words[f(CACHE_OFFSETS)+ordinal]);edge<int(words[f(CACHE_OFFSETS)+ordinal+1]);edge++){
-  double g=frozenG[2*edge];int other=int(frozenG[2*edge+1]),index=int(words[cf(51)+other]);double value;
-  if(product)value=(p.step==1?number(cf(38)+2*(n+index)):number(cf(37)+2*index))/number(cf(14)+2*other);
-  else value=number(cf(p.step==1?17:16)+2*other)-number(cf(2)+2*other);
+ int id=int(words[f(FIELD_IMEX_SAMPLES)+ordinal]);dvec2 sum=dvec2(0.0);int n=int(words[cf(CONDUCTION_IMEX_COUNTS)]);
+ for(int edge=int(words[f(FIELD_CACHE_OFFSETS)+ordinal]);edge<int(words[f(FIELD_CACHE_OFFSETS)+ordinal+1]);edge++){
+  double g=frozenG[2*edge];int other=int(frozenG[2*edge+1]),index=int(words[cf(CONDUCTION_IMEX_INDEX)+other]);double value;
+  if(product)value=(p.step==1?number(cf(CONDUCTION_WORK)+2*(n+index)):number(cf(CONDUCTION_PRESSURE)+2*index))/number(cf(CONDUCTION_ROOT_CP)+2*other);
+  else value=number(cf(p.step==1?17:16)+2*other)-number(cf(CONDUCTION_OWNER_INITIAL_T)+2*other);
   sum=mfAdd(sum,p.dt*g*value);
  }
- put(f(MF_DATA)+8*id+4,sum.x);put(f(MF_DATA)+8*id+6,sum.y);
+ put(f(FIELD_MF_DATA)+8*id+4,sum.x);put(f(FIELD_MF_DATA)+8*id+6,sum.y);
 }
 void main(){int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
  if(p.stage==19){if(errors==0u)bathSummary(block,lane);return;}if(id>=p.count)return;
  if(p.stage>=40){
   if(errors!=0u)return;
-  if(p.stage==40){if(int(words[cf(26)])!=0)imexCompact(id);return;}
-  if(p.stage==41||p.stage==42){if(id>=p.count)return;imexPoint=id;int point=int(words[f(IMEX_SAMPLES)+id]);imexCursor=int(words[f(CACHE_OFFSETS)+id]);if(p.stage==41)atomicOr(words[f(IMEX_FLAGS)+point],1u);spatialFlux(point,false);return;}
-  if(p.stage==44){if(id<p.count&&words[f(IMEX_FLAGS)+id]!=0u){uint slot=atomicAdd(words[cf(49)+2],1u);words[f(IMEX_AFFECTED)+slot]=uint(id);}return;}
-  if(p.stage==45){if(id==0){int groups=(int(words[cf(49)+2])+127)/128;words[f(MF_DISPATCH)]=uint(min(groups,65535));words[f(MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(MF_DISPATCH)+2]=1u;}return;}
-  if(p.stage==43){if(id<int(words[cf(49)+2]))spatialFlux(int(words[f(IMEX_AFFECTED)+id]),false);return;}
+  if(p.stage==40){if(int(words[cf(CONDUCTION_MODE)])!=0)imexCompact(id);return;}
+  if(p.stage==41||p.stage==42){if(id>=p.count)return;imexPoint=id;int point=int(words[f(FIELD_IMEX_SAMPLES)+id]);imexCursor=int(words[f(FIELD_CACHE_OFFSETS)+id]);if(p.stage==41)atomicOr(words[f(FIELD_IMEX_AFFECTED_FLAGS)+point],1u);spatialFlux(point,false);return;}
+  if(p.stage==44){if(id<p.count&&words[f(FIELD_IMEX_AFFECTED_FLAGS)+id]!=0u){uint slot=atomicAdd(words[cf(CONDUCTION_IMEX_COUNTS)+2],1u);words[f(FIELD_IMEX_AFFECTED)+slot]=uint(id);}return;}
+  if(p.stage==45){if(id==0){int groups=(int(words[cf(CONDUCTION_IMEX_COUNTS)+2])+127)/128;words[f(FIELD_MF_DISPATCH)]=uint(min(groups,65535));words[f(FIELD_MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(FIELD_MF_DISPATCH)+2]=1u;}return;}
+  if(p.stage==43){if(id<int(words[cf(CONDUCTION_IMEX_COUNTS)+2]))spatialFlux(int(words[f(FIELD_IMEX_AFFECTED)+id]),false);return;}
   if((p.stage==46||p.stage==47)&&id<p.count)imexCacheValue(id,p.stage==47);
   return;
  }
  if(p.stage==24){if(id==0)spatialDispatch();return;}
- if(p.stage==18){if(errors!=0u||id>=liveSamples()+livePorts())return;int point=id<liveSamples()?id:h(8)+id-liveSamples();spatialFlux(point,p.stage==18);return;}
+ if(p.stage==18){if(errors!=0u||id>=liveSamples()+livePorts())return;int point=id<liveSamples()?id:h(H_SAMPLE_CAPACITY)+id-liveSamples();spatialFlux(point,p.stage==18);return;}
  if(p.stage==17){writeBaths(id);return;}if(p.stage==21){graphInitialize(id);return;}
- if(p.stage==22){if(id==0)words[f(REQ)+4]=max(words[f(REQ)+4],words[cf(26)+1]);return;}
- if(p.stage==14){if(id==0){words[f(REQ)+5]=words[cf(26)];words[f(REQ)+6]=words[cf(26)+1];for(int i=0;i<4;i++)words[f(REQ)+7+i]=words[cf(49)+i];}return;}if(p.stage==13){if(id==0)words[f(REQ)+4]=words[cf(26)+1];return;}if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
+ if(p.stage==22){if(id==0)words[f(FIELD_REQUIREMENTS)+4]=max(words[f(FIELD_REQUIREMENTS)+4],words[cf(CONDUCTION_MODE)+1]);return;}
+ if(p.stage==14){if(id==0){words[f(FIELD_REQUIREMENTS)+5]=words[cf(CONDUCTION_MODE)];words[f(FIELD_REQUIREMENTS)+6]=words[cf(CONDUCTION_MODE)+1];for(int i=0;i<4;i++)words[f(FIELD_REQUIREMENTS)+7+i]=words[cf(CONDUCTION_IMEX_COUNTS)+i];}return;}if(p.stage==13){if(id==0)words[f(FIELD_REQUIREMENTS)+4]=words[cf(CONDUCTION_MODE)+1];return;}if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
  if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);else if(p.stage==11)portCount(id);else if(p.stage==12)portScatter(id);else if(p.stage==15)scatterOwnerSample(id);else if(p.stage==16)countBaths(id);else if(p.stage==25)projectContactGeometry(id);
 }

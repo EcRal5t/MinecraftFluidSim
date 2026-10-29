@@ -1,6 +1,8 @@
 package mmm.simulation;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidDomainContracts;
+
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidSolverConfig;
 import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
@@ -96,7 +98,7 @@ public final class FluidCutCellShapeValidation {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				160, 5.0E-5F, 2.0E-3F);
-		FluidDomain domain = new FluidDomain(24, 16, 24, config);
+		HostFluidState domain = new HostFluidState(24, 16, 24, config);
 		for (int z = 0; z < 24; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 9; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
@@ -114,7 +116,7 @@ public final class FluidCutCellShapeValidation {
 				);
 			}
 		}
-		FluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(5, 3, 5, displaced, 8);
+		FluidDomainContracts.VolumeAddition restoration = domain.addVolumeNearBudgeted(5, 3, 5, displaced, 8);
 		checkClose(displaced, 6.0F, 0.0F, "documented stair displacement");
 		checkClose(restoration.addedVolume(), displaced, 0.0F, "documented stair restoration");
 		check(!restoration.markerBudgetLimited(), "documented stair restoration exhausted marker budget");

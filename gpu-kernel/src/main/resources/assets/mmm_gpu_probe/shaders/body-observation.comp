@@ -1,6 +1,7 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+// HOST_LAYOUT
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint words[]; };
 layout(binding=1,std430) buffer Observation { uint outputWords[]; };
@@ -11,13 +12,13 @@ double num(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
 double outvalue(int a){return packDouble2x32(uvec2(outputWords[a],outputWords[a+1]));}
 void store(int a,double x){uvec2 bits=unpackDouble2x32(x);outputWords[a]=bits.x;outputWords[a+1]=bits.y;}
 int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-double liquid(int c,int k){return num(h(12)+2*(4*c+k));}
+double liquid(int c,int k){return num(h(H_GEOMETRY_CELLS)+2*(4*c+k));}
 double cellSize(){return outvalue(44);}double gravity(){return outvalue(46);}
 dvec3 bodyLow(){return dvec3(outvalue(32),outvalue(34),outvalue(36));}dvec3 bodyHigh(){return dvec3(outvalue(38),outvalue(40),outvalue(42));}
-ivec3 dims(){return ivec3(h(0),h(1),h(2));}int cell(ivec3 c){return (c.z*h(1)+c.y)*h(0)+c.x;}
-int nx(){return (h(0)+1)*h(1)*h(2);}int ny(){return h(0)*(h(1)+1)*h(2);}
+ivec3 dims(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}int cell(ivec3 c){return (c.z*h(H_SIZE_Y)+c.y)*h(H_SIZE_X)+c.x;}
+int nx(){return (h(H_SIZE_X)+1)*h(H_SIZE_Y)*h(H_SIZE_Z);}int ny(){return h(H_SIZE_X)*(h(H_SIZE_Y)+1)*h(H_SIZE_Z);}
 int faceAt(int axis,ivec3 c){ivec3 d=dims();d[axis]++;return (axis==0?0:axis==1?nx():nx()+ny())+(c.z*d.y+c.y)*d.x+c.x;}
-double faceVelocity(int f){return num(h(14)+2*(4*f+1));}
+double faceVelocity(int f){return num(h(H_FACES)+2*(4*f+1));}
 double power(double x,int n){double result=1.0;for(int i=0;i<n;i++)result*=x;return result;}
 // Fraction and first moments of a unit box below one plane. Inclusion-exclusion is evaluated
 // on the smaller cut; inactive axes use their exact half-box moment.
@@ -42,7 +43,7 @@ double clippedVolume(dvec4 plane,dvec3 lo,dvec3 hi,out dvec3 centerOut){
  dvec3 extent=max(dvec3(0.0),hi-lo),moment;double fraction=cut(plane.xyz*extent,plane.w-dot(plane.xyz,lo),moment);
  centerOut=fraction>0.0?lo+extent*(moment/fraction):.5*(lo+hi);return fraction*extent.x*extent.y*extent.z;
 }
-double below(int c,double y,dvec4 plane,double pore){double volume=0.0;uint mask=words[h(11)+c];
+double below(int c,double y,dvec4 plane,double pore){double volume=0.0;uint mask=words[h(H_MASKS)+c];
  for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),hi=lo+.5;hi.y=min(hi.y,y);dvec3 center;
   if(hi.y>lo.y)volume+=clippedVolume(plane,lo,hi,center)*pore;
  }return volume;
@@ -50,24 +51,24 @@ double below(int c,double y,dvec4 plane,double pore){double volume=0.0;uint mask
 double layerHeight(int c,double volume,dvec4 plane,double pore){if(volume<=0.0)return 0.0;if(volume>=liquid(c,0))return 1.0;double lo=0.0,hi=1.0;
  for(int i=0;i<16;i++){double middle=.5*(lo+hi);if(below(c,middle,plane,pore)<volume)lo=middle;else hi=middle;}return .5*(lo+hi);
 }
-double gasPressure(int c){if(h(21)<0||h(22)<0)return 0.0;int node=int(words[h(22)+c])-1;return node<0?0.0:num(h(21)+2*(9*node+1))-101325.0;}
+double gasPressure(int c){if(h(H_GAS_THERMAL)<0||h(H_GAS_CELL_NODES)<0)return 0.0;int node=int(words[h(H_GAS_CELL_NODES)+c])-1;return node<0?0.0:num(h(H_GAS_THERMAL)+2*(9*node+1))-101325.0;}
 void sampleCell(int c,ivec3 coord,out double value[13]){
  for(int i=0;i<13;i++)value[i]=0.0;double volume=liquid(c,0),available=liquid(c,2);if(available<=0.0)return;
- double size=cellSize(),h3=size*size*size,h2=size*size,density=volume>0.0?liquid(c,1)/(volume*h3):0.0;uint mask=words[h(11)+c];
+ double size=cellSize(),h3=size*size*size,h2=size*size,density=volume>0.0?liquid(c,1)/(volume*h3):0.0;uint mask=words[h(H_MASKS)+c];
  double open=double(bitCount((~mask)&255u))*.125,pore=open>0.0?available/open:0.0;if(pore<=0.0)return;
- dvec4 plane=dvec4(num(h(13)+8*c),num(h(13)+8*c+2),num(h(13)+8*c+4),num(h(13)+8*c+6));
+ dvec4 plane=dvec4(num(h(H_PLANES)+8*c),num(h(H_PLANES)+8*c+2),num(h(H_PLANES)+8*c+4),num(h(H_PLANES)+8*c+6));
  dvec3 boundLow=bodyLow()-dvec3(coord),boundHigh=bodyHigh()-dvec3(coord),flow=dvec3(0.0);
  for(int axis=0;axis<3;axis++){ivec3 next=coord;next[axis]++;flow[axis]=.5*(faceVelocity(faceAt(axis,coord))+faceVelocity(faceAt(axis,next)));}
  double waterVolume=0.0,waterMass=0.0,denserVolume=0.0;
- int first=int(words[h(15)+c]),last=int(words[h(15)+c+1]);
- for(int row=first;row<last;row++)if(int(words[h(17)+row])==h(19)){waterVolume+=num(h(16)+2*row);waterMass+=double(integer(h(18)+2*row))*1e-10;}
+ int first=int(words[h(H_CELL_OFFSETS)+c]),last=int(words[h(H_CELL_OFFSETS)+c+1]);
+ for(int row=first;row<last;row++)if(int(words[h(H_MATERIALS)+row])==h(H_WATER_MATERIAL)){waterVolume+=num(h(H_VOLUMES)+2*row);waterMass+=double(integer(h(H_MASS_UNITS)+2*row))*1e-10;}
  double waterDensity=waterVolume>0.0?waterMass/(waterVolume*h3):0.0;
- if(waterVolume>0.0)for(int row=first;row<last;row++)if(int(words[h(17)+row])!=h(19)){
-  double v=num(h(16)+2*row);double rho=v>0.0?double(integer(h(18)+2*row))*1e-10/(v*h3):0.0;if(rho>waterDensity)denserVolume+=v;
+ if(waterVolume>0.0)for(int row=first;row<last;row++)if(int(words[h(H_MATERIALS)+row])!=h(H_WATER_MATERIAL)){
+  double v=num(h(H_VOLUMES)+2*row);double rho=v>0.0?double(integer(h(H_MASS_UNITS)+2*row))*1e-10/(v*h3):0.0;if(rho>waterDensity)denserVolume+=v;
  }
  double waterLo=waterVolume>0.0?layerHeight(c,denserVolume,plane,pore):0.0,waterHi=waterVolume>0.0?layerHeight(c,denserVolume+waterVolume,plane,pore):0.0;
  double liquidMoment=0.0;for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),hi=lo+.5,center;double v=clippedVolume(plane,lo,hi,center)*pore;liquidMoment+=v*center.y;}
- double liquidY=volume>0.0?liquidMoment/volume:.5,basePressure=available-volume<=4e-5&&h(20)>=0?num(h(20)+2*c):gasPressure(c);
+ double liquidY=volume>0.0?liquidMoment/volume:.5,basePressure=available-volume<=4e-5&&h(H_GAS_PRESSURE)>=0?num(h(H_GAS_PRESSURE)+2*c):gasPressure(c);
  if(available-volume>4e-5){double surfaceY=abs(plane.y)>1e-12?clamp((plane.w-.5*plane.x-.5*plane.z)/plane.y,0.0,1.0):liquidY;basePressure+=density*gravity()*size*(surfaceY-liquidY);}
  for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){
   dvec3 micro=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),lo=max(micro,boundLow),hi=min(micro+.5,boundHigh),center;
@@ -86,7 +87,7 @@ void sampleCell(int c,ivec3 coord,out double value[13]){
 }
 void main(){int lane=int(gl_LocalInvocationID.x),group=int(gl_WorkGroupID.x),id=128*group+lane;
  if(p.stage==0){double values[13];for(int i=0;i<13;i++)values[i]=0.0;
-  if(id<p.count){ivec3 q=ivec3(h(3),h(4),h(5))+ivec3(id%h(6),id/h(6)%h(7),id/(h(6)*h(7)));sampleCell(cell(q),q,values);}
+  if(id<p.count){ivec3 q=ivec3(h(H_FIRST_X),h(H_FIRST_Y),h(H_FIRST_Z))+ivec3(id%h(H_EXTENT_X),id/h(H_EXTENT_X)%h(H_EXTENT_Y),id/(h(H_EXTENT_X)*h(H_EXTENT_Y)));sampleCell(cell(q),q,values);}
   for(int i=0;i<13;i++)sums[128*i+lane]=values[i];barrier();
   for(int stride=64;stride>0;stride>>=1){if(lane<stride)for(int i=0;i<13;i++)sums[128*i+lane]+=sums[128*i+lane+stride];barrier();}
   if(lane==0)for(int i=0;i<13;i++)store(96+26*group+2*i,sums[128*i]);return;

@@ -19,7 +19,7 @@ final class M3MaterialSurfaceValidation {
     int heavy = registry.handle("mmm:heavy");
     validateBoundedPieces(registry, water);
 
-    FluidDomain immiscibleDomain = layeredDomain(registry, water, oil);
+    HostFluidState immiscibleDomain = layeredDomain(registry, water, oil);
     double volumeBefore = immiscibleDomain.totalVolume(), massBefore = immiscibleDomain.totalMass();
     FluidMaterialRenderSnapshot layeredSnapshot = immiscibleDomain.copyMaterialRenderSnapshot();
     FluidMaterialSurfaceMesher.Mesh layered = FluidMaterialSurfaceMesher.build(layeredSnapshot);
@@ -143,7 +143,7 @@ final class M3MaterialSurfaceValidation {
     check(Math.abs(adjoiningArea - 1.5) < 1.0E-12,
         "a zero-volume neighbor removed a real liquid face or produced a sheet");
     var domain =
-        new FluidDomain(4, 4, 4, new FluidSolverConfig(1, 1_000, 0, .025F, 200, 1.0E-5F, 2.0E-3F));
+        new HostFluidState(4, 4, 4, new FluidSolverConfig(1, 1_000, 0, .025F, 200, 1.0E-5F, 2.0E-3F));
     domain.setVolume(1, 1, 1, 1.0E-6F);
     domain.domainCollision.setMaterialInCell(1, 1, 1, registry, material);
     var thin = domain.copyMaterialRenderSnapshot();
@@ -232,9 +232,9 @@ final class M3MaterialSurfaceValidation {
     return 1;
   }
 
-  private static FluidDomain layeredDomain(
+  private static HostFluidState layeredDomain(
       FluidMaterialRegistry registry, int leftMaterial, int rightMaterial) {
-    FluidDomain domain = filledDomain();
+    HostFluidState domain = filledDomain();
     for (int z = 1; z <= 4; z++)
       for (int y = 1; y <= 4; y++)
         for (int x = 1; x <= 4; x++) {
@@ -244,12 +244,12 @@ final class M3MaterialSurfaceValidation {
     return domain;
   }
 
-  private static FluidDomain threePhaseDomain(
+  private static HostFluidState threePhaseDomain(
       FluidMaterialRegistry registry,
       int leftMaterial,
       int lowRightMaterial,
       int highRightMaterial) {
-    FluidDomain domain = filledDomain();
+    HostFluidState domain = filledDomain();
     for (int z = 1; z <= 4; z++)
       for (int y = 1; y <= 4; y++)
         for (int x = 1; x <= 4; x++) {
@@ -259,10 +259,10 @@ final class M3MaterialSurfaceValidation {
     return domain;
   }
 
-  private static FluidDomain filledDomain() {
+  private static HostFluidState filledDomain() {
     FluidSolverConfig config =
         new FluidSolverConfig(1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F, 200, 1.0E-5F, 2.0E-3F);
-    FluidDomain domain = new FluidDomain(6, 6, 6, config);
+    HostFluidState domain = new HostFluidState(6, 6, 6, config);
     for (int z = 1; z <= 4; z++)
       for (int y = 1; y <= 4; y++)
         for (int x = 1; x <= 4; x++) {

@@ -1,4 +1,6 @@
-# 正常操作 fuzzer（runNormalPlayFuzz）
+# 正常操作 fuzzer 历史记录
+
+本页记录已移除的 CPU 推进测试及其原运行条件。当前验证入口见[验证指南](validation.md)。
 
 本页介绍 `:fabric:runNormalPlayFuzz` 的结构、模式、动作、场景、不变量与覆盖边界，供外部评审判断还有哪些层级没有覆盖。代码入口与提交历史见文末。
 

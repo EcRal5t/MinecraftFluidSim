@@ -1,7 +1,7 @@
 package mmm.simulation;
 
 import mmm.chemistry.ChemicalRegistry;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidMaterial;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
@@ -146,11 +146,11 @@ public final class CommittedWorldRegistries {
 		attachLiquidThermalContents(stack, GasRegistry.STANDARD_TEMPERATURE_K);
 	}
 
-	void bindConfiguredState(FluidDomain domain, int maximumThermalSubstepsPerStep) {
+	void bindConfiguredState(HostFluidState domain, int maximumThermalSubstepsPerStep) {
 		bindConfiguredState(domain, maximumThermalSubstepsPerStep, material);
 	}
 
-	void bindConfiguredState(FluidDomain domain, int maximumThermalSubstepsPerStep, MaterialRegistry definitions) {
+	void bindConfiguredState(HostFluidState domain, int maximumThermalSubstepsPerStep, MaterialRegistry definitions) {
 		if (hasCapability(WorldCapability.MATERIALS)) {
 			FluidRegionFactory.bindDefaultMaterialState(domain);
 			domain.bindMaterialDefinitions(definitions);

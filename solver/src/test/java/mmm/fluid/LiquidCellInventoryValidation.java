@@ -23,28 +23,24 @@ public final class LiquidCellInventoryValidation {
 		preparedRowsAndRecoveryAreAtomic();
 		targetEnergyClosesAtStoredOwners();
 		explicitMechanicalHeatIsOneAtomicCandidate();
-		dissipationFollowsAnEmptiedSource();
-		sharedFaceFluxUsesCellInventory();
+		transportAndMechanicalHeatCommitTogether();
 		System.out.println("Liquid cell inventory validation passed: six-face quantities, atomic rows, recovery and U rounding");
 	}
-	private static void dissipationFollowsAnEmptiedSource() {
-		var domain=new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F));
-		var cells=domain.liquidCells;var key=new LiquidCellInventory.Key(0,0,255);
+	private static void transportAndMechanicalHeatCommitTogether() {
+		var cells=new LiquidCellInventory(3,null);var key=new LiquidCellInventory.Key(0,0,255);
 		cells.planAdditions(List.of(new LiquidCellInventory.Stock(key,SignedDyadic.of(1),100,null,16))).commit();
-		domain.markCellInventoryChanged();domain.cellMacStage.rebuildInventory();
-		domain.cellMacStage.beginMechanicalHeat();domain.cellMacStage.addMechanicalHeatAtCell(0,64);
 		var before=cells.snapshot();
 		var routes=LiquidTransportRoutes.builder(1,2);routes.source(cells.stock(key));
 		routes.route(0,1,255,SignedDyadic.of(.25));routes.route(1,2,255,SignedDyadic.of(.75));
-		var plan=cells.planRoutes(routes.build(),null,domain.cellMacStage::finishMechanicalHeat);
+		var plan=cells.planRoutes(routes.build(),null,q->{q.addMechanicalHeat(1,16);q.addMechanicalHeat(2,48);});
 		require(cells.snapshot().rows().equals(before.rows()),"Dissipation preparation changed source U");
 		require(plan.future().stocksInCell(0).isEmpty()&&plan.mechanicalHeat().equals(SignedDyadic.of(64)),
-				"Source dissipation was lost when its liquid drained completely");
+				"Prepared mechanical heat was lost when the liquid moved");
 		plan.commit();
 		require(cells.stock(new LiquidCellInventory.Key(1,0,255)).internalEnergy()==20
 				&&cells.stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==60
 				&&cells.massUnits()==100&&cells.exactVolume().equals(SignedDyadic.of(1)),
-				"Actual transported mass did not carry source heat into the single successor inventory commit");
+				"Transport and explicit heat did not publish together");
 		var exchange=cells.planRoutes(LiquidTransportRoutes.builder(0,0).build(),null,q->{q.addMechanicalHeat(1,-4);q.addMechanicalHeat(2,4);});
 		require(exchange.future().stock(new LiquidCellInventory.Key(1,0,255)).internalEnergy()==16
 				&&exchange.future().stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==64
@@ -122,7 +118,7 @@ public final class LiquidCellInventoryValidation {
 	}
 	private static void bulkVolumeReplacement() {
 		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F);
-		var bulk=new FluidDomain(3,3,3,config);var single=new FluidDomain(3,3,3,config);
+		var bulk=new HostFluidState(3,3,3,config);var single=new HostFluidState(3,3,3,config);
 		byte[] masks=new byte[27];masks[0]=(byte)252;
 		bulk.geometry.cutCells.restoreMicroMasks(masks);single.geometry.cutCells.restoreMicroMasks(masks);
 		float[] volumes=new float[27];for(int c=0;c<27;c++)volumes[c]=c%4==0?1:.25F;
@@ -134,19 +130,19 @@ public final class LiquidCellInventoryValidation {
 		var before=bulk.liquidCells.snapshot();volumes[26]=Float.NaN;boolean rejected=false;
 		try{bulk.setVolumes(volumes);}catch(IllegalArgumentException expected){rejected=true;}
 		require(rejected && before.rows().equals(bulk.liquidCells.snapshot().rows()),"Invalid bulk target partially published");
-		var bound=new FluidDomain(3,3,3,config);
+		var bound=new HostFluidState(3,3,3,config);
 		bound.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		bound.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		var materials=new int[27];java.util.Arrays.fill(volumes,.5F);for(int c=0;c<27;c++)materials[c]=c%2;
 		bound.setVolumes(volumes,materials);
 		for(var stock:bound.liquidCells.stocks())require(stock.massUnits()==bound.unitScale.massUnitsForNormalized(.5*bound.materialRegistry.material(stock.key().material()).referenceDensity())
 				&& stock.mixture().massUnits(BuiltinChemicalDefinitions.REGISTRY)==stock.massUnits(),"Bulk material quantities did not use actual phase density");
-		var restored=FluidDomain.restoreAuthoritativeState(bound.captureAuthoritativeState());
+		var restored=HostFluidState.restoreAuthoritativeState(bound.captureAuthoritativeState());
 		require(restored.liquidCells.snapshot().rows().equals(bound.liquidCells.snapshot().rows()),"Bulk cell state did not restore");
 	}
 
 	private static void collisionPreservesGeometricTail() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
+		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(new FluidMaterial("test:tail",1000,"test:tail",0,Math.PI/2)));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
 		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,null,0))).commit();
@@ -159,7 +155,7 @@ public final class LiquidCellInventoryValidation {
 				&& domain.totalMassUnits()==0, "Collision tail could not return through the common inventory transaction");
 	}
 	private static void chemicalTailRetainsComposition() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
+		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		domain.bindChemistry(chemistry);
@@ -241,30 +237,6 @@ public final class LiquidCellInventoryValidation {
 		next.commit(); require(restored.massUnits() == 10 && restored.exactVolume().equals(SignedDyadic.of(.5)), "Recovered transport changed inventory");
 		boolean immutable = false; try { snapshot.rows().get(0).clear(); } catch (UnsupportedOperationException expected) { immutable = true; }
 		require(immutable, "Liquid snapshot exposes a mutable cell row");
-	}
-	private static void sharedFaceFluxUsesCellInventory() {
-		// Interior translation supplies the full donor with upstream gas capacity.
-		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(1, 0, 255);
-		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,
-				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10)))).commit();
-		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F)); domain.liquidCells = cells;
-		domain.markCellInventoryChanged();domain.domainFlowFields.preparePhysicalState();
-		for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=.2F;
-		domain.cellMacStage.publishMomentum();
-		var before=cells.snapshot();
-		var energyBefore=cells.exactInternalEnergy();
-		var prepared=domain.cellMacStage.prepareLiquid(.1F);
-		var plan=prepared.inventory();
-		require(!prepared.inventory().transfers().isEmpty()&&cells.snapshot().rows().equals(before.rows()),
-				"Shared face preparation bypassed transport or modified its source");
-		plan.commit();
-		for (int cell = 0; cell < 12; cell++) require(cells.exactCellVolume(cell).equals(plan.future().exactCellVolume(cell))
-				&& cells.exactCellVolume(cell).compareTo(SignedDyadic.of(1)) <= 0, "Shared face and material inventory disagree on future volume");
-		require(cells.massUnits() == 100 && cells.exactVolume().equals(SignedDyadic.of(1))
-				// Joint MAC preparation includes mixing and this fixture's wall response heat.
-				&& cells.exactInternalEnergy().subtract(energyBefore).equals(plan.mechanicalHeat().add(plan.energyRoundoff()))
-				&&plan.energyChange().equals(plan.mechanicalHeat().add(plan.energyRoundoff())),
-				"Shared face transport changed exact inventory or unbooked U");
 	}
 	private static void explicitMechanicalHeatIsOneAtomicCandidate() {
 		var cells = new LiquidCellInventory(2, null); var key = new LiquidCellInventory.Key(0,0,255);

@@ -1,14 +1,14 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.MmmMod;
 import mmm.application.ContainerRecoveryCoordinator;
 import mmm.application.ControllerQueryUseCase;
 import mmm.application.RegionApplicationService;
 import mmm.application.ThermalReservoirUseCase;
-import mmm.fluid.CpuFluidSolverBackend;
 import mmm.fluid.FluidSolverBackend;
-import mmm.fluid.FluidDomain;
-import mmm.fluid.SparseMatrixCompute;
+import mmm.fluid.HostFluidState;
 import mmm.network.ProtocolSessions;
 import mmm.simulation.persistence.ContainerJournalFileStore;
 import mmm.transfer.ContainerTransferJournal;
@@ -71,6 +71,7 @@ public final class MmmRuntimeFactory {
 		MinecraftRuntimePolicy policy = new MinecraftRuntimePolicy(startup, regionManager);
 		FluidWorldTargetResolver targets = new FluidWorldTargetResolver(regionManager);
 		FluidSolverBackend solverBackend = createSolverBackend();
+		regionManager.solverBackend(solverBackend);
 		try {
 		MmmMod.LOGGER.info("Matter, Motion & Mechanics numerical execution: {}", solverBackend.executionDescription());
 		prepareSolverBackend(solverBackend, startup, worldRegistries);
@@ -93,8 +94,7 @@ public final class MmmRuntimeFactory {
 		FarmlandMoistureOperations farmland = new FarmlandMoistureOperations(server, worldRoot,
 				regionManager, regionOperations, availability, phaseWorkBarrier, worldRegistries, snapshots);
 		availability.additionalPending(id -> finiteDevices.hasPending(id) || farmland.hasPending(id));
-		regionTick.finiteDeviceExchange(finiteDevices::tickExchange);
-		regionTick.activityConnections(finiteDevices::refreshActivityConnections);
+				regionTick.activityConnections(finiteDevices::refreshActivityConnections);
 		regionTick.farmlandHydration(farmland::tickAvailable);
 		ControllerQueryUseCase controllerQueries = new ControllerQueryUseCase(new ControllerSummaryAdapter(
 				regionManager, regionOperations, worldRegistries.profile(), worldRegistries.thermalOrNull(),
@@ -125,20 +125,20 @@ public final class MmmRuntimeFactory {
 						}
 						try {
 							return regionTick.refreshRegionInputs(level, region);
-						} catch (FluidDomain.CollisionEditBlockedException blocked) {
+						} catch (FluidDomainContracts.CollisionEditBlockedException blocked) {
 							regionTick.blockCollisionEdit(level, region, blocked);
 							throw blocked;
 						}
 					}
 					@Override public void stepMotion(FluidRegion region) { motion.step(region, List.of()); }
-					@Override public void bindCapabilityState(FluidDomain domain) {
+					@Override public void bindCapabilityState(HostFluidState domain) {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep());
 					}
-					@Override public void bindTensionPalette(FluidDomain domain, int angleDegrees) {
+					@Override public void bindTensionPalette(HostFluidState domain, int angleDegrees) {
 						DebugScenarioInitialization.bindTensionPalette(domain,
 								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
 					}
-					@Override public void bindTensionCapabilityState(FluidDomain domain, int angleDegrees) {
+					@Override public void bindTensionCapabilityState(HostFluidState domain, int angleDegrees) {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep(),
 								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
 					}
@@ -189,9 +189,9 @@ public final class MmmRuntimeFactory {
 
 	static void prepareSolverBackend(FluidSolverBackend backend, WorldStartupCoordinator.Result startup,
 			CommittedWorldRegistries worldRegistries) {
-		if (startup.creationLocked() || !startup.profileProven()) return;
+		if (startup.creationLocked() || !startup.profileProven() || backend.unavailableReason() != null) return;
 		long started = System.nanoTime();
-		FluidDomain domain = FluidRegionFactory.createDomain(1, 1, 1);
+		HostFluidState domain = FluidRegionFactory.createDomain(1, 1, 1);
 		worldRegistries.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep());
 		domain.synchronizeGasTopologyForPersistence();
 		backend.prepare(domain.captureAuthoritativeState());
@@ -200,29 +200,16 @@ public final class MmmRuntimeFactory {
 	}
 
 	static FluidSolverBackend createSolverBackend() {
-		String selected = System.getProperty("mmm.solverBackend", "vulkan").trim();
-		if (selected.equals("cpu")) {
-			var pressureCompute = createPressureCompute();
-			return pressureCompute == null ? new CpuFluidSolverBackend()
-					: new CpuFluidSolverBackend(pressureCompute, message -> MmmMod.LOGGER.warn("{}", message));
-		}
 		int device = Integer.parseInt(System.getProperty("mmm.gpuDevice", "0"));
 		if (device < 0) throw new IllegalArgumentException("mmm.gpuDevice must be nonnegative");
-		for (var provider : ServiceLoader.load(FluidSolverBackend.Provider.class))
-			if (provider.id().equals(selected)) return Objects.requireNonNull(provider.create(device));
-		throw new IllegalStateException("Fluid solver provider is unavailable: " + selected);
-	}
-
-	private static SparseMatrixCompute createPressureCompute() {
-		String selected = System.getProperty("mmm.pressureCompute", "cpu").trim();
-		if (selected.equals("cpu")) return null;
-		if (!selected.equals("vulkan"))
-			throw new IllegalArgumentException("Unknown mmm.pressureCompute: " + selected);
-		int device = Integer.parseInt(System.getProperty("mmm.gpuDevice", "0"));
-		if (device < 0) throw new IllegalArgumentException("mmm.gpuDevice must be nonnegative");
-		for (var provider : ServiceLoader.load(SparseMatrixCompute.Provider.class))
-			if (provider.id().equals(selected)) return Objects.requireNonNull(provider.create(device));
-		throw new IllegalStateException("Vulkan pressure compute requested; install the GPU kernel provider");
+        try {
+            for (var provider : ServiceLoader.load(FluidSolverBackend.Provider.class))
+                if (provider.id().equals("vulkan")) return Objects.requireNonNull(provider.create(device));
+            return new mmm.fluid.UnavailableFluidRuntime("Vulkan provider is unavailable");
+        } catch (RuntimeException | LinkageError failure) {
+            MmmMod.LOGGER.error("Vulkan initialization failed; simulation regions remain paused", failure);
+            return new mmm.fluid.UnavailableFluidRuntime(message(failure));
+        }
 	}
 
 	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {

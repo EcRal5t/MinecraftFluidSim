@@ -7,7 +7,7 @@ import mmm.model.region.RegionSectionState;
 
 import mmm.application.RegionCatalog;
 import mmm.chemistry.ChemicalRegistry;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
@@ -273,14 +273,14 @@ final class RegionRepositoryAdapter {
 
 	/** Stages a private lifecycle result from its own complete carrier geometry. */
 	StagedCheckpoint stageLifecycleCheckpoint(
-			FluidRegion region, FluidDomain candidateDomain, long targetGeneration
+			FluidRegion region, HostFluidState candidateDomain, long targetGeneration
 	) throws IOException {
 		return stageCandidateCheckpoint(region, candidateDomain, targetGeneration, true);
 	}
 
 	/** Stages a complete private solver successor while preserving the supplied operator intent. */
 	StagedCheckpoint stageCandidateCheckpoint(
-			FluidRegion region, FluidDomain candidateDomain, long targetGeneration, boolean operatorPaused
+			FluidRegion region, HostFluidState candidateDomain, long targetGeneration, boolean operatorPaused
 	) throws IOException {
 		if (!GenerationSequence.isNext(region.checkpointGeneration(), targetGeneration)) {
 			throw new IOException("Candidate checkpoint target does not advance the live region by one generation");
@@ -512,8 +512,7 @@ final class RegionRepositoryAdapter {
 
 		FluidRegion probe = unloadedRegion(manifest);
 		restoreFeatureGeneration(probe, previous.state());
-		if (!probe.solverLoaded()
-				|| !probe.domain().thermalAudit().acceptsInventory(probe.domain().exactInternalEnergy())) {
+		if (!probe.solverLoaded() || !probe.thermalAuditClosed()) {
 			throw new IOException("Previous checkpoint probe did not restore a closed thermal inventory");
 		}
 		if (!probe.releaseSolverAfterCheckpoint(manifest.checkpointGeneration())) {
@@ -564,35 +563,36 @@ final class RegionRepositoryAdapter {
 	private RegionState captureForFeatureGate(
 			FluidRegion region, long generation, boolean synchronizeGasTopology
 	) throws IOException {
-		if (region.domain().hasMaterialState() && !region.domain().authoritativeLayout()
-				.materialDefinitionsFingerprint().isEmpty() && !region.domain().authoritativeLayout()
+		HostFluidState host = region.deviceResident() ? region.hostSnapshot() : region.editableHost();
+		if (host.hasMaterialState() && !host.authoritativeLayout()
+				.materialDefinitionsFingerprint().isEmpty() && !host.authoritativeLayout()
 				.materialDefinitionsFingerprint().equals(materialDefinitions.fingerprint())) {
 			throw new IOException("Region material definitions differ from the committed world bundle");
 		}
-		if (region.domain().hasMaterialState()) region.domain().bindMaterialDefinitions(materialDefinitions);
-		MinecraftRegionCheckpointSource source = new MinecraftRegionCheckpointSource(region);
+		if (host.hasMaterialState()) host.bindMaterialDefinitions(materialDefinitions);
+		MinecraftRegionCheckpointSource source = new MinecraftRegionCheckpointSource(region, host);
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			if (thermalRegistry == null || gasRegistry == null) {
 				throw new IOException("Authoritative thermal/gas registry is unavailable");
 			}
-			if (!region.domain().hasMaterialState()) throw new IOException("Thermal state requires a material-bound domain");
+			if (!host.hasMaterialState()) throw new IOException("Thermal state requires a material-bound domain");
 			if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
+				if (!host.hasChemistryState()) host.bindChemistry(chemicalRegistry);
 			}
 			if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
-				if (!region.domain().hasGranularState()) {
-					region.domain().bindGranular(granularRegistry, region.domain().materialRegistry(), materialDefinitions);
+				if (!host.hasGranularState()) {
+					host.bindGranular(granularRegistry, host.materialRegistry(), materialDefinitions);
 				}
-				enablePrecipitationIfConfigured(region);
+				enablePrecipitationIfConfigured(host);
 			}
-			if (!region.domain().hasThermalState()) {
+			if (!host.hasThermalState()) {
 				throw new IOException("Thermal state is unavailable for the active feature layout");
 			}
 			if (synchronizeGasTopology) {
 				try {
-					region.domain().synchronizeGasTopologyForPersistence();
+					host.synchronizeGasTopologyForPersistence();
 				} catch (RuntimeException invalidTopology) {
 					throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
 							+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
@@ -603,24 +603,24 @@ final class RegionRepositoryAdapter {
 		}
 		if (profile.hasCapability(WorldCapability.GRANULAR)) {
 			if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
-			if (!region.domain().hasMaterialState()) throw new IOException("Granular state requires a material-bound domain");
+			if (!host.hasMaterialState()) throw new IOException("Granular state requires a material-bound domain");
 			if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 				if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
+				if (!host.hasChemistryState()) host.bindChemistry(chemicalRegistry);
 			}
-			if (!region.domain().hasGranularState()) {
-				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry(), materialDefinitions);
+			if (!host.hasGranularState()) {
+				host.bindGranular(granularRegistry, host.materialRegistry(), materialDefinitions);
 			}
-			enablePrecipitationIfConfigured(region);
+			enablePrecipitationIfConfigured(host);
 			return new RegionState(RegionCheckpointAssembler.captureGranular(source, generation));
 		}
 		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
 			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-			if (!region.domain().hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
-			if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
+			if (!host.hasMaterialState()) throw new IOException("Chemistry requires a material-bound domain");
+			if (!host.hasChemistryState()) host.bindChemistry(chemicalRegistry);
 			return new RegionState(RegionCheckpointAssembler.captureChemical(source, generation));
 		}
-		return new RegionState(region.domain().hasMaterialState()
+		return new RegionState(host.hasMaterialState()
 				? RegionCheckpointAssembler.captureMaterial(source, generation)
 				: RegionCheckpointAssembler.capture(source, generation));
 	}
@@ -638,13 +638,13 @@ final class RegionRepositoryAdapter {
 			if (readView != null) files.verifyReadView(readView);
 			region.restoreAuthoritativeSolver(authoritative,generation);
 			if(authoritative.thermalOwner()!=null)region.restoreFiniteThermalDevices(restorer.reconstructFiniteThermalDevices(thermalRegistry),thermalRegistry,generation);
-			enablePrecipitationIfConfigured(region);
+			enablePrecipitationIfConfigured(region.editableHost());
 			if(authoritative.thermalOwner()!=null&&!region.lifecycle().operatorPaused()&&region.lifecycle().state()==FluidRegionLifecycle.State.HYDROSTATIC_SLEEP)region.wakeForActivity();
 		}catch(IOException|RuntimeException failure){if(region.solverLoaded()&&region.checkpointGeneration()==generation)region.releaseSolverAfterCheckpoint(generation);throw failure;}
 	}
 
-	private void enablePrecipitationIfConfigured(FluidRegion region) {
-		if (profile.hasCapability(WorldCapability.PRECIPITATION)) region.domain().setPrecipitationEnabled(true);
+	private void enablePrecipitationIfConfigured(HostFluidState host) {
+		if (profile.hasCapability(WorldCapability.PRECIPITATION)) host.setPrecipitationEnabled(true);
 	}
 
 	private void validateFeatureShape(RegionManifest manifest) throws IOException {

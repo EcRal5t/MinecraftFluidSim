@@ -1,79 +1,166 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
-layout(local_size_x=128) in;
-layout(push_constant) uniform Metadata { int sx; int sy; int sz; int stage; float h; float dt; float gravity; float tolerance; } pc;
-layout(std430,binding=0) readonly buffer Cells { dvec4 cells[]; };
-layout(std430,binding=1) buffer Faces { dvec4 faces[]; };
-layout(std430,binding=2) buffer Starts { int starts[]; };
-layout(std430,binding=3) buffer Columns { int columns[]; };
-layout(std430,binding=4) buffer Values { double values[]; };
-layout(std430,binding=5) buffer Rows { int rows[]; };
-layout(std430,binding=6) buffer Meta { int meta[]; };
-layout(std430,binding=7) buffer Problem { double problem[]; };
-layout(std430,binding=8) readonly buffer Pressure { double pressure[]; };
-layout(std430,binding=9) buffer Errors { uint errors; };
-
-int n() { return pc.sx*pc.sy*pc.sz; }
-int xFaces() { return (pc.sx+1)*pc.sy*pc.sz; }
-int yFaces() { return pc.sx*(pc.sy+1)*pc.sz; }
-int cellIndex(ivec3 p) { return (p.z*pc.sy+p.y)*pc.sx+p.x; }
-bool inside(ivec3 p) { return all(greaterThanEqual(p,ivec3(0)))&&all(lessThan(p,ivec3(pc.sx,pc.sy,pc.sz))); }
-bool full(int c) { return cells[c].y>0.0 && cells[c].z>0.0 && cells[c].z-cells[c].x<=4e-5; }
-int faceIndex(ivec3 p,int axis) {
-    ivec3 shape=ivec3(pc.sx,pc.sy,pc.sz);shape[axis]++;
-    return (axis==0?0:axis==1?xFaces():xFaces()+yFaces())+(p.z*shape.y+p.y)*shape.x+p.x;
+layout(local_size_x = 128) in;
+layout(push_constant) uniform Metadata {
+    int sx;
+    int sy;
+    int sz;
+    int stage;
+    float h;
+    float dt;
+    float gravity;
+    float tolerance;
 }
-double coefficient(int face) { return faces[face].x>0.0?faces[face].w/double(pc.h):0.0; }
-double inverseInertia(int face) { double h=double(pc.h);return faces[face].x>0.0?h*h*h/faces[face].x:0.0; }
+pc;
+layout(std430, binding = 0) readonly buffer Cells {
+    dvec4 cells[];
+};
+layout(std430, binding = 1) buffer Faces {
+    dvec4 faces[];
+};
+layout(std430, binding = 2) buffer Starts {
+    int starts[];
+};
+layout(std430, binding = 3) buffer Columns {
+    int columns[];
+};
+layout(std430, binding = 4) buffer Values {
+    double values[];
+};
+layout(std430, binding = 5) buffer Rows {
+    int rows[];
+};
+layout(std430, binding = 6) buffer Meta {
+    int meta[];
+};
+layout(std430, binding = 7) buffer Problem {
+    double problem[];
+};
+layout(std430, binding = 8) readonly buffer Pressure {
+    double pressure[];
+};
+layout(std430, binding = 9) buffer Errors {
+    uint errors;
+};
+layout(std430, binding = 10) readonly buffer ActiveCells {
+    uint activeCells[];
+};
+layout(std430, binding = 11) readonly buffer ActiveFaces {
+    uint activeFaces[];
+};
+
+int n() {
+    return pc.sx * pc.sy * pc.sz;
+}
+int xFaces() {
+    return (pc.sx + 1) * pc.sy * pc.sz;
+}
+int yFaces() {
+    return pc.sx * (pc.sy + 1) * pc.sz;
+}
+int cellIndex(ivec3 p) {
+    return (p.z * pc.sy + p.y) * pc.sx + p.x;
+}
+bool inside(ivec3 p) {
+    return all(greaterThanEqual(p, ivec3(0))) && all(lessThan(p, ivec3(pc.sx, pc.sy, pc.sz)));
+}
+bool full(int c) {
+    return activeCells[c] != 0u && cells[c].y > 0.0 && cells[c].z > 0.0 && cells[c].z - cells[c].x <= 4e-5;
+}
+int faceIndex(ivec3 p, int axis) {
+    ivec3 shape = ivec3(pc.sx, pc.sy, pc.sz);
+    shape[axis]++;
+    return (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces()) + (p.z * shape.y + p.y) * shape.x + p.x;
+}
+double coefficient(int face) {
+    return activeFaces[face] != 0u && faces[face].x > 0.0 ? faces[face].w / double(pc.h) : 0.0;
+}
+double inverseInertia(int face) {
+    double h = double(pc.h);
+    return faces[face].x > 0.0 ? h * h * h / faces[face].x : 0.0;
+}
 
 void predict(int face) {
-    if(faces[face].z<=0.0||faces[face].x<=0.0) { faces[face].y=0.0;return; }
-    if(face>=xFaces()&&face<xFaces()+yFaces()&&faces[face].w>0.0)
-        faces[face].y-=double(pc.gravity)*double(pc.dt);
+    if (activeFaces[face] == 0u)
+        return;
+    if (faces[face].z <= 0.0 || faces[face].x <= 0.0) {
+        faces[face].y = 0.0;
+        return;
+    }
+    if (face >= xFaces() && face < xFaces() + yFaces() && faces[face].w > 0.0)
+        faces[face].y -= double(pc.gravity) * double(pc.dt);
 }
 
 // B contains signed wet area/h, M is the dual face inertia per physical cell volume.
 // The pressure matrix B M^-1 B^T and its response use the very same face coefficients.
 void assemble(int row) {
-    ivec3 p=ivec3(row%pc.sx,row/pc.sx%pc.sy,row/(pc.sx*pc.sy));
-    int start=7*row;starts[row]=start;columns[start]=row;
-    double diagonal=0.0,rhs=0.0;
-    bool enabled=full(row);
-    for(int side=0;side<6;side++) {
-        int axis=side/2;bool upper=(side&1)!=0;
-        ivec3 adjacent=p;adjacent[axis]+=upper?1:-1;
-        ivec3 at=p;if(upper)at[axis]++;
-        int face=faceIndex(at,axis),peer=inside(adjacent)?cellIndex(adjacent):row;
-        double b=coefficient(face),a=b*b*inverseInertia(face);
-        columns[start+1+side]=peer;
-        values[start+1+side]=enabled&&inside(adjacent)&&full(peer)?-a:0.0;
-        if(enabled) { diagonal+=a;rhs+=(upper?-1.0:1.0)*b*faces[face].y/double(pc.dt); }
+    ivec3 p = ivec3(row % pc.sx, row / pc.sx % pc.sy, row / (pc.sx * pc.sy));
+    int start = 7 * row;
+    starts[row] = start;
+    columns[start] = row;
+    double diagonal = 0.0, rhs = 0.0;
+    bool enabled = full(row);
+    for (int side = 0; side < 6; side++) {
+        int axis = side / 2;
+        bool upper = (side & 1) != 0;
+        ivec3 adjacent = p;
+        adjacent[axis] += upper ? 1 : -1;
+        ivec3 at = p;
+        if (upper)
+            at[axis]++;
+        int face = faceIndex(at, axis), peer = inside(adjacent) ? cellIndex(adjacent) : row;
+        double b = coefficient(face), a = b * b * inverseInertia(face);
+        columns[start + 1 + side] = peer;
+        values[start + 1 + side] = enabled && inside(adjacent) && full(peer) ? -a : 0.0;
+        if (enabled) {
+            diagonal += a;
+            rhs += (upper ? -1.0 : 1.0) * b * faces[face].y / double(pc.dt);
+        }
     }
-    bool unknown=enabled&&diagonal>0.0;
-    rows[row]=unknown?row:-1;
-    values[start]=unknown?diagonal:1.0;
-    meta[row]=0;
-    problem[row]=unknown?rhs:0.0;
-    problem[n()+row]=0.0;
-    problem[2*n()+row]=unknown?pressure[row]:0.0;
-    if(row==0){starts[n()]=7*n();problem[3*n()]=double(pc.tolerance);}
+    bool unknown = enabled && diagonal > 0.0;
+    rows[row] = unknown ? row : -1;
+    values[start] = unknown ? diagonal : 1.0;
+    meta[row] = 0;
+    problem[row] = unknown ? rhs : 0.0;
+    problem[n() + row] = 0.0;
+    problem[2 * n() + row] = unknown ? pressure[row] : 0.0;
+    if (row == 0) {
+        starts[n()] = 7 * n();
+        problem[3 * n()] = double(pc.tolerance);
+    }
 }
 
 void project(int face) {
-    int axis=face<xFaces()?0:face<xFaces()+yFaces()?1:2;
-    int local=face-(axis==0?0:axis==1?xFaces():xFaces()+yFaces());
-    ivec3 shape=ivec3(pc.sx,pc.sy,pc.sz);shape[axis]++;
-    ivec3 right=ivec3(local%shape.x,local/shape.x%shape.y,local/(shape.x*shape.y)),left=right;left[axis]--;
-    if(!inside(left)||!inside(right)||faces[face].x<=0.0||faces[face].z<=0.0){faces[face].y=0.0;return;}
-    int a=cellIndex(left),b=cellIndex(right);
-    double pa=full(a)?pressure[a]:0.0,pb=full(b)?pressure[b]:0.0;
-    faces[face].y+=double(pc.dt)*inverseInertia(face)*coefficient(face)*(pa-pb);
-    if(isnan(faces[face].y)||isinf(faces[face].y))atomicOr(errors,8u);
+    if (activeFaces[face] == 0u)
+        return;
+    int axis = face < xFaces() ? 0 : face < xFaces() + yFaces() ? 1 : 2;
+    int local = face - (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces());
+    ivec3 shape = ivec3(pc.sx, pc.sy, pc.sz);
+    shape[axis]++;
+    ivec3 right = ivec3(local % shape.x, local / shape.x % shape.y, local / (shape.x * shape.y)), left = right;
+    left[axis]--;
+    if (!inside(left) || !inside(right) || faces[face].x <= 0.0 || faces[face].z <= 0.0) {
+        faces[face].y = 0.0;
+        return;
+    }
+    int a = cellIndex(left), b = cellIndex(right);
+    double pa = full(a) ? pressure[a] : 0.0, pb = full(b) ? pressure[b] : 0.0;
+    faces[face].y += double(pc.dt) * inverseInertia(face) * coefficient(face) * (pa - pb);
+    if (isnan(faces[face].y) || isinf(faces[face].y))
+        atomicOr(errors, 8u);
 }
 
 void main() {
-    int id=int(gl_GlobalInvocationID.x);
-    if(pc.stage==1){if(id<n())assemble(id);return;}
-    if(id>=xFaces()+yFaces()+pc.sx*pc.sy*(pc.sz+1))return;
-    if(pc.stage==0)predict(id);else project(id);
+    int id = int(gl_GlobalInvocationID.x);
+    if (pc.stage == 1) {
+        if (id < n())
+            assemble(id);
+        return;
+    }
+    if (id >= xFaces() + yFaces() + pc.sx * pc.sy * (pc.sz + 1))
+        return;
+    if (pc.stage == 0)
+        predict(id);
+    else
+        project(id);
 }

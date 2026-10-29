@@ -4,7 +4,7 @@ package mmm.fluid;
 final class LiquidMaterialBinding {
 	private LiquidMaterialBinding() { }
 
-	static void validate(FluidDomain domain, FluidMaterialRegistry palette, MaterialRegistry definitions) {
+	static void validate(HostFluidState domain, FluidMaterialRegistry palette, MaterialRegistry definitions) {
 		if (palette == null || definitions == null) throw new IllegalArgumentException("Liquid definitions are missing");
 		if (domain.materialRegistry != null && !domain.materialRegistry.materials().equals(palette.materials())) {
 			throw new IllegalArgumentException("A domain cannot change its liquid palette");
@@ -28,7 +28,7 @@ final class LiquidMaterialBinding {
 		}
 	}
 
-	static void bind(FluidDomain domain, MaterialRegistry definitions) {
+	static void bind(HostFluidState domain, MaterialRegistry definitions) {
 		validate(domain, domain.materialRegistry, definitions);
 		if (domain.materialDefinitions != null) return;
 		domain.materialDefinitions = definitions;

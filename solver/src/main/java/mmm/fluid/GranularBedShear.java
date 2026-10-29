@@ -12,15 +12,15 @@ final class GranularBedShear {
 	private GranularBedShear() { }
 
 	/** Local bed traction pays the exact lift work from persistent horizontal MAC momentum. */
-	static LiftWork planLift(FluidDomain domain, int cell, double joules) {
+	static LiftWork planLift(HostFluidState domain, int cell, double joules) {
 		if (!Double.isFinite(joules)) throw new IllegalArgumentException("Non-finite bed lift work");
 		return planLift(domain, cell, SignedDyadic.of(joules));
 	}
-	static LiftWork planLift(FluidDomain domain, int cell, SignedDyadic work) {
+	static LiftWork planLift(HostFluidState domain, int cell, SignedDyadic work) {
 		domain.domainFlowFields.ensureVelocityGrid();
 		return planLiftPrepared(domain,cell,work);
 	}
-	private static LiftWork planLiftPrepared(FluidDomain domain,int cell,SignedDyadic work){
+	private static LiftWork planLiftPrepared(HostFluidState domain,int cell,SignedDyadic work){
 		if (domain == null || cell < 0 || cell >= domain.cellCount || work == null || !Double.isFinite(work.toDouble()))
 			throw new IllegalArgumentException("Invalid bed lift work");
 		var faces = new java.util.ArrayList<Face>(8);
@@ -52,7 +52,7 @@ final class GranularBedShear {
 		return new LiftWork(domain,domain.liquidCells,domain.liquidCells.revision(),prepared,
 				work,loss.subtract(work),impulseX,impulseZ);
 	}
-	private static void addFace(FluidDomain domain,java.util.List<Face> faces,int axis,int index) {
+	private static void addFace(HostFluidState domain,java.util.List<Face> faces,int axis,int index) {
 		double mass=(axis==0?domain.cellMacStage.massX:domain.cellMacStage.massZ)[index];
 		if(mass<=0||domain.geometry.cutCells.openFaceField(axis)[index]<=0) return;
 		double momentum=(axis==0?domain.mac.momentumX:domain.mac.momentumZ)[index];
@@ -63,21 +63,21 @@ final class GranularBedShear {
 		double energy(double momentum){return .5*momentum*(momentum/mass);}
 	}
 	static final class LiftWork {
-		private final FluidDomain owner;
+		private final HostFluidState owner;
 		private final LiquidCellInventory inventory;
 		private final long revision;
 		private final Face[] faces;
 		private final SignedDyadic physicalWork,rounding;
 		private final double impulseX,impulseZ;
 		private boolean committed;
-		private LiftWork(FluidDomain owner,LiquidCellInventory inventory,long revision,Face[] faces,
+		private LiftWork(HostFluidState owner,LiquidCellInventory inventory,long revision,Face[] faces,
 				SignedDyadic physicalWork,SignedDyadic rounding,double impulseX,double impulseZ){
 			this.owner=owner;this.inventory=inventory;this.revision=revision;this.faces=faces;
 			this.physicalWork=physicalWork;this.rounding=rounding;this.impulseX=impulseX;this.impulseZ=impulseZ;
 		}
 		SignedDyadic physicalWork(){return physicalWork;}
 		SignedDyadic mechanicalRounding(){return rounding;}
-		void requireCurrent(FluidDomain domain){
+		void requireCurrent(HostFluidState domain){
 			if(committed||domain!=owner||domain.liquidCells!=inventory||inventory.revision()!=revision)
 				throw new IllegalStateException("Bed traction source changed");
 			for(var face:faces){
@@ -89,7 +89,7 @@ final class GranularBedShear {
 					throw new IllegalStateException("Bed traction face changed");
 			}
 		}
-		double[] apply(FluidDomain domain){
+		double[] apply(HostFluidState domain){
 			requireCurrent(domain);
 			for(var face:faces){
 				(face.axis()==0?domain.mac.momentumX:domain.mac.momentumZ)[face.index()]=face.after();
@@ -104,24 +104,24 @@ final class GranularBedShear {
 
 	/** Source liquid observation remains valid while a local solid transition changes its candidate beds. */
 	static final class Flow {
-		private final FluidDomain domain;
+		private final HostFluidState domain;
 		private final LiquidCarrierProperties properties;
 		private final long[] sourceSolid;
-		private Flow(FluidDomain domain,LiquidCarrierProperties properties,long[] sourceSolid){
+		private Flow(HostFluidState domain,LiquidCarrierProperties properties,long[] sourceSolid){
 			this.domain=domain;this.properties=properties;this.sourceSolid=sourceSolid;
 		}
 		LiftWork planLift(int cell,SignedDyadic work){return planLiftPrepared(domain,cell,work);}
 		double shields(int cell,ParticulateMaterial material){return shieldsPrepared(domain,cell,material,this);}
 		GranularMechanics.FluidSample sample(float x,float y,float z){return domain.granularMechanicalStage.samplePrepared(x,y,z,properties,sourceSolid);}
 	}
-	static Flow prepareFlow(FluidDomain domain,long[] sourceSolid){
+	static Flow prepareFlow(HostFluidState domain,long[] sourceSolid){
 		domain.domainFlowFields.ensureVelocityGrid();
 		return new Flow(domain,domain.domainPhaseInventory.derivedCarrierState(),sourceSolid);
 	}
-	static double shields(FluidDomain domain, int cell, ParticulateMaterial material) {
+	static double shields(HostFluidState domain, int cell, ParticulateMaterial material) {
 		return prepareFlow(domain,null).shields(cell,material);
 	}
-	private static double shieldsPrepared(FluidDomain domain,int cell,ParticulateMaterial material,Flow flow){
+	private static double shieldsPrepared(HostFluidState domain,int cell,ParticulateMaterial material,Flow flow){
 		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY;
 		int z = cell / (domain.sizeX * domain.sizeY);
 		double h = domain.config.cellSize();

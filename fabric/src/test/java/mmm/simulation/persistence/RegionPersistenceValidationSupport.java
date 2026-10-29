@@ -4,7 +4,7 @@ import mmm.model.region.RegionExtension;
 import mmm.model.region.RegionManifest;
 import mmm.model.region.RegionSectionState;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FlipChemicalParticleState;
 import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
@@ -44,7 +44,7 @@ abstract class RegionPersistenceValidationSupport {
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation"));
 
 	static FluidRegion populatedRegion(UUID id) {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
 		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
@@ -57,10 +57,10 @@ abstract class RegionPersistenceValidationSupport {
 				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, mmm.units.Mass.createLiquid(state.cellSize(), 1000.0, state.copyPositionVolume()), state.copySolidMask()));
 		return fixtureRegion(id, domain);
 	}
-	static FluidRegion fixtureRegion(UUID id, FluidDomain domain) {
+	static FluidRegion fixtureRegion(UUID id, HostFluidState domain) {
 		return fixtureRegion(id,domain,new BlockPos(15,16,15));
 	}
-	static FluidRegion fixtureRegion(UUID id, FluidDomain domain, BlockPos origin) {
+	static FluidRegion fixtureRegion(UUID id, HostFluidState domain, BlockPos origin) {
 		int cellsPerBlock=Math.round(1/domain.config().cellSize());
 		BlockPos maximum=origin.offset(domain.sizeX()/cellsPerBlock-1,domain.sizeY()/cellsPerBlock-1,domain.sizeZ()/cellsPerBlock-1);
 		Set<Long> interior=new HashSet<>(),chunks=new HashSet<>();
@@ -74,7 +74,7 @@ abstract class RegionPersistenceValidationSupport {
 
 	/** Fixed codec columns, independent of the runtime cell-fill quadrature. */
 	static FluidRegion canonicalCodecRegion(UUID id) {
-		var domain = new FluidDomain(6, 4, 6, CONFIG);
+		var domain = new HostFluidState(6, 4, 6, CONFIG);
 		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		var template = domain.exportParticleState();
@@ -96,7 +96,7 @@ abstract class RegionPersistenceValidationSupport {
 
 	static FluidRegion emptyRegion(UUID id) {
 		BlockPos origin = new BlockPos(32, 16, 32);
-		FluidDomain domain = new FluidDomain(8, 8, 8, CONFIG);
+		HostFluidState domain = new HostFluidState(8, 8, 8, CONFIG);
 		domain.sealDomainBoundary();
 		Set<Long> interior = new HashSet<>();
 		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {

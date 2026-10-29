@@ -1,148 +1,282 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) buffer Arena { uint words[]; };
-layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; } p;
-int h(int index) { return int(words[p.header+index]); }
-int64_t integerAt(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
-void putInteger(int at,int64_t value) { words[at]=uint(value);words[at+1]=uint(uint64_t(value)>>32); }
-double numberAt(int at) { return packDouble2x32(uvec2(words[at],words[at+1])); }
-double cellVolume(int cell) {
-    int begin=int(words[h(34)+cell]),end=int(words[h(34)+cell+1]);
-    if(begin==end)return 0.0;
-    double head=double(words[h(35)+end-1]);
-    if(end-begin>1)head+=double(words[h(35)+end-2])*2.3283064365386962890625e-10LF;
-    return ldexp(head,int(words[h(7)+cell])+32*(end-begin-1));
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Arena {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
 }
-int faceIndex(ivec3 pos,int axis,bool positive) {
-    ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;if(positive)pos[axis]++;
-    int base=axis==0?0:(h(0)+1)*h(1)*h(2);
-    if(axis==2)base+=h(0)*(h(1)+1)*h(2);
-    return base+(pos.z*dims.y+pos.y)*dims.x+pos.x;
+p;
+// HOST_LAYOUT
+int h(int index) {
+    return int(words[p.header + index]);
+}
+int64_t integerAt(int at) {
+    return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32));
+}
+void putInteger(int at, int64_t value) {
+    words[at] = uint(value);
+    words[at + 1] = uint(uint64_t(value) >> 32);
+}
+double numberAt(int at) {
+    return packDouble2x32(uvec2(words[at], words[at + 1]));
+}
+double cellVolume(int cell) {
+    int begin = int(words[h(H_TOTAL_OFFSETS) + cell]), end = int(words[h(H_TOTAL_OFFSETS) + cell + 1]);
+    if (begin == end)
+        return 0.0;
+    double head = double(words[h(H_TOTAL_LIMBS) + end - 1]);
+    if (end - begin > 1)
+        head += double(words[h(H_TOTAL_LIMBS) + end - 2]) * 2.3283064365386962890625e-10LF;
+    return ldexp(head, int(words[h(H_TOTAL_EXPONENTS) + cell]) + 32 * (end - begin - 1));
+}
+int faceIndex(ivec3 pos, int axis, bool positive) {
+    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    dims[axis]++;
+    if (positive)
+        pos[axis]++;
+    int base = axis == 0 ? 0 : (h(H_SIZE_X) + 1) * h(H_SIZE_Y) * h(H_SIZE_Z);
+    if (axis == 2)
+        base += h(H_SIZE_X) * (h(H_SIZE_Y) + 1) * h(H_SIZE_Z);
+    return base + (pos.z * dims.y + pos.y) * dims.x + pos.x;
 }
 void cellInputs() {
-    int cell=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(cell>=h(3)||errors!=0u)return;
-    if(cell<h(22))putInteger(h(29)+2*cell,int64_t(0));
-    int64_t k=integerAt(h(5)+2*cell);
-    int64_t solid=integerAt(h(9)+2*cell);
-    int64_t pore=(int64_t(bitCount((~words[h(8)+cell])&255u))<<21)-solid;
-    bool tail=words[h(6)+cell]!=0u&&int(words[h(7)+cell])<h(4);
-    int64_t upper=pore<<(-24-h(4));
-    if(k<int64_t(0)||pore<int64_t(0)||(p.stage!=3&&upper<k)){atomicOr(errors,4096u);return;}
-    ivec3 pos=ivec3(cell%h(0),cell/h(0)%h(1),cell/(h(0)*h(1)));
-    double desired[6];double sum=0.0,incomingGas=0.0;uint open=0u;
-    for(int side=0;side<6;side++) {
-        int axis=side/2;bool positive=(side&1)!=0;
-        int face=faceIndex(pos,axis,positive);
-        double area=numberAt(h(10)+8*face+4),qt=numberAt(h(11)+4*face),ql=numberAt(h(11)+4*face+2);
-        if(isnan(area)||isinf(area)||isnan(qt)||isinf(qt)||isnan(ql)||isinf(ql)){atomicOr(errors,4096u);return;}
-        bool internal=positive?pos[axis]+1<ivec3(h(0),h(1),h(2))[axis]:pos[axis]>0;
-        bool connected=internal&&area>0.0;
-        if(connected)open|=1u<<side;
-        double direction=positive?1.0:-1.0;
-        desired[side]=connected?max(0.0,direction*ql):0.0;
-        sum+=desired[side];
-        if(connected)incomingGas+=max(0.0,-direction*(qt-ql));
+    int cell = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if (cell >= h(H_CELL_COUNT) || errors != 0u)
+        return;
+    if (cell < h(H_GAS_GROUP_COUNT))
+        putInteger(h(H_GROUP_CAPACITY) + 2 * cell, int64_t(0));
+    int64_t k = integerAt(h(H_QUANTIZED) + 2 * cell);
+    int64_t solid = integerAt(h(H_OCCUPIED) + 2 * cell);
+    int64_t pore = (int64_t(bitCount((~words[h(H_MASKS) + cell]) & 255u)) << 21) - solid;
+    bool tail = words[h(H_TOTAL_SIGNS) + cell] != 0u && int(words[h(H_TOTAL_EXPONENTS) + cell]) < h(H_QUANTUM_EXPONENT);
+    int64_t upper = pore << (-24 - h(H_QUANTUM_EXPONENT));
+    if (k < int64_t(0) || pore < int64_t(0) || (p.stage != 3 && upper < k)) {
+        atomicOr(errors, 4096u);
+        return;
     }
-    double scale=ldexp(1.0,-h(4));
-    double volume=cellVolume(cell);
-    double factor=sum>0.0&&volume>0.0?min(1.0,volume/sum)*double(k)/(volume*scale):0.0;
+    ivec3 pos = ivec3(cell % h(H_SIZE_X), cell / h(H_SIZE_X) % h(H_SIZE_Y), cell / (h(H_SIZE_X) * h(H_SIZE_Y)));
+    double desired[6];
+    double sum = 0.0, incomingGas = 0.0;
+    uint open = 0u;
+    for (int side = 0; side < 6; side++) {
+        int axis = side / 2;
+        bool positive = (side & 1) != 0;
+        int face = faceIndex(pos, axis, positive);
+        double area = numberAt(h(H_FACES) + 8 * face + 4), qt = numberAt(h(H_FLUXES) + 4 * face),
+               ql = numberAt(h(H_FLUXES) + 4 * face + 2);
+        if (isnan(area) || isinf(area) || isnan(qt) || isinf(qt) || isnan(ql) || isinf(ql)) {
+            atomicOr(errors, 4096u);
+            return;
+        }
+        bool internal = positive ? pos[axis] + 1 < ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z))[axis] : pos[axis] > 0;
+        bool connected = internal && area > 0.0 && (h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u);
+        if (connected)
+            open |= 1u << side;
+        double direction = positive ? 1.0 : -1.0;
+        desired[side] = connected ? max(0.0, direction * ql) : 0.0;
+        sum += desired[side];
+        if (connected)
+            incomingGas += max(0.0, -direction * (qt - ql));
+    }
+    double scale = ldexp(1.0, -h(H_QUANTUM_EXPONENT));
+    double volume = cellVolume(cell);
+    double factor = sum > 0.0 && volume > 0.0 ? min(1.0, volume / sum) * double(k) / (volume * scale) : 0.0;
     // Round the total preferred transport once, then allocate its integer quanta
     // by largest remainder. Independent floors strand a one-quantum stock even
     // when a face preference is arbitrarily close to transferring it in full.
-    int64_t target=int64_t(min(double(k),floor(sum*scale*factor+0.5)));
-    int64_t amounts[6];double remainders[6];int64_t allocated=0l;
-    for(int side=0;side<6;side++) {
-        double scaled=desired[side]*scale*factor;
-        amounts[side]=int64_t(min(double(target-allocated),floor(scaled)));
-        remainders[side]=scaled-floor(scaled);
-        allocated+=amounts[side];
+    int64_t target = int64_t(min(double(k), floor(sum * scale * factor + 0.5)));
+    int64_t amounts[6];
+    double remainders[6];
+    int64_t allocated = 0l;
+    for (int side = 0; side < 6; side++) {
+        double scaled = desired[side] * scale * factor;
+        amounts[side] = int64_t(min(double(target - allocated), floor(scaled)));
+        remainders[side] = scaled - floor(scaled);
+        allocated += amounts[side];
     }
-    for(int part=0;part<6&&allocated<target;part++) {
-        int best=-1;
-        for(int side=0;side<6;side++)if(remainders[side]>=0.0&&(best<0||remainders[side]>remainders[best]))best=side;
-        if(best<0)break;
-        amounts[best]++;remainders[best]=-1.0;allocated++;
+    for (int part = 0; part < 6 && allocated < target; part++) {
+        int best = -1;
+        for (int side = 0; side < 6; side++)
+            if (remainders[side] >= 0.0 && (best < 0 || remainders[side] > remainders[best]))
+                best = side;
+        if (best < 0)
+            break;
+        amounts[best]++;
+        remainders[best] = -1.0;
+        allocated++;
     }
-    for(int side=0;side<6;side++)putInteger(h(20)+2*(7*cell+side+1),amounts[side]);
-    putInteger(h(20)+14*cell,k-allocated);
+    for (int side = 0; side < 6; side++)
+        putInteger(h(H_CAPACITY_PREFERRED) + 2 * (7 * cell + side + 1), amounts[side]);
+    putInteger(h(H_CAPACITY_PREFERRED) + 14 * cell, k - allocated);
     // Exact full cells need actual incoming dry-space transport before creating new dry volume.
-    bool full=!tail&&k>=upper;
-    int64_t filled=min(k,upper);
-    int64_t lower=full&&p.stage!=3?filled-int64_t(min(double(filled),floor(incomingGas*scale))):int64_t(0);
-    putInteger(h(16)+2*cell,k);putInteger(h(17)+2*cell,lower);putInteger(h(18)+2*cell,upper);
-    int node=h(22)>0?int(words[h(23)+cell]):0;
-    if(node>h(22)){atomicOr(errors,64u);return;}
-    words[h(19)+cell]=uint(node>0?node-1:-1);words[h(21)+cell]=open;
+    bool full = !tail && k >= upper;
+    int64_t filled = min(k, upper);
+    int64_t lower =
+        full && p.stage != 3 ? filled - int64_t(min(double(filled), floor(incomingGas * scale))) : int64_t(0);
+    if (h(H_ACTIVITY_CELLS) >= 0 && words[h(H_ACTIVITY_CELLS) + cell] == 0u) {
+        lower = k;
+        upper = k;
+        open = 0u;
+    }
+    putInteger(h(H_CAPACITY_K) + 2 * cell, k);
+    putInteger(h(H_CAPACITY_LOWER) + 2 * cell, lower);
+    putInteger(h(H_CAPACITY_UPPER) + 2 * cell, upper);
+    int node = h(H_GAS_GROUP_COUNT) > 0 ? int(words[h(H_GAS_CELL_NODES) + cell]) : 0;
+    if (node > h(H_GAS_GROUP_COUNT)) {
+        atomicOr(errors, 64u);
+        return;
+    }
+    words[h(H_CAPACITY_GROUP_ID) + cell] = uint(node > 0 ? node - 1 : -1);
+    words[h(H_CAPACITY_OPEN_NEIGHBORS) + cell] = open;
 }
 
 // Same adiabatic relation as the gas pressure model, evaluated in binary64.
-double logarithm(double x){int e;double m=frexp(x,e);if(m<0.7071067811865475244LF){m*=2.0;e--;}
- double z=(m-1.0)/(m+1.0),z2=z*z,power=z,result=z;for(int k=3;k<=25;k+=2){power*=z2;result+=power/double(k);}return 2.0*result+double(e)*0.6931471805599453094LF;}
-double exponential(double x){int e=int(round(x/0.6931471805599453094LF));double r=x-double(e)*0.6931471805599453094LF,term=1.0,result=1.0;
- for(int k=1;k<=18;k++){term*=r/double(k);result+=term;}return ldexp(result,e);}
-double retainedGasVolume(int node){
- double volume=numberAt(h(12)+2*node),pressure=numberAt(h(13)+18*node+2),gamma=numberAt(h(13)+18*node+10);
- if(int(words[h(15)+node])==0)return volume;
- double predicted=numberAt(h(14)+2*node);
- if(!(volume>0.0&&pressure>0.0&&gamma>0.0&&predicted>=0.0)||isnan(predicted)||isinf(predicted)){atomicOr(errors,4096u);return 0.0;}
- if(predicted<=pressure)return volume;
- return volume*exponential((logarithm(pressure)-logarithm(predicted))/gamma);
+double logarithm(double x) {
+    int e;
+    double m = frexp(x, e);
+    if (m < 0.7071067811865475244LF) {
+        m *= 2.0;
+        e--;
+    }
+    double z = (m - 1.0) / (m + 1.0), z2 = z * z, power = z, result = z;
+    for (int k = 3; k <= 25; k += 2) {
+        power *= z2;
+        result += power / double(k);
+    }
+    return 2.0 * result + double(e) * 0.6931471805599453094LF;
+}
+double exponential(double x) {
+    int e = int(round(x / 0.6931471805599453094LF));
+    double r = x - double(e) * 0.6931471805599453094LF, term = 1.0, result = 1.0;
+    for (int k = 1; k <= 18; k++) {
+        term *= r / double(k);
+        result += term;
+    }
+    return ldexp(result, e);
+}
+double retainedGasVolume(int node) {
+    double volume = numberAt(h(H_GAS_VOLUMES) + 2 * node), pressure = numberAt(h(H_GAS_STATES) + 18 * node + 2),
+           gamma = numberAt(h(H_GAS_STATES) + 18 * node + 10);
+    if (int(words[h(H_GAS_MECHANICAL_MODE) + node]) == 0)
+        return volume;
+    double predicted = numberAt(h(H_GAS_PRESSURE) + 2 * node);
+    if (!(volume > 0.0 && pressure > 0.0 && gamma > 0.0 && predicted >= 0.0) || isnan(predicted) || isinf(predicted)) {
+        atomicOr(errors, 4096u);
+        return 0.0;
+    }
+    if (predicted <= pressure)
+        return volume;
+    return volume * exponential((logarithm(pressure) - logarithm(predicted)) / gamma);
 }
 
-const int64_t MAX_TOTAL=int64_t(0x3fffffffffffffffUL);
-int64_t addUpper(int64_t a,int64_t b){return a>MAX_TOTAL-b?MAX_TOTAL:a+b;}
-int64_t addSource(int64_t a,int64_t b){if(b<int64_t(0)||a>MAX_TOTAL-b){atomicOr(errors,4096u);return a;}return a+b;}
+const int64_t MAX_TOTAL = int64_t(0x3fffffffffffffffUL);
+int64_t addUpper(int64_t a, int64_t b) {
+    return a > MAX_TOTAL - b ? MAX_TOTAL : a + b;
+}
+int64_t addSource(int64_t a, int64_t b) {
+    if (b < int64_t(0) || a > MAX_TOTAL - b) {
+        atomicOr(errors, 4096u);
+        return a;
+    }
+    return a + b;
+}
 shared uint stopped;
 shared int64_t groupUpper[128];
 shared int64_t groupSource[128];
 shared uint groupTail[128];
+shared uint groupBlocked[128];
 void groupInputs() {
-    int group=int(gl_WorkGroupID.x+gl_WorkGroupID.y*65535u),lane=int(gl_LocalInvocationID.x);
-    if(group>=h(22)||group>=int(words[h(26)]))return;
-    int first=int(words[h(24)+group+1]),end=int(words[h(24)+group+2]);
-    int64_t upper=int64_t(0),source=int64_t(0);uint tail=0u;
-    for(int member=first+lane;member<end;member+=128) {
-        int c=int(words[h(25)+member]);upper=addUpper(upper,integerAt(h(18)+2*c));source=addSource(source,integerAt(h(16)+2*c));
-        if(words[h(6)+c]!=0u&&int(words[h(7)+c])<h(4))tail=1u;
+    int group = int(gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u), lane = int(gl_LocalInvocationID.x);
+    if (group >= h(H_GAS_GROUP_COUNT) || group >= int(words[h(H_GAS_COUNTS)]))
+        return;
+    int first = int(words[h(H_GAS_COMPONENT_OFFSETS) + group + 1]),
+        end = int(words[h(H_GAS_COMPONENT_OFFSETS) + group + 2]);
+    int64_t upper = int64_t(0), source = int64_t(0);
+    uint tail = 0u, blocked = 0u;
+    for (int member = first + lane; member < end; member += 128) {
+        int c = int(words[h(H_GAS_COMPONENT_MEMBERS) + member]);
+        upper = addUpper(upper, integerAt(h(H_CAPACITY_UPPER) + 2 * c));
+        source = addSource(source, integerAt(h(H_CAPACITY_K) + 2 * c));
+        if (words[h(H_TOTAL_SIGNS) + c] != 0u && int(words[h(H_TOTAL_EXPONENTS) + c]) < h(H_QUANTUM_EXPONENT))
+            tail = 1u;
+        if (h(H_ACTIVITY_CELLS) >= 0 && words[h(H_ACTIVITY_CELLS) + c] == 0u) blocked = 1u;
     }
-    groupUpper[lane]=upper;groupSource[lane]=source;groupTail[lane]=tail;barrier();
-    for(int stride=64;stride>0;stride/=2) {
-        if(lane<stride){groupUpper[lane]=addUpper(groupUpper[lane],groupUpper[lane+stride]);groupSource[lane]=addSource(groupSource[lane],groupSource[lane+stride]);groupTail[lane]|=groupTail[lane+stride];}
+    groupUpper[lane] = upper;
+    groupSource[lane] = source;
+    groupTail[lane] = tail;
+    groupBlocked[lane] = blocked;
+    barrier();
+    for (int stride = 64; stride > 0; stride /= 2) {
+        if (lane < stride) {
+            groupUpper[lane] = addUpper(groupUpper[lane], groupUpper[lane + stride]);
+            groupSource[lane] = addSource(groupSource[lane], groupSource[lane + stride]);
+            groupTail[lane] |= groupTail[lane + stride];
+            groupBlocked[lane] |= groupBlocked[lane + stride];
+        }
         barrier();
     }
-    if(lane==0) {
-        bool nonempty=false;
-        if(group<int(words[h(26)]))for(int component=int(words[h(27)+group]);component<int(words[h(27)+group+1]);component++)
-            if(integerAt(h(28)+2*component)>int64_t(0))nonempty=true;
-        int64_t reserve=0l;
-        if(nonempty&&groupUpper[0]<MAX_TOTAL){
-            double normal=retainedGasVolume(group)/numberAt(p.header+32);
-            double quantized=ceil(ldexp(normal,-h(4)));
-            if(isnan(quantized)||isinf(quantized)||quantized<0.0){atomicOr(errors,4096u);return;}
-            reserve=min(groupUpper[0],int64_t(min(double(MAX_TOTAL),quantized)));
+    if (lane == 0) {
+        bool nonempty = false;
+        if (group < int(words[h(H_GAS_COUNTS)]))
+            for (int component = int(words[h(H_GAS_ROW_COMPONENT_OFFSETS) + group]);
+                 component < int(words[h(H_GAS_ROW_COMPONENT_OFFSETS) + group + 1]); component++)
+                if (integerAt(h(H_GAS_STANDARD_VOLUME) + 2 * component) > int64_t(0))
+                    nonempty = true;
+        int64_t reserve = 0l;
+        if (nonempty && groupBlocked[0] == 0u && groupUpper[0] < MAX_TOTAL) {
+            double normal = retainedGasVolume(group) / numberAt(p.header + H_CELL_VOLUME);
+            double quantized = ceil(ldexp(normal, -h(H_QUANTUM_EXPONENT)));
+            if (isnan(quantized) || isinf(quantized) || quantized < 0.0) {
+                atomicOr(errors, 4096u);
+                return;
+            }
+            reserve = min(groupUpper[0], int64_t(min(double(MAX_TOTAL), quantized)));
             // Prescribed solid motion may consume an unresolved fraction of a gas cell.
             // The later chamber remap keeps its inventory and evaluates the actual volume.
-            if(p.stage==4)reserve=max(0l,reserve-int64_t(ceil(ldexp(4e-5,-h(4)))));
+            if (p.stage == 4)
+                reserve = max(0l, reserve - int64_t(ceil(ldexp(4e-5, -h(H_QUANTUM_EXPONENT)))));
             // Ordinary transport starts from an admissible state; only prescribed solids may displace it.
-            if(p.stage!=4)reserve=min(reserve,max(0l,groupUpper[0]-groupSource[0]));
-            if(reserve==0l&&groupTail[0]==0u)reserve=1l;
+            if (p.stage != 4)
+                reserve = min(reserve, max(0l, groupUpper[0] - groupSource[0]));
+            if (reserve == 0l && groupTail[0] == 0u)
+                reserve = 1l;
         }
-        int64_t limit=groupUpper[0]-reserve;
-        if((p.stage!=4&&limit<groupSource[0])||limit<int64_t(0)){atomicOr(errors,4096u);return;}
-        putInteger(h(29)+2*group,limit);
+        int64_t limit = groupUpper[0] - reserve;
+        if ((p.stage != 4 && limit < groupSource[0]) || limit < int64_t(0)) {
+            atomicOr(errors, 4096u);
+            return;
+        }
+        putInteger(h(H_GROUP_CAPACITY) + 2 * group, limit);
     }
 }
-void main(){
-    if(p.stage==2){
-        if(gl_GlobalInvocationID.x==0u){uint nodes=words[h(26)];if(nodes>uint(h(22)))atomicOr(errors,64u);
-            uint activeNodes=errors==0u?nodes:0u;words[h(30)]=min(activeNodes,65535u);words[h(30)+1]=max(1u,(activeNodes+65534u)/65535u);words[h(30)+2]=1u;}
+void main() {
+    if (p.stage == 2) {
+        if (gl_GlobalInvocationID.x == 0u) {
+            uint nodes = words[h(H_GAS_COUNTS)];
+            if (nodes > uint(h(H_GAS_GROUP_COUNT)))
+                atomicOr(errors, 64u);
+            uint activeNodes = errors == 0u ? nodes : 0u;
+            words[h(H_GROUP_DISPATCH)] = min(activeNodes, 65535u);
+            words[h(H_GROUP_DISPATCH) + 1] = max(1u, (activeNodes + 65534u) / 65535u);
+            words[h(H_GROUP_DISPATCH) + 2] = 1u;
+        }
         return;
     }
-    if(p.stage==0||p.stage==3){if(errors==0u)cellInputs();return;}
-    if(gl_LocalInvocationID.x==0u)stopped=errors;barrier();
-    if(stopped==0u)groupInputs();
+    if (p.stage == 0 || p.stage == 3) {
+        if (errors == 0u)
+            cellInputs();
+        return;
+    }
+    if (gl_LocalInvocationID.x == 0u)
+        stopped = errors;
+    barrier();
+    if (stopped == 0u)
+        groupInputs();
 }

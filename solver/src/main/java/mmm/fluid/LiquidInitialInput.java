@@ -11,7 +11,7 @@ import java.util.List;
 /** Converts an explicitly supplied point fixture once into cell inventory and MAC momentum. */
 final class LiquidInitialInput {
 	private LiquidInitialInput() { }
-	static void restore(FluidDomain domain, FlipParticleState input, FluidMaterialRegistry palette,
+	static void restore(HostFluidState domain, FlipParticleState input, FluidMaterialRegistry palette,
 	                    int[] materials, List<ChemicalMixtureRecord> mixtures,
 	                    ChemicalRegistry chemistry) {
 		input.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());

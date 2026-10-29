@@ -60,53 +60,6 @@ public final class GasThermalModel {
 
 	ThermalRegistry thermalRegistry() { return thermalRegistry; }
 
-	/** A port's continuous work state uses real-valued mass fractions; compact inventory comes later. */
-	AirNetwork.PortThermodynamics portThermodynamics(AirNetwork network, int first, int second,
-	                                                double[] energies, double ambientTemperature) {
-		double pa = first == 0 ? GasRegistry.STANDARD_PRESSURE_PA : absolutePressure(network.inventory(first), network.availableVolume(first), energies[first - 1]);
-		double pb = second == 0 ? GasRegistry.STANDARD_PRESSURE_PA : absolutePressure(network.inventory(second), network.availableVolume(second), energies[second - 1]);
-		int source = pa >= pb ? first : second, target = source == first ? second : first;
-		GasInventory donor = source == 0 ? network.registry().standardAmbientInventory() : network.inventory(source);
-		double sourceVolume = source == 0 ? ambientTemperature / GasRegistry.STANDARD_TEMPERATURE_K : network.availableVolume(source);
-		double sourceEnergy = source == 0 ? internalEnergyAtTemperature(donor, ambientTemperature) : energies[source - 1];
-		double standard = AirNetwork.cubicMeters(donor.standardVolumeNanos());
-		if (pa == pb || donor.isEmpty()) return new AirNetwork.PortThermodynamics(source, target, 0, 1, 1, 0, 1e-9, q -> 0);
-		var sourceParts = portions(donor);
-		var sourceCaloric=source==0?null:stateFunction.prepareInventory(sourceParts);
-		var sourceInitial = source == 0 ? null : hydrodynamicState(donor, sourceVolume, sourceCaloric.state(sourceEnergy));
-		double maximum = source == 0 ? Double.POSITIVE_INFINITY : standard * maximumOutflowFraction(sourceParts, sourceEnergy, sourceInitial);
-		GasInventory receiver = target == 0 ? GasInventory.EMPTY : network.inventory(target);
-		double receiverVolume = target == 0 ? 1 : network.availableVolume(target), receiverEnergy = target == 0 ? 0 : energies[target - 1];
-		double receiverStandard = AirNetwork.cubicMeters(receiver.standardVolumeNanos());
-		var receiving = receiver.isEmpty() ? List.<ThermalStateFunction.InventoryPortion>of() : portions(receiver);
-		double sourceOffset = 0;
-		for (var part : sourceParts) sourceOffset += stateFunction.baseEnergy(part.materialHandle(), part.massKg(), part.speciesQuanta())
-				- stateFunction.baseEnergy(part.materialHandle(), part.massKg(), Map.of());
-		double offset = sourceOffset;
-		double enthalpy = source == 0 ? enthalpy(donor, ambientTemperature) : 0;
-		java.util.function.DoubleUnaryOperator response = amount -> {
-			double fraction = amount / standard, sourcePressure, carried;
-			if (source == 0) { sourcePressure = GasRegistry.STANDARD_PRESSURE_PA; carried = fraction * enthalpy; }
-			else {
-				var expanded = compressAdiabatically(donor, sourceEnergy, sourceVolume, sourceVolume / (1 - fraction), sourceParts, sourceInitial, sourceCaloric);
-				double remainingEnergy = (1 - fraction) * expanded.finalInternalEnergy();
-				carried = sourceEnergy - remainingEnergy;
-				sourcePressure = GasRegistry.STANDARD_PRESSURE_PA * standard * (1 - fraction)
-						* expanded.finalTemperatureK() / GasRegistry.STANDARD_TEMPERATURE_K / sourceVolume;
-			}
-			if (target == 0) return sourcePressure - GasRegistry.STANDARD_PRESSURE_PA;
-			var mixed = new ArrayList<ThermalStateFunction.InventoryPortion>(receiving);
-			if (fraction > 0) for (var part : sourceParts) mixed.add(new ThermalStateFunction.InventoryPortion(part.materialHandle(), part.massKg() * fraction, Map.of()));
-			if (mixed.isEmpty()) return sourcePressure;
-			double temperature = stateFunction.stateForInventory(mixed, receiverEnergy + carried - offset * fraction).temperatureK();
-			double receiverPressure = GasRegistry.STANDARD_PRESSURE_PA * (receiverStandard + amount)
-					* temperature / GasRegistry.STANDARD_TEMPERATURE_K / receiverVolume;
-			return sourcePressure - receiverPressure;
-		};
-		return new AirNetwork.PortThermodynamics(source, target, Math.abs(pa - pb), donor.totalMass() / sourceVolume,
-				standard / sourceVolume, maximum, Math.max(1e-9, standard / donor.totalMassUnits()), response);
-	}
-
 	double maximumOutflowFraction(GasInventory inventory, double energy, double volume) {
 		if (inventory.isEmpty()) return 0;
 		var parts = portions(inventory);

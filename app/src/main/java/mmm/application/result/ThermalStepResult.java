@@ -1,11 +1,13 @@
 package mmm.application.result;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidDomainContracts;
+
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidThermalStepCandidate;
 
 import java.util.Objects;
 
-public record ThermalStepResult(RegionStepStatus status, FluidDomain.ThermalAxisStats stats) {
+public record ThermalStepResult(RegionStepStatus status, FluidDomainContracts.ThermalAxisStats stats) {
 	public ThermalStepResult {
 		Objects.requireNonNull(status, "status");
 		if ((status == RegionStepStatus.ACCEPTED) != (stats != null)) {

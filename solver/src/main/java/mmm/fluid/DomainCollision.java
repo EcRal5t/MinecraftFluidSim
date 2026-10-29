@@ -17,12 +17,13 @@ import mmm.chemistry.ChemicalRegistry;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import static mmm.fluid.FluidDomain.*;
+import static mmm.fluid.HostFluidState.*;
+import static mmm.fluid.FluidDomainContracts.*;
 
 /** Applies fixed collision edits, initial inventory and material binding with their prepared successors. */
 final class DomainCollision {
-	private final FluidDomain domain;
-	DomainCollision(FluidDomain domain) { this.domain = domain; }
+	private final HostFluidState domain;
+	DomainCollision(HostFluidState domain) { this.domain = domain; }
 	public void setMarkerChemical(int ordinal, Map<String, Long> stableAmounts) {
 		var stock = domain.liquidCells.physicalStockAt(ordinal);
 		var registry = domain.chemistry().registry();
@@ -132,7 +133,7 @@ final class DomainCollision {
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be planned", failure);
 		}
-		return new CollisionEditPlan((FluidDomain) domain, List.copyOf(canonical), previousMasks, domain.liquidCells.size(),
+		return new CollisionEditPlan((HostFluidState) domain, List.copyOf(canonical), previousMasks, domain.liquidCells.size(),
 				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan,
 				LiquidCollisionEdit.prepare(domain, canonical, granularPlan),
 				domain.thermalState == null ? null : domain.thermalState.thermalRevision());

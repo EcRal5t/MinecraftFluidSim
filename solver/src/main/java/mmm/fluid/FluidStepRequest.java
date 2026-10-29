@@ -14,10 +14,14 @@ public record FluidStepRequest(
 		boolean phaseChangeEnabled,
 		int maximumPhaseOperations,
 		boolean mechanicalAuditEnabled,
-		boolean pendingPhaseSettlementOnly
+		boolean pendingPhaseSettlementOnly,
+		boolean[] activeCells
 ) {
-	/** Explicit CPU materialization; resident backends use stateAccess directly. */
-	public FluidDomainState state() { return stateAccess.exportState(); }
+	public FluidStepRequest(long generation, FluidStateAccess state, List<MovingBodyFluidCoupling.Request> bodies,
+			boolean phase, int budget, boolean audit, boolean settlement) {
+		this(generation, state, bodies, phase, budget, audit, settlement, null);
+	}
+	@Override public boolean[] activeCells() { return activeCells == null ? null : activeCells.clone(); }
 	public FluidStepRequest(
 			long baseGeneration, FluidDomainState state,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
@@ -42,6 +46,12 @@ public record FluidStepRequest(
 	public FluidStepRequest {
 		if (baseGeneration < 0L) throw new IllegalArgumentException("Base generation must not be negative");
 		Objects.requireNonNull(stateAccess, "stateAccess");
+		if (activeCells != null) {
+			var layout = stateAccess.layout();
+			if (activeCells.length != layout.sizeX() * layout.sizeY() * layout.sizeZ())
+				throw new IllegalArgumentException("Activity mask differs from the region layout");
+			activeCells = activeCells.clone();
+		}
 		if (movingBodies == null || movingBodies.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP) {
 			throw new IllegalArgumentException("Moving-body request budget is invalid");
 		}

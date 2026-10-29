@@ -1,8 +1,10 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.api.RegionAvailabilityReason;
 import mmm.application.RegionCatalog;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.GasTopologyBlockedException;
 import mmm.world.CollisionField;
@@ -91,8 +93,8 @@ public final class FluidRegionManagerValidation {
 		FluidRegionManager manager = manager();
 		FluidRegion first = region(2, 2, 2);
 		FluidRegion second = regionAt(4, 0, 0, 2, 2, 2);
-		first.domain().setVolume(0, 0, 0, 1.0F);
-		float exactVolume = first.domain().totalVolume();
+		first.editableHost().setVolume(0, 0, 0, 1.0F);
+		float exactVolume = first.editableHost().totalVolume();
 		require(manager.add(first).accepted() && manager.add(second).accepted(), "replacement setup failed");
 		require(manager.select(first.id()), "could not select replacement target");
 
@@ -100,7 +102,7 @@ public final class FluidRegionManagerValidation {
 		RegionCatalog.AdmissionResult rejection = manager.replaceSelected(rejected);
 		require(!rejection.accepted(), "oversized replacement should be rejected");
 		require(manager.selected() == first && manager.regions().contains(first), "rejected replacement changed the selected region");
-		require(first.domain().totalVolume() == exactVolume, "region admission changed exact particle volume");
+		require(first.editableHost().totalVolume() == exactVolume, "region admission changed exact particle volume");
 
 		FluidRegion replacement = regionAt(0, 0, 0, 2, 2, 2);
 		require(manager.replaceSelected(replacement).accepted(), "valid replacement was rejected");
@@ -207,39 +209,39 @@ public final class FluidRegionManagerValidation {
 
 	private static void validateCollisionPublication() {
 		FluidRegion region = region(2, 2, 2);
-		FluidDomain original = region.domain();
+		HostFluidState original = region.editableHost();
 		original.setVolume(0, 0, 0, 0.5F);
 		float volume = original.totalVolume();
 		long generation = region.solverGeneration();
 		byte[] masks = new byte[8];
 		CollisionField empty = new CollisionField(2, 2, 2, masks);
 		require(FluidRegionWorldInteraction.applyCapturedCollisions(region, empty, 2).changedCells() == 0
-				&& region.domain() == original && region.solverGeneration() == generation,
+				&& region.editableHost() == original && region.solverGeneration() == generation,
 				"unchanged collision capture replaced the live solver");
 		masks[0] = (byte) 255;
 		CollisionField occupied = new CollisionField(2, 2, 2, masks);
 		FluidRegion.CollisionStats stats = FluidRegionWorldInteraction.applyCapturedCollisions(region, occupied, 2);
 		require(stats.changedCells() == 1 && stats.displacedCellVolume() == volume
-				&& stats.escapedCellVolume() == 0.0F && region.domain().totalVolume() == volume,
+				&& stats.escapedCellVolume() == 0.0F && region.editableHost().totalVolume() == volume,
 				"collision successor lost displaced liquid or reported uncommitted statistics");
-		require(region.domain() != original && region.solverGeneration() == generation + 1
-				&& region.domain().solidMicroMask(0, 0, 0) == 255
+		require(region.editableHost() != original && region.solverGeneration() == generation + 1
+				&& region.editableHost().solidMicroMask(0, 0, 0) == 255
 				&& original.solidMicroMask(0, 0, 0) == 0 && original.totalVolume() == volume,
 				"collision publication mutated its original or failed to advance the solver generation");
-		FluidDomain committed = region.domain();
-		FluidDomain stale = FluidDomain.restoreAuthoritativeState(original.captureAuthoritativeState());
+		HostFluidState committed = region.editableHost();
+		HostFluidState stale = HostFluidState.restoreAuthoritativeState(original.captureAuthoritativeState());
 		try {
-			region.adoptCollisionCandidate(original, generation, stale);
+			region.adoptCollisionCandidate(generation, stale);
 			throw new AssertionError("stale collision candidate was accepted");
 		} catch (IllegalStateException expected) {
-			require(region.domain() == committed && region.solverGeneration() == generation + 1,
+			require(region.editableHost() == committed && region.solverGeneration() == generation + 1,
 					"stale collision candidate changed the committed solver");
 		}
 	}
 
 	private static void validateClosedGasCollisionRejection() {
 		FluidRegion region = region(2, 2, 2);
-		FluidDomain original = region.domain();
+		HostFluidState original = region.editableHost();
 		original.sealDomainBoundary();
 		var before = original.bootstrapGasState(null);
 		require(!before.nodes().isEmpty(), "closed gas collision fixture has no finite inventory");
@@ -249,11 +251,11 @@ public final class FluidRegionManagerValidation {
 		try {
 			FluidRegionWorldInteraction.applyCapturedCollisions(region, new CollisionField(2, 2, 2, masks), 2);
 			throw new AssertionError("collision removed every cavity holding closed gas");
-		} catch (FluidDomain.CollisionEditBlockedException expected) {
+		} catch (FluidDomainContracts.CollisionEditBlockedException expected) {
 			require(expected.getCause() instanceof GasTopologyBlockedException,
 					"gas-capacity rejection lost its typed physical cause");
 		}
-		require(region.domain() == original && region.solverGeneration() == generation,
+		require(region.editableHost() == original && region.solverGeneration() == generation,
 				"rejected gas collision published a partial successor");
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
 			require(original.solidMicroMask(x, y, z) == 0, "rejected collision changed live geometry");
@@ -269,7 +271,7 @@ public final class FluidRegionManagerValidation {
 				new CollisionField(2, 2, 2, masks), 2).changedCells() == 7,
 				"a corrected collision capture could not be committed after rejection");
 		require(region.solverGeneration() == generation + 1
-				&& region.domain().captureAuthoritativeState().gas().nodes().equals(before.nodes()),
+				&& region.editableHost().captureAuthoritativeState().gas().nodes().equals(before.nodes()),
 				"valid closed-gas compression changed the finite inventory");
 	}
 
@@ -279,7 +281,7 @@ public final class FluidRegionManagerValidation {
 
 	private static FluidRegion regionAt(int x, int y, int z, int nx, int ny, int nz) {
 		return new FluidRegion(new UUID(0L, ++nextRegionId), DIMENSION, new BlockPos(x, y, z),
-				new FluidDomain(nx, ny, nz, CONFIG));
+				new HostFluidState(nx, ny, nz, CONFIG));
 	}
 
 	private static void require(boolean condition, String message) {

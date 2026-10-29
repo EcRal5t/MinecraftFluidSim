@@ -18,10 +18,10 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 	private final java.util.function.IntUnaryOperator previousMask;
 
 	MinecraftCollisionWorldPort(ServerLevel level) {
-		this(level, (mmm.fluid.FluidDomain)null);
+		this(level, (mmm.fluid.HostFluidState)null);
 	}
 
-	MinecraftCollisionWorldPort(ServerLevel level, mmm.fluid.FluidDomain previous) {
+	MinecraftCollisionWorldPort(ServerLevel level, mmm.fluid.HostFluidState previous) {
 		this.level = java.util.Objects.requireNonNull(level, "level");
 		this.availableCell = previous==null?null:previous::groupAvailable;
 		this.previousMask = previous==null?null:cell->previous.solidMicroMask(cell%previous.sizeX(),cell/previous.sizeX()%previous.sizeY(),cell/(previous.sizeX()*previous.sizeY()));

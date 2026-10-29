@@ -10,13 +10,17 @@ public interface ResidentFluidState extends FluidStateAccess {
     @Override ResidentFluidState retain();
     FixedGeometrySnapshot fixedGeometry();
     EntityBodyState entityBodies();
+    PhysicalActivityGraph activityGraph();
+    boolean hasPendingPhaseMotion(boolean[] activeCells);
     Observation observation();
     InventorySummary inventorySummary();
     Display display();
     ThermalAuditLedger thermalAudit();
-    FluidDomain.BodyFluidSample sampleBody(double minX,double minY,double minZ,double maxX,double maxY,double maxZ);
+    FluidDomainContracts.BodyFluidSample sampleBody(double minX,double minY,double minZ,double maxX,double maxY,double maxZ);
     FluidCellInventoryView observeCellInventory(int x,int y,int z);
-    java.util.List<FluidDomain.WaterContact> waterContacts(java.util.List<FluidDomain.WaterContactFace> faces);
+    CellCarrierInventoryView observeCellCarriers(int x,int y,int z);
+    boolean hasGranularOccupancy(int x,int y,int z);
+    java.util.List<FluidDomainContracts.WaterContact> waterContacts(java.util.List<FluidDomainContracts.WaterContactFace> faces);
 
     record Observation(double liquidVolume, int liquidRows, float maximumSpeed,
                        boolean gasPressureFlow, boolean granularQuiet, boolean pendingPhaseMotion,

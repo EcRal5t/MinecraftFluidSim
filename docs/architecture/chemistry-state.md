@@ -7,9 +7,9 @@
 - **组分状态和反应**
   - 代码入口：
     - [RegionChemistry](../../model/src/main/java/mmm/chemistry/RegionChemistry.java)
-    - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)：分组、热可行性、最终库存及内能提交
-    - [ChemicalReactionEngine](../../model/src/main/java/mmm/chemistry/ChemicalReactionEngine.java)：`reactInventory` 统一推进完整物种工作向量
-  - 验证入口：[M7ChemistryValidation](../../fabric/src/test/java/mmm/chemistry/M7ChemistryValidation.java)、[ChemicalReactionCandidateValidation](../../fabric/src/test/java/mmm/fluid/ChemicalReactionCandidateValidation.java)，共同执行生产反应阶段
+    - [VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java)：分组、热可行性、最终库存及内能提交
+    - [VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：组装设备反应、相变与传质阶段
+  - 验证入口：[M7ChemistryValidation](../../fabric/src/test/java/mmm/chemistry/M7ChemistryValidation.java) 检查定义；GPU 演示和反应场景验证设备推进
   - 测试选择器：`chemistry`
 
 - **液体单元组成与提交**
@@ -87,13 +87,13 @@ massUnits = speciesMassUnits + massResidualUnits
 候选联合核对物种、组成、电荷、质量和残差，保持实际材料身份及载体体积。
 反应调度保存待处理单元与轮转位置，预算耗尽后继续保留任务；冷恢复从实际库存重建调度。
 
-`ChemicalReactionEngine.reactInventory` 是生产反应计量推进的共同入口。它在完整物种向量上依次执行反应，`ChemicalReactionStage` 通过 extent 约束提供区域数量与正温度可行性。瞬时中间态可暂时包含超过单份库存槽位数的物种，热学计算直接按工作向量分配的物种数量和实际载体质量计算基准能。
+设备反应阶段依据物种库存、反应计量和热可行性确定实际反应量。瞬时中间态可暂时包含超过单份库存槽位数的物种，热学计算直接按工作向量分配的物种数量和实际载体质量计算基准能。
 
 整条反应链完成后，再将最终向量生成各份 `ChemicalMixtureRecord` 并检查库存容量；物种条目超限保留原库存及待处理任务。热量不足时按整格原内能限制实际反应程度，可行的部分反应和待处理状态共同发布，补热后继续推进。
 
 反应后的整数物种按实际单元记录质量份额分配，保留各记录的质量、体积和 MAC 动量。
 组成质量余量按实际质量减去新物种质量重新计算，物种、实际质量和余量分别精确闭合。
-`ChemicalReactionStage` 以同格、同开放分量、同化学物相为一组，准备一次库存计划与 LTE 内能分配。
+设备反应按同格、同开放分量、同化学物相组织库存，准备一次库存计划与 LTE 内能分配。
 温度由候选质量、组成与原总内能推导，完整预检后联合提交。
 
 最终库存容量受限时保留原库存和待处理单元；反应评估预算按单元轮转，后续步骤继续尚未处理的任务。

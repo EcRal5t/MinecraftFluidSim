@@ -12,11 +12,11 @@ public final class FluidPhysicalAssertions {
 	public record Motion(double massKilograms,double kineticJoules) {
 		public double rmsSpeed(){return massKilograms>0?Math.sqrt(2*kineticJoules/massKilograms):0;}
 	}
-	public static Motion motion(FluidDomain domain){
+	public static Motion motion(HostFluidState domain){
 		return new Motion(Mass.kilograms(domain.totalMassUnits()),domain.liquidKineticEnergyJoules());
 	}
 	/** Pressure error corresponds to at most five percent of one cell's water head. */
-	public static void hydrostaticPressure(FluidDomain domain,double actual,double expected,String context){
+	public static void hydrostaticPressure(HostFluidState domain,double actual,double expected,String context){
 		double allowance=HEAD_CELL_FRACTION*domain.config.density()*Math.abs(domain.config.gravity())*domain.config.cellSize();
 		require(Double.isFinite(actual)&&Math.abs(actual-expected)<=allowance,
 				context+": pressure="+actual+", expected="+expected+", allowancePa="+allowance);
@@ -27,7 +27,7 @@ public final class FluidPhysicalAssertions {
 				context+": gradient="+actual+", expected="+expected);
 	}
 	/** Gravity provides Mgh; a zero-gravity interface uses its capillary pressure-volume scale. */
-	public static Motion staticMotion(FluidDomain domain,double capillaryPressure,double energyFraction,String context){
+	public static Motion staticMotion(HostFluidState domain,double capillaryPressure,double energyFraction,String context){
 		var motion=motion(domain);double gravity=Math.abs(domain.config.gravity());
 		double scale=gravity>0?motion.massKilograms()*gravity*domain.config.cellSize()
 				:Math.abs(capillaryPressure)*domain.unitScale.cubicMeters(domain.totalVolumeExact());
@@ -36,7 +36,7 @@ public final class FluidPhysicalAssertions {
 		return motion;
 	}
 	/** Cell-volume centroid monitors accumulated macroscopic movement of a resting inventory. */
-	public static double inventoryCenterY(FluidDomain domain){
+	public static double inventoryCenterY(HostFluidState domain){
 		double volume=0,weighted=0;
 		for(var stock:domain.exportLiquidCellState().stocks()){
 			double amount=stock.volumeFraction();int y=stock.key().cell()/domain.sizeX%domain.sizeY;
@@ -44,7 +44,7 @@ public final class FluidPhysicalAssertions {
 		}
 		return domain.config.cellSize()*weighted/volume;
 	}
-	public static void hydrostaticRest(FluidDomain domain,double initialCenter,String context){
+	public static void hydrostaticRest(HostFluidState domain,double initialCenter,String context){
 		staticMotion(domain,0,SETTLED_ENERGY_FRACTION,context);
 		double drift=Math.abs(inventoryCenterY(domain)-initialCenter);
 		require(drift<=HEAD_CELL_FRACTION*domain.config.cellSize(),context+": accumulated vertical drift="+drift+" m");

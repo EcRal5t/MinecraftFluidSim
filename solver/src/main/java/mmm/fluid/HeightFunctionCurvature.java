@@ -6,7 +6,7 @@ final class HeightFunctionCurvature {
     private static final int COLUMN_REACH = 5;
     private HeightFunctionCurvature() { }
 
-    static double compute(FluidDomain d, int x, int y, int z) {
+    static double compute(HostFluidState d, int x, int y, int z) {
         int cell = d.domainFlowFields.cellIndex(x, y, z);
         double[] color = d.tension.surfaceTensionColor;
         double gx = difference(d, color, x, y, z, 0, cell);
@@ -50,7 +50,7 @@ final class HeightFunctionCurvature {
         return Double.NaN;
     }
 
-    private static double column(FluidDomain d, double[] color, int x, int y, int z, int axis, int sign, int target) {
+    private static double column(HostFluidState d, double[] color, int x, int y, int z, int axis, int sign, int target) {
         int gas = 0, base = 0; boolean gasFound = false, baseFound = false;
         for (int distance = 0; distance <= COLUMN_REACH; distance++) {
             if (!gasFound) {
@@ -84,7 +84,7 @@ final class HeightFunctionCurvature {
 
     /** The physical wall is the integration base of a single-valued contact height.
      * A partial PLIC face need only touch it; the column integral retains actual volume. */
-    private static boolean wallBase(FluidDomain d,double[] color,int x,int y,int z,
+    private static boolean wallBase(HostFluidState d,double[] color,int x,int y,int z,
                                     int axis,int offset,int side,int target) {
         x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
         int coordinate=axis==0?x:axis==1?y:z,size=axis==0?d.sizeX:axis==1?d.sizeY:d.sizeZ;
@@ -98,7 +98,7 @@ final class HeightFunctionCurvature {
 
     /** A common entirely wet section supplies a liquid neighbourhood on both sides.
      * Partial end cells contribute their actual volume to the height integral. */
-    private static boolean wetFace(FluidDomain d, double[] color, int x, int y, int z,
+    private static boolean wetFace(HostFluidState d, double[] color, int x, int y, int z,
                                    int axis, int offset, int side, int orientation, int target) {
         double c = sample(d, color, x, y, z, axis, offset, target);
         if (!(c > 0)) return false;
@@ -117,7 +117,7 @@ final class HeightFunctionCurvature {
         return maximum <= plane.planeOffset(cell);
     }
 
-    private static double sample(FluidDomain d, double[] color, int x, int y, int z, int axis, int offset, int target) {
+    private static double sample(HostFluidState d, double[] color, int x, int y, int z, int axis, int offset, int target) {
         x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
         boolean reflected = !d.domainFlowFields.inside(x, y, z);
         if (reflected) {
@@ -134,10 +134,10 @@ final class HeightFunctionCurvature {
         int position = Math.floorMod(coordinate, 2 * size);
         return position < size ? position : 2 * size - 1 - position;
     }
-    private static double difference(FluidDomain d, double[] c, int x, int y, int z, int axis, int target) {
+    private static double difference(HostFluidState d, double[] c, int x, int y, int z, int axis, int target) {
         return sample(d, c, x, y, z, axis, 1, target) - sample(d, c, x, y, z, axis, -1, target);
     }
-    private static boolean sameNeighbors(FluidDomain d, double[] c, int x, int y, int z, double value, int target) {
+    private static boolean sameNeighbors(HostFluidState d, double[] c, int x, int y, int z, double value, int target) {
         for (int a = 0; a < 3; a++) if (sample(d,c,x,y,z,a,1,target) != value || sample(d,c,x,y,z,a,-1,target) != value) return false;
         return true;
     }

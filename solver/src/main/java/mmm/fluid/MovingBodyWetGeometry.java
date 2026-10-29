@@ -8,7 +8,7 @@ import mmm.world.MovingBodyFluidCoupling.Bounds;
 /** Physical PLIC intersection with an axis-aligned body and pressure integrals on its wet faces. */
 final class MovingBodyWetGeometry {
   record Capture(
-      FluidDomain.BodyFluidSample sample, double[] cellVolumes, double[] wetAreaByNormal) {}
+      FluidDomainContracts.BodyFluidSample sample, double[] cellVolumes, double[] wetAreaByNormal) {}
 
   private record Point(double x, double y, double z) {
     Point add(Point p) {
@@ -38,7 +38,7 @@ final class MovingBodyWetGeometry {
 
   private record Moment(double volume, Point center) {}
 
-  static Capture capture(FluidDomain domain, Bounds bounds) {
+  static Capture capture(HostFluidState domain, Bounds bounds) {
     domain.domainFlowFields.preparePhysicalState();
     double h = domain.config.cellSize(), h2 = h * h, h3 = h2 * h;
     var frame = domain.gasState.frame;
@@ -140,12 +140,12 @@ final class MovingBodyWetGeometry {
           }
         }
     if (!(volume > 0))
-      return new Capture(FluidDomain.BodyFluidSample.EMPTY, occupied, wetAreaByNormal);
+      return new Capture(FluidDomainContracts.BodyFluidSample.EMPTY, occupied, wetAreaByNormal);
     force = force.add(gasSurfaceForce(domain, bounds, start, end));
     center = center.times(1 / volume);
     velocity = velocity.times(1 / volume);
     return new Capture(
-        new FluidDomain.BodyFluidSample(
+        new FluidDomainContracts.BodyFluidSample(
             volume,
             center.x,
             center.y,
@@ -163,7 +163,7 @@ final class MovingBodyWetGeometry {
         wetAreaByNormal);
   }
 
-  private static boolean isWater(FluidDomain domain, int material) {
+  private static boolean isWater(HostFluidState domain, int material) {
     return domain.materialRegistry == null ? material == 0
         : domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER.id());
   }
@@ -172,7 +172,7 @@ final class MovingBodyWetGeometry {
    * Dry body faces carry their own cavity pressure; uniform gas pressure cancels over a closed
    * body.
    */
-  private static Point gasSurfaceForce(FluidDomain domain, Bounds bounds, int[] start, int[] end) {
+  private static Point gasSurfaceForce(HostFluidState domain, Bounds bounds, int[] start, int[] end) {
     var frame = domain.gasState.frame;
     double h = domain.config.cellSize();
     Point force = new Point(0, 0, 0);

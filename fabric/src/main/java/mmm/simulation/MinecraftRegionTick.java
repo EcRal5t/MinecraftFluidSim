@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.MmmMod;
 import mmm.application.RegionApplicationService;
 import mmm.application.RegionRuntime;
@@ -8,7 +10,7 @@ import mmm.application.command.MotionStepCommand;
 import mmm.application.command.ThermalStepCommand;
 import mmm.application.port.RegionRepository;
 import mmm.chemistry.ChemicalReactionEngine;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidSolverBackend;
 import mmm.fluid.GasTopologyBlockedException;
 import mmm.granular.GranularDepositDynamics;
@@ -39,8 +41,6 @@ final class MinecraftRegionTick {
 	private final FluidSnapshotPublisher snapshots;
 	private final WorldCapabilityProfile profile;
 	private final int maximumPhaseOperationsPerStep;
-	private java.util.function.BiConsumer<ServerLevel,FluidRegion> finiteDeviceExchange = (level,region) -> { };
-	void finiteDeviceExchange(java.util.function.BiConsumer<ServerLevel,FluidRegion> exchange) { finiteDeviceExchange=exchange; }
 	private java.util.function.Consumer<FluidRegion> activityConnections = region -> { };
 	void activityConnections(java.util.function.Consumer<FluidRegion> connections) { activityConnections = Objects.requireNonNull(connections); }
 	private java.util.function.BiPredicate<ServerLevel,FluidRegion> farmlandHydration = (level,region) -> true;
@@ -71,11 +71,15 @@ final class MinecraftRegionTick {
 		inputs.discardEntityResponse(region);
 		long tick = region.incrementTick();
 		activityConnections.accept(region);
-		MinecraftGroupAvailability.prepare(level,region);
+		if (!MinecraftGroupAvailability.prepare(level, region)) {
+			region.setAvailabilityFailure(mmm.api.RegionAvailabilityReason.CHUNK_MISSING,
+					"Region is waiting for world chunks");
+			return;
+		}
 		boolean collisionsChanged = false;
 		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick)) {
 			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
-			catch (FluidDomain.CollisionEditBlockedException blocked) {
+			catch (FluidDomainContracts.CollisionEditBlockedException blocked) {
 				blockCollisionEdit(level, region, blocked);
 				return;
 			}
@@ -103,9 +107,9 @@ final class MinecraftRegionTick {
 		boolean motionStepDue = tickPlan.axis() == RegionTickUseCase.Axis.MOTION;
 		ThermalAuditLedger thermalBefore = profile.hasCapability(WorldCapability.THERMAL)
 				? region.thermalAudit() : null;
-		FluidDomain.ThermalAxisStats completedThermalAxis = null;
+		FluidDomainContracts.ThermalAxisStats completedThermalAxis = null;
 		GranularDepositDynamics.Stats completedGranularTransition = NO_GRANULAR_TRANSITION;
-		FluidDomain.StepStats completedMotion = null;
+		FluidDomainContracts.StepStats completedMotion = null;
 		try {
 			boolean phaseChange = profile.hasCapability(WorldCapability.PHASECHANGE);
 			int phaseBudget = phaseChange ? maximumPhaseOperationsPerStep : 0;
@@ -113,7 +117,7 @@ final class MinecraftRegionTick {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
 				RegionTickUseCase.MotionOutcome outcome = useCase.executeMotion(tickPlan,
 						new MotionStepCommand(region.id(), region.solverGeneration(), frozen.movingBodies(),
-								phaseChange, phaseBudget, false));
+								phaseChange, phaseBudget, false, false, frozen.activeCells()));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Motion step application rejected synchronous region state: " + outcome.result().status());
 				inputs.commitEntityResponse(level, region, outcome.result().movingBodyCoupling());
@@ -127,7 +131,7 @@ final class MinecraftRegionTick {
 			} else {
 				inputs.discardEntityResponse(region);
 				RegionTickUseCase.ThermalOutcome outcome = useCase.executeThermal(tickPlan,
-						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange, phaseBudget));
+						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange, phaseBudget, frozen.activeCells()));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Thermal step application rejected synchronous region state: " + outcome.result().status());
 				completedThermalAxis = outcome.result().stats();
@@ -139,12 +143,6 @@ final class MinecraftRegionTick {
 		}
 		boolean thermalRequiresMotion = false;
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
-			try { finiteDeviceExchange.accept(level,region); }
-			catch (RuntimeException failure) {
-				region.blockThermal("有限设备换热："+failure.getMessage());
-				MmmMod.LOGGER.error("Region {} finite device exchange failed",region.id(),failure);
-				return;
-			}
 			thermalRequiresMotion = observeThermalStep(region, thermalBefore, motionStepDue,
 					completedThermalAxis, completedGranularTransition);
 		}
@@ -154,7 +152,7 @@ final class MinecraftRegionTick {
 		var pacing = useCase.paceAfterAcceptedStep(tickRuntime, elapsedMilliseconds);
 		applyRuntime(region, tickRuntime, pacing.runtime(), elapsedMilliseconds);
 		boolean autoPause = pacing.autoPause();
-		FluidDomain.StepStats stats = region.lastStats();
+		FluidDomainContracts.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.solverConfig().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0 && !thermalRequiresMotion
 				&& !region.gasPressureFlow()
@@ -181,6 +179,7 @@ final class MinecraftRegionTick {
 
 	FluidRegion.CollisionStats refreshRegionInputs(ServerLevel level, FluidRegion region) {
 		FluidRegion.CollisionStats collisions = inputs.refreshCollisions(level, region);
+		if (collisions.changedCells() > 0) MinecraftGroupAvailability.prepare(level, region);
 		try {
 			if (inputs.refreshThermalBoundary(level, region)) {
 				region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
@@ -208,7 +207,7 @@ final class MinecraftRegionTick {
 	}
 
 	void blockCollisionEdit(
-			ServerLevel level, FluidRegion region, FluidDomain.CollisionEditBlockedException blocked
+			ServerLevel level, FluidRegion region, FluidDomainContracts.CollisionEditBlockedException blocked
 	) {
 		String detail = blocked.getCause() == null ? blocked.getMessage() : blocked.getCause().getMessage();
 		region.blockCollision("collision-edit-blocked PAUSED：" + detail);
@@ -230,7 +229,7 @@ final class MinecraftRegionTick {
 	}
 
 	void blockNumerical(
-			ServerLevel level, FluidRegion region, FluidDomain.PressureSolveBlockedException blocked
+			ServerLevel level, FluidRegion region, FluidDomainContracts.PressureSolveBlockedException blocked
 	) {
 		String failure = "pressure-solver NUMERICAL_PAUSE：" + blocked.getMessage();
 		region.blockNumerical(failure);
@@ -257,6 +256,11 @@ final class MinecraftRegionTick {
 
 	/** Maps a rejected logical-step candidate through the single runtime pause taxonomy. */
 	boolean blockStepFailure(ServerLevel level, FluidRegion region, RuntimeException failure) {
+        if (region.pauseForUnavailableDevice()) {
+            MmmMod.LOGGER.error("Region {} paused after Vulkan device loss; recover from HEAD and WAL on reload", region.id(), failure);
+            snapshots.sendRemoval(level.getServer(), region);
+            return true;
+        }
 		if (failure instanceof RegionRepository.StateCaptureRejectedException rejected) {
 			String detail = "state-capture NUMERICAL_PAUSE：" + rejected.getMessage();
 			region.blockNumerical(detail);
@@ -290,7 +294,7 @@ final class MinecraftRegionTick {
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
-		if (failure instanceof FluidDomain.PressureSolveBlockedException blocked) {
+		if (failure instanceof FluidDomainContracts.PressureSolveBlockedException blocked) {
 			blockNumerical(level, region, blocked);
 			return true;
 		}
@@ -298,15 +302,15 @@ final class MinecraftRegionTick {
 			blockGasTopology(level, region, blocked);
 			return true;
 		}
-		if (failure instanceof FluidDomain.ThermalTransportBlockedException blocked) {
+		if (failure instanceof FluidDomainContracts.ThermalTransportBlockedException blocked) {
 			blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
 			return true;
 		}
-		if (failure instanceof FluidDomain.GasThermalBlockedException blocked) {
+		if (failure instanceof FluidDomainContracts.GasThermalBlockedException blocked) {
 			blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
 			return true;
 		}
-		if (failure instanceof FluidDomain.ThermalPhaseBlockedException blocked) {
+		if (failure instanceof FluidDomainContracts.ThermalPhaseBlockedException blocked) {
 			blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
 			return true;
 		}
@@ -347,7 +351,7 @@ final class MinecraftRegionTick {
 
 	private static boolean observeThermalStep(
 			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion,
-			FluidDomain.ThermalAxisStats thermalAxis,
+			FluidDomainContracts.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition
 	) {
 		ThermalAuditLedger after = region.thermalAudit();

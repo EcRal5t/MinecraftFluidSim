@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.api.RegionAvailabilityReason;
 import mmm.application.ControllerQueryUseCase;
 import mmm.application.RegionApplicationService;
@@ -22,8 +24,7 @@ import mmm.controller.ControllerSummary;
 import mmm.controller.LifecycleOperation;
 import mmm.controller.LifecycleOperationPreview;
 import mmm.controller.LifecycleOperationSessions;
-import mmm.fluid.CpuFluidSolverBackend;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.FluidSolverBackend;
@@ -63,18 +64,97 @@ public final class FluidRegionLifecycleValidation {
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
 		validateAvailabilityPreservesRunIntent();
+		validateUnavailableDevicePreservesHostState();
+		validateDeviceLossRecovery();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateInternalConductionWakesMotion();
-		validateFiniteDeviceExchangeInvalidatesCandidatesAndWakesMotion();
-		validateBackendCandidateAdoption();
-		validateLiveCaptureFailureIsTyped();
-		validateApplicationCheckpointResults();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		validateMetadataOnlySummaryCannotInventInventory();
 		validateControllerSummaryTracksRunAndRecovery();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateUnavailableDevicePreservesHostState() {
+		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		host.setVolume(0, 0, 0, .5F);
+		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host);
+		region.setPaused(false);
+		long generation = region.solverGeneration();
+		region.solverBackend(new mmm.fluid.UnavailableFluidRuntime("test device unavailable"));
+		require(region.pauseForUnavailableDevice() && !region.canStep()
+				&& region.availabilityReason() == RegionAvailabilityReason.NUMERICAL_PAUSE
+				&& region.solverGeneration() == generation && region.hostSnapshot().totalVolumeExact() == .5,
+				"Unavailable device did not preserve host inventory and pause advancement");
+	}
+
+	private static void validateDeviceLossRecovery() {
+		var controller = new BlockPos(-1, 0, 0);
+		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
+				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
+				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
+		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		host.setVolume(0, 0, 0, .5F);
+		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host, footprint);
+		var backend = new LossBackend();
+		region.solverBackend(backend);
+		region.ensureDeviceResident();
+		var successor = region.beginHostEdit();
+		successor.setVolume(0, 0, 0, .75F);
+		var published = successor.captureAuthoritativeState();
+		backend.failImport = true;
+		try {
+			region.adoptContainerCandidateDomain(successor, 1, false);
+			throw new AssertionError("device loss did not interrupt published candidate adoption");
+		} catch (FluidSolverBackend.DeviceLostException expected) { }
+		require(!region.solverLoaded() && region.checkpointGeneration() == 1 && !region.paused(),
+				"published HEAD was not retained for recovery after failed adoption");
+		require(region.pauseForUnavailableDevice() && !region.canStep(), "lost device did not pause region");
+		region.restoreAuthoritativeSolver(published, 1);
+		require(region.hostSnapshot().totalVolumeExact() == .75 && !region.paused(),
+				"recovery did not restore the published inventory and operator intent");
+
+		var queryHost = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		var queryRegion = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, queryHost, footprint);
+		var queryBackend = new LossBackend();
+		queryRegion.solverBackend(queryBackend);
+		queryRegion.ensureDeviceResident();
+		queryBackend.failRead = true;
+		try {
+			queryRegion.hostSnapshot();
+			throw new AssertionError("device loss did not interrupt readback");
+		} catch (FluidSolverBackend.DeviceLostException expected) { }
+		require(queryRegion.pauseForUnavailableDevice() && !queryRegion.solverLoaded() && !queryRegion.canStep(),
+				"failed readback left a lost resident generation accessible");
+	}
+
+	private static final class LossBackend implements FluidSolverBackend {
+		boolean failImport, failRead;
+		String unavailable;
+		@Override public String id() { return "test:device"; }
+		@Override public String unavailableReason() { return unavailable; }
+		@Override public mmm.fluid.PreparedFluidState prepareState(mmm.fluid.FluidStateAccess source,
+				mmm.fluid.FluidDomainState successor, FiniteThermalDeviceInventory devices,
+				List<mmm.fluid.FluidStateAccess.DevicePort> ports) {
+			if (failImport) throw lost();
+			var state = new mmm.fluid.FluidStateAccess() {
+				@Override public mmm.fluid.FluidDomainState.Layout layout() { return successor.layout(); }
+				@Override public mmm.fluid.FluidDomainState exportState() {
+					if (failRead) throw lost();
+					return successor;
+				}
+			};
+			return new mmm.fluid.PreparedFluidState() {
+				@Override public mmm.fluid.FluidDomainState.Layout layout() { return state.layout(); }
+				@Override public mmm.fluid.FluidDomainState exportState() { return state.exportState(); }
+				@Override public mmm.fluid.FluidStateAccess commit() { return state; }
+				@Override public void close() { }
+			};
+		}
+		private DeviceLostException lost() { unavailable = "test device lost"; return new DeviceLostException(unavailable); }
+		@Override public FluidStepCandidate evaluate(FluidStepRequest request) { throw new UnsupportedOperationException(); }
+		@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) { throw new UnsupportedOperationException(); }
 	}
 
 	private static void validateDemoWorkbenchStore() throws Exception {
@@ -136,12 +216,12 @@ public final class FluidRegionLifecycleValidation {
 		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
 				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F,1000,0,.05F,48,1e-4F,.002F));
+		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F,1000,0,.05F,48,1e-4F,.002F));
 		domain.setSolidMicroMask(0,0,0,15);
 		var region = new FluidRegion(new UUID(127,131), DIMENSION, BlockPos.ZERO, domain, footprint);
 		require(signals.signal(DIMENSION, controller)==0 && manager.add(region).accepted()
 				&& notifications[0]==0, "Inactive or empty controller emitted a liquid signal");
-		var candidate = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		var candidate = HostFluidState.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		float[] half = {.25F,.5F,.5F,.5F,.5F,.5F,.5F,.5F};
 		candidate.setVolumes(half);
 		region.adoptContainerCandidateDomain(candidate, 1, true);
@@ -153,7 +233,7 @@ public final class FluidRegionLifecycleValidation {
 						new mmm.world.MovingBodyFluidCoupling.Bounds(.1,.1,.1,.8,.8,.8),0,0,0))));
 		region.publishCommittedObservation();
 		for(int i=0;i<20;i++) require(signals.signal(DIMENSION, controller)==8, "Comparator observation changed state");
-		require(notifications[0]==1 && region.domain()==candidate && region.paused()
+		require(notifications[0]==1 && region.editableHost()==candidate && region.paused()
 				&& candidate.fixedOpenVolumeExact()==7.5, "Read-only observation woke or rebuilt the region");
 		candidate.restoreEntityBodyState(mmm.fluid.EntityBodyState.EMPTY);
 		region.setAvailabilityFailure(mmm.api.RegionAvailabilityReason.CHUNK_MISSING,"test missing chunk");
@@ -241,7 +321,7 @@ public final class FluidRegionLifecycleValidation {
 		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
 				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 48, 1e-5F, 1e-4F));
+		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 48, 1e-5F, 1e-4F));
 		domain.setVolume(0, 0, 0, .5F);
 		var region = new FluidRegion(new UUID(83L, 89L), DIMENSION, BlockPos.ZERO, domain, footprint);
 		require(manager.addAndSelect(region).accepted(), "controller summary fixture was not admitted");
@@ -300,111 +380,11 @@ public final class FluidRegionLifecycleValidation {
 	}
 
 	/** The live solver is only replaced by a complete, adjacent candidate from the expected backend. */
-	private static void validateBackendCandidateAdoption() {
-		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FluidDomain domain = new FluidDomain(4, 4, 4, config);
-		domain.setVolume(1, 1, 1, 0.5F);
-		FluidRegion region = new FluidRegion(new UUID(19L, 23L), DIMENSION, BlockPos.ZERO,
-				domain);
-		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(
-				4, 4_096L, 16_384L));
-		require(manager.addAndSelect(region).accepted(), "application test region was not admitted");
-		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		RegionApplicationService application = application(backend, new FluidRegionRepository(manager),
-				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
-		long[] clock = {0L, 50_000_000L};
-		int[] clockIndex = {0};
-		RegionTickUseCase ticks = new RegionTickUseCase(application,
-				() -> clock[clockIndex[0]++], RegionTickUseCase.Policy.production());
-		RegionTickUseCase.MotionOutcome firstResult = ticks.executeMotion(
-				ticks.plan(new RegionRuntime(2L, 1, 0, 0, true, true)),
-				new MotionStepCommand(region.id(), region.solverGeneration(), List.of(), false, 0, false));
-		require(firstResult.result().accepted() && firstResult.elapsedMilliseconds() == 50.0
-				&& firstResult.runtime().stepIntervalTicks() == 2,
-				"valid tick use case motion command was rejected or lost measured pacing");
-		require(region.solverGeneration() == 1L && region.domain() != domain,
-				"valid backend candidate did not atomically replace the live solver");
 
-		FluidDomain committed = region.domain();
-		var stale = application.stepMotion(new MotionStepCommand(region.id(), 0L, List.of(), false, 0, false));
-		require(stale.status() == RegionStepStatus.STALE_GENERATION
-				&& region.domain() == committed && region.solverGeneration() == 1L,
-				"stale backend candidate changed the committed solver");
 
-		FluidStepCandidate second = backend.evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
-		FluidStepCandidate wrongBackend = new FluidStepCandidate("mmm:unexpected", second.baseGeneration(),
-				second.candidateGeneration(), second.state(), second.stats(), second.movingBodyCoupling());
-		RegionApplicationService wrongBackendApplication = application(
-				fixedBackend(backend.id(), wrongBackend, backend), new FluidRegionRepository(manager),
-				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
-		var backendRejected = wrongBackendApplication.stepMotion(new MotionStepCommand(
-				region.id(), region.solverGeneration(), List.of(), false, 0, false));
-		require(backendRejected.status() == RegionStepStatus.BACKEND_MISMATCH
-				&& region.domain() == committed && region.solverGeneration() == 1L,
-				"backend identity mismatch changed the committed solver");
 
-		FluidDomain alteredLayout = new FluidDomain(4, 4, 4, config);
-		alteredLayout.sealDomainBoundary();
-		alteredLayout.setVolume(1, 1, 1, 0.5F);
-		FluidStepCandidate incompatible = new FluidStepCandidate(second.backendId(), second.baseGeneration(),
-				second.candidateGeneration(), alteredLayout.captureAuthoritativeState(), second.stats(),
-				second.movingBodyCoupling());
-		RegionApplicationService incompatibleApplication = application(
-				fixedBackend(backend.id(), incompatible, backend), new FluidRegionRepository(manager),
-				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
-		var layoutRejected = incompatibleApplication.stepMotion(new MotionStepCommand(
-				region.id(), region.solverGeneration(), List.of(), false, 0, false));
-		require(layoutRejected.status() == RegionStepStatus.LAYOUT_MISMATCH
-				&& region.domain() == committed && region.solverGeneration() == 1L,
-				"backend candidate changed sealed/carrier/registry layout");
-		FluidStepCandidate ownershipCandidate = backend.evaluate(new FluidStepRequest(
-				region.solverGeneration(), region.domain().captureAuthoritativeState(), List.of(), false, 0));
-		require(ownershipCandidate.claimPreparedCpuDomain() != null,
-				"CPU candidate did not expose its single-use prepared aggregate");
-		boolean lateStateRejected = false;
-		try { ownershipCandidate.state(); }
-		catch (IllegalStateException expected) { lateStateRejected = true; }
-		require(lateStateRejected, "adopted CPU aggregate could be rematerialized as a stale immutable state");
 
-		var secondResult = application.stepMotion(new MotionStepCommand(
-				region.id(), region.solverGeneration(), List.of(), false, 0, false));
-		require(secondResult.accepted(), "second adjacent application candidate was rejected");
-		require(region.solverGeneration() == 2L, "adjacent backend candidate did not advance the generation");
-	}
 
-	private static FluidSolverBackend fixedBackend(
-			String id, FluidStepCandidate motion, FluidSolverBackend thermalDelegate
-	) {
-		return new FluidSolverBackend() {
-			@Override public String id() { return id; }
-			@Override public FluidStepCandidate evaluate(FluidStepRequest request) { return motion; }
-			@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
-				return thermalDelegate.evaluateThermal(request);
-			}
-		};
-	}
-
-	private static void validateApplicationCheckpointResults() {
-		int[] checkpointCalls = {0};
-		RegionCheckpointPort checkpoint = (id, generation) -> {
-			checkpointCalls[0]++;
-			return new RegionCheckpointPort.Attempt(CheckpointRegionResult.Status.COMMITTED,
-					Math.addExact(generation, 1L), null);
-		};
-		RegionApplicationService application = application(new CpuFluidSolverBackend(), unusedRepository(),
-				checkpoint);
-		UUID region = new UUID(29L, 31L);
-		var blocked = application.checkpoint(new CheckpointRegionCommand(region, 7L, true));
-		require(blocked.status() == CheckpointRegionResult.Status.PENDING_CONTAINER_WAL
-				&& checkpointCalls[0] == 0, "pending WAL reached the durable checkpoint port");
-		var committed = application.checkpoint(new CheckpointRegionCommand(region, 7L, false));
-		require(committed.committed() && committed.checkpointGeneration() == 8L && checkpointCalls[0] == 1,
-				"loader-neutral checkpoint command/result lost the committed generation");
-	}
 
 	private static void validateRegionTickPlanningAndPacing() {
 		int[] calls = {0, 0};
@@ -461,7 +441,7 @@ public final class FluidRegionLifecycleValidation {
 
 	private static void validateHydrostaticSleepPreservesMarkerLedger() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FluidDomain domain = new FluidDomain(6, 5, 4, config);
+		HostFluidState domain = new HostFluidState(6, 5, 4, config);
 		domain.restoreParticleState(new FlipParticleState(
 				6, 5, 4, config.cellSize(), 2, 0.1875F,
 				new float[] {
@@ -482,17 +462,17 @@ public final class FluidRegionLifecycleValidation {
 				domain);
 		region.setPaused(false);
 		require(region.lifecycle().observeCompletedStep(true, 1), "sleep fixture did not enter sleep");
-		require(java.util.Arrays.equals(velocities, region.domain().exportParticleState().copyParticleVelocities()),
+		require(java.util.Arrays.equals(velocities, region.editableHost().exportParticleState().copyParticleVelocities()),
 				"scheduling sleep changed marker momentum and kinetic energy");
 		region.wakeForActivity();
-		require(java.util.Arrays.equals(velocities, region.domain().exportParticleState().copyParticleVelocities()),
+		require(java.util.Arrays.equals(velocities, region.editableHost().exportParticleState().copyParticleVelocities()),
 				"waking changed retained marker momentum");
 		require(domain.particleCount() == markers && domain.totalVolumeExact() == volume && domain.totalMass() == mass,
 				"hydrostatic sleep changed marker ledgers");
 	}
 
 	private static void validateInternalConductionWakesMotion() {
-		FluidDomain domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		HostFluidState domain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
 		FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
 				domain);
 		region.setPaused(false);
@@ -520,73 +500,7 @@ public final class FluidRegionLifecycleValidation {
 		require(!region.canStep(), "thermal activity overrode the operator's pause");
 	}
 
-	private static void validateFiniteDeviceExchangeInvalidatesCandidatesAndWakesMotion() throws Exception {
-		var registries = FullCapabilityTestFixture.load();
-		FluidDomain domain = new FluidDomain(4, 4, 4, ProductionReplayValidationSupport.productionConfig());
-		domain.sealDomainBoundary();
-		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-		domain.setVolume(1, 1, 1, 0.5F);
-		FullCapabilityTestFixture.bindFull(domain, registries, 300.0,
-				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		FluidRegion region = new FluidRegion(new UUID(71L, 73L), DIMENSION, BlockPos.ZERO,
-				domain);
-		region.setPaused(false);
-		region.enableThermalActivity();
-		var thermal = registries.thermal();
-		var stateFunction = new ThermalStateFunction(thermal);
-		var body = new FiniteThermalBodyState(0L, thermal.fingerprint(), "mmm:copper_heat_exchanger", mmm.units.Mass.fromKilograms(2.0),
-				stateFunction.internalEnergyAtTemperature(thermal.materialHandle("mmm:copper_heat_exchanger"),
-						2.0, java.util.Map.of(), 350.0));
-		var devices = new FiniteThermalDeviceInventory(thermal.fingerprint(), List.of(
-				new FiniteThermalDeviceState("mmm:test", "mmm:device", "mmm:finite_heat_exchanger", body)));
-		region.restoreFiniteThermalDevices(devices, thermal, region.checkpointGeneration());
-		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(
-				4, 4_096L, 16_384L));
-		require(manager.addAndSelect(region).accepted(), "finite device fixture was not admitted");
-		var oldCandidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
-				region.solverGeneration(), domain.captureAuthoritativeState(), false, 0));
-		var exchange = FiniteThermalExchange.plan(thermal, body, domain.finiteThermalContacts(List.of(
-				new FluidDomain.ThermalContactRequest(0, 1, 1, 1, 10.0))),
-				0.05, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		var staleCellPlan = domain.planFiniteThermalCellExchange(List.of(
-				new FluidDomain.ThermalCellEnergyDelta(1, 1, 1, 1.0)));
-		domain.setThermalTemperatureInCell(1, 1, 1, 320.0);
-		var changedFluidEnergy = domain.exactInternalEnergy();
-		boolean staleContactRejected = false;
-		try {
-			region.commitFiniteThermalExchange("mmm:test", "mmm:device", exchange,
-					List.of(new FluidRegion.FiniteThermalCellBinding(0, 1, 1, 1)), thermal);
-		} catch (IllegalArgumentException expected) { staleContactRejected = true; }
-		require(staleContactRejected && domain.exactInternalEnergy().equals(changedFluidEnergy)
-				&& region.finiteThermalDevices(thermal.fingerprint()).equals(devices)
-				&& region.solverGeneration() == 0L,
-				"finite device applied heat computed from an obsolete fluid temperature");
-		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
-		boolean staleCellRejected = false;
-		try { domain.commitFiniteThermalCellExchange(staleCellPlan); }
-		catch (IllegalArgumentException expected) { staleCellRejected = true; }
-		require(staleCellRejected, "finite device cell plan ignored a changed thermal revision");
-		require(region.lifecycle().observeCompletedStep(true, 1), "finite device fixture did not sleep");
-		var fluidBefore = domain.exactInternalEnergy();
-		var fluidRoundoffBefore = domain.thermalAudit().roundoffResidual();
-		require(region.commitFiniteThermalExchange("mmm:test", "mmm:device", exchange,
-				List.of(new FluidRegion.FiniteThermalCellBinding(0, 1, 1, 1)), thermal),
-				"finite device fixture did not exchange heat");
-		var after = region.finiteThermalDevices(thermal.fingerprint());
-		require(region.solverGeneration() == 1L && region.canStep() && region.canStepThermal(),
-				"finite device heat failed to invalidate old candidates or wake mechanics and thermal activity");
-		require(domain.exactInternalEnergy().subtract(fluidBefore)
-				.add(after.exactInternalEnergy().subtract(devices.exactInternalEnergy()))
-				.equals(domain.thermalAudit().roundoffResidual().subtract(fluidRoundoffBefore)
-						.add(after.audit().roundoffResidual().subtract(devices.audit().roundoffResidual()))),
-				"finite device heat did not close body and fluid energy");
-		var fluidAfter = domain.exactInternalEnergy();
-		require(new FluidRegionRepository(manager).adoptThermal(region.id(), oldCandidate, CpuFluidSolverBackend.ID)
-				== RegionStepStatus.STALE_GENERATION && region.domain() == domain
-				&& domain.exactInternalEnergy().equals(fluidAfter)
-				&& region.finiteThermalDevices(thermal.fingerprint()).equals(after),
-				"pre-exchange candidate overwrote the coupled body/fluid energy");
-	}
+
 
 	private static void validatePacingAndOperatorPause() {
 		RegionLifecycleUseCase useCase = new RegionLifecycleUseCase();
@@ -617,7 +531,7 @@ public final class FluidRegionLifecycleValidation {
 		require(!lifecycle.canStep() && lifecycle.state() == FluidRegionLifecycle.State.REDUCED,
 				"operator pause was confused with scheduling state");
 
-		FluidDomain retryDomain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		HostFluidState retryDomain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
 		FluidRegion retryRegion = new FluidRegion(new UUID(11L, 13L), DIMENSION, BlockPos.ZERO,
 				retryDomain);
 		retryRegion.blockPerformance("three accepted steps exceeded the wall-time guard");
@@ -730,31 +644,7 @@ public final class FluidRegionLifecycleValidation {
 				"controller query token did not consume exactly once");
 	}
 
-	private static void validateLiveCaptureFailureIsTyped() {
-		RegionRepository brokenCapture = new RegionRepository() {
-			@Override public Capture captureForStep(UUID regionId) {
-				throw new IllegalArgumentException("broken live capture");
-			}
-			@Override public RegionStepStatus adoptMotion(
-					UUID regionId, FluidStepCandidate candidate, String expectedBackendId
-			) { throw new AssertionError("capture failure reached motion adoption"); }
-			@Override public RegionStepStatus adoptThermal(
-					UUID regionId, FluidThermalStepCandidate candidate, String expectedBackendId
-			) { throw new AssertionError("capture failure reached thermal adoption"); }
-		};
-		RegionApplicationService application = application(new CpuFluidSolverBackend(), brokenCapture,
-				(id, generation) -> new RegionCheckpointPort.Attempt(
-						CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null));
-		boolean typed = false;
-		try {
-			application.stepMotion(new MotionStepCommand(
-					new UUID(71L, 73L), 0L, List.of(), false, 0, false));
-		} catch (RegionRepository.StateCaptureRejectedException rejected) {
-			typed = rejected.getCause() instanceof IllegalArgumentException
-					&& rejected.getMessage().contains("broken live capture");
-		}
-		require(typed, "invalid live capture could still escape the typed runtime pause boundary");
-	}
+
 
 	private static RegionApplicationService application(
 			FluidSolverBackend backend,

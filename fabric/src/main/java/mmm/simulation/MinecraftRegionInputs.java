@@ -58,16 +58,37 @@ final class MinecraftRegionInputs {
 	TickInputs captureTick(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled) {
 		MinecraftGroupAvailability.prepare(level, region);
 		EntityInputs entities = region.entityPhysicsEnabled() ? captureEntities(level, region) : EntityInputs.EMPTY;
+		var requestedBodies = entities.movingBodies();
+		boolean[] activeCells = region.activityForBodies(requestedBodies);
+		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
 		int affectedEntities = entities.affectedEntities();
 		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
-		if (affectedEntities > 0 || !new mmm.fluid.EntityBodyState(entities.movingBodies()).equals(region.entityBodyState())) {
+		if (affectedEntities > 0 || !new mmm.fluid.EntityBodyState(requestedBodies).equals(region.entityBodyState())) {
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 		}
 		RegionRuntime runtime = new RegionRuntime(tick, region.stepIntervalTicks(),
 				region.hardOverrunStreak(), region.recoveryStreak(), region.canStep(),
 				thermalEnabled && region.canStepThermal());
-		return new TickInputs(runtime, entities.movingBodies(), affectedEntities);
+		return new TickInputs(runtime, requestedBodies, affectedEntities, activeCells);
+	}
+
+	static boolean bodyAvailable(FluidRegion region, MovingBodyFluidCoupling.Bounds bounds) {
+		var origin = region.origin();
+		return MinecraftGroupAvailability.boxAvailable(region, new net.minecraft.world.phys.AABB(
+				bounds.minimumX()+origin.getX(), bounds.minimumY()+origin.getY(), bounds.minimumZ()+origin.getZ(),
+				bounds.maximumX()+origin.getX(), bounds.maximumY()+origin.getY(), bounds.maximumZ()+origin.getZ()));
+	}
+	static List<MovingBodyFluidCoupling.Request> retainBlockedBodies(FluidRegion region, List<MovingBodyFluidCoupling.Request> requested) {
+		var accepted = new ArrayList<MovingBodyFluidCoupling.Request>();
+		var ids = new java.util.HashSet<UUID>();
+		for (var body : requested) if (bodyAvailable(region, body.bounds())) {
+			accepted.add(body); ids.add(body.bodyId());
+		}
+		for (var body : region.entityBodyState().bodies()) if (!ids.contains(body.bodyId())
+				&& !bodyAvailable(region, body.bounds()))
+			accepted.add(new MovingBodyFluidCoupling.Request(body.bodyId(), body.bounds(), 0, 0, 0));
+		return List.copyOf(accepted);
 	}
 
 	void finishServerTick() { motion.rotate(); pendingResponses.clear(); }
@@ -76,7 +97,7 @@ final class MinecraftRegionInputs {
 		var responses = pendingResponses.remove(region.id());
 		if (responses == null) return;
 		for (var interaction : responses) {
-			if (matchesObservation(level, region, interaction) && interaction.entity().isOnFire()
+			if (bodyAvailable(region, interaction.contact().bounds()) && matchesObservation(level, region, interaction) && interaction.entity().isOnFire()
 					&& interaction.contact().waterContactVolumeCubicMetres() > 0)
 				interaction.entity().clearFire();
 		}
@@ -84,7 +105,7 @@ final class MinecraftRegionInputs {
 		for (var interaction : responses) byId.put(interaction.entity().getUUID(), interaction);
 		for (var impulse : result.bodyImpulses()) {
 			var interaction = byId.get(impulse.bodyId());
-			if (interaction == null || !matchesObservation(level, region, interaction) || !canAffect(interaction.entity())) continue;
+			if (interaction == null || !bodyAvailable(region, interaction.contact().bounds()) || !matchesObservation(level, region, interaction) || !canAffect(interaction.entity())) continue;
 			double mass = interaction.contact().massKilograms();
 			Vec3 delta = new Vec3(impulse.impulseXKilogramMetresPerSecond(),
 					impulse.impulseYKilogramMetresPerSecond(), impulse.impulseZKilogramMetresPerSecond())
@@ -210,7 +231,8 @@ final class MinecraftRegionInputs {
 	record TickInputs(
 			RegionRuntime runtime,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
-			int affectedEntities
+			int affectedEntities,
+			boolean[] activeCells
 	) { }
 
 	private record Interaction(Entity entity, Contact contact, Vec3 displacementBlocksThisTick) { }

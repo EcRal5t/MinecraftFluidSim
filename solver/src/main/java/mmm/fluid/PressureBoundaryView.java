@@ -8,8 +8,8 @@ import mmm.fluid.air.AirNetwork;
  * network; face incidence uses these state-equation values with the shared geometry.
  */
 final class PressureBoundaryView {
-	private final FluidDomain domain;
-	PressureBoundaryView(FluidDomain domain) {
+	private final HostFluidState domain;
+	PressureBoundaryView(HostFluidState domain) {
 		this.domain = domain;
 	}
 

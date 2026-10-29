@@ -1,101 +1,61 @@
 package mmm.fluid;
 
 import java.util.Objects;
+import mmm.world.MovingBodyFluidCoupling;
 
-/** Complete uncommitted thermal-only successor, with the same lazy CPU adoption path as motion. */
+/** A complete device successor, adopted once or released without changing the committed generation. */
 public final class FluidThermalStepCandidate implements AutoCloseable {
-	private final String backendId;
-	private final long baseGeneration;
-	private final long candidateGeneration;
-	private final FluidDomainState.Layout layout;
-	private final FluidDomain.ThermalAxisStats stats;
-	private FluidDomain preparedCpuDomain;
-	private boolean preparedCpuDomainClaimed;
-	private volatile FluidDomainState state;
-	private PreparedFluidState preparedDeviceState;
+    private final String backendId;
+    private final long baseGeneration;
+    private final FluidDomainState.Layout layout;
+    private final FluidDomainContracts.ThermalAxisStats stats;
+    private PreparedFluidState prepared;
+    private FluidDomainState snapshot;
+    private boolean handled;
 
-	public FluidThermalStepCandidate(
-			String backendId, long baseGeneration, long candidateGeneration,
-			FluidDomainState state, FluidDomain.ThermalAxisStats stats
-	) {
-		this(backendId, baseGeneration, candidateGeneration, Objects.requireNonNull(state, "state"),
-				state.layout(), stats, null);
-	}
-
-	static FluidThermalStepCandidate preparedCpu(
-			long baseGeneration, FluidDomain domain, FluidDomain.ThermalAxisStats stats
-	) {
-		Objects.requireNonNull(domain, "domain");
-		return new FluidThermalStepCandidate(CpuFluidSolverBackend.ID, baseGeneration,
-				Math.addExact(baseGeneration, 1L), null, domain.authoritativeLayout(), stats, domain);
-	}
-
-	private FluidThermalStepCandidate(
-			String backendId, long baseGeneration, long candidateGeneration, FluidDomainState state,
-			FluidDomainState.Layout layout, FluidDomain.ThermalAxisStats stats, FluidDomain preparedCpuDomain
-	) {
-		if (backendId == null || backendId.isBlank()) throw new IllegalArgumentException("Backend id is missing");
-		if (baseGeneration < 0L || candidateGeneration != Math.addExact(baseGeneration, 1L)) {
-			throw new IllegalArgumentException("Candidate generation is not the immediate successor");
-		}
-		this.backendId = backendId;
-		this.baseGeneration = baseGeneration;
-		this.candidateGeneration = candidateGeneration;
-		this.state = state;
-		this.layout = Objects.requireNonNull(layout, "layout");
-		this.stats = Objects.requireNonNull(stats, "stats");
-		this.preparedCpuDomain = preparedCpuDomain;
-		if (preparedCpuDomain != null && (!CpuFluidSolverBackend.ID.equals(backendId)
-				|| !preparedCpuDomain.authoritativeLayout().equals(layout))) {
-			throw new IllegalArgumentException("Prepared CPU thermal candidate identity/layout is invalid");
-		}
-	}
-
-	public static FluidThermalStepCandidate preparedDevice(String backendId,long baseGeneration,PreparedFluidState state,
-            FluidDomain.ThermalAxisStats stats) {
-        Objects.requireNonNull(state,"state");
-        var result=new FluidThermalStepCandidate(backendId,baseGeneration,Math.addExact(baseGeneration,1),null,
-                state.layout(),stats,null);
-        result.preparedDeviceState=state;return result;
+    private FluidThermalStepCandidate(String backendId, long baseGeneration, PreparedFluidState prepared,
+            FluidDomainContracts.ThermalAxisStats stats) {
+        if (backendId == null || backendId.isBlank() || baseGeneration < 0)
+            throw new IllegalArgumentException("Candidate identity is invalid");
+        Math.addExact(baseGeneration, 1);
+        this.backendId = backendId;
+        this.baseGeneration = baseGeneration;
+        this.prepared = Objects.requireNonNull(prepared);
+        this.layout = prepared.layout();
+        this.stats = Objects.requireNonNull(stats);
     }
+
+    public static FluidThermalStepCandidate preparedDevice(String backendId, long baseGeneration, PreparedFluidState state,
+            FluidDomainContracts.ThermalAxisStats stats) {
+        return new FluidThermalStepCandidate(backendId, baseGeneration, state, stats);
+    }
+
+    public String backendId() { return backendId; }
+    public long baseGeneration() { return baseGeneration; }
+    public long candidateGeneration() { return baseGeneration + 1; }
+    public FluidDomainState.Layout layout() { return layout; }
+    public FluidDomainContracts.ThermalAxisStats stats() { return stats; }
+
     public synchronized PreparedFluidState claimPreparedDeviceState() {
-        if(preparedCpuDomainClaimed)throw new IllegalStateException("Candidate was already adopted");
-        var result=preparedDeviceState;
-        if(result!=null){preparedDeviceState=null;preparedCpuDomainClaimed=true;}
+        if (handled) throw new IllegalStateException("Candidate was already handled");
+        handled = true;
+        var result = prepared;
+        prepared = null;
         return result;
     }
-    @Override public synchronized void close() {
-        if(preparedDeviceState!=null){preparedDeviceState.close();preparedDeviceState=null;preparedCpuDomainClaimed=true;}
+
+    /** Explicit checkpoint capture retains the same private generation until adoption. */
+    public synchronized FluidDomainState state() {
+        if (snapshot != null) return snapshot;
+        if (handled) throw new IllegalStateException("Candidate no longer owns its generation");
+        return snapshot = prepared.exportState();
     }
 
-	public String backendId() { return backendId; }
-	public long baseGeneration() { return baseGeneration; }
-	public long candidateGeneration() { return candidateGeneration; }
-	public FluidDomainState.Layout layout() { return layout; }
-	public FluidDomain.ThermalAxisStats stats() { return stats; }
-	public synchronized FluidDomain claimPreparedCpuDomain() {
-		if (preparedCpuDomainClaimed) {
-			throw new IllegalStateException("Prepared CPU thermal candidate was already adopted");
-		}
-		if (preparedCpuDomain == null) return null;
-		FluidDomain claimed = preparedCpuDomain;
-		preparedCpuDomain = null;
-		preparedCpuDomainClaimed = true;
-		return claimed;
-	}
-
-	public FluidDomainState state() {
-		FluidDomainState current = state;
-		if (current != null) return current;
-		synchronized (this) {
-			current = state;
-			if (current == null) {
-				if (preparedCpuDomainClaimed) {
-					throw new IllegalStateException("Adopted CPU thermal candidate no longer owns an immutable state source");
-				}
-				state = current = preparedDeviceState!=null?preparedDeviceState.exportState():preparedCpuDomain.captureAuthoritativeState();
-			}
-			return current;
-		}
-	}
+    @Override public synchronized void close() {
+        if (handled) return;
+        handled = true;
+        var resource = prepared;
+        prepared = null;
+        resource.close();
+    }
 }

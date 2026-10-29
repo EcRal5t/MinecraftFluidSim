@@ -8,9 +8,9 @@ import mmm.fluid.air.AirNetwork;
  * mutates it; every method is safe on a frozen candidate and allocates only its result.
  */
 final class DomainMetrics {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	DomainMetrics(FluidDomain domain) {
+	DomainMetrics(HostFluidState domain) {
 		this.domain = domain;
 	}
 
@@ -71,7 +71,7 @@ final class DomainMetrics {
 		return mass == 0 ? Float.NaN : (float) (weighted / mass);
 	}
 
-	FluidDomain.VolumeDistribution volumeDistribution(float visibleThreshold) {
+	FluidDomainContracts.VolumeDistribution volumeDistribution(float visibleThreshold) {
 		domain.domainFlowFields.ensureInventoryGrid();
 		int active = 0, visible = 0, dense = 0;
 		for (float value : domain.volume) {
@@ -79,17 +79,17 @@ final class DomainMetrics {
 			if (value >= visibleThreshold) visible++;
 			if (value >= 0.90F) dense++;
 		}
-		return new FluidDomain.VolumeDistribution(active, visible, dense);
+		return new FluidDomainContracts.VolumeDistribution(active, visible, dense);
 	}
 
-	FluidDomain.SolidDistribution solidDistribution() {
+	FluidDomainContracts.SolidDistribution solidDistribution() {
 		int partial = 0, full = 0;
 		for (int index = 0; index < domain.cellCount; index++) {
 			int mask = domain.geometry.cutCells.mask(index);
 			if (mask == FlipCutCellGeometry.FULL_MASK) full++;
 			else if (mask != 0) partial++;
 		}
-		return new FluidDomain.SolidDistribution(partial, full);
+		return new FluidDomainContracts.SolidDistribution(partial, full);
 	}
 
 	boolean containsFluidAt(float localX, float localY, float localZ) {
@@ -101,7 +101,7 @@ final class DomainMetrics {
 		if (domain.geometry.cutCells.fullySolid(index) || domain.geometry.cutCells.pointInsideSolid(localX, localY, localZ, h)
 				|| domain.volume[index] <= domain.config.fluidEpsilon()) return false;
 		float openVolume = domain.domainCollision.effectiveOpenCellVolume(index);
-		float reconstructedFill = openVolume <= 0.0F ? 0.0F : FluidDomain.clamp01(domain.volume[index] / openVolume);
+		float reconstructedFill = openVolume <= 0.0F ? 0.0F : HostFluidState.clamp01(domain.volume[index] / openVolume);
 		return localY - y * h < reconstructedFill * h;
 	}
 
@@ -133,7 +133,7 @@ final class DomainMetrics {
 	double exactVolumeNear(int centerX, int centerY, int centerZ, int maxRadius, int materialHandle) {
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 		boolean[] near = new boolean[domain.cellCount];
-		for (FluidDomain.CellCandidate candidate : domain.domainFlowFields.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+		for (FluidDomainContracts.CellCandidate candidate : domain.domainFlowFields.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			near[candidate.index()] = true;
 		}
 		double result = 0.0;

@@ -62,11 +62,11 @@ public abstract class ThermalValidationSupport {
 	}
 
 	/** Explicit raw owners for phase storage, integer partitions and carrier-count budgets. */
-	static void restorePhaseTestCarriers(FluidDomain domain, FluidMaterialRegistry materials,
+	static void restorePhaseTestCarriers(HostFluidState domain, FluidMaterialRegistry materials,
 	                                     float[] volumes, int[] materialHandles) {
 		restorePhaseTestCarriers(domain, materials, 1, 1, 1, volumes, materialHandles);
 	}
-	static void restorePhaseTestCarriers(FluidDomain domain, FluidMaterialRegistry materials, int x, int y, int z,
+	static void restorePhaseTestCarriers(HostFluidState domain, FluidMaterialRegistry materials, int x, int y, int z,
 	                                     float[] volumes, int[] materialHandles) {
 		float[] positions = new float[4 * volumes.length]; long[] masses = new long[volumes.length];
 		for (int marker = 0; marker < volumes.length; marker++) {

@@ -2,7 +2,7 @@ package mmm.thermal;
 
 import mmm.units.SignedDyadic;
 
-/** Conservative backward-Euler heat transfer through one finite conductance, in J/(s K). */
+/** Caloric carrier state and energy integrals. */
 public final class ThermalContactExchange {
 	/** A caloric curve evaluated against the same initial inventory throughout one contact solve. */
 	public sealed interface Body permits Carrier,Reservoir {
@@ -93,87 +93,6 @@ public final class ThermalContactExchange {
 		return target < from ? SignedDyadic.ZERO.subtract(total) : total;
 	}
 
-	/** Returns signed energy entering first; finite second receives the opposite amount. No inventory is edited. */
-	public static double transfer(Body first, Body second, double conductanceWPerK, double dtSeconds) {
-		if (first == null || second == null || !first.finite()
-				|| !(Double.isFinite(conductanceWPerK) && conductanceWPerK >= 0.0)
-				|| !(Double.isFinite(dtSeconds) && dtSeconds > 0.0))
-			throw new IllegalArgumentException("Thermal contact input is invalid");
-		double firstT = first.temperatureK(), secondT = second.temperatureK();
-		requireCapacity(first.heatCapacityJPerK());
-		if (second.finite()) requireCapacity(second.heatCapacityJPerK());
-		if (conductanceWPerK == 0.0 || firstT == secondT) return 0.0;
-		double sign = secondT > firstT ? 1.0 : -1.0;
-		double high = Math.abs(first.energyChangeToTemperature(secondT));
-		if (second.finite()) high = Math.min(high, Math.abs(second.energyChangeToTemperature(firstT)));
-		if (!(high >= 0.0))
-			throw new IllegalArgumentException("Thermal contact energy interval is invalid");
-		if (high == 0.0) return 0.0;
-		high = Math.min(high, Double.MAX_VALUE);
-		double inverseConductanceDt = (1.0 / conductanceWPerK) / dtSeconds;
-		// Change division order when a reciprocal overflow hides a representable conductance-times-dt.
-		if (Double.isInfinite(inverseConductanceDt)) inverseConductanceDt = (1.0 / dtSeconds) / conductanceWPerK;
-		double low = 0.0;
-		double amount = Math.min(high, response(Math.abs(secondT - firstT),
-				first.heatCapacityJPerK(), second.heatCapacityJPerK(), conductanceWPerK, dtSeconds));
-		if (amount == 0.0) return 0.0;
-		// One local caloric contact has bounded work. Constant-Cv segments use the
-		// analytic response above; knots use safeguarded Newton at visible accuracy.
-		for (int iteration=0;iteration<8;iteration++) {
-			var firstState = first.stateAfterEnergyChange(sign * amount);
-			var secondState = second.stateAfterEnergyChange(-sign * amount);
-			double drop = amount * inverseConductanceDt;
-			if (!Double.isFinite(drop)) drop = Math.scalb(Math.scalb(amount, -exponent(amount))
-					/ (Math.scalb(conductanceWPerK, -exponent(conductanceWPerK))
-					* Math.scalb(dtSeconds, -exponent(dtSeconds))),
-					exponent(amount) - exponent(conductanceWPerK) - exponent(dtSeconds));
-			double residual = drop
-					- sign * (secondState.temperatureK() - firstState.temperatureK());
-			if (Math.abs(residual)<=1e-4 || Math.nextUp(low)>=high) return sign*amount;
-			if (amount == Double.MAX_VALUE && residual < 0.0)
-				throw new IllegalArgumentException("Thermal contact transfer is not representable");
-			if (residual > 0.0) high = amount; else low = amount;
-			double next = amount - response(residual, firstState.heatCapacityJPerK(),
-					secondState.heatCapacityJPerK(), conductanceWPerK, dtSeconds);
-			if (!(next > low && next < high)) next = low + (high - low) * 0.5;
-			if (next == amount) break;
-			amount = next;
-		}
-		// The largest possible caloric slope bounds the backward-Euler response
-		// from below. Complex registered curves therefore retain positive heat
-		// exchange even if all bounded Newton samples stayed above the root.
-		double bounded=response(Math.abs(secondT-firstT),minimumCapacity(first),minimumCapacity(second),conductanceWPerK,dtSeconds);
-		return sign*Math.max(low,Math.min(high,bounded));
-	}
-	private static double minimumCapacity(Body body){
-		if(body instanceof Reservoir)return Double.POSITIVE_INFINITY;
-		var carrier=(Carrier)body;double minimum=Double.POSITIVE_INFINITY;
-		for(var segment:carrier.material().caloricSegments())minimum=Math.min(minimum,segment.specificHeatJPerKgK());
-		return carrier.massKilograms()*minimum;
-	}
-
-	/** delta / (1/(G dt) + 1/C1 + 1/C2), keeping the shared binary scale outside the sum. */
-	private static double response(double delta, double firstCapacity, double secondCapacity, double g, double dt) {
-		double inverse = (1.0 / g) / dt;
-		if (Double.isInfinite(inverse)) inverse = (1.0 / dt) / g;
-		double denominator = inverse + (1.0 / firstCapacity + 1.0 / secondCapacity);
-		double result = delta / denominator;
-		if (Double.isFinite(denominator) && denominator > 0.0 && Double.isFinite(result) && result != 0.0)
-			return result;
-		if (delta == 0.0 || !Double.isFinite(delta)) return delta;
-		int ge = exponent(g), de = exponent(dt), ce = exponent(firstCapacity);
-		int scale = Math.min(ge + de, ce);
-		if (Double.isFinite(secondCapacity)) scale = Math.min(scale, exponent(secondCapacity));
-		denominator = Math.scalb(1.0 / (Math.scalb(g, -ge) * Math.scalb(dt, -de)), scale - ge - de)
-				+ Math.scalb(1.0 / Math.scalb(firstCapacity, -ce), scale - ce);
-		if (Double.isFinite(secondCapacity)) {
-			ce = exponent(secondCapacity);
-			denominator += Math.scalb(1.0 / Math.scalb(secondCapacity, -ce), scale - ce);
-		}
-		int re = exponent(Math.abs(delta));
-		return Math.scalb(Math.scalb(delta, -re) / denominator, re + scale);
-	}
-
 	/** Shared contact arithmetic; sign is retained while intermediate overflow and subnormal rounding are avoided. */
 	static double product(double a, double b, double c) {
 		if (a == 0.0 || b == 0.0 || c == 0.0) return 0.0;
@@ -189,8 +108,4 @@ public final class ThermalContactExchange {
 		return exponent == Double.MIN_EXPONENT - 1 ? Math.getExponent(Math.scalb(value, 54)) - 54 : exponent;
 	}
 
-	private static void requireCapacity(double capacity) {
-		if (!(Double.isFinite(capacity) && capacity > 0.0))
-			throw new IllegalArgumentException("Thermal contact heat capacity is invalid");
-	}
 }

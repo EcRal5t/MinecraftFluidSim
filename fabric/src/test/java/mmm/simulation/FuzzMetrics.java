@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 /**
  * Thread-safe coverage and timing counters for fuzz runs, plus the summary they print. It observes the
  * harness only; it never touches simulation state.
@@ -73,7 +75,7 @@ final class FuzzMetrics {
 	}
 
 	/** Records what the solver actually did, per scene, to separate action coverage from process coverage. */
-	static void recordEvents(String scene, mmm.fluid.FluidDomain.StepStats stats) {
+	static void recordEvents(String scene, mmm.fluid.FluidDomainContracts.StepStats stats) {
 		if (stats == null) return;
 		addEvent(scene, "chemistry:evaluations", stats.chemistryEvaluations());
 		addEvent(scene, "chemistry:changedMarkers", stats.chemistryChangedStocks());
@@ -85,11 +87,11 @@ final class FuzzMetrics {
 		recordPhaseCounters(scene, stats.thermalAxis(), false);
 	}
 
-	static void recordEvents(String scene, mmm.fluid.FluidDomain.ThermalAxisStats axis) {
+	static void recordEvents(String scene, mmm.fluid.FluidDomainContracts.ThermalAxisStats axis) {
 		recordPhaseCounters(scene, axis, true);
 	}
 
-	private static void recordPhaseCounters(String scene, mmm.fluid.FluidDomain.ThermalAxisStats axis,
+	private static void recordPhaseCounters(String scene, mmm.fluid.FluidDomainContracts.ThermalAxisStats axis,
 	                                        boolean withChemistry) {
 		if (axis == null) return;
 		if (axis.condensedPhase() != null) {

@@ -10,7 +10,7 @@ import mmm.units.SignedDyadic;
 final class DomainGasInventory {
   private DomainGasInventory() {}
 
-  static int nodeAt(FluidDomain domain, double x, double y, double z) {
+  static int nodeAt(HostFluidState domain, double x, double y, double z) {
     if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) return -1;
     double h = domain.config.cellSize();
     int cx = (int) Math.floor(x / h), cy = (int) Math.floor(y / h), cz = (int) Math.floor(z / h);
@@ -35,8 +35,8 @@ final class DomainGasInventory {
     return node;
   }
 
-  static FluidDomain.GasEdit edit(
-      FluidDomain domain,
+  static FluidDomainContracts.GasEdit edit(
+      HostFluidState domain,
       int node,
       String componentId,
       long nanos,
@@ -71,7 +71,7 @@ final class DomainGasInventory {
                   ? 0
                   : before.component(componentId).standardVolumeNanos();
       long actual = Math.min(nanos, available);
-      if (actual == 0) return new FluidDomain.GasEdit(node, GasInventory.EMPTY, SignedDyadic.ZERO);
+      if (actual == 0) return new FluidDomainContracts.GasEdit(node, GasInventory.EMPTY, SignedDyadic.ZERO);
       var split =
           componentId == null
               ? before.splitTotal(actual)
@@ -79,7 +79,7 @@ final class DomainGasInventory {
       moved = split.first();
       after = split.second();
       if (moved.isEmpty())
-        return new FluidDomain.GasEdit(node, GasInventory.EMPTY, SignedDyadic.ZERO);
+        return new FluidDomainContracts.GasEdit(node, GasInventory.EMPTY, SignedDyadic.ZERO);
       double[] energies = thermal.partitionGasNodeEnergy(node, List.of(moved, after), network);
       carriedEnergy = energies[0];
       finalEnergy = energies[1];
@@ -93,7 +93,7 @@ final class DomainGasInventory {
                       nanos,
                       List.of(new GasRegistry.AmbientFraction(componentId, ExactRational.ONE)));
       if (moved.isEmpty())
-        return new FluidDomain.GasEdit(node, GasInventory.EMPTY, SignedDyadic.ZERO);
+        return new FluidDomainContracts.GasEdit(node, GasInventory.EMPTY, SignedDyadic.ZERO);
       after = before.merge(moved);
       carriedEnergy = thermal.gasEnergyAtTemperature(moved, temperatureK);
       finalEnergy =
@@ -122,6 +122,6 @@ final class DomainGasInventory {
     network.commitInventoryBatch(inventoryPlan);
     domain.gasState.pressureActive = true;
     domain.pressureSystem.invalidateGeometry();
-    return new FluidDomain.GasEdit(node, moved, carried);
+    return new FluidDomainContracts.GasEdit(node, moved, carried);
   }
 }

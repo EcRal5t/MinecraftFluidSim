@@ -25,26 +25,26 @@ final class GranularLiquidDisplacement {
 			this.momentum = momentum; this.energy=energy;
 		}
 	}
-	static long[] begin(FluidDomain domain) {
+	static long[] begin(HostFluidState domain) {
 		if (!domain.domainPhaseInventory.hasGranularInventory()) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 		return domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 	}
-	static void commit(FluidDomain domain, long[] previous) {
+	static void commit(HostFluidState domain, long[] previous) {
 		if (previous == null) return;
 		var candidate = prepare(domain, previous, domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq()));
 		if (candidate != null) publish(domain, candidate, () -> { });
 	}
-	static void publish(FluidDomain domain, Prepared candidate, Runnable solidPublication) {
+	static void publish(HostFluidState domain, Prepared candidate, Runnable solidPublication) {
 		domain.cellMacStage.publishTransport(candidate.energy,candidate.momentum,candidate.gasTopology,null,solidPublication);
 	}
 
-	static Prepared prepare(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, false); }
-	static Prepared prepareInsertion(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true); }
-	static Prepared prepareExternal(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true, true); }
-    private static Prepared prepare(FluidDomain domain, long[] previous, long[] next, boolean insertion) { return prepare(domain, previous, next, insertion, false); }
-    private static Prepared prepare(FluidDomain domain, long[] previous, long[] next, boolean insertion, boolean external) {
+	static Prepared prepare(HostFluidState domain, long[] previous, long[] next) { return prepare(domain, previous, next, false); }
+	static Prepared prepareInsertion(HostFluidState domain, long[] previous, long[] next) { return prepare(domain, previous, next, true); }
+	static Prepared prepareExternal(HostFluidState domain, long[] previous, long[] next) { return prepare(domain, previous, next, true, true); }
+    private static Prepared prepare(HostFluidState domain, long[] previous, long[] next, boolean insertion) { return prepare(domain, previous, next, insertion, false); }
+    private static Prepared prepare(HostFluidState domain, long[] previous, long[] next, boolean insertion, boolean external) {
 		if (previous == null || next == null || previous.length != domain.cellCount || next.length != domain.cellCount)
 			throw new IllegalArgumentException("Solid transition requires complete source and future occupancy");
 		if (Arrays.equals(previous, next)) return null;

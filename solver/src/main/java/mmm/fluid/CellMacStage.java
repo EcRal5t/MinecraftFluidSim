@@ -8,7 +8,7 @@ import java.util.Arrays;
 
 /** Derived cell properties and dual face inertia over persistent liquid inventory and momentum. */
 final class CellMacStage {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	final double[] massX, massY, massZ;
 	private final double[] cellMass;
 	private long inventoryRevision=-1,quantityRevision;
@@ -18,90 +18,31 @@ final class CellMacStage {
 	private FlipPressurePhaseGeometry wallPhase;
 	private LiquidCellInventory.Snapshot wallInventory;
 	private CellMomentumTransport momentumTransport;
-	private ConservativeLiquidFlux liquidTransport;
-	private final double[] sourceMechanicalHeat;
-	private boolean hasMechanicalHeat;
-	private final double[] transportedMechanicalHeat, remainingMechanicalHeat;
-	private final long[] outgoingHeatMass;
-	private final int[] lastHeatTarget;
 	static final class PreparedLiquid {
 		private final LiquidCellInventory.Plan inventory;
 		private final ConservativeLiquidFlux flux;
 		private final GasVolumeAllocation gas;
 		private final LiquidCellInventory source;
-		private final long[] occupied;
 		PreparedLiquid(LiquidCellInventory.Plan inventory, ConservativeLiquidFlux flux,
-		               GasVolumeAllocation gas, long[] occupied) {
+		               GasVolumeAllocation gas) {
 			this.inventory = inventory;
 			this.flux = flux;
 			this.gas = gas;
 			this.source = flux.sourceInventory();
-			this.occupied = occupied;
 		}
 		LiquidCellInventory.Plan inventory(){return inventory;}
 		ConservativeLiquidFlux volumeFlux(){return flux;}
 		GasVolumeAllocation gasAllocation(){return gas;}
 		LiquidCellInventory sourceInventory(){return source;}
-		CellMomentumTransport.Prepared preparedMomentum(){return flux.preparedMomentum;}
 	}
 
-	CellMacStage(FluidDomain domain) {
+	CellMacStage(HostFluidState domain) {
 		this.domain = domain;
 		massX = new double[domain.mac.velocityX.length];
 		massY = new double[domain.mac.velocityY.length];
 		massZ = new double[domain.mac.velocityZ.length];
 		cellMass = new double[domain.cellCount];
-		sourceMechanicalHeat = new double[domain.cellCount];
-		transportedMechanicalHeat = new double[domain.cellCount];
-		remainingMechanicalHeat = new double[domain.cellCount];
-		outgoingHeatMass = new long[domain.cellCount];
-		lastHeatTarget = new int[domain.cellCount];
 		unresolvedWall=new boolean[][]{new boolean[massX.length],new boolean[massY.length],new boolean[massZ.length]};
-	}
-
-	/** Local viscous, porous and contact dissipation travels with its source liquid. */
-	void beginMechanicalHeat() { if(hasMechanicalHeat)Arrays.fill(sourceMechanicalHeat,0);hasMechanicalHeat=false; }
-	void addMechanicalHeatAtCell(int cell, double joules) {
-		if (joules == 0) return;
-		if (!Double.isFinite(joules) || cell < 0 || !(cellMass[cell] > 0))
-			throw new IllegalStateException("Mechanical heat exchange requires an actual liquid carrier");
-		sourceMechanicalHeat[cell] += joules;hasMechanicalHeat=true;
-	}
-	void addMechanicalHeatAtFace(int axis, int face, double joules) {
-		if (joules == 0) return;
-		int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
-		int x=face%nx,y=face/nx%ny,z=face/(nx*ny);
-		int coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-		int b=coordinate<size?domain.domainFlowFields.cellIndex(x,y,z):-1;
-		int a=coordinate>0?domain.domainFlowFields.cellIndex(x-(axis==0?1:0),y-(axis==1?1:0),z-(axis==2?1:0)):-1;
-		double ma=a<0?0:cellMass[a],mb=b<0?0:cellMass[b],total=ma+mb;
-		if (!(total > 0)) throw new IllegalStateException("Dissipative face has no liquid mass");
-		double first=joules*(ma/total);
-		if(ma>0)addMechanicalHeatAtCell(a,first);
-		if(mb>0)addMechanicalHeatAtCell(b,joules-first);
-	}
-	void finishMechanicalHeat(LiquidCellInventory.TransportQuantities quantities) {
-		if(!hasMechanicalHeat)return;
-		Arrays.fill(transportedMechanicalHeat,0);Arrays.fill(outgoingHeatMass,0);
-		System.arraycopy(sourceMechanicalHeat,0,remainingMechanicalHeat,0,sourceMechanicalHeat.length);
-		for(var transfer:quantities.transfers()) {
-			int from=transfer.source().cell(),to=transfer.target().cell();long mass=transfer.massUnits();
-			if(mass<=0)continue;
-			double heat=sourceMechanicalHeat[from]*((double)mass/quantities.beforeMass()[from]);
-			transportedMechanicalHeat[to]+=heat;remainingMechanicalHeat[from]-=heat;
-			outgoingHeatMass[from]=Math.addExact(outgoingHeatMass[from],mass);
-			lastHeatTarget[from]=to;
-		}
-		for(int cell=0;cell<sourceMechanicalHeat.length;cell++)if(sourceMechanicalHeat[cell]!=0) {
-			int target=outgoingHeatMass[cell]==quantities.beforeMass()[cell]?lastHeatTarget[cell]:cell;
-			transportedMechanicalHeat[target]+=remainingMechanicalHeat[cell];
-		}
-		// An emptied source hands its remaining mechanical exchange to its accepted outgoing stock.
-		for(int cell=0;cell<transportedMechanicalHeat.length;cell++)if(quantities.afterMass()[cell]==0&&transportedMechanicalHeat[cell]!=0){
-			transportedMechanicalHeat[lastHeatTarget[cell]]+=transportedMechanicalHeat[cell];transportedMechanicalHeat[cell]=0;
-		}
-		for(int cell=0;cell<transportedMechanicalHeat.length;cell++)if(transportedMechanicalHeat[cell]!=0)
-			quantities.addMechanicalHeat(cell,transportedMechanicalHeat[cell]);
 	}
 
 	void rebuildInventory() {
@@ -164,7 +105,9 @@ final class CellMacStage {
 	}
 	private void derivePreparedVelocity(){
 		domain.mac.deriveVelocity(massX, massY, massZ);
-		domain.bodyForceStage.enforceSolidFaceVelocities();
+		float[][] velocities = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
+		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < velocities[axis].length; face++)
+			if (mechanicsFaceActive(axis, face) && isWallFace(axis, face, null)) velocities[axis][face] = 0;
 		domain.velocityGridDirty = false;
 	}
 
@@ -207,23 +150,6 @@ final class CellMacStage {
 		return wallPhase==domain.pressureSystem.phaseGeometry()&&domain.liquidCells.hasSameGeometry(wallInventory)&&unresolvedWall[axis][face];
 	}
 
-	/** Retires existing normal momentum once, before any force can act on the constrained mode. */
-	void constrainUnresolvedWallMomentum(){
-		double[][] old={domain.mac.momentumX,domain.mac.momentumY,domain.mac.momentumZ};boolean changed=false;
-		for(int axis=0;axis<3&&!changed;axis++)for(int face=0;face<old[axis].length;face++)if(mechanicsFaceActive(axis,face)&&old[axis][face]!=0&&isUnresolvedWallFace(axis,face)){changed=true;break;}
-		if(!changed)return;
-		double[][] values={old[0].clone(),old[1].clone(),old[2].clone()};double[] heat=new double[domain.cellCount],impulse=new double[3];
-		for(int axis=0;axis<3;axis++)for(int face=0;face<values[axis].length;face++){
-			double p=values[axis][face];if(!mechanicsFaceActive(axis,face)||p==0||!isUnresolvedWallFace(axis,face))continue;
-			int f=domain.pressureSystem.faces.offsets[axis]+face,a=domain.pressureSystem.faces.firstCell[f],b=domain.pressureSystem.faces.secondCell[f];
-			double total=cellMass[a]+cellMass[b],energy=p*p/total,first=energy*(cellMass[a]/total);
-			heat[a]+=first;heat[b]+=energy-first;impulse[axis]-=p;values[axis][face]=0;
-		}
-		var byCell=new java.util.TreeMap<Integer,SignedDyadic>();
-		for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)byCell.put(cell,SignedDyadic.of(heat[cell]));
-		commitMomentumAndHeat(new ExternalMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,
-				values[0],values[1],values[2]),byCell,java.util.Map.of(),new WallImpulse(impulse[0],impulse[1],impulse[2])));
-	}
 	/** Face inertia belongs to the same inventory generation as cell mass. */
 	private void rebuildFaceInertia() {
 		for (int axis = 0; axis < 3; axis++) {
@@ -245,52 +171,12 @@ final class CellMacStage {
 		}
 	}
 
-	/** Publishes explicit velocity input through the same stationary-wall impulse and heat plan. */
-	void publishMomentum() {
-		rebuildInventory();
-		double[][] values=new double[3][];
-		for(int axis=0;axis<3;axis++){
-			float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
-			double[] mass=axis==0?massX:axis==1?massY:massZ;values[axis]=new double[mass.length];
-			double[] retained=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
-			for(int face=0;face<mass.length;face++)values[axis][face]=mechanicsFaceActive(axis,face)?mass[face]*velocity[face]:retained[face];
-		}
-		publishMomentum(values);
-	}
-	/** Prepared external motion and its local dashpot heat publish together. */
-	void publishMomentum(double[][] values) {
-		var prepared=prepareMomentumInput(values,domain.liquidCells,null);
-		var heat=new java.util.TreeMap<Integer,SignedDyadic>(prepared.heatByCell());
-		if(hasMechanicalHeat)for(int cell=0;cell<sourceMechanicalHeat.length;cell++)if(sourceMechanicalHeat[cell]!=0)
-			heat.merge(cell,SignedDyadic.of(sourceMechanicalHeat[cell]),SignedDyadic::add);
-		commitMomentumAndHeat(new ExternalMomentum(prepared.momentum(),heat,prepared.removedKineticEnergyByCell(),prepared.wallImpulse()));
-		beginMechanicalHeat();
-	}
-	/** U-only edits retain the current inventory mass, PLIC, gas frame and face inertia. */
-	private void commitMomentumAndHeat(ExternalMomentum prepared) {
-        var inventory=domain.liquidCells.planEdits(java.util.List.of());
-        if(!prepared.heatByCell().isEmpty())inventory=inventory.withMechanicalHeat(prepared.heatByCell());
-        var energy=domain.mechanicalEnergy.prepare(inventory,null);inventory=energy.inventory();
-        var audit=domain.thermalState==null?null:domain.thermalState.auditLedger()
-                .withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff());
-        audit=energy.auditAfter(audit);
-        if(audit!=null)audit.expectedInventory();
-        energy.requireCurrent();
-        boolean changed=!inventory.changedCells().isEmpty();
-        if(changed)inventory.commit();
-        commitMomentum(prepared);energy.commitGranular();
-        if(changed){inventoryRevision=domain.liquidCells.revision();domain.carrierPropertiesWorkspace.invalidate();}
-        if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
-        derivePreparedVelocity();
-    }
-
 	record WallImpulse(double x,double y,double z) { }
 	void commitMomentum(CellMomentumTransport.Prepared prepared){domain.mac.restoreMomentum(prepared.momentum());recordWallImpulse(prepared.wallImpulse());}
 	void commitMomentum(ExternalMomentum prepared){domain.mac.restoreMomentum(prepared.momentum());recordWallImpulse(prepared.wallImpulse());}
 	private void recordWallImpulse(WallImpulse impulse){
 		domain.lastLiquidBoundaryImpulseX+=impulse.x();domain.lastLiquidBoundaryImpulseY+=impulse.y();domain.lastLiquidBoundaryImpulseZ+=impulse.z();
 	}
-	void recordSupportedWeightImpulse(double impulseY){recordWallImpulse(new WallImpulse(0,impulseY,0));}
 	boolean isWallFace(int axis,int face,byte[] masks){
 		int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
 		int x=face%nx,y=face/nx%ny,z=face/(nx*ny),coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
@@ -332,15 +218,9 @@ final class CellMacStage {
 	}
 
 	CellMomentumTransport.Prepared prepareMomentumTransport(PreparedLiquid liquid) {
-		if(liquid.preparedMomentum()!=null)return liquid.preparedMomentum();
 		if (momentumTransport == null) momentumTransport = new CellMomentumTransport(domain);
 		return momentumTransport.prepare(liquid);
 	}
-	CellMomentumTransport.Prepared prepareMomentumTransport(ConservativeLiquidFlux flux,LiquidCellInventory.TransportQuantities quantities) {
-		if(momentumTransport==null)momentumTransport=new CellMomentumTransport(domain);
-		return momentumTransport.prepare(flux,quantities);
-	}
-
 	/** Stationary insertion adds inertia; extraction removes the carried momentum at its current velocity. */
 	record ExternalMomentum(MacMomentumState momentum, java.util.Map<Integer, SignedDyadic> heatByCell, java.util.Map<Integer,SignedDyadic> removedKineticEnergyByCell,WallImpulse wallImpulse) {
 		double removedKineticEnergy(){return removedKineticEnergyByCell.values().stream().mapToDouble(SignedDyadic::toDouble).sum();}
@@ -403,33 +283,8 @@ final class CellMacStage {
 		return new ExternalMomentum(constrained.momentum(), java.util.Map.copyOf(heat), java.util.Map.copyOf(removedEnergy),constrained.wallImpulse());
 	}
 
-	PreparedLiquid prepareLiquid(float dt){
-		if(!(Float.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Liquid transport duration must be positive");
-		domain.pressureSystem.prepareGeometry();
-		if(liquidTransport==null)liquidTransport=new ConservativeLiquidFlux(domain);
-		long[] occupied=domain.granularCoupling==null?domain.occupiedSolidSvq():domain.granularState!=null&&domain.granularState.parcels.count()>0?domain.entityBodyCoupling.addTo(domain.granularNextCoupling.copySolidSvq()):domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
-		liquidTransport.prepare(dt,occupied,quantities->{
-			liquidTransport.preparedMomentum=prepareMomentumTransport(liquidTransport,quantities);
-			finishMechanicalHeat(quantities);
-		});
-		return prepareLiquid(liquidTransport,domain.liquidCells,occupied);
-	}
-	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux){return prepareLiquid(flux,domain.liquidCells);}
-	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux,LiquidCellInventory source){
-		return prepareLiquid(flux,source,null);
-	}
-	private PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux,LiquidCellInventory source,long[] occupied){
-		var inventory=flux.prepareInventory(source);
-		return new PreparedLiquid(inventory,flux,flux.gasAllocation(),occupied);
-	}
-	void transport(float dt) {
-		var liquid = prepareLiquid(dt);
-		var momentum = prepareMomentumTransport(liquid);
-		var inventory = liquid.preparedMomentum()==null?liquid.inventory().withMechanicalHeat(momentum.heatByCell()):liquid.inventory();
-		var gas = domain.gasTopologyCoordinator.planAfterMechanicalTransport(inventory.future(), liquid.occupied, liquid.gasAllocation());
-		var energy=domain.mechanicalEnergy.prepare(inventory,gas);inventory=energy.inventory();
-		publishTransport(energy,momentum,gas,liquid.occupied,domain.granularMechanicalStage::commitCollision);
-		beginMechanicalHeat();domain.mechanicalEnergy.clear();
+	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux) {
+		return new PreparedLiquid(flux.prepareInventory(domain.liquidCells), flux, flux.gasAllocation());
 	}
 	/** Common publication for accepted liquid routes, including internal and external solid displacement. */
 	void publishTransport(MechanicalEnergySettlement.Plan energy,CellMomentumTransport.Prepared momentum,

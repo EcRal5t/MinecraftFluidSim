@@ -28,8 +28,8 @@ final class LiquidCollisionEdit {
 		energyRoundoff = inventory.energyChange().add(observed).subtract(inventory.mechanicalHeat());
 	}
 
-	static LiquidCollisionEdit prepare(FluidDomain domain, List<FluidDomain.CollisionEdit> edits,
-	                                  FluidDomain.GranularCollisionPlan granular) {
+	static LiquidCollisionEdit prepare(HostFluidState domain, List<FluidDomainContracts.CollisionEdit> edits,
+	                                  FluidDomainContracts.GranularCollisionPlan granular) {
 		byte[] masks = domain.geometry.cutCells.copyMicroMasks();
 		long[] occupied = domain.occupiedSolidSvq();
 		if (granular != null) {
@@ -110,7 +110,7 @@ final class LiquidCollisionEdit {
 		var totalChemistry = domain.chemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
 		for (var row : removed) {
 			var chemical = totalChemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
-			var material = domain.materialRegistry == null ? null : new FluidDomain.RemovedMaterialLedger(domain.materialRegistry.size());
+			var material = domain.materialRegistry == null ? null : new FluidDomainContracts.RemovedMaterialLedger(domain.materialRegistry.size());
 			for (var stock : row) {
 				if (chemical != null) chemical.add(domain.materialRegistry.material(stock.key().material()).id(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
 				if (material != null) material.add(stock.key().material(), stock.volumeFraction(), stock.massUnits());
@@ -128,8 +128,8 @@ final class LiquidCollisionEdit {
 		return new LiquidCollisionEdit(plan, momentum, gas, gas.frame().geometry().actualCapacity().fixedGeometry, removed);
 	}
 
-	float report(int index, FluidDomain domain, ChemicalTransferLedger.Builder chemistry,
-	             FluidDomain.RemovedMaterialLedger materials, FluidDomain.RemovedThermalEnergy energy) {
+	float report(int index, HostFluidState domain, ChemicalTransferLedger.Builder chemistry,
+	             FluidDomainContracts.RemovedMaterialLedger materials, FluidDomainContracts.RemovedThermalEnergy energy) {
 		double volume = 0;
 		for (var stock : displaced.get(index)) {
 			volume += stock.volumeFraction();

@@ -38,8 +38,8 @@ def registerGpuProbe = { String taskName, String descriptionText, String mainCla
 	tasks.register(taskName, JavaExec) {
 		group = 'verification'
 		description = descriptionText
-		dependsOn tasks.named('classes')
-		classpath = sourceSets.main.runtimeClasspath
+		dependsOn tasks.named('testClasses')
+		classpath = sourceSets.test.runtimeClasspath
 		mainClass = mainClassName
 		jvmArgs '--enable-native-access=ALL-UNNAMED'
 		def requestedDeviceName = providers.gradleProperty('gpuProbeDeviceName').orNull
@@ -62,7 +62,7 @@ def registerGpuProbe = { String taskName, String descriptionText, String mainCla
 registerGpuProbe(
 	'runGpuInventoryTransportValidation',
 	'Validates resident Vulkan int64 inventory gather and atomic candidate adoption.',
-	'mmm.gpuprobe.GpuInventoryTransportValidation',
+	'mmm.gpu.GpuInventoryTransportValidation',
 	'gpu-inventory-validation-work'
 ) { probeTask ->
 	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
@@ -71,7 +71,7 @@ registerGpuProbe(
 registerGpuProbe(
 	'runHeadlessGpuProbe',
 	'Runs the windowless Vulkan/Shaderc/VMA compute capability probe.',
-	'mmm.gpuprobe.HeadlessGpuProbeMain',
+	'mmm.gpu.HeadlessGpuProbeMain',
 	'headless-probe-work'
 ) { probeTask ->
 	if (providers.gradleProperty('gpuProbeDevice').isPresent()) {
@@ -79,101 +79,11 @@ registerGpuProbe(
 	}
 }
 
-registerGpuProbe(
-	'runGpuFlipValidation',
-	'Runs the windowless 3D GPU FLIP correctness suite and current/32-cubed benchmarks.',
-	'mmm.gpuprobe.GpuFlipProbeValidation',
-	'gpu-flip-validation-work'
-) { probeTask ->
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
-	if (providers.gradleProperty('gpuProbeSkipLarge').map(String::toBoolean).getOrElse(false)) {
-		probeTask.args '--skip-large'
-	}
-	if (providers.gradleProperty('gpuProbeSkipLong').map(String::toBoolean).getOrElse(false)) {
-		probeTask.args '--skip-long'
-	}
-}
-
-registerGpuProbe(
-	'runGpuOccupancyBenchmark',
-	'Measures the M1 CPU/GPU break-even matrix across grid, marker and fluid-cell occupancy.',
-	'mmm.gpuprobe.GpuOccupancyBreakEvenValidation',
-	'gpu-occupancy-benchmark-work'
-) { probeTask ->
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
-}
-
-registerGpuProbe(
-	'runGpuLongRunSurfaceValidation',
-	'Runs the current-domain long-run GPU/CPU marker-distribution and edge-surface gate.',
-	'mmm.gpuprobe.GpuLongRunSurfaceValidation',
-	'gpu-long-run-surface-validation-work'
-) { probeTask ->
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
-	if (providers.gradleProperty('gpuProbeLongRunSteps').isPresent()) {
-		probeTask.args providers.gradleProperty('gpuProbeLongRunSteps').get()
-	}
-}
-
-publishing {
-	publications {
-		create('mavenJava', MavenPublication) { from components.java }
-	}
-}
-
-registerGpuProbe(
-	'runGpuPressureScaleBenchmark',
-	'Measures current resident pressure solver against same-CSR CPU Jacobi-PCG at 8/16/32/64 cubed.',
-	'mmm.gpuprobe.GpuPressureScaleBenchmark',
-	'gpu-pressure-scale-work'
-) { probeTask ->
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-		providers.gradleProperty('gpuPressureGridSizes').getOrElse('8,16,32,64'),
-		providers.gradleProperty('gpuPressureSamples').getOrElse('3'),
-		providers.gradleProperty('gpuPressureSingleGroupRows').getOrElse('16384')
-	probeTask.jvmArgs '-Xmx1g'
-}
-
-registerGpuProbe(
-	'runGpuPressureValidation',
-	'Runs resident Vulkan pressure solves inside current finite-volume candidates.',
-	'mmm.gpuprobe.GpuPressureValidation',
-	'gpu-pressure-validation-work'
-) { probeTask ->
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
-}
-
-registerGpuProbe(
-	'runGpuLiquidQuantityValidation',
-	'Validates actual Vulkan liquid mass and species partitions through production inventory plans.',
-	'mmm.gpuprobe.GpuLiquidQuantityValidation',
-	'gpu-liquid-quantity-work'
-) { probeTask ->
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
-}
-
-registerGpuProbe(
-	'runGpuCurrentPhysicsValidation',
-	'Runs existing complete physics scenarios with Vulkan pressure and liquid quantity computation.',
-	'mmm.gpuprobe.GpuCurrentPhysicsValidation',
-	'gpu-current-physics-work'
-) { probeTask ->
-	probeTask.dependsOn ':fabric:writeGpuPhysicsClasspath'
-	probeTask.doFirst {
-		probeTask.classpath += files(rootProject.file('fabric/build/gpu-physics-classpath.txt').text.split(java.util.regex.Pattern.quote(File.pathSeparator)))
-	}
-	probeTask.jvmArgs '-ea', '-Xmx512m'
-	if (providers.gradleProperty('gpuPhysicsProfile').map(String::toBoolean).getOrElse(false)) {
-		probeTask.jvmArgs "-XX:StartFlightRecording=filename=${rootProject.file('build/gpu-physics.jfr').absolutePath},settings=profile,dumponexit=true"
-	}
-	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-		providers.gradleProperty('gpuPhysicsSelection').getOrElse('activity-groups,controller-gas-lineage')
-}
 
 registerGpuProbe(
     'runGpuRegionStorageBenchmark',
     'Measures device generation copy/adoption overhead without fluid computation.',
-    'mmm.gpuprobe.GpuRegionStorageBenchmark',
+    'mmm.gpu.GpuRegionStorageBenchmark',
     'gpu-region-storage-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -183,7 +93,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuResidentPressureBenchmark',
     'Measures pressure on a resident device generation without repeated matrix or vector transfers.',
-    'mmm.gpuprobe.GpuResidentPressureBenchmark',
+    'mmm.gpu.GpuResidentPressureBenchmark',
     'gpu-resident-pressure-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -194,7 +104,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuCommonPressureReplay',
     'Measures a captured liquid/gas pressure graph without repeating preceding simulation steps.',
-    'mmm.gpuprobe.GpuCommonPressureReplay',
+    'mmm.gpu.GpuCommonPressureReplay',
     'gpu-common-pressure-replay-work'
 ) { probeTask ->
     probeTask.systemProperty 'mmm.gpuPressureGraphProfile', providers.gradleProperty('gpuPressureGraphProfile').getOrElse('false')
@@ -206,7 +116,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuLiquidGeometryBenchmark',
     'Measures resident mixed-liquid PLIC, cut-cell and MAC geometry reconstruction.',
-    'mmm.gpuprobe.GpuLiquidGeometryBenchmark',
+    'mmm.gpu.GpuLiquidGeometryBenchmark',
     'gpu-liquid-geometry-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -219,7 +129,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuDyadicSumBenchmark',
     'Measures resident exact inventory remainders and GPU limb allocation.',
-    'mmm.gpuprobe.GpuDyadicSumBenchmark',
+    'mmm.gpu.GpuDyadicSumBenchmark',
     'gpu-dyadic-sum-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -230,7 +140,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuLiquidGatherBenchmark',
     'Measures resident accepted cell-volume material routes, quantity partition, gather, MAC and energy ledgers.',
-    'mmm.gpuprobe.GpuLiquidGatherBenchmark',
+    'mmm.gpu.GpuLiquidGatherBenchmark',
     'gpu-liquid-gather-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -241,7 +151,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuLiquidCapacityBenchmark',
     'Measures integer capacity repair on divergent circulation and finite-gas dam inputs.',
-    'mmm.gpuprobe.GpuLiquidCapacityBenchmark',
+    'mmm.gpu.GpuLiquidCapacityBenchmark',
     'gpu-liquid-capacity-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -256,7 +166,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuLiquidMechanicalBenchmark',
     'Measures consecutive resident liquid mechanical commits with capacity, inventory transport and optional finite gas.',
-    'mmm.gpuprobe.GpuLiquidMechanicalBenchmark',
+    'mmm.gpu.GpuLiquidMechanicalBenchmark',
     'gpu-liquid-mechanical-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -282,7 +192,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuGasGeometryBenchmark',
     'Measures resident dry geometry, finite chamber topology, member volumes and segmented gas EOS.',
-    'mmm.gpuprobe.GpuGasGeometryBenchmark',
+    'mmm.gpu.GpuGasGeometryBenchmark',
     'gpu-gas-geometry-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -293,7 +203,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuGranularMotionBenchmark',
     'Measures resident granular spatial contacts, response, swept positions and integer support.',
-    'mmm.gpuprobe.GpuGranularMotionBenchmark',
+    'mmm.gpu.GpuGranularMotionBenchmark',
     'gpu-granular-motion-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -306,7 +216,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuGasPressureBenchmark',
     'Measures common resident liquid and finite gas pressure with real inventory EOS.',
-    'mmm.gpuprobe.GpuGasPressureBenchmark',
+    'mmm.gpu.GpuGasPressureBenchmark',
     'gpu-gas-pressure-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -321,7 +231,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuGasFlowBenchmark',
     'Measures continuous finite-aperture gas pressure, inventory transport and donor cooling.',
-    'mmm.gpuprobe.GpuGasFlowBenchmark',
+    'mmm.gpu.GpuGasFlowBenchmark',
     'gpu-gas-flow-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -334,7 +244,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuThermalContactsBenchmark',
     'Measures continuous real inventory caloric inversion, spatial contacts, conduction and owner publication.',
-    'mmm.gpuprobe.GpuThermalContactsBenchmark',
+    'mmm.gpu.GpuThermalContactsBenchmark',
     'gpu-thermal-contacts-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -347,7 +257,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuThermalConductionBenchmark',
     'Measures continuous segmented-caloric conduction with explicit and implicit finite-volume transport.',
-    'mmm.gpuprobe.GpuThermalConductionBenchmark',
+    'mmm.gpu.GpuThermalConductionBenchmark',
     'gpu-thermal-conduction-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
@@ -361,7 +271,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuLiquidCapacityReplay',
     'Replays exact captured capacity inputs with complete integer quota and bound checks.',
-    'mmm.gpuprobe.GpuLiquidCapacityReplay',
+    'mmm.gpu.GpuLiquidCapacityReplay',
     'gpu-liquid-capacity-replay-work'
 ) { probeTask ->
     probeTask.systemProperty 'mmm.gpuCapacityStages', providers.gradleProperty('gpuCapacityStages').getOrElse('false')
@@ -374,7 +284,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuLiquidReactionsValidation',
     'Runs continuous resident liquid reaction commits with exact species and energy inventory.',
-    'mmm.gpuprobe.GpuLiquidReactionsValidation',
+    'mmm.gpu.GpuLiquidReactionsValidation',
     'gpu-liquid-reactions-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
@@ -383,7 +293,7 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuGranularTransitionsBenchmark',
     'Runs continuous resident settlement, slope relaxation, shear wake and canonical stock reconstruction.',
-    'mmm.gpuprobe.GpuGranularTransitionsBenchmark',
+    'mmm.gpu.GpuGranularTransitionsBenchmark',
     'gpu-granular-transitions-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
@@ -392,24 +302,24 @@ registerGpuProbe(
 registerGpuProbe(
     'runGpuEntityBodyCouplingBenchmark',
     'Runs prescribed overlapping body geometry, analytic pressure load, viscous shear, reaction and external work.',
-    'mmm.gpuprobe.GpuEntityBodyCouplingBenchmark',
+    'mmm.gpu.GpuEntityBodyCouplingBenchmark',
     'gpu-entity-body-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
 registerGpuProbe('runGpuResidentStateValidation', 'Runs production state cold import, private adoption and exact checkpoint.',
-    'mmm.gpuprobe.GpuResidentStateValidation', 'gpu-resident-state-work') { probeTask ->
+    'mmm.gpu.GpuResidentStateValidation', 'gpu-resident-state-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
 registerGpuProbe('runGpuSolidLiquidReactionsValidation', 'Executes conservative GPU solid/liquid chemistry with momentum and energy settlement.',
-    'mmm.gpuprobe.GpuSolidLiquidReactionsValidation', 'gpu-solid-liquid-reactions-work') { probeTask ->
+    'mmm.gpu.GpuSolidLiquidReactionsValidation', 'gpu-solid-liquid-reactions-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
 registerGpuProbe('runGpuGasFlowReplay', 'Replays a captured aperture graph through the production Schur solver.',
-    'mmm.gpuprobe.GpuGasFlowReplay', 'gpu-gas-flow-replay-work') { probeTask ->
+    'mmm.gpu.GpuGasFlowReplay', 'gpu-gas-flow-replay-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
         providers.gradleProperty('gpuGasFlowReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath)
     probeTask.jvmArgs '-Xmx1g'
@@ -418,8 +328,13 @@ registerGpuProbe('runGpuGasFlowReplay', 'Replays a captured aperture graph throu
 registerGpuProbe(
     'runGpuThermalPhaseValidation',
     'Runs thermal conversion, mechanical continuation and checkpoint through the resident backend.',
-    'mmm.gpuprobe.GpuThermalPhaseValidation',
+    'mmm.gpu.GpuThermalPhaseValidation',
     'gpu-thermal-phase-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath, providers.gradleProperty('gpuPhaseCases').getOrElse('freeze,melt,boil,condense,dissolve,outgas,ambient-outgas')
+}
+
+registerGpuProbe('runGpuActivityMaskValidation', 'Checks active and paused physical groups through a resident mechanical step.',
+    'mmm.gpu.GpuActivityMaskValidation', 'gpu-activity-mask-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath
 }

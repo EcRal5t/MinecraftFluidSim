@@ -18,16 +18,16 @@ import java.util.TreeMap;
 
 /** Exact external quantity transactions over the same persistent cells used by fluid transport. */
 final class MaterialTransferPlanner {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	private double externalKineticSinkJoules;
-	MaterialTransferPlanner(FluidDomain domain) { this.domain = domain; }
+	MaterialTransferPlanner(HostFluidState domain) { this.domain = domain; }
 	double externalKineticSinkJoules() { return externalKineticSinkJoules; }
 	private record Input(int material, SignedDyadic volume, long mass, ChemicalMixtureRecord mixture) { }
 	private record Placement(LiquidCellInventory.Key key, SignedDyadic volume, int input) { }
-	private record Extraction(LiquidCellInventory.Plan inventory, List<FluidDomain.MaterialPortion> portions,
+	private record Extraction(LiquidCellInventory.Plan inventory, List<FluidDomainContracts.MaterialPortion> portions,
 	                          ChemicalTransferLedger ledger, double energy, SignedDyadic volume) { }
 
-	FluidDomain.ExactMixtureTransfer insertMixture(int x, int y, int z, List<FluidDomain.MaterialPortion> portions,
+	FluidDomainContracts.ExactMixtureTransfer insertMixture(int x, int y, int z, List<FluidDomainContracts.MaterialPortion> portions,
 	                                             int radius, boolean externalSource, Double energy) {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Mixture insertion is empty");
 		var inputs = new ArrayList<Input>(); var seen = new java.util.HashSet<Integer>();
@@ -38,13 +38,13 @@ final class MaterialTransferPlanner {
 			inputs.add(defaultInput(portion.materialHandle(), SignedDyadic.of(portion.volume()), portion.massUnits()));
 		}
 		boolean inserted = insert(inputs, domain.domainFlowFields.editableNearbyCells(x, y, z, radius), externalSource, energy);
-		return new FluidDomain.ExactMixtureTransfer(inserted, inserted ? List.copyOf(portions) : List.of(), inserted ? suppliedEnergy(inputs, energy) : 0);
+		return new FluidDomainContracts.ExactMixtureTransfer(inserted, inserted ? List.copyOf(portions) : List.of(), inserted ? suppliedEnergy(inputs, energy) : 0);
 	}
-	FluidDomain.ExactChemicalTransfer insertChemical(int x, int y, int z, ChemicalTransferLedger ledger,
+	FluidDomainContracts.ExactChemicalTransfer insertChemical(int x, int y, int z, ChemicalTransferLedger ledger,
 	                                                int radius, boolean externalSource, Double energy) {
 		if (domain.chemistry == null) throw new IllegalStateException("Chemical insertion requires chemistry");
 		if (ledger == null) throw new IllegalArgumentException("Chemical ledger is missing");
-		if (ledger.isEmpty()) return new FluidDomain.ExactChemicalTransfer(true, ledger);
+		if (ledger.isEmpty()) return new FluidDomainContracts.ExactChemicalTransfer(true, ledger);
 		var inputs = new ArrayList<Input>(); var chemistry = domain.chemistry.registry();
 		for (var group : ledger.groups()) {
 			if (externalSource && group.massUnits() <= 0) throw new IllegalArgumentException("External liquid source requires actual positive mass");
@@ -55,23 +55,23 @@ final class MaterialTransferPlanner {
 			inputs.add(new Input(material, SignedDyadic.of(group.normalizedVolume()), group.massUnits(), mixture));
 		}
 		boolean inserted = insert(inputs, domain.domainFlowFields.editableNearbyCells(x, y, z, radius), externalSource, energy);
-		return new FluidDomain.ExactChemicalTransfer(inserted, inserted ? ledger : ChemicalTransferLedger.EMPTY, inserted ? suppliedEnergy(inputs, energy) : 0);
+		return new FluidDomainContracts.ExactChemicalTransfer(inserted, inserted ? ledger : ChemicalTransferLedger.EMPTY, inserted ? suppliedEnergy(inputs, energy) : 0);
 	}
-	FluidDomain.VolumeAddition insertVolumeAtMost(int x, int y, int z, float amount, int radius) {
+	FluidDomainContracts.VolumeAddition insertVolumeAtMost(int x, int y, int z, float amount, int radius) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
-		if (amount <= 0 || domain.hasPendingPhaseMotionWork()) return new FluidDomain.VolumeAddition(0, false);
+		if (amount <= 0 || domain.hasPendingPhaseMotionWork()) return new FluidDomainContracts.VolumeAddition(0, false);
 		var nearby = domain.domainFlowFields.editableNearbyCells(x, y, z, radius); var room = SignedDyadic.ZERO;
 		for (var candidate : nearby) room = room.add(available(candidate.index()));
 		var requested = SignedDyadic.of(amount); var accepted = minimum(room, requested);
 		float represented = (float) accepted.toDouble();
 		if (SignedDyadic.of(represented).compareTo(accepted) > 0) represented = Math.nextDown(represented);
-		if (!(represented > 0)) return new FluidDomain.VolumeAddition(0, false);
+		if (!(represented > 0)) return new FluidDomainContracts.VolumeAddition(0, false);
 		var volume = SignedDyadic.of(represented);
 		double density = domain.materialRegistry == null ? domain.config.density() : domain.materialRegistry.material(0).referenceDensity();
 		long mass = domain.unitScale.massUnitsForNormalized(volume.toDouble() * density);
-		if (mass == 0) return new FluidDomain.VolumeAddition(0, false);
+		if (mass == 0) return new FluidDomainContracts.VolumeAddition(0, false);
 		boolean inserted = insert(List.of(defaultInput(0, volume, mass)), nearby, true, null);
-		return new FluidDomain.VolumeAddition(inserted ? represented : 0, false);
+		return new FluidDomainContracts.VolumeAddition(inserted ? represented : 0, false);
 	}
 	private Input defaultInput(int material, SignedDyadic volume, long mass) {
 		if (mass < 0) throw new IllegalArgumentException("Liquid packet mass must be non-negative");
@@ -79,7 +79,7 @@ final class MaterialTransferPlanner {
 				materialId(material), volume.toDouble(), domain.config.cellSize(), mass);
 		return new Input(material, volume, mass, mixture);
 	}
-	private boolean insert(List<Input> inputs, List<FluidDomain.CellCandidate> nearby, boolean externalSource, Double energy) {
+	private boolean insert(List<Input> inputs, List<FluidDomainContracts.CellCandidate> nearby, boolean externalSource, Double energy) {
 		if (domain.hasPendingPhaseMotionWork()) return false;
 		domain.domainFlowFields.ensureInventoryGrid();
 		var requested = SignedDyadic.ZERO; long mass = domain.liquidCells.massUnits();
@@ -172,25 +172,25 @@ final class MaterialTransferPlanner {
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
 		return (float) extraction.volume().toDouble();
 	}
-	FluidDomain.ExactMixtureTransfer extractMixture(int x, int y, int z, float amount, int radius, int material) {
+	FluidDomainContracts.ExactMixtureTransfer extractMixture(int x, int y, int z, float amount, int radius, int material) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
 		var extraction = extract(domain.domainFlowFields.editableNearbyCells(x, y, z, radius), SignedDyadic.of(amount), material, true);
-		if (extraction == null) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		if (extraction == null) return new FluidDomainContracts.ExactMixtureTransfer(false, List.of());
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
-		return new FluidDomain.ExactMixtureTransfer(true, extraction.portions(), extraction.energy());
+		return new FluidDomainContracts.ExactMixtureTransfer(true, extraction.portions(), extraction.energy());
 	}
-	FluidDomain.ExactChemicalTransfer extractChemical(int x, int y, int z, float amount, int radius,
+	FluidDomainContracts.ExactChemicalTransfer extractChemical(int x, int y, int z, float amount, int radius,
 	                                                java.util.function.Predicate<ChemicalTransferLedger> accepts) {
 		if (domain.chemistry == null) throw new IllegalStateException("Chemical extraction requires chemistry");
 		if (accepts == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
 		var extraction = extract(domain.domainFlowFields.editableNearbyCells(x, y, z, radius), SignedDyadic.of(amount), -1, false);
 		if (extraction == null || extraction.ledger().groups().stream().anyMatch(group -> group.massUnits() == 0)
-				|| !accepts.test(extraction.ledger())) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				|| !accepts.test(extraction.ledger())) return new FluidDomainContracts.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
-		return new FluidDomain.ExactChemicalTransfer(true, extraction.ledger(), extraction.energy());
+		return new FluidDomainContracts.ExactChemicalTransfer(true, extraction.ledger(), extraction.energy());
 	}
-	FluidDomain.ContactWaterTransfer extractContactWater(List<FluidDomain.WaterContactFace> faces, long requestedNanos) {
+	FluidDomainContracts.ContactWaterTransfer extractContactWater(List<FluidDomainContracts.WaterContactFace> faces, long requestedNanos) {
 		if (requestedNanos <= 0) throw new IllegalArgumentException("Water contact extraction requires positive nanos");
 		var contacts = WaterContactGeometry.capture(domain, faces);
 		var keys = new java.util.HashSet<LiquidCellInventory.Key>();
@@ -199,18 +199,18 @@ final class MaterialTransferPlanner {
 			keys.add(new LiquidCellInventory.Key(contact.cell(), contact.materialHandle(), contact.supportMask()));
 			cells.add(contact.cell());
 		}
-		if (keys.isEmpty()) return FluidDomain.ContactWaterTransfer.EMPTY;
+		if (keys.isEmpty()) return FluidDomainContracts.ContactWaterTransfer.EMPTY;
 		double cubicMetres = requestedNanos / 1_000_000_000.0;
 		double normalized = domain.unitScale.normalizedVolume(cubicMetres);
 		while (domain.unitScale.cubicMeters(normalized) > cubicMetres) normalized = Math.nextDown(normalized);
-		var nearby = cells.stream().map(cell -> new FluidDomain.CellCandidate(cell, 0)).toList();
+		var nearby = cells.stream().map(cell -> new FluidDomainContracts.CellCandidate(cell, 0)).toList();
 		var extraction = extract(nearby, SignedDyadic.of(normalized), -1, false, stock -> keys.contains(stock.key()));
-		if (extraction == null || extraction.portions().isEmpty()) return FluidDomain.ContactWaterTransfer.EMPTY;
+		if (extraction == null || extraction.portions().isEmpty()) return FluidDomainContracts.ContactWaterTransfer.EMPTY;
 		long actualNanos = Math.round(domain.unitScale.cubicMeters(extraction.volume().toDouble()) * 1_000_000_000.0);
-		if (actualNanos != requestedNanos) return FluidDomain.ContactWaterTransfer.EMPTY;
+		if (actualNanos != requestedNanos) return FluidDomainContracts.ContactWaterTransfer.EMPTY;
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(),
 				SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
-		return new FluidDomain.ContactWaterTransfer(true, actualNanos, extraction.portions(), extraction.ledger(), extraction.energy());
+		return new FluidDomainContracts.ContactWaterTransfer(true, actualNanos, extraction.portions(), extraction.ledger(), extraction.energy());
 	}
 
 	/** Whole source blocks can represent reference water at rest; all other stocks stay in MMM. */
@@ -243,7 +243,7 @@ final class MaterialTransferPlanner {
 					|| domain.mac.momentumZ[x + domain.sizeX * (y + domain.sizeY * (z + 1))] != 0) return false;
 		}
 		if (!actualEnergy.equals(referenceEnergy)) return false;
-		var nearby = cells.stream().distinct().map(cell -> new FluidDomain.CellCandidate(cell, 0)).toList();
+		var nearby = cells.stream().distinct().map(cell -> new FluidDomainContracts.CellCandidate(cell, 0)).toList();
 		var extraction = extract(nearby, SignedDyadic.of((double) nearby.size()), -1, false);
 		if (extraction == null) return false;
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO,
@@ -266,11 +266,11 @@ final class MaterialTransferPlanner {
 		return (material < 0 || stock.key().material() == material) && (!canonicalOnly || canonical(stock));
 	}
 
-	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
+	private Extraction extract(List<FluidDomainContracts.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
 		return extract(nearby, requested, material, canonical, stock -> true);
 	}
 
-	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material,
+	private Extraction extract(List<FluidDomainContracts.CellCandidate> nearby, SignedDyadic requested, int material,
 	                           boolean canonical, java.util.function.Predicate<LiquidCellInventory.Stock> selected) {
 		if (requested.signum() < 0 || domain.hasPendingPhaseMotionWork()) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
@@ -298,10 +298,10 @@ final class MaterialTransferPlanner {
 			remaining = remaining.subtract(taken);
 		}
 		if (remaining.signum() != 0) return null;
-		var portions = new ArrayList<FluidDomain.MaterialPortion>(); var groups = new ArrayList<ChemicalTransferLedger.Group>();
+		var portions = new ArrayList<FluidDomainContracts.MaterialPortion>(); var groups = new ArrayList<ChemicalTransferLedger.Group>();
 		for (var group : removed.values()) {
 			if (canonical && group.mass == 0) return null;
-			if (group.mass > 0) portions.add(new FluidDomain.MaterialPortion(group.material, group.volume.toDouble(), group.mass));
+			if (group.mass > 0) portions.add(new FluidDomainContracts.MaterialPortion(group.material, group.volume.toDouble(), group.mass));
 			if (domain.chemistry != null) groups.add(group.group());
 		}
 		return new Extraction(domain.liquidCells.planEdits(edits), List.copyOf(portions), new ChemicalTransferLedger(groups), removedEnergy.toDouble(), requested);

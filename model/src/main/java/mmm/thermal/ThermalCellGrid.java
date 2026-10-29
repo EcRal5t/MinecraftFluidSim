@@ -85,21 +85,7 @@ public final class ThermalCellGrid {
 			}
 		updateObservedTemperatureRange();
 	}
-	/** Reuses this axis's validated post-conduction sample; publication stays on its real owners. */
-	void rebuildAfterConduction(ThermalCarrierTransport.Batch sample){
-		rebuildTopology(sample,-1,false);
-		for(int carrier=0;carrier<topologyCarrierCount;carrier++)carrierBaseEnergy[carrier]=sample.baseEnergy(carrier);
-		carriers=sample.owners();
-		for(int cell=0;cell<cellCount;cell++)if(carrierCount[cell]>0){
-			conductivity[cell]/=totalVolume[cell];
-			int first=cellHead[cell];
-			if(carrierNext[first]<0){
-				temperature[cell]=sample.temperatureK(first);heatCapacity[cell]=sample.heatCapacityJPerK(first);
-				updateLinearTemperatureInterval(cell);
-			}else solveCarrierCell(cell);
-		}
-		updateObservedTemperatureRange();
-	}
+
 
 
 	/** Prepares changed topology and a prospective conserved target; the subsequent setter publishes owner U. */

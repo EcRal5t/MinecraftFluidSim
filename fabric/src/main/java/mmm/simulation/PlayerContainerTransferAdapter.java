@@ -222,7 +222,7 @@ public final class PlayerContainerTransferAdapter {
 			return InteractionResult.FAIL;
 		}
 		FluidRegion region = target.region();
-		if (!ensureAvailableFor(player, region) || !region.domain().hasThermalState()) return InteractionResult.FAIL;
+		if (!ensureAvailableFor(player, region) || !region.hasThermalState()) return InteractionResult.FAIL;
 		// Retain the actual hit's transverse position and cross only the selected shell thickness.
 		BlockPos shell = hit.getBlockPos(), interior = target.interiorBlock();
 		int dx = interior.getX() - shell.getX(), dy = interior.getY() - shell.getY(), dz = interior.getZ() - shell.getZ();
@@ -232,7 +232,11 @@ public final class PlayerContainerTransferAdapter {
 		double z = dz == 0 ? hit.getLocation().z : shell.getZ() + (dz > 0 ? 1.0 + epsilon : -epsilon);
 		double localX = x - region.origin().getX(), localY = y - region.origin().getY(), localZ = z - region.origin().getZ();
 		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
-		if (region.domain().gasNodeAt(localX, localY, localZ) <= 0) {
+		double h = region.solverConfig().cellSize();
+		int cellX = (int) Math.floor(localX / h), cellY = (int) Math.floor(localY / h), cellZ = (int) Math.floor(localZ / h);
+		var carrierView = cellX < 0 || cellY < 0 || cellZ < 0 || cellX >= region.sizeX()
+				|| cellY >= region.sizeY() || cellZ >= region.sizeZ() ? null : region.observeCellCarriers(cellX, cellY, cellZ);
+		if (carrierView == null || carrierView.gas() == null || carrierView.gas().nodeId() <= 0) {
 			message(player, "外壳内侧接触处没有有限气腔，请对准气体空间");
 			return InteractionResult.FAIL;
 		}
@@ -240,10 +244,10 @@ public final class PlayerContainerTransferAdapter {
 		var actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		var transaction = transactions.executeGasSource(region, level, actor, source, extract,
 				gas.standardVolumeNanos(), (candidate, requested, ignored) -> {
-					int node = candidate.domain().gasNodeAt(localX, localY, localZ);
+					int node = candidate.editableHost().gasNodeAt(localX, localY, localZ);
 					if (node <= 0) return new MinecraftContainerTransferOperations.TransferOutcome(
 							false, !extract, source.copy(), "目标气腔已变化，请重新对准外壳");
-					var edit = candidate.domain().editGas(node, gas.componentId(), requested, gas.temperatureK(), extract);
+					var edit = candidate.editableHost().editGas(node, gas.componentId(), requested, gas.temperatureK(), extract);
 					long moved = edit.moved().standardVolumeNanos();
 					double energy = edit.internalEnergy().toDouble();
 					return new MinecraftContainerTransferOperations.TransferOutcome(moved > 0, !extract, source.copy(),

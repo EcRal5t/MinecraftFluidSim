@@ -4,12 +4,13 @@ import java.util.List;
 import mmm.units.SignedDyadic;
 import mmm.chemistry.ChemicalTransferLedger;
 import mmm.thermal.CoherentPhaseStore;
-import static mmm.fluid.FluidDomain.*;
+import static mmm.fluid.HostFluidState.*;
+import static mmm.fluid.FluidDomainContracts.*;
 
 /** Prepares inventory insertion, extraction and clear operations against one domain state. */
 final class DomainInventory {
-	private final FluidDomain domain;
-	DomainInventory(FluidDomain domain) { this.domain = domain; }
+	private final HostFluidState domain;
+	DomainInventory(HostFluidState domain) { this.domain = domain; }
 	public BodyFluidSample sampleAxisAlignedBody(
 			double minimumX, double minimumY, double minimumZ,
 			double maximumX, double maximumY, double maximumZ
@@ -135,7 +136,7 @@ final class DomainInventory {
 				plan.granular.internalEnergy(), plan.gasTopology == null ? null : plan.gasTopology.thermalPlan());
 		if (plan.gasTopology != null) domain.gasTopologyCoordinator.preflight(plan.gasTopology);
 		CondensedClear condensed = applyCondensedClear(plan.condensed());
-		FluidDomain.GranularClear granular = ((FluidDomain) domain).domainPhaseInventory.applyGranularClear(plan.granular());
+		FluidDomainContracts.GranularClear granular = ((HostFluidState) domain).domainPhaseInventory.applyGranularClear(plan.granular());
 		if (plan.gasTopology != null) domain.gasTopologyCoordinator.commit(plan.gasTopology);
 		return new OperatorClear(condensed, granular);
 	}
@@ -219,7 +220,7 @@ final class DomainInventory {
 		return tryInsertExactMixture(centerX, centerY, centerZ, portions, maxRadius, externalSource,
 				Double.valueOf(internalEnergy));
 	}
-	FluidDomain.ExactMixtureTransfer tryInsertExactMixture(
+	FluidDomainContracts.ExactMixtureTransfer tryInsertExactMixture(
 			int centerX, int centerY, int centerZ, List<MaterialPortion> portions, int maxRadius,
 			boolean externalSource, Double internalEnergy
 	) {

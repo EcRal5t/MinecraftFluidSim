@@ -7,7 +7,7 @@ import mmm.application.ContainerTransferUseCase;
 import mmm.item.ContainerItemMapper;
 import mmm.item.ContainerItemStacks;
 import mmm.item.MmmComponents;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.transfer.ContainerTransferActor;
 import mmm.transfer.ContainerTransferJournal;
 import net.minecraft.server.level.ServerLevel;
@@ -162,7 +162,7 @@ final class MinecraftContainerTransactionAdapter {
 		ContainerTransferUseCase useCase = new ContainerTransferUseCase(coordinator);
 		ContainerTransferUseCase.Result result = useCase.execute(new ContainerTransferUseCase.Command(
 				region.id(), region.dimension().identifier().toString(), region.checkpointGeneration(),
-				region.domain().hasThermalState(), profileFingerprint, thermalRegistryFingerprint,
+				region.hasThermalState(), profileFingerprint, thermalRegistryFingerprint,
 				actor, before, source, operation, resourceKind, requestedAmount, baseAmount, publicOperationId));
 		ItemStack after;
 		try {
@@ -221,7 +221,7 @@ final class MinecraftContainerTransactionAdapter {
 		private final ItemStack beforeStack;
 		private final TransferExecutor executor;
 		private final FinalItemResolver finalItemResolver;
-		private FluidDomain candidateDomain;
+		private HostFluidState candidateDomain;
 		private boolean candidateOperatorPaused;
 
 		private RegionPort(
@@ -243,8 +243,7 @@ final class MinecraftContainerTransactionAdapter {
 				return new ContainerTransferCoordinator.Execution(false, null,
 						"容器转移目标在 WAL 准备前后发生变化", 0L, null);
 			}
-			candidateDomain = FluidDomain.restoreAuthoritativeState(
-					region.domain().captureAuthoritativeState());
+			candidateDomain = region.beginHostEdit();
 			candidateOperatorPaused = region.paused();
 			FluidRegion candidate = region.lifecycleCandidate(candidateDomain, candidateOperatorPaused);
 			MinecraftContainerTransferOperations.TransferOutcome raw =

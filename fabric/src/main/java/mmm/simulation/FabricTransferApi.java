@@ -7,7 +7,7 @@ import java.util.OptionalDouble;
 import java.util.UUID;
 import mmm.api.StableId;
 import mmm.api.transfer.*;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.item.ContainerItemMapper;
 import mmm.item.MmmComponents;
 import mmm.application.ContainerRecoveryCoordinator;
@@ -99,7 +99,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			var region=regions.region(request.regionId());
 			if(region==null || !region.dimension().identifier().toString().equals(request.dimensionId())) return result(TransferStatus.NO_REGION,"Requested region is absent");
 			if(!region.controllerManaged() || !region.solverLoaded() || region.availabilityFailure()!=null || availability.hasPending(region.id())
-					|| region.domain().hasPendingPhaseMotionWork()) return result(TransferStatus.UNAVAILABLE,"Region is unloaded, locked, or has pending mechanical work");
+					|| region.hasPendingPhaseMotionWork(region.activityForBodies(region.entityBodyState().bodies()))) return result(TransferStatus.UNAVAILABLE,"Region is unloaded, locked, or has pending mechanical work");
 			if(!actor.binding().address().dimensionId().equals(request.dimensionId())) return result(TransferStatus.INVALID_REQUEST,"Actor and region dimensions differ");
 			if(!portMatches(actor,region,request)) return result(TransferStatus.INVALID_REQUEST,
 					"Dispenser must face the outward side of a fluid port and target its adjacent interior");
@@ -107,7 +107,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(region.footprint()==null || !region.footprint().containsInterior(position)) return result(TransferStatus.NO_REGION,"Point is outside the region interior");
 			double h=region.solverConfig().cellSize();
 			int[] cell={(int)Math.floor((request.worldXMetres()-region.origin().getX())/h),(int)Math.floor((request.worldYMetres()-region.origin().getY())/h),(int)Math.floor((request.worldZMetres()-region.origin().getZ())/h)};
-			if(!region.domain().groupAvailable((cell[2]*region.sizeY()+cell[1])*region.sizeX()+cell[0]))
+			if(!region.groupAvailable((cell[2]*region.sizeY()+cell[1])*region.sizeX()+cell[0]))
 				return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
 			var resolution=MinecraftContainerTransferPlan.resolve(transactions,world,region,cell,actor.item().copy(),false);
 			if(!resolution.resolved()) return result(TransferStatus.NOT_TRANSFERRED,resolution.diagnostic());
@@ -116,7 +116,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(operation.filled()!=insert || (operation.resourceKind()==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ)!=(request.quantity() instanceof TransferQuantity.Granular))
 				return result(TransferStatus.INVALID_REQUEST,"Request direction or quantity does not match the actual container inventory");
 			long maximum=amount(request.quantity());
-			var candidate=region.lifecycleCandidate(FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState()),region.paused());
+			var candidate=region.lifecycleCandidate(region.beginHostEdit(),region.paused());
 			var outcome=operation.executeExact(candidate,Math.min(maximum,operation.requestedAmount()),operation.baseAmount());
 			if(outcome==null || !outcome.transferred()) return result(TransferStatus.NOT_TRANSFERRED,outcome==null?"No inventory transferred":outcome.message());
 			if(outcome.resourceAmount()>maximum) return result(TransferStatus.NOT_TRANSFERRED,"Container cannot settle the requested bounded amount");
@@ -149,6 +149,13 @@ final class FabricTransferApi implements MmmTransferApi {
 				return result(TransferStatus.UNAVAILABLE,"Region is currently unavailable");
 			if(region.checkpointGeneration()!=prepared.view().regionCheckpointGeneration() || region.solverGeneration()!=prepared.solverGeneration())
 				return result(TransferStatus.STALE_PLAN,"Region changed after planning");
+			double cellSize=region.solverConfig().cellSize();
+			int x=(int)Math.floor((request.worldXMetres()-region.origin().getX())/cellSize);
+			int y=(int)Math.floor((request.worldYMetres()-region.origin().getY())/cellSize);
+			int z=(int)Math.floor((request.worldZMetres()-region.origin().getZ())/cellSize);
+			if(x<0||x>=region.sizeX()||y<0||y>=region.sizeY()||z<0||z>=region.sizeZ()
+					||!region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x))
+				return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
 			if(!portMatches(actor,region,request)) return result(TransferStatus.STALE_PLAN,
 					"Dispenser or directed fluid port changed after planning");
 			var durableActor=(ContainerTransferActor.Dispenser)prepared.settlement().actor();

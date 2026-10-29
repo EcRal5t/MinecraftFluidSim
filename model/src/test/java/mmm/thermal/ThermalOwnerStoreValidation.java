@@ -34,7 +34,6 @@ public final class ThermalOwnerStoreValidation {
 
 		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
-		finiteDevicesRetainActualOwnerTemperatures();
 	}
 
 	private static void thermalAuditAcceptsFloatingPointResidual() {
@@ -338,44 +337,7 @@ public final class ThermalOwnerStoreValidation {
 		require(Math.abs(caloric.temperature(SignedDyadic.of(raw)) - actual) <= tolerance
 				&& Double.isFinite(caloric.energy(actual)) && Double.isFinite(caloric.roundoff(actual)),
 				"Prospective liquid caloric state or roundoff retained an overflowing specific intermediate");
-		long bodyMass;
-		try { bodyMass = mmm.units.Mass.fromKilograms(mass); }
-		catch (ArithmeticException outsideInventoryRange) { return; }
-		if (bodyMass == 0L || mmm.units.Mass.kilograms(bodyMass) != mass) return;
-		var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
-		var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), bodyMass, raw);
-		var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
-		require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaJ() == 0, "Equivalent caloric paths created equal-temperature device heat flow");
-	}
 
-	private static void finiteDevicesRetainActualOwnerTemperatures(){
-		var cold=new ThermalMaterialDefinition("test:device/a",ThermalMaterialDefinition.CarrierKind.LIQUID,"test:device/a",300,0,0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,1000)));
-		var hot=new ThermalMaterialDefinition("test:device/b",ThermalMaterialDefinition.CarrierKind.LIQUID,"test:device/b",300,0,1,cold.caloricSegments());
-		var device=new ThermalMaterialDefinition("test:device/wall",ThermalMaterialDefinition.CarrierKind.DEVICE,"test:device/wall",300,0,1,cold.caloricSegments());
-		var registry=new ThermalRegistry(List.of(cold,hot,device));var context=thermalHandoffContext();
-		var state=ThermalDomainState.restoreTarget(registry,new int[]{0,1},new int[0],300,2,1,1,1,.5F,context,null,8,new double[]{0,200000});
-		state.restoreAuditLedger(ThermalAuditLedger.initialized(state.exactEnergy(2)));
-		state.preparePhaseScan(context);var revision=state.thermalRevision();
-		var contacts=state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0,0,1)),context);
-		require(state.matchesThermalRevision(revision),"Device observation mutated a phase cache or owner revision");
-		state.preparePhaseScan(context);state.preparePhaseCandidateCell(0,context);
-		var body=new FiniteThermalBodyState(0,registry.fingerprint(),device.id(),mmm.units.Mass.fromKilograms(1),300000);
-		var exchange=FiniteThermalExchange.plan(registry,body,contacts,1e-8,8);var delta=exchange.contacts().getFirst();
-		state.commitFiniteDeviceCellExchange(state.planFiniteDeviceCellExchange(List.of(
-				new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0,delta.internalEnergyDeltaJ(),delta.carriers())),context),context);
-		require(state.liquidInternalEnergy(0)==0&&state.liquidInternalEnergy(1)>200000&&state.liquidInternalEnergy(1)-200000<.001
-				&&state.exactEnergy(2).equals(state.auditLedger().expectedInventory()),"Minute device heat equilibrated isolated hot/cold owners");
-		var segmented=new ThermalMaterialDefinition("test:device/segmented",ThermalMaterialDefinition.CarrierKind.LIQUID,"test:device/segmented",300,0,1,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(1,300,10),new ThermalMaterialDefinition.CaloricSegment(300,1000,1000)));
-		var r=new ThermalRegistry(List.of(device,segmented));
-		var coldBody=new FiniteThermalBodyState(0,r.fingerprint(),device.id(),mmm.units.Mass.fromKilograms(1),-50000);
-		for(double dt:new double[]{.001,1000000}){
-			var contact=new FiniteThermalExchange.Contact(0,1000,List.of(new FiniteThermalExchange.Carrier(0,segmented,1,0,0,1)));
-			var plan=FiniteThermalExchange.plan(r,coldBody,List.of(contact),dt,8);
-			require(plan.contacts().getFirst().finalTemperatureK()<300&&plan.contacts().getFirst().finalTemperatureK()>=250
-					&&plan.after().internalEnergyJ()>coldBody.internalEnergyJ(),"Finite contact could not cool from a caloric knot across its lower segment");
-		}
 	}
 
 	private static void coolingInversionRetainsEnergyScale() {

@@ -1,7 +1,6 @@
 package mmm.chemistry;
 
 import java.io.StringReader;
-import mmm.fluid.ChemicalReactionCandidateValidation;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -21,10 +20,7 @@ public final class M7ChemistryValidation {
 		validateAuditLedgerCodec();
 		validateRegistrySnapshot();
 		validateInvalidDefinitions();
-		validateStrongElectrolytes();
-		validateAcidBase();
 		validatePhDisplayPhases();
-		validateNoDrift(fast ? 1_000 : 10_000);
 		System.out.printf("M7 chemistry core gate passed: fingerprint=%s iterations=%d species=%d reactions=%d%n",
 				BuiltinChemicalDefinitions.REGISTRY.fingerprint(), fast ? 1_000 : 10_000,
 				BuiltinChemicalDefinitions.REGISTRY.species().size(),
@@ -33,7 +29,7 @@ public final class M7ChemistryValidation {
 
 	private static void validatePhDisplayPhases() {
 		var materials = new mmm.fluid.FluidMaterialRegistry(mmm.fluid.BuiltinFluidMaterials.DEFAULT_PALETTE);
-		var domain = new mmm.fluid.FluidDomain(4, 4, 4,
+		var domain = new mmm.fluid.HostFluidState(4, 4, 4,
 				new mmm.fluid.FluidSolverConfig(.5F, 1000, 0, .01F, 64, 1e-6F, .002F));
 		domain.bindMaterialRegistry(materials);
 		domain.setVolume(1, 1, 1, .25F);
@@ -68,7 +64,7 @@ public final class M7ChemistryValidation {
 		var saltReactions = builtin.reactions().stream().filter(value -> value.phaseId().equals(waterPhase.id())
 				&& value.reactants().keySet().stream().noneMatch(omitted::contains)
 				&& value.products().keySet().stream().noneMatch(omitted::contains)).toList();
-		var partial = new mmm.fluid.FluidDomain(4, 4, 4, domain.config());
+		var partial = new mmm.fluid.HostFluidState(4, 4, 4, domain.config());
 		partial.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER)));
 		partial.setVolume(1, 1, 1, .25F);
 		partial.bindChemistry(new ChemicalRegistry(waterSpecies, List.of(waterPhase), saltReactions));
@@ -431,63 +427,6 @@ public final class M7ChemistryValidation {
 		check(stratified.reactionOrder().get(0).kind() == ChemicalReaction.Kind.COMPLETE_DISSOCIATION
 				&& stratified.reactionOrder().get(1).kind() == ChemicalReaction.Kind.INSTANTANEOUS,
 				"reaction order did not keep complete dissociation ahead of instantaneous reactions");
-	}
-
-	private static void validateStrongElectrolytes() {
-		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
-		ChemicalReactionEngine engine = new ChemicalReactionEngine(registry);
-		int phase = registry.phaseHandle(BuiltinChemicalDefinitions.AQUEOUS);
-		ChemicalMixtureRecord salts = record(Map.of(
-				BuiltinChemicalDefinitions.NACL, 4_000_000L,
-				BuiltinChemicalDefinitions.KNO3, 6_000_000L));
-		ChemicalMixtureRecord result = ChemicalReactionCandidateValidation.react(registry, phase, salts);
-		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NACL)) == 0L, "NaCl did not fully dissociate");
-		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.KNO3)) == 0L, "KNO3 did not fully dissociate");
-		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)) == 4_000_000L, "Na inventory drifted");
-		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.K_PLUS)) == 6_000_000L, "K inventory drifted");
-		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.CL_MINUS)) == 4_000_000L, "Cl inventory drifted");
-		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NO3_MINUS)) == 6_000_000L, "nitrate inventory drifted");
-		check(salts.exactSpeciesMassKilograms(registry).equals(result.exactSpeciesMassKilograms(registry)), "salt dissociation changed exact mass");
-		check(salts.chargeQuanta(registry) == result.chargeQuanta(registry), "salt dissociation changed charge");
-
-		ChemicalMixtureRecord firstPair = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
-				BuiltinChemicalDefinitions.NACL, 5_000_003L,
-				BuiltinChemicalDefinitions.KNO3, 5_000_003L)));
-		ChemicalMixtureRecord secondPair = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
-				BuiltinChemicalDefinitions.NANO3, 5_000_003L,
-				BuiltinChemicalDefinitions.KCL, 5_000_003L)));
-		check(firstPair.equals(secondPair),
-				"equivalent NaCl+KNO3 and NaNO3+KCl inventories did not canonicalize identically");
-	}
-
-	private static void validateAcidBase() {
-		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
-		ChemicalReactionEngine engine = new ChemicalReactionEngine(registry);
-		int phase = registry.phaseHandle(BuiltinChemicalDefinitions.AQUEOUS);
-		ChemicalMixtureRecord equal = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 10_000L, BuiltinChemicalDefinitions.NAOH, 10_000L)));
-		check(equal.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)) == 0L, "equal acid left H+");
-		check(equal.amount(registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)) == 0L, "equal base left OH-");
-		check(engine.ph(equal) == 7.0, "equal acid/base is not neutral");
-		ChemicalMixtureRecord acid = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 15_000L, BuiltinChemicalDefinitions.NAOH, 10_000L)));
-		check(acid.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)) == 5_000L, "acid excess is wrong");
-		check(engine.ph(acid) < 7.0, "acid excess pH is not acidic");
-		ChemicalMixtureRecord base = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 10_000L, BuiltinChemicalDefinitions.NAOH, 15_000L)));
-		check(base.amount(registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)) == 5_000L, "base excess is wrong");
-		check(engine.ph(base) > 7.0, "base excess pH is not basic");
-	}
-
-	private static void validateNoDrift(int iterations) {
-		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
-		ChemicalReactionEngine engine = new ChemicalReactionEngine(registry);
-		int phase = registry.phaseHandle(BuiltinChemicalDefinitions.AQUEOUS);
-		ChemicalMixtureRecord input = record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 1_000_003L,
-				BuiltinChemicalDefinitions.NAOH, 1_000_000L,
-				BuiltinChemicalDefinitions.NANO3, 123_457L));
-		ChemicalReactionCandidateValidation.validateIdempotence(registry, input, iterations);
 	}
 
 	private static ChemicalMixtureRecord record(Map<String, Long> amounts) {

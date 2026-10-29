@@ -14,9 +14,9 @@ import java.util.ArrayList;
  * storage; capture/restore and renderer adapters consume these as values.
  */
 final class CarrierInventoryReader {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	CarrierInventoryReader(FluidDomain domain) {
+	CarrierInventoryReader(HostFluidState domain) {
 		this.domain = domain;
 	}
 
@@ -157,7 +157,7 @@ final class CarrierInventoryReader {
 		domain.domainFlowFields.ensureInventoryGrid();
 		byte[] result = new byte[domain.cellCount];
 		for (int i = 0; i < domain.cellCount; i++) {
-			result[i] = (byte) Math.round(FluidDomain.clamp01(domain.volume[i]) * 255.0F);
+			result[i] = (byte) Math.round(HostFluidState.clamp01(domain.volume[i]) * 255.0F);
 		}
 		return result;
 	}

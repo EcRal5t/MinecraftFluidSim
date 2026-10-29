@@ -14,7 +14,7 @@ import java.util.TreeMap;
 
 /** Actual K/PE and cavity work close once on each body coupled by pressure, mass transfer and contacts. */
 final class MechanicalEnergySettlement {
-    private final FluidDomain domain;
+    private final HostFluidState domain;
     private final double[] liquidExchange;
     private final double[] externalBodyWork;
     private double[] granularExchange=new double[0],granularPotentialExchange=new double[0];
@@ -27,7 +27,7 @@ final class MechanicalEnergySettlement {
         representation=resolvedPotential=initialRepresentationBound=finalRepresentationBound=0;
         this.captureSpatialObservation=captureSpatialObservation;spatialObserved=false;
     }
-    FluidDomain.MechanicalCorrection correction(){return new FluidDomain.MechanicalCorrection(
+    FluidDomainContracts.MechanicalCorrection correction(){return new FluidDomainContracts.MechanicalCorrection(
             stepLiquidForce,stepGranularForce,stepPotential,stepGas,stepCorrection,stepAbsoluteCorrection,
             spatialObserved,representation,stepCorrection-representation,resolvedPotential,
             initialRepresentationBound,finalRepresentationBound);}
@@ -65,7 +65,7 @@ final class MechanicalEnergySettlement {
         finalRepresentationBound=after.bound();spatialObserved=true;
     }
 
-    MechanicalEnergySettlement(FluidDomain domain){
+    MechanicalEnergySettlement(HostFluidState domain){
         this.domain=domain;
         liquidExchange=new double[domain.mac.velocityX.length+domain.mac.velocityY.length+domain.mac.velocityZ.length];
         externalBodyWork=new double[domain.cellCount];

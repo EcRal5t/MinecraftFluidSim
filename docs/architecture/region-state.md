@@ -45,7 +45,7 @@
     - [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)
   - 测试选择器：`region-state,region-manager`
 
-执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+执行方式见 [验证指南](../maintenance/validation.md#host)。
 
 ## 本文内容
 
@@ -198,7 +198,7 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 最近真实压力投影随 solver runtime 扩展保存，供后续力学推进使用。
 `PendingPhaseMotionCodec` 以 `mmm:pending_phase_motion` Manifest 扩展保存格总数和有序格索引，空集合省略扩展。
 集合恢复沿用 `PendingPhaseMotionState` 的网格与索引契约。完全汽化格可携带待推进标记，其气体、内能和空间归属由对应库存载荷恢复；正式 checkpoint 校验和域恢复采用同一格集合定义。
-正常后端交接共享已验证的不可变单元库存与气腔几何。
+设备状态按代次导出完整库存；宿主编辑以私有副本规划后提交设备候选。
 液体几何身份随快照、候选和提交传递，仅体积或分量变化才更新；内能更新保留该身份。
 冷恢复同时读取保存的相占据与单元库存，核对容量和各固定连通分量的体积后重建派生几何。
 相占据列保存共同 PLIC 的重建输入；生产准备与冷恢复执行同一次重建，微盒积分保持为派生几何。
@@ -343,7 +343,7 @@ checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归
 物质或几何编辑在其联合计划中准备最终拓扑、库存与热状态，再发布完整后继。
 捕获期间拒绝尚未结束的碰撞事务。
 
-普通后端交接保存不可变液体行和几何引用，并使用独立网络快照与动量列建立私有候选。
+设备候选和 checkpoint 保持同代液体库存、几何与动量。
 冷恢复验证保存的支撑、相占据与容量，从同代相占据重建派生几何，再核对气腔归属、状态方程和全部审计。
 恢复失败保留原 HEAD 与活动状态，详细格式见[气体状态](gas-state.md)。
 

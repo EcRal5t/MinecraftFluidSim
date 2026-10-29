@@ -1,6 +1,8 @@
 package mmm.application.result;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidDomainContracts;
+
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidStepCandidate;
 import mmm.world.MovingBodyFluidCoupling;
 
@@ -8,7 +10,7 @@ import java.util.Objects;
 
 public record MotionStepResult(
 		RegionStepStatus status,
-		FluidDomain.StepStats stats,
+		FluidDomainContracts.StepStats stats,
 		MovingBodyFluidCoupling.Result movingBodyCoupling
 ) {
 	public MotionStepResult {

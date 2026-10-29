@@ -22,9 +22,9 @@ import java.util.List;
 
 /** Joint inventory and energy remapping on captured positive PLIC microbox supports. */
 final class GasTopologyCoordinator {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	private int[] restoredGasNodes;
-	private enum VolumeWork { ADIABATIC, MECHANICAL_TRANSPORT, FIXED_ENERGY }
+	private enum VolumeWork { ADIABATIC, FIXED_ENERGY }
 	private record SourceVolumeWork(int node,SignedDyadic volume,double energy,List<GasInventory> parts,
 	                                int[] targets,SignedDyadic[] controls,double[] partEnergy,boolean mechanicalMode) { }
 	record PhaseBirth(int cell, int supportMask, GasInventory inventory, double energy) { }
@@ -40,7 +40,7 @@ final class GasTopologyCoordinator {
 			births = List.copyOf(births);
 		}
 	}
-	GasTopologyCoordinator(FluidDomain domain) { this.domain = domain; }
+	GasTopologyCoordinator(HostFluidState domain) { this.domain = domain; }
 
 	GasStateSnapshot bootstrap(String fingerprint) { refresh(); return export(fingerprint); }
 	GasStateSnapshot export(String fingerprint) {
@@ -157,11 +157,7 @@ final class GasTopologyCoordinator {
 		return planCells(future,occupied,null,VolumeWork.FIXED_ENERGY,null,allocation);
 	}
     GasTopologyPlan planAfterMechanicalTransport(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation){
-        // A prescribed velocity field without a prepared pressure step retains its
-        // explicit displacement work; missing modes never classify gas as unresolved.
-        var work=domain.pressureSystem.hasGasMechanicalModes(domain.gasState.frame)
-                ?VolumeWork.MECHANICAL_TRANSPORT:VolumeWork.ADIABATIC;
-        return planCells(future,occupied,null,work,null,allocation);
+        return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,allocation);
     }
 
 	GasTopologyPlan planAfterLiquidDisplacement(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation) {
@@ -291,7 +287,7 @@ final class GasTopologyCoordinator {
 				}
 				if(retainControl)sourceWork.add(new SourceVolumeWork(previous,old.capacity().normalizedVolume(previous),
 						stock.isEmpty()?0:energy(previous,edit),parts,targets,control,energies,
-                        volumeWork==VolumeWork.ADIABATIC||domain.pressureSystem.sourceGasDoesVolumeWork(old,previous)));
+                        volumeWork==VolumeWork.ADIABATIC));
 			}
 			// Ambient is source row 1. Explicit vacuum (row 0) imports neither stock nor old control.
 			for(int entry=origins.first(1);entry>=0;entry=origins.next(entry)) {
@@ -466,12 +462,6 @@ final class GasTopologyCoordinator {
 			if (domain.thermalState == null) throw new IllegalStateException("Gas topology plan lost its thermal owner");
 			domain.thermalState.requireCanCommitGasRemap(plan.thermalPlan());
 		}
-	}
-	void step(float dt) {
-		refresh(); if (!domain.gasState.pressureActive) return;
-		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt,domain.activityGroups::gasNodeIsActive);
-		else domain.gasState.network.stepEdges(dt, domain.thermalState.gasThermodynamics(domain.gasState.network),
-				batch -> domain.thermalState.planGasFlow(batch, domain.gasState.network),domain.activityGroups::gasNodeIsActive);
 	}
 	void synchronizeForPersistence() { refresh(); }
 	record GasTopologyPlan(GasRuntimeGeometry frame, GasRuntimeGeometry source,

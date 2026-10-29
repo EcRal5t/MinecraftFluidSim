@@ -31,7 +31,6 @@ public final class ArchitectureDependencyValidation {
 			"fabric/src/main/java",
 			"fabric/src/client/java",
 			"gpu-kernel/src/main/java",
-			"gpu-probe/src/main/java",
 	};
 	private static final Set<String> LOADER_NEUTRAL_MODULES = Set.of(
 			"api/src/main/java", "model/src/main/java", "solver/src/main/java",
@@ -43,7 +42,7 @@ public final class ArchitectureDependencyValidation {
 			"FluidRegionOperations", "ThermalActivity");
 
 	/** Solver mutable domain types that UI/adapter packages must never import. */
-	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("FluidDomain", "ThermalDomainState");
+	private static final Set<String> SOLVER_MUTABLE_TYPES = Set.of("HostFluidState", "ThermalDomainState");
 
 	/** Thermal mutable state owners that UI/adapter packages must never import (S10). */
 	private static final Set<String> THERMAL_MUTABLE_OWNERS = Set.of(
@@ -75,8 +74,7 @@ public final class ArchitectureDependencyValidation {
 		checkApiPurity(sources, violations);
 		checkLoaderNeutralModules(sources, violations);
 		checkApplicationPurity(sources, violations);
-		checkGpuProbeKernel(sources, violations);
-		checkGpuProbeAdapterHostBoundary(sources, violations);
+		checkGpuKernel(sources, violations);
 		checkPersistenceDoesNotReferenceRuntime(sources, violations);
 		checkAdaptersDoNotReferenceSolverDomain(sources, violations);
 		checkAdaptersDoNotImportSimulationService(sources, violations);
@@ -91,20 +89,6 @@ public final class ArchitectureDependencyValidation {
 		}
 		System.out.println("Architecture gate passed: " + sources.size() + " production sources scanned.");
 		LiquidInventoryAuthorityValidation.main(new String[] {root.toString()});
-	}
-
-	/** Optional probe code reaches host runtime/network implementations only through its one adapter. */
-	static void checkGpuProbeAdapterHostBoundary(List<SourceFile> sources, List<String> violations) {
-		for (SourceFile source : sources) {
-			if (!source.module().equals("gpu-probe/src/main/java")
-					|| source.simpleName().equals("MmmGpuProbeHostIntegration")) continue;
-			for (String imported : source.imports()) {
-				if (!imported.startsWith("mmm.simulation")
-						&& !imported.startsWith("mmm.network")) continue;
-				violations.add("gpu-probe adapter bypasses host integration: "
-						+ source.simpleName() + " -> " + imported);
-			}
-		}
 	}
 
 	private static List<SourceFile> scan(Path root) throws IOException {
@@ -192,15 +176,15 @@ public final class ArchitectureDependencyValidation {
 		}
 	}
 
-	/** The physical gpu-probe kernel must not reach simulation/network/Fabric integration. */
-	private static void checkGpuProbeKernel(List<SourceFile> sources, List<String> violations) {
+	/** The physical GPU kernel must not reach simulation/network/Fabric integration. */
+	static void checkGpuKernel(List<SourceFile> sources, List<String> violations) {
 		for (SourceFile source : sources) {
 			if (!source.module().equals("gpu-kernel/src/main/java")) continue;
 			for (String imported : source.imports()) {
 				if (imported.startsWith("mmm.simulation") || imported.startsWith("mmm.network")
 						|| imported.startsWith("mmm.logging") || imported.startsWith("net.minecraft")
 						|| imported.startsWith("net.fabricmc")) {
-					violations.add("gpu-probe kernel imports integration type: "
+					violations.add("GPU kernel imports integration type: "
 							+ source.simpleName() + " -> " + imported);
 				}
 			}

@@ -13,8 +13,8 @@ public final class MarkerVelocityTransferValidation {
 		adjacentCellsSupplyActualFaceMass();
 		closedFacesStopNormalMomentum();
 	}
-	private static FluidDomain domain() {
-		return new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,0,.001F,400,1e-5F,.002F));
+	private static HostFluidState domain() {
+		return new HostFluidState(4,4,4,new FluidSolverConfig(.5F,1000,0,.001F,400,1e-5F,.002F));
 	}
 	private static void initialInputKeepsActualMassAndMomentum() {
 		for (double scale : new double[]{125, 1.25e8}) {
@@ -40,7 +40,7 @@ public final class MarkerVelocityTransferValidation {
 						+.5*Mass.kilograms(masses[1])*velocity[3+axis]*velocity[3+axis];
 			}
 			if(d.liquidKineticEnergyJoules()>kineticInput+16*Math.ulp(kineticInput))throw new AssertionError("Initial averaging amplified kinetic energy");
-			var state=d.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(state);
+			var state=d.captureAuthoritativeState();var restored=HostFluidState.restoreAuthoritativeState(state);
 			if(!state.liquid().stocks().equals(restored.exportLiquidCellState().stocks())
 					||!Arrays.equals(state.momentum().copyX(),restored.exportMacMomentum().copyX())
 					||!Arrays.equals(state.momentum().copyY(),restored.exportMacMomentum().copyY())
@@ -59,10 +59,12 @@ public final class MarkerVelocityTransferValidation {
 	}
 	private static void closedFacesStopNormalMomentum() {
 		var d=domain();d.setSolid(1,1,1,true);d.setVolume(2,1,1,.2F);d.domainFlowFields.preparePhysicalState();
-		int face=d.domainFlowFields.xFaceIndex(2,1,1);d.mac.velocityX[face]=-7;
-		d.bodyForceStage.enforceSolidFaceVelocities();d.cellMacStage.publishMomentum();
-		near(d.mac.velocityX[face],0,0,"Closed face normal velocity");
-		near(d.mac.momentumX[face],0,0,"Closed face normal momentum");
+		int face=d.domainFlowFields.xFaceIndex(2,1,1);
+		double[][] momentum={d.mac.momentumX.clone(),d.mac.momentumY.clone(),d.mac.momentumZ.clone()};
+		momentum[0][face]=-7*d.cellMacStage.massX[face];
+		var candidate=d.cellMacStage.prepareMomentumInput(momentum,d.liquidCells,null);
+		near(candidate.momentum().copyX()[face],0,0,"Closed face normal momentum");
+		if(candidate.heatByCell().isEmpty())throw new AssertionError("Stopped momentum must transfer kinetic energy to the liquid");
 	}
 	private static void near(double actual,double expected,double tolerance,String label) {
 		if(!(Double.isFinite(actual)&&Math.abs(actual-expected)<=tolerance))throw new AssertionError(label+": "+actual+" != "+expected);

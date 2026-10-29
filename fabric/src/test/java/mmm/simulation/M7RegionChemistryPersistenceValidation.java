@@ -7,7 +7,7 @@ import mmm.chemistry.ChemicalRegistry;
 import mmm.chemistry.ExactRational;
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FlipChemicalParticleState;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FluidSolverConfig;
@@ -71,17 +71,17 @@ public final class M7RegionChemistryPersistenceValidation {
 				CONFIG.fluidEpsilon(), FluidSolverConfig.WallCondition.NO_SLIP);
 		FluidRegion source = populatedRegion(UUID.randomUUID(), noSlip);
 		bindDefaultMaterials(source);
-		FullCapabilityTestFixture.bindFull(source.domain(), new FullCapabilityTestFixture.Registries(
+		FullCapabilityTestFixture.bindFull(source.editableHost(), new FullCapabilityTestFixture.Registries(
 				production.liquids(), production.chemical(), production.granular(), production.gas(),
 				production.thermal(), custom), 293.15, 4);
-		source.domain().setThermalTemperatureInCell(2, 1, 2, 353.15);
-		var pendingKey = source.domain().captureAuthoritativeState().liquid().stocks().stream()
-				.filter(stock -> source.domain().materialRegistry().material(stock.key().material()).id().equals("mmm:water"))
+		source.editableHost().setThermalTemperatureInCell(2, 1, 2, 353.15);
+		var pendingKey = source.editableHost().captureAuthoritativeState().liquid().stocks().stream()
+				.filter(stock -> source.editableHost().materialRegistry().material(stock.key().material()).id().equals("mmm:water"))
 				.findFirst().orElseThrow().key();
-		source.domain().chemistry().restoreMassTransferPending(java.util.List.of(
+		source.editableHost().chemistry().restoreMassTransferPending(java.util.List.of(
 				new mmm.chemistry.RegionChemistry.MassTransferPending(pendingKey.cell(), pendingKey.material(),
 						pendingKey.supportMask(), "mmm:co2_water", .25, 3.75e-7)));
-		source.domain().restoreEntityBodyState(new mmm.fluid.EntityBodyState(java.util.List.of(
+		source.editableHost().restoreEntityBodyState(new mmm.fluid.EntityBodyState(java.util.List.of(
 				new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(43, 59),
 						new mmm.world.MovingBodyFluidCoupling.Bounds(-2, -2, -2, -1.75, -1.5, -1.25), -.5, .25, -.125))));
 
@@ -113,13 +113,13 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(reader.loadMetadata(manager).isEmpty(), "custom viscosity checkpoint metadata was rejected");
 		FluidRegion restored = manager.regions().getFirst();
 		reader.restore(restored);
-		check(restored.domain().config().viscousWallCondition() == FluidSolverConfig.WallCondition.NO_SLIP,
+		check(restored.editableHost().config().viscousWallCondition() == FluidSolverConfig.WallCondition.NO_SLIP,
 				"disk restore lost explicit no-slip boundary definition");
 		mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(
-				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
+				source.editableHost().captureAuthoritativeState(), restored.editableHost().captureAuthoritativeState(),
 				"custom viscosity disk restore");
 		int cell = (2 * 4 + 1) * 6 + 2;
-		double actual = restored.domain().carrierViscosityPascalSeconds(cell);
+		double actual = restored.editableHost().carrierViscosityPascalSeconds(cell);
 		double expected = custom.dynamicViscosityAt("mmm:water", 353.15);
 		check(Math.abs(actual - expected) <= expected * 1e-12
 				&& actual > 1.9 * production.materials().dynamicViscosityAt("mmm:water", 353.15),
@@ -135,17 +135,17 @@ public final class M7RegionChemistryPersistenceValidation {
 				new mmm.worldprofile.RegistryFingerprintSet(custom.fingerprint(), "", "", "", ""));
 		FluidRegion source = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(source);
-		source.domain().bindMaterialDefinitions(custom);
+		source.editableHost().bindMaterialDefinitions(custom);
 		var repository = new RegionRepositoryAdapter(root, profile, null, null, null, null, custom);
 		repository.checkpoint(source);
 		var manager = manager();
 		check(repository.loadMetadata(manager).isEmpty(), "material-only viscosity metadata was rejected");
 		var restored = manager.regions().getFirst(); repository.restore(restored);
 		mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(
-				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
+				source.editableHost().captureAuthoritativeState(), restored.editableHost().captureAuthoritativeState(),
 				"material-only viscosity disk restore");
-		check(!restored.domain().hasGranularState()
-				&& restored.domain().carrierViscosityPascalSeconds((2 * 4 + 1) * 6 + 2)
+		check(!restored.editableHost().hasGranularState()
+				&& restored.editableHost().carrierViscosityPascalSeconds((2 * 4 + 1) * 6 + 2)
 				== custom.dynamicViscosityAt("mmm:water", 293.15),
 				"material-only restore lost custom constitutive data");
 	}
@@ -156,9 +156,9 @@ public final class M7RegionChemistryPersistenceValidation {
 		ThermalRegistry thermal = productionThermalRegistry();
 		FluidRegion source = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(source);
-		source.domain().bindGasRegistry(gas);
-		source.domain().bindThermal(thermal, source.domain().materialRegistry(), 300.0);
-		source.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
+		source.editableHost().bindGasRegistry(gas);
+		source.editableHost().bindThermal(thermal, source.editableHost().materialRegistry(), 300.0);
+		source.editableHost().setThermalTemperatureInCell(2, 1, 2, 325.0);
 		RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas, TestProfiles.materialRegistry());
 		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint was not published");
 
@@ -166,9 +166,9 @@ public final class M7RegionChemistryPersistenceValidation {
 		RegionRepositoryAdapter restoring = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas, TestProfiles.materialRegistry());
 		check(restoring.loadMetadata(manager).isEmpty(), "valid thermal metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
-		check(admitted.solverLoaded() && admitted.domain().hasThermalState()
-				&& admitted.domain().exportGasState("").registryFingerprint().equals(gas.fingerprint())
-				&& admitted.domain().thermalAudit().equals(source.domain().thermalAudit()),
+		check(admitted.solverLoaded() && admitted.editableHost().hasThermalState()
+				&& admitted.editableHost().exportGasState("").registryFingerprint().equals(gas.fingerprint())
+				&& admitted.editableHost().thermalAudit().equals(source.editableHost().thermalAudit()),
 				"production restore did not reconstruct gas plus thermal truth");
 
 		FluidRegionManager constrained = new FluidRegionManager(
@@ -238,15 +238,15 @@ public final class M7RegionChemistryPersistenceValidation {
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "granular-gate-off-");
 		FluidRegion source = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(source);
-		source.domain().bindChemistry(chemistry);
-		source.domain().bindGranular(granular, source.domain().materialRegistry(), TestProfiles.materialRegistry());
+		source.editableHost().bindChemistry(chemistry);
+		source.editableHost().bindGranular(granular, source.editableHost().materialRegistry(), TestProfiles.materialRegistry());
 		new RegionGenerationStore(gateRoot, chemistry, granular).publish(RegionCheckpointFixtures.captureGranular(source, 1L));
 		FluidRegionManager currentManager = manager();
 		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null, TestProfiles.materialRegistry());
 		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
-		check(restored.domain().hasChemistryState() && restored.domain().hasGranularState()
-				&& restored.domain().precipitationEnabled(), "current granular layout did not restore");
+		check(restored.editableHost().hasChemistryState() && restored.editableHost().hasGranularState()
+				&& restored.editableHost().precipitationEnabled(), "current granular layout did not restore");
 		FluidRegionManager gateManager = manager();
 		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
@@ -258,13 +258,13 @@ public final class M7RegionChemistryPersistenceValidation {
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "chemical-gate-off-");
 		FluidRegion chemical = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(chemical);
-		chemical.domain().bindChemistry(chemistry);
+		chemical.editableHost().bindChemistry(chemistry);
 		new RegionGenerationStore(gateRoot, chemistry).publish(RegionCheckpointFixtures.captureChemical(chemical, 1L));
 		FluidRegionManager currentManager = manager();
 		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.chemical(chemistry), chemistry, null, null, null, TestProfiles.materialRegistry());
 		check(current.loadMetadata(currentManager).isEmpty(), "current chemical layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
-		assertChemicalStateEquals(chemical.domain().exportChemicalParticleState(), restored.domain().exportChemicalParticleState());
+		assertChemicalStateEquals(chemical.editableHost().exportChemicalParticleState(), restored.editableHost().exportChemicalParticleState());
 		FluidRegionManager gateManager = manager();
 		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
@@ -279,7 +279,7 @@ public final class M7RegionChemistryPersistenceValidation {
 
 	private static FluidRegion populatedRegion(UUID id, FluidSolverConfig config) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FluidDomain domain = new FluidDomain(6, 4, 6, config);
+		HostFluidState domain = new HostFluidState(6, 4, 6, config);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -296,7 +296,7 @@ public final class M7RegionChemistryPersistenceValidation {
 	}
 
 	private static void bindDefaultMaterials(FluidRegion region) {
-		FlipParticleState pure = region.domain().exportParticleState();
+		FlipParticleState pure = region.editableHost().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
 		double[] mass = new double[pure.particleCount()];
 		double totalMass = 0.0;
@@ -304,7 +304,7 @@ public final class M7RegionChemistryPersistenceValidation {
 			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
 			totalMass += mass[marker];
 		}
-		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
+		region.editableHost().restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 	}
 

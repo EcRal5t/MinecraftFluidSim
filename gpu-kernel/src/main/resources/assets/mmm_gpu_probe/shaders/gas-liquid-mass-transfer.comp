@@ -2,94 +2,612 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_shader_atomic_int64 : require
-layout(local_size_x=128)in;
-layout(binding=0,std430)buffer Arena{uint words[];};
-layout(binding=1,std430)buffer Errors{uint errors;};
-layout(binding=2,std430)buffer AtomicArena{int64_t longs[];};
-layout(push_constant)uniform Params{int header;int stage;int count;int maximum;}p;
-// PHASE_ROWS_LIBRARY
-const int RULES=1,CONTROL=2,HEAD=3,NEXT=4,RULE=5,NODE=6,BOIL=7,LIMIT=8,DESIRED=9,OFFSETS=10,BATCHES=11,
- SCORE=12,SATURATION=13,PARTIAL=14,RESPONSE=15,GAS_RESPONSE=16,KG=17,LOWER=18,UPPER=19,TEMP=20,GAS_TEMP=21,
- OLD_MASS=22,NEW_MASS=23,OLD_GAS_U=24,NEW_GAS_U=25,GAS_TRANSFER=26,OLD_K=27,NEW_K=28,FACE_HEAT=29,FACE_P=30,PE_WORK=31,BIRTH_NODE=32,
- PENDING_TIME=33,PENDING_RESIDUAL=34,SOURCE_ENERGY=35,SINK_ENERGY=36,AMBIENT_SOURCE_SPECIES=37,AMBIENT_SINK_SPECIES=38,SOURCE_MASS=39,SINK_MASS=40;
-int h(int i){return int(words[p.header+i]);}int f(int i){return h(48+i);}int eh(int i){return int(words[h(3)+i]);}int gh(int i){return int(words[h(5)+i]);}int th(int i){return int(words[h(4)+i]);}
-int gas(int i){return eh(16+i);}int source(int i){return lpS(h(2),i);}int row(int c,int m){return c*h(10)+m;}
-double value(int at){return lpDouble(at);}void put(int at,double x){lpDoubleAt(at,x);}int64_t quantity(int at){return lpInt(at);}void putq(int at,int64_t x){lpIntAt(at,x);}
-bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,67108864u);}
-int64_t addq(int64_t a,int64_t b){const int64_t limit=0x7fffffffffffffffl;if(b>0l&&a>limit-b||b<0l&&a<(-limit-1l)-b){invalid();return a;}return a+b;}
-u64vec2 mul128(uint64_t a,uint64_t b){uint64_t mask=0xffffffffUL,low=(a&mask)*(b&mask),t=(a>>32)*(b&mask)+(low>>32),mid=(t&mask)+(a&mask)*(b>>32);return u64vec2((mid<<32)|(low&mask),(a>>32)*(b>>32)+(t>>32)+(mid>>32));}
-bool lessEqual(u64vec2 a,u64vec2 b){return a.y<b.y||a.y==b.y&&a.x<=b.x;}
-int64_t portion(int64_t a,int64_t b,int64_t total){if(a==0l||b==0l)return 0l;if(b==total)return a;uint64_t q=min(uint64_t(a),uint64_t(floor(double(a)*(double(b)/double(total)))));u64vec2 target=mul128(uint64_t(a),uint64_t(b));while(!lessEqual(mul128(q,uint64_t(total)),target))q--;while(q<uint64_t(a)&&lessEqual(mul128(q+1UL,uint64_t(total)),target))q++;return int64_t(q);}
-int rule(int c){return f(RULES)+24*int(words[f(RULE)+c]);}int component(int node,int m){return node*eh(1)+m;}
-int gasSpecies(int comp,int s){for(int a=int(words[gas(8)+comp]);a<int(words[gas(8)+comp+1]);a++)if(int(words[gas(9)+a])==s)return a;return -1;}
-double state(int n,int k){return value(eh(9)+18*n+2*k);}double massUnit(){return 1e-10LF;}
-double specificLiquid(int m,double t){double u=value(th(3)+2*m)+value(th(9)+2*m),lower=value(h(4)+44);int end=int(words[th(5)+m+1]);for(int a=int(words[th(5)+m]);a<end&&lower<t;a++){double upper=a==end-1?t:min(t,value(th(6)+2*a));u+=(upper-lower)*value(th(7)+2*a);lower=upper;}return u;}
-double specificGas(int m,double t){double u=value(eh(7)+2*m),anchor=293.15LF,low=min(t,anchor),high=max(t,anchor),edge=value(h(4)+44),integral=0.0;int end=int(words[eh(4)+m+1]);for(int a=int(words[eh(4)+m]);a<end&&edge<high;a++){double upper=a==end-1?high:min(high,value(eh(5)+2*a));integral+=max(0.0LF,upper-max(edge,low))*value(eh(6)+2*a);edge=upper;}return u+(t>=anchor?integral:-integral);}
-double liquidCold(int lr,int material){double u=double(lpMass(h(2),lr))*massUnit()*specificLiquid(material,value(h(4)+44));
- for(int sp=0;sp<h(11);sp++){int64_t q=lpSpecies(h(2),lr,sp);if(q>0l)u+=double(q)*value(th(4)+2*(material*th(2)+sp));}return u;}
-
-ivec3 shape(){return ivec3(lpH(h(2),64),lpH(h(2),65),lpH(h(2),66));}
-int cell(ivec3 q){ivec3 z=shape();return any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,z))?-1:(q.z*z.y+q.y)*z.x+q.x;}
-// Finite nodes use EOS ordinals. The extra group represents the prescribed ambient reservoir.
-int nodeAt(int c){if(c<0)return -1;for(int i=0;i<8;i++){int n=int(words[gas(2)+8*c+i]);if(n>0)return n-1;}return int(words[gh(24)+c])==0?h(8)-1:-1;}
-int interfaceNode(int c){int n=nodeAt(c);if(n>=0&&value(gh(17)+2*c)>0.0)return n;ivec3 z=shape(),q=ivec3(c%z.x,c/z.x%z.y,c/(z.x*z.y));for(int a=0;a<3;a++)for(int side=-1;side<=1;side+=2){ivec3 v=q;v[a]+=side;int other=cell(v);if(other<0){if(gh(5)==0)return h(8)-1;continue;}int mask=int(words[gh(6)+c]),om=int(words[gh(6)+other]);bool open=false;for(int micro=0;micro<8;micro++)if(((micro>>a)&1)==(side>0?1:0)&&((mask>>micro)&1)==0&&((om>>(micro^(1<<a)))&1)==0)open=true;if(open&&(n=nodeAt(other))>=0&&value(gh(17)+2*other)>0.0)return n;}return -1;}
-void initialize(int i){if(i<h(8))words[f(HEAD)+i]=uint(-1);if(i<h(0)){words[f(NEXT)+i]=uint(-1);words[f(RULE)+i]=uint(-1);words[f(NODE)+i]=uint(-1);putq(f(BATCHES)+2*i,0l);put(f(GAS_TRANSFER)+2*i,0.0);put(f(SOURCE_ENERGY)+2*i,0.0);put(f(SINK_ENERGY)+2*i,0.0);put(f(PE_WORK)+2*i,0.0);int64_t mass=0l;for(int m=0;m<h(10);m++)mass=addq(mass,lpMass(h(2),row(i,m)));putq(f(OLD_MASS)+2*i,mass);putq(f(NEW_MASS)+2*i,mass);}
- if(i<eh(0)){double u=i<int(words[gas(0)])?value(gas(12)+2*i):0.0LF;put(f(OLD_GAS_U)+2*i,u);put(f(NEW_GAS_U)+2*i,u);}if(i<h(0)*h(1)){put(f(PENDING_TIME)+2*i,0.0);put(f(PENDING_RESIDUAL)+2*i,0.0);}if(i==0)for(int j=0;j<8;j++)words[f(CONTROL)+j]=0u;}
-void importPending(int i){if(i>=int(words[h(12)]))return;int c=int(words[h(20)+i]),stored=int(words[h(23)+i]),k=-1;for(int j=0;j<h(1);j++)if(int(words[f(RULES)+24*j+3])==stored)k=j;if(c<0||c>=h(0)||k<0)return;int r=f(RULES)+24*k,m=int(words[r]);if(int(words[h(21)+i])!=m)return;int lr=row(c,m);if(int(words[h(22)+i])!=int(words[lpF(h(2),LP_SUPPORT)+lr]))return;int at=c*h(1)+k;put(f(PENDING_TIME)+2*at,value(h(24)+2*i));put(f(PENDING_RESIDUAL)+2*at,value(h(25)+2*i));}
-void propose(int c){int node=interfaceNode(c);if(node<0)return;bool ambient=node==h(8)-1;double tg=ambient?293.15LF:state(node,0),vg=ambient?1.0LF:value(eh(3)+2*node),best=0.0;int selected=-1;double wanted=0.0;
- for(int k=0;k<h(1);k++){int r=f(RULES)+24*k,m=int(words[r]),sp=int(words[r+2]),lr=row(c,m),at=c*h(1)+k;int64_t mass=lpMass(h(2),lr);if(mass<=0l||words[lpF(h(2),LP_MIXTURE)+lr]==0u)continue;double t=value(th(13)+2*c),seconds=value(f(PENDING_TIME)+2*at)+value(p.header+28);
-  if(t<value(r+16)||t>value(r+18)){put(f(PENDING_TIME)+2*at,0.0);continue;}put(f(PENDING_TIME)+2*at,seconds);
-  double v=lpVolume(h(2),lr)*value(p.header+16)*value(p.header+16)*value(p.header+16);if(!(v>0.0&&tg>0.0&&vg>0.0))continue;
-  double henry=value(r+8)*exp(float(value(r+10)*(1.0LF/t-1.0LF/value(r+6))));double film=1.0LF/(1.0LF/value(r+12)+henry*8.31446261815324LF*t/value(r+14));
-  double partial=ambient?value(r+20):double(quantity(gas(5)+2*component(node,int(words[r+1]))))*1e-9LF*(101325.0LF/293.15LF)*tg/vg;
-  double total=0.0;for(int material=0;material<h(10);material++)total+=lpVolume(h(2),row(c,material));
-  double area=value(p.header+16)*value(p.header+16)*min(1.0LF,lpVolume(h(2),lr)/max(total,1e-300LF));double conductance=film*area,response=1.0LF/v+(ambient?0.0LF:henry*8.31446261815324LF*tg/vg);
-  double transfer=seconds*conductance*(henry*partial-double(lpSpecies(h(2),lr,sp))*1e-6LF/v)/(1.0LF+seconds*conductance*response)+value(f(PENDING_RESIDUAL)+2*at);
-  if(!finite(transfer)){invalid();return;}if(abs(transfer)>best){best=abs(transfer);selected=k;wanted=transfer;}
- }
- if(selected<0)return;int r=f(RULES)+24*selected,m=int(words[r]),lr=row(c,m);words[f(RULE)+c]=uint(selected);words[f(NODE)+c]=uint(node);put(f(KG)+2*c,wanted);put(f(TEMP)+2*c,value(th(13)+2*c));put(f(GAS_TEMP)+2*c,tg);words[f(NEXT)+c]=atomicExchange(words[f(HEAD)+node],uint(c));if(abs(wanted)>=.5e-6LF)atomicAdd(words[f(CONTROL)],1u);
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Arena {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(binding = 2, std430) buffer AtomicArena {
+    int64_t longs[];
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+    int maximum;
 }
-int64_t coldLimit(int64_t wanted,double margin,double cost){if(cost>0.0)wanted=min(wanted,int64_t(max(0.0LF,floor(max(0.0LF,margin)/cost))));return wanted;}
-double gasCold(int node){double u=0.0;for(int m=0;m<eh(1);m++){int comp=component(node,m);u+=double(quantity(gas(6)+2*comp))*massUnit()*specificGas(m,value(h(4)+44));for(int a=int(words[gas(8)+comp]);a<int(words[gas(8)+comp+1]);a++){int sp=int(words[gas(9)+a]);int64_t q=quantity(gas(10)+2*a);if(q!=0l)u+=double(q)*value(eh(8)+2*(m*eh(2)+sp));}}return u;}
+p;
+bool activeCell(int cell);
+bool activeFace(int face);
+// PHASE_ROWS_LIBRARY
+// HOST_LAYOUT
+int h(int i) {
+    return int(words[p.header + i]);
+}
+int f(int i) {
+    return h(WORK_FIELDS + i);
+}
+int eh(int i) {
+    return int(words[h(H_GAS_HEADER) + i]);
+}
+int gh(int i) {
+    return int(words[h(H_GEOMETRY_HEADER) + i]);
+}
+int th(int i) {
+    return int(words[h(H_LIQUID_CALORIC) + i]);
+}
+int gas(int i) {
+    return eh(GAS_FIELDS+i);
+}
+int source(int i) {
+    return lpS(h(H_PHASE_ROWS_HEADER), i);
+}
+int row(int c, int m) {
+    return c * h(H_MATERIAL_COUNT) + m;
+}
+double value(int at) {
+    return lpDouble(at);
+}
+void put(int at, double x) {
+    lpDoubleAt(at, x);
+}
+int64_t quantity(int at) {
+    return lpInt(at);
+}
+void putq(int at, int64_t x) {
+    lpIntAt(at, x);
+}
+bool finite(double x) {
+    return !isnan(x) && !isinf(x);
+}
+void invalid() {
+    atomicOr(errors, 67108864u);
+}
+int64_t addq(int64_t a, int64_t b) {
+    const int64_t limit = 0x7fffffffffffffffl;
+    if (b > 0l && a > limit - b || b < 0l && a < (-limit - 1l) - b) {
+        invalid();
+        return a;
+    }
+    return a + b;
+}
+u64vec2 mul128(uint64_t a, uint64_t b) {
+    uint64_t mask = 0xffffffffUL, low = (a & mask) * (b & mask), t = (a >> 32) * (b & mask) + (low >> 32),
+             mid = (t & mask) + (a & mask) * (b >> 32);
+    return u64vec2((mid << 32) | (low & mask), (a >> 32) * (b >> 32) + (t >> 32) + (mid >> 32));
+}
+bool lessEqual(u64vec2 a, u64vec2 b) {
+    return a.y < b.y || a.y == b.y && a.x <= b.x;
+}
+int64_t portion(int64_t a, int64_t b, int64_t total) {
+    if (a == 0l || b == 0l)
+        return 0l;
+    if (b == total)
+        return a;
+    uint64_t q = min(uint64_t(a), uint64_t(floor(double(a) * (double(b) / double(total)))));
+    u64vec2 target = mul128(uint64_t(a), uint64_t(b));
+    while (!lessEqual(mul128(q, uint64_t(total)), target))
+        q--;
+    while (q < uint64_t(a) && lessEqual(mul128(q + 1UL, uint64_t(total)), target))
+        q++;
+    return int64_t(q);
+}
+int rule(int c) {
+    return f(FIELD_RULES) + 24 * int(words[f(FIELD_RULE) + c]);
+}
+int component(int node, int m) {
+    return node * eh(GAS_H_COMPONENT_COUNT) + m;
+}
+int gasSpecies(int comp, int s) {
+    for (int a = int(words[gas(GAS_COMPONENT_SPECIES_OFFSETS) + comp]); a < int(words[gas(GAS_COMPONENT_SPECIES_OFFSETS) + comp + 1]); a++)
+        if (int(words[gas(GAS_SPECIES_HANDLES) + a]) == s)
+            return a;
+    return -1;
+}
+double state(int n, int k) {
+    return value(eh(GAS_H_STATES) + 18 * n + 2 * k);
+}
+double massUnit() {
+    return 1e-10LF;
+}
+double specificLiquid(int m, double t) {
+    double u = value(th(CAL_MATERIAL_REFERENCE) + 2 * m) + value(th(CAL_COLD_SENSIBLE) + 2 * m), lower = value(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE);
+    int end = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]);
+    for (int a = int(words[th(CAL_SEGMENT_OFFSETS) + m]); a < end && lower < t; a++) {
+        double upper = a == end - 1 ? t : min(t, value(th(CAL_SEGMENT_UPPER) + 2 * a));
+        u += (upper - lower) * value(th(CAL_SEGMENT_CAPACITY) + 2 * a);
+        lower = upper;
+    }
+    return u;
+}
+double specificGas(int m, double t) {
+    double u = value(eh(GAS_H_ANCHOR_ENERGY) + 2 * m), anchor = 293.15LF, low = min(t, anchor), high = max(t, anchor),
+           edge = value(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), integral = 0.0;
+    int end = int(words[eh(GAS_H_SEGMENT_OFFSETS) + m + 1]);
+    for (int a = int(words[eh(GAS_H_SEGMENT_OFFSETS) + m]); a < end && edge < high; a++) {
+        double upper = a == end - 1 ? high : min(high, value(eh(GAS_H_SEGMENT_UPPER) + 2 * a));
+        integral += max(0.0LF, upper - max(edge, low)) * value(eh(GAS_H_SEGMENT_CAPACITY) + 2 * a);
+        edge = upper;
+    }
+    return u + (t >= anchor ? integral : -integral);
+}
+double liquidCold(int lr, int material) {
+    double u = double(lpMass(h(H_PHASE_ROWS_HEADER), lr)) * massUnit() *
+               specificLiquid(material, value(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE));
+    for (int sp = 0; sp < h(H_SPECIES_COUNT); sp++) {
+        int64_t q = lpSpecies(h(H_PHASE_ROWS_HEADER), lr, sp);
+        if (q > 0l)
+            u += double(q) * value(th(CAL_SPECIES_REFERENCE) + 2 * (material * th(CAL_SPECIES_STRIDE) + sp));
+    }
+    return u;
+}
+
+ivec3 shape() {
+    return ivec3(lpH(h(H_PHASE_ROWS_HEADER), LP_H_SIZE_X), lpH(h(H_PHASE_ROWS_HEADER), LP_H_SIZE_Y), lpH(h(H_PHASE_ROWS_HEADER), LP_H_SIZE_Z));
+}
+int cell(ivec3 q) {
+    ivec3 z = shape();
+    return any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, z)) ? -1 : (q.z * z.y + q.y) * z.x + q.x;
+}
+// Finite nodes use EOS ordinals. The extra group represents the prescribed ambient reservoir.
+int nodeAt(int c) {
+    if (c < 0)
+        return -1;
+    for (int i = 0; i < 8; i++) {
+        int n = int(words[gas(GAS_PIECE_NODE_ORDINAL) + 8 * c + i]);
+        if (n > 0)
+            return n - 1;
+    }
+    return int(words[gh(GEO_H_CELL_NODES) + c]) == 0 ? h(H_GROUP_COUNT) - 1 : -1;
+}
+int interfaceNode(int c) {
+    int n = nodeAt(c);
+    if (n >= 0 && value(gh(GEO_H_DRY_VOLUMES) + 2 * c) > 0.0)
+        return n;
+    ivec3 z = shape(), q = ivec3(c % z.x, c / z.x % z.y, c / (z.x * z.y));
+    for (int a = 0; a < 3; a++)
+        for (int side = -1; side <= 1; side += 2) {
+            ivec3 v = q;
+            v[a] += side;
+            int other = cell(v);
+            if (other < 0) {
+                if (gh(GEO_H_SEALED_EXTERIOR) == 0)
+                    return h(H_GROUP_COUNT) - 1;
+                continue;
+            }
+            int mask = int(words[gh(GEO_H_MASKS) + c]), om = int(words[gh(GEO_H_MASKS) + other]);
+            bool open = false;
+            for (int micro = 0; micro < 8; micro++)
+                if (((micro >> a) & 1) == (side > 0 ? 1 : 0) && ((mask >> micro) & 1) == 0 &&
+                    ((om >> (micro ^ (1 << a))) & 1) == 0)
+                    open = true;
+            if (open && (n = nodeAt(other)) >= 0 && value(gh(GEO_H_DRY_VOLUMES) + 2 * other) > 0.0)
+                return n;
+        }
+    return -1;
+}
+void initialize(int i) {
+    if (i < h(H_GROUP_COUNT))
+        words[f(FIELD_HEAD) + i] = uint(-1);
+    if (i < h(H_CELL_COUNT)) {
+        words[f(FIELD_NEXT) + i] = uint(-1);
+        words[f(FIELD_RULE) + i] = uint(-1);
+        words[f(FIELD_NODE) + i] = uint(-1);
+        putq(f(FIELD_BATCHES) + 2 * i, 0l);
+        put(f(FIELD_GAS_TRANSFER) + 2 * i, 0.0);
+        put(f(FIELD_SOURCE_ENERGY) + 2 * i, 0.0);
+        put(f(FIELD_SINK_ENERGY) + 2 * i, 0.0);
+        put(f(FIELD_PE_WORK) + 2 * i, 0.0);
+        int64_t mass = 0l;
+        for (int m = 0; m < h(H_MATERIAL_COUNT); m++)
+            mass = addq(mass, lpMass(h(H_PHASE_ROWS_HEADER), row(i, m)));
+        putq(f(FIELD_OLD_MASS) + 2 * i, mass);
+        putq(f(FIELD_NEW_MASS) + 2 * i, mass);
+    }
+    if (i < eh(GAS_H_NODE_CAPACITY)) {
+        double u = i < int(words[gas(GAS_COUNTS)]) ? value(gas(GAS_INTERNAL_ENERGY) + 2 * i) : 0.0LF;
+        put(f(FIELD_OLD_GAS_U) + 2 * i, u);
+        put(f(FIELD_NEW_GAS_U) + 2 * i, u);
+    }
+    if (i < h(H_CELL_COUNT) * h(H_RULE_COUNT)) {
+        put(f(FIELD_PENDING_TIME) + 2 * i, 0.0);
+        put(f(FIELD_PENDING_RESIDUAL) + 2 * i, 0.0);
+    }
+    if (i == 0)
+        for (int j = 0; j < 8; j++)
+            words[f(FIELD_CONTROL) + j] = 0u;
+}
+void importPending(int i) {
+    if (i >= int(words[h(H_PENDING_COUNT)]))
+        return;
+    int c = int(words[h(H_PENDING_CELL) + i]), stored = int(words[h(H_PENDING_RULE) + i]), k = -1;
+    for (int j = 0; j < h(H_RULE_COUNT); j++)
+        if (int(words[f(FIELD_RULES) + 24 * j + 3]) == stored)
+            k = j;
+    if (c < 0 || c >= h(H_CELL_COUNT) || k < 0)
+        return;
+    int r = f(FIELD_RULES) + 24 * k, m = int(words[r]);
+    if (int(words[h(H_PENDING_MATERIAL) + i]) != m)
+        return;
+    int lr = row(c, m);
+    if (int(words[h(H_PENDING_SUPPORT) + i]) != int(words[lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_SUPPORT) + lr]))
+        return;
+    int at = c * h(H_RULE_COUNT) + k;
+    put(f(FIELD_PENDING_TIME) + 2 * at, value(h(H_PENDING_SECONDS) + 2 * i));
+    put(f(FIELD_PENDING_RESIDUAL) + 2 * at, value(h(H_RESIDUAL_MOLES) + 2 * i));
+}
+void propose(int c) {
+    if (!activeCell(c))
+        return;
+    int node = interfaceNode(c);
+    if (node < 0)
+        return;
+    bool ambient = node == h(H_GROUP_COUNT) - 1;
+    double tg = ambient ? 293.15LF : state(node, 0), vg = ambient ? 1.0LF : value(eh(GAS_H_NODE_VOLUMES) + 2 * node), best = 0.0;
+    int selected = -1;
+    double wanted = 0.0;
+    for (int k = 0; k < h(H_RULE_COUNT); k++) {
+        int r = f(FIELD_RULES) + 24 * k, m = int(words[r]), sp = int(words[r + 2]), lr = row(c, m),
+            at = c * h(H_RULE_COUNT) + k;
+        int64_t mass = lpMass(h(H_PHASE_ROWS_HEADER), lr);
+        if (mass <= 0l || words[lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_MIXTURE) + lr] == 0u)
+            continue;
+        double t = value(th(CAL_CELL_TEMPERATURES) + 2 * c),
+               seconds = value(f(FIELD_PENDING_TIME) + 2 * at) + value(p.header + H_DURATION);
+        if (t < value(r + 16) || t > value(r + 18)) {
+            put(f(FIELD_PENDING_TIME) + 2 * at, 0.0);
+            continue;
+        }
+        put(f(FIELD_PENDING_TIME) + 2 * at, seconds);
+        double v = lpVolume(h(H_PHASE_ROWS_HEADER), lr) * value(p.header + H_CELL_SIZE) *
+                   value(p.header + H_CELL_SIZE) * value(p.header + H_CELL_SIZE);
+        if (!(v > 0.0 && tg > 0.0 && vg > 0.0))
+            continue;
+        double henry = value(r + 8) * exp(float(value(r + 10) * (1.0LF / t - 1.0LF / value(r + 6))));
+        double film = 1.0LF / (1.0LF / value(r + 12) + henry * 8.31446261815324LF * t / value(r + 14));
+        double partial = ambient ? value(r + 20)
+                                 : double(quantity(gas(GAS_STANDARD_VOLUME_NANOS) + 2 * component(node, int(words[r + 1])))) * 1e-9LF *
+                                       (101325.0LF / 293.15LF) * tg / vg;
+        double total = 0.0;
+        for (int material = 0; material < h(H_MATERIAL_COUNT); material++)
+            total += lpVolume(h(H_PHASE_ROWS_HEADER), row(c, material));
+        double area = value(p.header + H_CELL_SIZE) * value(p.header + H_CELL_SIZE) *
+                      min(1.0LF, lpVolume(h(H_PHASE_ROWS_HEADER), lr) / max(total, 1e-300LF));
+        double conductance = film * area,
+               response = 1.0LF / v + (ambient ? 0.0LF : henry * 8.31446261815324LF * tg / vg);
+        double transfer = seconds * conductance *
+                              (henry * partial - double(lpSpecies(h(H_PHASE_ROWS_HEADER), lr, sp)) * 1e-6LF / v) /
+                              (1.0LF + seconds * conductance * response) +
+                          value(f(FIELD_PENDING_RESIDUAL) + 2 * at);
+        if (!finite(transfer)) {
+            invalid();
+            return;
+        }
+        if (abs(transfer) > best) {
+            best = abs(transfer);
+            selected = k;
+            wanted = transfer;
+        }
+    }
+    if (selected < 0)
+        return;
+    int r = f(FIELD_RULES) + 24 * selected, m = int(words[r]), lr = row(c, m);
+    words[f(FIELD_RULE) + c] = uint(selected);
+    words[f(FIELD_NODE) + c] = uint(node);
+    put(f(FIELD_KG) + 2 * c, wanted);
+    put(f(FIELD_TEMP) + 2 * c, value(th(CAL_CELL_TEMPERATURES) + 2 * c));
+    put(f(FIELD_GAS_TEMP) + 2 * c, tg);
+    words[f(FIELD_NEXT) + c] = atomicExchange(words[f(FIELD_HEAD) + node], uint(c));
+    if (abs(wanted) >= .5e-6LF)
+        atomicAdd(words[f(FIELD_CONTROL)], 1u);
+}
+int64_t coldLimit(int64_t wanted, double margin, double cost) {
+    if (cost > 0.0)
+        wanted = min(wanted, int64_t(max(0.0LF, floor(max(0.0LF, margin) / cost))));
+    return wanted;
+}
+double gasCold(int node) {
+    double u = 0.0;
+    for (int m = 0; m < eh(GAS_H_COMPONENT_COUNT); m++) {
+        int comp = component(node, m);
+        u += double(quantity(gas(GAS_MASS_UNITS) + 2 * comp)) * massUnit() * specificGas(m, value(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE));
+        for (int a = int(words[gas(GAS_COMPONENT_SPECIES_OFFSETS) + comp]); a < int(words[gas(GAS_COMPONENT_SPECIES_OFFSETS) + comp + 1]); a++) {
+            int sp = int(words[gas(GAS_SPECIES_HANDLES) + a]);
+            int64_t q = quantity(gas(GAS_SPECIES_AMOUNTS) + 2 * a);
+            if (q != 0l)
+                u += double(q) * value(eh(GAS_H_SPECIES_REFERENCE) + 2 * (m * eh(GAS_H_SPECIES_STRIDE) + sp));
+        }
+    }
+    return u;
+}
 // A single chamber worker grants all its proposals against the live integer donor stock.
 // Different chambers never edit the same cell: each cell selected one contact/rule above.
-void exchange(int node){bool ambient=node==h(8)-1;if(!ambient&&node>=int(words[gas(0)]))return;double energy=ambient?0.0LF:value(gas(12)+2*node);
- for(int c=int(words[f(HEAD)+node]);c>=0;c=int(words[f(NEXT)+c])){int r=rule(c),m=int(words[r]),gm=int(words[r+1]),sp=int(words[r+2]),lr=row(c,m),at=c*h(1)+int(words[f(RULE)+c]);double demand=value(f(KG)+2*c);bool dissolve=demand>0.0;int64_t unit=quantity(r+4),q=int64_t(min(9e15LF,floor(abs(demand)*1e6LF)));if(unit<=0l){invalid();return;}
-  int comp=ambient?-1:component(node,gm),gs=ambient?-1:gasSpecies(comp,sp);if(!ambient&&gs<0){invalid();return;}
-  int64_t oldMass=lpMass(h(2),lr);if(dissolve){if(!ambient){bool complete=quantity(gas(7)+2*comp)==0l;for(int a=int(words[gas(8)+comp]);a<int(words[gas(8)+comp+1]);a++)if(a!=gs&&quantity(gas(10)+2*a)!=0l)complete=false;q=min(q,min(quantity(gas(10)+2*gs),max(0l,quantity(gas(6)+2*comp)-(complete?0l:1l))/unit));}q=min(q,(0x7fffffffffffffffl-oldMass)/unit);}else{q=min(q,min(lpSpecies(h(2),lr,sp),(oldMass-1l)/unit));if(!ambient)q=min(q,(0x7fffffffffffffffl-quantity(gas(6)+2*comp))/unit);}
-  double t=dissolve?value(f(GAS_TEMP)+2*c):value(f(TEMP)+2*c),reference=value(eh(8)+2*(gm*eh(2)+sp)),carried=double(unit)*massUnit()*specificGas(gm,t)+reference;
-  double lcold=double(unit)*massUnit()*specificLiquid(m,value(h(4)+44))+value(th(4)+2*(m*th(2)+sp));
-  if(!finite(carried)||!finite(lcold)){invalid();return;}
-  q=coldLimit(q,lpEnergy(h(2),lr)-liquidCold(lr,m),dissolve?lcold-carried:carried-lcold);
-  if(dissolve&&!ambient)q=coldLimit(q,energy-gasCold(node),carried-double(unit)*massUnit()*specificGas(gm,value(h(4)+44))-reference);
-  int64_t mass=q*unit,nanos=q>0l?max(1l,int64_t(floor(double(q)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF)+.5LF))):0l;
-  if(dissolve&&!ambient&&q>0l){bool empty=mass==quantity(gas(6)+2*comp);if(empty)nanos=quantity(gas(5)+2*comp);else{nanos=min(nanos,max(0l,quantity(gas(5)+2*comp)-1l));if(nanos==0l){q=0l;mass=0l;}}}
-  // Only fractional molecular work survives a donor/thermal limit; blocked whole quanta are recomputed next step.
-  put(f(PENDING_RESIDUAL)+2*at,demand-(dissolve?1.0LF:-1.0LF)*floor(abs(demand)*1e6LF)*1e-6LF);put(f(PENDING_TIME)+2*at,0.0);if(q==0l)continue;
-  double moved=double(q)*carried;lpSpeciesAt(h(2),lr,sp,addq(lpSpecies(h(2),lr,sp),dissolve?q:-q));putq(lpF(h(2),LP_MASS)+2*lr,addq(oldMass,dissolve?mass:-mass));put(lpF(h(2),LP_U)+2*lr,lpEnergy(h(2),lr)+(dissolve?moved:-moved));
-  putq(f(NEW_MASS)+2*c,addq(quantity(f(OLD_MASS)+2*c),dissolve?mass:-mass));putq(f(BATCHES)+2*c,dissolve?q:-q);
-  if(ambient){int audit=(dissolve?f(AMBIENT_SOURCE_SPECIES):f(AMBIENT_SINK_SPECIES))+2*(m*h(11)+sp);atomicAdd(longs[audit/2],q);atomicAdd(longs[((dissolve?f(SOURCE_MASS):f(SINK_MASS))+2*m)/2],mass);put((dissolve?f(SOURCE_ENERGY):f(SINK_ENERGY))+2*c,moved);}
-  else{putq(gas(10)+2*gs,addq(quantity(gas(10)+2*gs),dissolve?-q:q));putq(gas(6)+2*comp,addq(quantity(gas(6)+2*comp),dissolve?-mass:mass));putq(gas(5)+2*comp,addq(quantity(gas(5)+2*comp),dissolve?-nanos:nanos));energy+=dissolve?-moved:moved;
-   int audit=component(int(words[gas(0)])+(dissolve?3:2),gm),entry=gasSpecies(audit,sp);atomicAdd(longs[(gas(10)+2*entry)/2],q);atomicAdd(longs[(gas(6)+2*audit)/2],mass);atomicAdd(longs[(gas(5)+2*audit)/2],nanos);
-  }
-  put(f(PE_WORK)+2*c,(dissolve?-1.0LF:1.0LF)*double(mass)*massUnit()*value(p.header+18)*(double(c/shape().x%shape().y)+.5LF)*value(p.header+16));words[h(6)+c]=1u;atomicOr(words[h(7)],1u);atomicAdd(words[f(CONTROL)+1],1u);atomicAdd(words[f(CONTROL)+(dissolve?2:3)],uint(min(q,2147483647l)));
- }if(!ambient)put(gas(12)+2*node,energy);
+void exchange(int node) {
+    bool ambient = node == h(H_GROUP_COUNT) - 1;
+    if (!ambient && node >= int(words[gas(GAS_COUNTS)]))
+        return;
+    double energy = ambient ? 0.0LF : value(gas(GAS_INTERNAL_ENERGY) + 2 * node);
+    for (int c = int(words[f(FIELD_HEAD) + node]); c >= 0; c = int(words[f(FIELD_NEXT) + c])) {
+        int r = rule(c), m = int(words[r]), gm = int(words[r + 1]), sp = int(words[r + 2]), lr = row(c, m),
+            at = c * h(H_RULE_COUNT) + int(words[f(FIELD_RULE) + c]);
+        double demand = value(f(FIELD_KG) + 2 * c);
+        bool dissolve = demand > 0.0;
+        int64_t unit = quantity(r + 4), q = int64_t(min(9e15LF, floor(abs(demand) * 1e6LF)));
+        if (unit <= 0l) {
+            invalid();
+            return;
+        }
+        int comp = ambient ? -1 : component(node, gm), gs = ambient ? -1 : gasSpecies(comp, sp);
+        if (!ambient && gs < 0) {
+            invalid();
+            return;
+        }
+        int64_t oldMass = lpMass(h(H_PHASE_ROWS_HEADER), lr);
+        if (dissolve) {
+            if (!ambient) {
+                bool complete = quantity(gas(GAS_MASS_RESIDUAL_UNITS) + 2 * comp) == 0l;
+                for (int a = int(words[gas(GAS_COMPONENT_SPECIES_OFFSETS) + comp]); a < int(words[gas(GAS_COMPONENT_SPECIES_OFFSETS) + comp + 1]); a++)
+                    if (a != gs && quantity(gas(GAS_SPECIES_AMOUNTS) + 2 * a) != 0l)
+                        complete = false;
+                q = min(q, min(quantity(gas(GAS_SPECIES_AMOUNTS) + 2 * gs),
+                               max(0l, quantity(gas(GAS_MASS_UNITS) + 2 * comp) - (complete ? 0l : 1l)) / unit));
+            }
+            q = min(q, (0x7fffffffffffffffl - oldMass) / unit);
+        } else {
+            q = min(q, min(lpSpecies(h(H_PHASE_ROWS_HEADER), lr, sp), (oldMass - 1l) / unit));
+            if (!ambient)
+                q = min(q, (0x7fffffffffffffffl - quantity(gas(GAS_MASS_UNITS) + 2 * comp)) / unit);
+        }
+        double t = dissolve ? value(f(FIELD_GAS_TEMP) + 2 * c) : value(f(FIELD_TEMP) + 2 * c),
+               reference = value(eh(GAS_H_SPECIES_REFERENCE) + 2 * (gm * eh(GAS_H_SPECIES_STRIDE) + sp)),
+               carried = double(unit) * massUnit() * specificGas(gm, t) + reference;
+        double lcold = double(unit) * massUnit() * specificLiquid(m, value(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE)) +
+                       value(th(CAL_SPECIES_REFERENCE) + 2 * (m * th(CAL_SPECIES_STRIDE) + sp));
+        if (!finite(carried) || !finite(lcold)) {
+            invalid();
+            return;
+        }
+        q = coldLimit(q, lpEnergy(h(H_PHASE_ROWS_HEADER), lr) - liquidCold(lr, m),
+                      dissolve ? lcold - carried : carried - lcold);
+        if (dissolve && !ambient)
+            q = coldLimit(
+                q, energy - gasCold(node),
+                carried - double(unit) * massUnit() * specificGas(gm, value(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE)) - reference);
+        int64_t mass = q * unit,
+                nanos = q > 0l
+                            ? max(1l, int64_t(floor(
+                                          double(q) * (8.31446261815324LF * 293.15LF / 101325.0LF * 1000.0LF) + .5LF)))
+                            : 0l;
+        if (dissolve && !ambient && q > 0l) {
+            bool empty = mass == quantity(gas(GAS_MASS_UNITS) + 2 * comp);
+            if (empty)
+                nanos = quantity(gas(GAS_STANDARD_VOLUME_NANOS) + 2 * comp);
+            else {
+                nanos = min(nanos, max(0l, quantity(gas(GAS_STANDARD_VOLUME_NANOS) + 2 * comp) - 1l));
+                if (nanos == 0l) {
+                    q = 0l;
+                    mass = 0l;
+                }
+            }
+        }
+        // Only fractional molecular work survives a donor/thermal limit; blocked whole quanta are recomputed next step.
+        put(f(FIELD_PENDING_RESIDUAL) + 2 * at,
+            demand - (dissolve ? 1.0LF : -1.0LF) * floor(abs(demand) * 1e6LF) * 1e-6LF);
+        put(f(FIELD_PENDING_TIME) + 2 * at, 0.0);
+        if (q == 0l)
+            continue;
+        double moved = double(q) * carried;
+        lpSpeciesAt(h(H_PHASE_ROWS_HEADER), lr, sp, addq(lpSpecies(h(H_PHASE_ROWS_HEADER), lr, sp), dissolve ? q : -q));
+        putq(lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_MASS) + 2 * lr, addq(oldMass, dissolve ? mass : -mass));
+        put(lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_ENERGY) + 2 * lr,
+            lpEnergy(h(H_PHASE_ROWS_HEADER), lr) + (dissolve ? moved : -moved));
+        putq(f(FIELD_NEW_MASS) + 2 * c, addq(quantity(f(FIELD_OLD_MASS) + 2 * c), dissolve ? mass : -mass));
+        putq(f(FIELD_BATCHES) + 2 * c, dissolve ? q : -q);
+        if (ambient) {
+            int audit = (dissolve ? f(FIELD_AMBIENT_SOURCE_SPECIES) : f(FIELD_AMBIENT_SINK_SPECIES)) +
+                        2 * (m * h(H_SPECIES_COUNT) + sp);
+            atomicAdd(longs[audit / 2], q);
+            atomicAdd(longs[((dissolve ? f(FIELD_SOURCE_MASS) : f(FIELD_SINK_MASS)) + 2 * m) / 2], mass);
+            put((dissolve ? f(FIELD_SOURCE_ENERGY) : f(FIELD_SINK_ENERGY)) + 2 * c, moved);
+        } else {
+            putq(gas(GAS_SPECIES_AMOUNTS) + 2 * gs, addq(quantity(gas(GAS_SPECIES_AMOUNTS) + 2 * gs), dissolve ? -q : q));
+            putq(gas(GAS_MASS_UNITS) + 2 * comp, addq(quantity(gas(GAS_MASS_UNITS) + 2 * comp), dissolve ? -mass : mass));
+            putq(gas(GAS_STANDARD_VOLUME_NANOS) + 2 * comp, addq(quantity(gas(GAS_STANDARD_VOLUME_NANOS) + 2 * comp), dissolve ? -nanos : nanos));
+            energy += dissolve ? -moved : moved;
+            int audit = component(int(words[gas(GAS_COUNTS)]) + (dissolve ? 3 : 2), gm), entry = gasSpecies(audit, sp);
+            atomicAdd(longs[(gas(GAS_SPECIES_AMOUNTS) + 2 * entry) / 2], q);
+            atomicAdd(longs[(gas(GAS_MASS_UNITS) + 2 * audit) / 2], mass);
+            atomicAdd(longs[(gas(GAS_STANDARD_VOLUME_NANOS) + 2 * audit) / 2], nanos);
+        }
+        put(f(FIELD_PE_WORK) + 2 * c, (dissolve ? -1.0LF : 1.0LF) * double(mass) * massUnit() *
+                                          value(p.header + H_GRAVITY) * (double(c / shape().x % shape().y) + .5LF) *
+                                          value(p.header + H_CELL_SIZE));
+        words[h(H_PHASE_MOTION_CELLS) + c] = 1u;
+        atomicOr(words[h(H_PHASE_PENDING_SUMMARY)], 1u);
+        atomicAdd(words[f(FIELD_CONTROL) + 1], 1u);
+        atomicAdd(words[f(FIELD_CONTROL) + (dissolve ? 2 : 3)], uint(min(q, 2147483647l)));
+    }
+    if (!ambient)
+        put(gas(GAS_INTERNAL_ENERGY) + 2 * node, energy);
 }
-int faceBase(int axis){ivec3 s=shape();return axis==0?0:(s.x+1)*s.y*s.z+(axis==2?s.x*(s.y+1)*s.z:0);}ivec3 unit(int axis){ivec3 v=ivec3(0);v[axis]=1;return v;}
-void faceCells(int id,out int axis,out int a,out int b){axis=id<faceBase(1)?0:id<faceBase(2)?1:2;int local=id-faceBase(axis);ivec3 s=shape()+unit(axis),q=ivec3(local%s.x,local/s.x%s.y,local/(s.x*s.y));a=cell(q-unit(axis));b=cell(q);}
-int cellFace(int c,int axis,int side){ivec3 s=shape(),q=ivec3(c%s.x,c/s.x%s.y,c/(s.x*s.y));q[axis]+=side;s[axis]++;return faceBase(axis)+(q.z*s.y+q.y)*s.x+q.x;}
-double cmass(int c,int field){return c<0?0.0LF:double(quantity(f(field)+2*c))*massUnit();}
-void momentum(int id){int axis,a,b;faceCells(id,axis,a,b);double old=.5LF*(cmass(a,OLD_MASS)+cmass(b,OLD_MASS)),now=.5LF*(cmass(a,NEW_MASS)+cmass(b,NEW_MASS)),before=value(source(16+axis)+2*(id-faceBase(axis))),v=old>0.0?before/old:0.0LF;
- if(old==now){put(f(FACE_P)+2*id,before);put(f(OLD_K)+2*id,.5LF*old*v*v);put(f(NEW_K)+2*id,.5LF*old*v*v);put(f(FACE_HEAT)+4*id,0.0);put(f(FACE_HEAT)+4*id+2,0.0);return;}
- double kept=.5LF*(min(cmass(a,OLD_MASS),cmass(a,NEW_MASS))+min(cmass(b,OLD_MASS),cmass(b,NEW_MASS))),after=kept*v,w=now>0.0?after/now:0.0LF;
- put(f(FACE_P)+2*id,after);put(f(OLD_K)+2*id,.5LF*old*v*v);put(f(NEW_K)+2*id,.5LF*now*w*w);
- for(int side=0;side<2;side++){int c=side==0?a:b;double oldc=.5LF*cmass(c,OLD_MASS),newc=.5LF*cmass(c,NEW_MASS),retained=min(oldc,newc),heat=.5LF*(retained*(v-w)*(v-w)+max(0.0LF,newc-oldc)*w*w+max(0.0LF,oldc-newc)*v*v);put(f(FACE_HEAT)+4*id+2*side,heat);}}
-void cellHeat(int c){double heat=value(f(PE_WORK)+2*c);for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++)heat+=value(f(FACE_HEAT)+4*cellFace(c,axis,side)+2*(side==0?1:0));
- int64_t total=quantity(f(NEW_MASS)+2*c);double assigned=0.0;if(total>0l){int last=-1;for(int m=0;m<h(10);m++){int r=row(c,m);if(lpMass(h(2),r)>0l)last=r;}for(int m=0;m<h(10);m++){int r=row(c,m);int64_t mass=lpMass(h(2),r);if(mass<=0l)continue;double q=r==last?heat-assigned:heat*double(mass)/double(total);put(lpF(h(2),LP_U)+2*r,lpEnergy(h(2),r)+q);assigned+=q;}}
- else if(heat!=0.0){int node=int(words[f(NODE)+c]);if(node<0){invalid();return;}put(f(GAS_TRANSFER)+2*c,heat);}}
+int faceBase(int axis) {
+    ivec3 s = shape();
+    return axis == 0 ? 0 : (s.x + 1) * s.y * s.z + (axis == 2 ? s.x * (s.y + 1) * s.z : 0);
+}
+ivec3 unit(int axis) {
+    ivec3 v = ivec3(0);
+    v[axis] = 1;
+    return v;
+}
+void faceCells(int id, out int axis, out int a, out int b) {
+    axis = id < faceBase(1) ? 0 : id < faceBase(2) ? 1 : 2;
+    int local = id - faceBase(axis);
+    ivec3 s = shape() + unit(axis), q = ivec3(local % s.x, local / s.x % s.y, local / (s.x * s.y));
+    a = cell(q - unit(axis));
+    b = cell(q);
+}
+int cellFace(int c, int axis, int side) {
+    ivec3 s = shape(), q = ivec3(c % s.x, c / s.x % s.y, c / (s.x * s.y));
+    q[axis] += side;
+    s[axis]++;
+    return faceBase(axis) + (q.z * s.y + q.y) * s.x + q.x;
+}
+double cmass(int c, int field) {
+    return c < 0 ? 0.0LF : double(quantity(f(field) + 2 * c)) * massUnit();
+}
+void momentum(int id) {
+    int axis, a, b;
+    faceCells(id, axis, a, b);
+    if (!activeFace(id)) {
+        put(f(FIELD_FACE_P) + 2 * id, value(source(16 + axis) + 2 * (id - faceBase(axis))));
+        put(f(FIELD_OLD_K) + 2 * id, 0.0LF);
+        put(f(FIELD_NEW_K) + 2 * id, 0.0LF);
+        put(f(FIELD_FACE_HEAT) + 4 * id, 0.0LF);
+        put(f(FIELD_FACE_HEAT) + 4 * id + 2, 0.0LF);
+        return;
+    }
+    double old = .5LF * (cmass(a, FIELD_OLD_MASS) + cmass(b, FIELD_OLD_MASS)),
+           now = .5LF * (cmass(a, FIELD_NEW_MASS) + cmass(b, FIELD_NEW_MASS)),
+           before = value(source(16 + axis) + 2 * (id - faceBase(axis))), v = old > 0.0 ? before / old : 0.0LF;
+    if (old == now) {
+        put(f(FIELD_FACE_P) + 2 * id, before);
+        put(f(FIELD_OLD_K) + 2 * id, .5LF * old * v * v);
+        put(f(FIELD_NEW_K) + 2 * id, .5LF * old * v * v);
+        put(f(FIELD_FACE_HEAT) + 4 * id, 0.0);
+        put(f(FIELD_FACE_HEAT) + 4 * id + 2, 0.0);
+        return;
+    }
+    double kept = .5LF * (min(cmass(a, FIELD_OLD_MASS), cmass(a, FIELD_NEW_MASS)) +
+                          min(cmass(b, FIELD_OLD_MASS), cmass(b, FIELD_NEW_MASS))),
+           after = kept * v, w = now > 0.0 ? after / now : 0.0LF;
+    put(f(FIELD_FACE_P) + 2 * id, after);
+    put(f(FIELD_OLD_K) + 2 * id, .5LF * old * v * v);
+    put(f(FIELD_NEW_K) + 2 * id, .5LF * now * w * w);
+    for (int side = 0; side < 2; side++) {
+        int c = side == 0 ? a : b;
+        double oldc = .5LF * cmass(c, FIELD_OLD_MASS), newc = .5LF * cmass(c, FIELD_NEW_MASS),
+               retained = min(oldc, newc),
+               heat = .5LF * (retained * (v - w) * (v - w) + max(0.0LF, newc - oldc) * w * w +
+                              max(0.0LF, oldc - newc) * v * v);
+        put(f(FIELD_FACE_HEAT) + 4 * id + 2 * side, heat);
+    }
+}
+void cellHeat(int c) {
+    if (!activeCell(c))
+        return;
+    double heat = value(f(FIELD_PE_WORK) + 2 * c);
+    for (int axis = 0; axis < 3; axis++)
+        for (int side = 0; side < 2; side++)
+            heat += value(f(FIELD_FACE_HEAT) + 4 * cellFace(c, axis, side) + 2 * (side == 0 ? 1 : 0));
+    int64_t total = quantity(f(FIELD_NEW_MASS) + 2 * c);
+    double assigned = 0.0;
+    if (total > 0l) {
+        int last = -1;
+        for (int m = 0; m < h(H_MATERIAL_COUNT); m++) {
+            int r = row(c, m);
+            if (lpMass(h(H_PHASE_ROWS_HEADER), r) > 0l)
+                last = r;
+        }
+        for (int m = 0; m < h(H_MATERIAL_COUNT); m++) {
+            int r = row(c, m);
+            int64_t mass = lpMass(h(H_PHASE_ROWS_HEADER), r);
+            if (mass <= 0l)
+                continue;
+            double q = r == last ? heat - assigned : heat * double(mass) / double(total);
+            put(lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_ENERGY) + 2 * r, lpEnergy(h(H_PHASE_ROWS_HEADER), r) + q);
+            assigned += q;
+        }
+    } else if (heat != 0.0) {
+        int node = int(words[f(FIELD_NODE) + c]);
+        if (node < 0) {
+            invalid();
+            return;
+        }
+        put(f(FIELD_GAS_TRANSFER) + 2 * c, heat);
+    }
+}
 
-void finishGas(int node){if(node>=int(words[gas(0)]))return;double u=value(gas(12)+2*node);int receiver=-1;for(int c=int(words[f(HEAD)+node]);c>=0;c=int(words[f(NEXT)+c])){u+=value(f(GAS_TRANSFER)+2*c);if(quantity(f(BATCHES)+2*c)>0l)receiver=row(c,int(words[rule(c)]));}int64_t total=0l;for(int m=0;m<eh(1);m++)total=addq(total,quantity(gas(6)+2*component(node,m)));if(total==0l&&u!=0.0){if(receiver<0){invalid();return;}put(lpF(h(2),LP_U)+2*receiver,lpEnergy(h(2),receiver)+u);u=0.0;}put(gas(12)+2*node,u);put(f(NEW_GAS_U)+2*node,u);}
-void publish(int i){if(i<h(9)){int axis=i<faceBase(1)?0:i<faceBase(2)?1:2;put(source(16+axis)+2*(i-faceBase(axis)),value(f(FACE_P)+2*i));}
- if(i<h(0)*h(1)){double t=value(f(PENDING_TIME)+2*i),q=value(f(PENDING_RESIDUAL)+2*i);if(t==0.0&&q==0.0)return;int c=i/h(1),k=i%h(1),m=int(words[f(RULES)+24*k]),lr=row(c,m);if(lpMass(h(2),lr)<=0l)return;uint at=atomicAdd(words[h(12)],1u);if(at>=uint(h(13))){invalid();return;}words[h(20)+int(at)]=uint(c);words[h(21)+int(at)]=uint(m);words[h(22)+int(at)]=words[lpF(h(2),LP_SUPPORT)+lr];words[h(23)+int(at)]=words[f(RULES)+24*k+3];put(h(24)+2*int(at),t);put(h(25)+2*int(at),q);}}
-void main(){int i=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(i>=p.count)return;if(p.stage==0){initialize(i);return;}if(errors!=0u)return;
- if(p.stage==9)importPending(i);else if(p.stage==1)propose(i);else if(p.stage==4)exchange(i);else if(p.stage==5)momentum(i);else if(p.stage==6)cellHeat(i);else if(p.stage==7)finishGas(i);else if(p.stage==8)publish(i);else if(p.stage==10&&i==0)words[h(12)]=0u;}
+void finishGas(int node) {
+    if (node >= int(words[gas(GAS_COUNTS)]))
+        return;
+    double u = value(gas(GAS_INTERNAL_ENERGY) + 2 * node);
+    int receiver = -1;
+    for (int c = int(words[f(FIELD_HEAD) + node]); c >= 0; c = int(words[f(FIELD_NEXT) + c])) {
+        u += value(f(FIELD_GAS_TRANSFER) + 2 * c);
+        if (quantity(f(FIELD_BATCHES) + 2 * c) > 0l)
+            receiver = row(c, int(words[rule(c)]));
+    }
+    int64_t total = 0l;
+    for (int m = 0; m < eh(GAS_H_COMPONENT_COUNT); m++)
+        total = addq(total, quantity(gas(GAS_MASS_UNITS) + 2 * component(node, m)));
+    if (total == 0l && u != 0.0) {
+        if (receiver < 0) {
+            invalid();
+            return;
+        }
+        put(lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_ENERGY) + 2 * receiver, lpEnergy(h(H_PHASE_ROWS_HEADER), receiver) + u);
+        u = 0.0;
+    }
+    put(gas(GAS_INTERNAL_ENERGY) + 2 * node, u);
+    put(f(FIELD_NEW_GAS_U) + 2 * node, u);
+}
+void publish(int i) {
+    if (i < h(H_FACE_COUNT)) {
+        int axis = i < faceBase(1) ? 0 : i < faceBase(2) ? 1 : 2;
+        put(source(16 + axis) + 2 * (i - faceBase(axis)), value(f(FIELD_FACE_P) + 2 * i));
+    }
+    if (i < h(H_CELL_COUNT) * h(H_RULE_COUNT)) {
+        double t = value(f(FIELD_PENDING_TIME) + 2 * i), q = value(f(FIELD_PENDING_RESIDUAL) + 2 * i);
+        if (t == 0.0 && q == 0.0)
+            return;
+        int c = i / h(H_RULE_COUNT), k = i % h(H_RULE_COUNT), m = int(words[f(FIELD_RULES) + 24 * k]), lr = row(c, m);
+        if (lpMass(h(H_PHASE_ROWS_HEADER), lr) <= 0l)
+            return;
+        uint at = atomicAdd(words[h(H_PENDING_COUNT)], 1u);
+        if (at >= uint(h(H_PROPOSAL_CAPACITY))) {
+            invalid();
+            return;
+        }
+        words[h(H_PENDING_CELL) + int(at)] = uint(c);
+        words[h(H_PENDING_MATERIAL) + int(at)] = uint(m);
+        words[h(H_PENDING_SUPPORT) + int(at)] = words[lpF(h(H_PHASE_ROWS_HEADER), LP_FIELD_SUPPORT) + lr];
+        words[h(H_PENDING_RULE) + int(at)] = words[f(FIELD_RULES) + 24 * k + 3];
+        put(h(H_PENDING_SECONDS) + 2 * int(at), t);
+        put(h(H_RESIDUAL_MOLES) + 2 * int(at), q);
+    }
+}
+bool activeCell(int cell) {
+    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
+}
+bool activeFace(int face) {
+    return h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u;
+}
+void main() {
+    int i = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if (i >= p.count)
+        return;
+    if (p.stage == 0) {
+        initialize(i);
+        return;
+    }
+    if (errors != 0u)
+        return;
+    if (p.stage == 9)
+        importPending(i);
+    else if (p.stage == 1)
+        propose(i);
+    else if (p.stage == 4)
+        exchange(i);
+    else if (p.stage == 5)
+        momentum(i);
+    else if (p.stage == 6)
+        cellHeat(i);
+    else if (p.stage == 7)
+        finishGas(i);
+    else if (p.stage == 8)
+        publish(i);
+    else if (p.stage == 10 && i == 0)
+        words[h(H_PENDING_COUNT)] = 0u;
+}

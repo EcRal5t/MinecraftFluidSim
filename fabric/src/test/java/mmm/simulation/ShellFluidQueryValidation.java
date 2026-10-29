@@ -5,7 +5,7 @@ import mmm.api.query.FluidCellObservation;
 import mmm.api.query.FluidQueryResult;
 import mmm.api.query.FluidQueryStatus;
 
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidDomainStateAssertions;
 import mmm.fluid.FluidSolverConfig;
 import mmm.simulation.controller.FluidRegionFootprint;
@@ -74,7 +74,7 @@ public final class ShellFluidQueryValidation {
 	private static void validateCapturedWaterSampling() {
 		var dimension = ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
 				Identifier.fromNamespaceAndPath("mmm", "capture"));
-		var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
+		var domain = new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
 		var region = new FluidRegion(UUID.randomUUID(), dimension, BlockPos.ZERO, domain);
 		require(FluidRegionFactory.captureWater(region, position -> 0.0F) == 0 && domain.totalVolume() == 0.0F,
 				"Empty world produced captured liquid");
@@ -99,7 +99,7 @@ public final class ShellFluidQueryValidation {
 			require(scan.succeeded(), "Controller demo scan failed: " + facing + " " + scan.failure());
 			var footprint = scan.footprint();
 			require(footprint.interiorBlocks().size() == 8, "Controller demo interior changed: " + facing);
-			var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
+			var domain = new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
 			var region = new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(), domain, footprint);
 			require(DemoWorkbench.matchesTank(region, layout, dimension.identifier().toString()),
 					"Restored demo footprint did not match its layout: " + facing);
@@ -109,7 +109,7 @@ public final class ShellFluidQueryValidation {
 			var changedFootprint = new mmm.simulation.controller.FluidRegionFootprint(footprint.controllerPosition(),
 					footprint.minimumInterior(), footprint.maximumInterior(), interior, footprint.boundaryBlocks(), footprint.requiredChunks());
 			var changed = new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(),
-					new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F)), changedFootprint);
+					new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F)), changedFootprint);
 			require(!DemoWorkbench.matchesTank(changed, layout, dimension.identifier().toString()),
 					"Demo accepted an altered interior footprint");
 			var inward = layout.portOutward().getOpposite();
@@ -131,7 +131,7 @@ public final class ShellFluidQueryValidation {
 		var otherDimension = ResourceKey.create(registry,
 				Identifier.fromNamespaceAndPath("mmm", "other_ports"));
 		var source = portRegion(new UUID(631, 641), dimension);
-		var initial = source.domain().captureAuthoritativeState();
+		var initial = source.editableHost().captureAuthoritativeState();
 		var lifecycle = source.lifecycle().state();
 		for (var outward : Direction.values()) {
 			var port = portPosition(outward);
@@ -156,7 +156,7 @@ public final class ShellFluidQueryValidation {
 		require(FluidWorldTargetResolver.resolvePortTarget(List.of(source, overlapping), dimension,
 				portPosition(Direction.WEST), Direction.WEST, Direction.EAST) == null,
 				"Ambiguous port selected one of two owners");
-		FluidDomainStateAssertions.assertSameState(initial, source.domain().captureAuthoritativeState(), "Read-only port resolution");
+		FluidDomainStateAssertions.assertSameState(initial, source.editableHost().captureAuthoritativeState(), "Read-only port resolution");
 		require(source.lifecycle().state() == lifecycle, "Port lookup changed the region lifecycle");
 		require(source.recordPublishedCheckpoint(1) && source.releaseSolverAfterCheckpoint(1), "Port metadata fixture could not unload");
 		require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension,
@@ -178,7 +178,7 @@ public final class ShellFluidQueryValidation {
 		}
 		var footprint = new FluidRegionFootprint(controller, origin,
 				new BlockPos(1, 1, 1), interior, boundary, Set.of(0L));
-		var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .025F, 120, 1e-5F, .002F));
+		var domain = new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .025F, 120, 1e-5F, .002F));
 		domain.sealDomainBoundary();
 		domain.setVolume(1, 1, 1, .5F);
 		return new FluidRegion(id, dimension, origin, domain, footprint);

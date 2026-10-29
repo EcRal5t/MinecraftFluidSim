@@ -22,9 +22,15 @@ import java.util.Objects;
 public final class MinecraftRegionCheckpointSource implements RegionCheckpointSource {
 	private final FluidRegion region;
 	private mmm.fluid.FluidDomainState state;
+	private final mmm.fluid.HostFluidState host;
 
 	public MinecraftRegionCheckpointSource(FluidRegion region) {
+		this(region, null);
+	}
+
+	MinecraftRegionCheckpointSource(FluidRegion region, mmm.fluid.HostFluidState host) {
 		this.region = Objects.requireNonNull(region, "region");
+		this.host = host;
 	}
 
 	@Override
@@ -47,7 +53,10 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 
 	@Override public RegionRuntimeIntent runtimeIntent() { return runtimeIntent(region.persistedRuntime()); }
 	@Override public mmm.fluid.FluidDomainState authoritativeState() {
-		if(state==null)try(var capture=region.captureSolverState()){state=capture.exportState();}
+		if (state == null) {
+			if (host != null) state = host.captureAuthoritativeState();
+			else try (var capture = region.captureSolverState()) { state = capture.exportState(); }
+		}
 		return state;
 	}
 	@Override public GranularStateSnapshot granularState() { return authoritativeState().granular(); }

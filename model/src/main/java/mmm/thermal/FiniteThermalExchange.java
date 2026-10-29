@@ -2,8 +2,6 @@ package mmm.thermal;
 
 import mmm.units.SignedDyadic;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /** Pure bounded exchange planner between one finite thermal body and independent fluid energy ports. */
@@ -94,77 +92,4 @@ public final class FiniteThermalExchange {
 
 	private FiniteThermalExchange() { }
 
-	public static Plan plan(
-			ThermalRegistry registry,
-			FiniteThermalBodyState body,
-			List<Contact> contacts,
-			double logicalDtSeconds,
-			int maximumSubsteps
-	) {
-		if (registry == null || body == null || contacts == null || contacts.isEmpty()
-				|| contacts.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
-			throw new IllegalArgumentException("Finite thermal exchange input is missing or over budget");
-		}
-		if (!body.thermalRegistryFingerprint().equals(registry.fingerprint())) {
-			throw new IllegalArgumentException("Finite thermal body registry fingerprint changed");
-		}
-		if (!(Double.isFinite(logicalDtSeconds) && logicalDtSeconds > 0.0)
-				|| maximumSubsteps <= 0 || maximumSubsteps > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS) {
-			throw new IllegalArgumentException("Finite thermal timestep or substep budget is invalid");
-		}
-		ArrayList<Contact> canonical = new ArrayList<>(contacts);
-		if (canonical.stream().anyMatch(java.util.Objects::isNull)) {
-			throw new IllegalArgumentException("Finite thermal contacts contain null");
-		}
-		canonical.sort(Comparator.comparingInt(Contact::ordinal));
-		for (int index = 1; index < canonical.size(); index++) if (canonical.get(index - 1).ordinal()
-				== canonical.get(index).ordinal()) {
-			throw new IllegalArgumentException("Duplicate finite thermal contact ordinal " + canonical.get(index).ordinal());
-		}
-
-		int materialHandle = registry.materialHandle(body.thermalMaterialId());
-		ThermalMaterialDefinition material = registry.material(materialHandle);
-		if (material.carrierKind() != ThermalMaterialDefinition.CarrierKind.DEVICE) {
-			throw new IllegalArgumentException("Finite thermal body material is not a device carrier");
-		}
-		var function=new ThermalStateFunction(registry);
-		var samples=new ArrayList<Carrier>();
-		samples.add(new Carrier(0,material,body.massKilograms(),function.baseEnergy(materialHandle,body.massKilograms(),java.util.Map.of()),body.internalEnergyJ(),1));
-		var graph=new ThermalCarrierContacts(canonical.stream().mapToInt(c->c.carriers().size()).sum());
-		for(var contact:canonical)for(var carrier:contact.carriers()){
-			int owner=samples.size();samples.add(carrier);
-			if(carrier.contactFraction()>0)graph.add(0,owner,contact.conductanceWPerK()*carrier.contactFraction(),Double.NaN);
-		}
-		double[] energies=samples.stream().mapToDouble(Carrier::internalEnergy).toArray();
-		var access=new ThermalCellGrid.CarrierAccess(){
-			public int carrierCount(){return samples.size();}
-			public int cell(int owner){return 0;}
-			public ThermalMaterialDefinition material(int owner){return samples.get(owner).material();}
-			public double mass(int owner){return samples.get(owner).mass();}
-			public double volume(int owner){return 1;}
-			public double baseEnergy(int owner){return samples.get(owner).baseEnergy();}
-			public double internalEnergy(int owner){return energies[owner];}
-			public void setInternalEnergy(int owner,double energy){energies[owner]=energy;}
-		};
-		var batch=ThermalCarrierTransport.prepare(access);
-		var stats=ThermalCarrierTransport.solve(batch,graph,logicalDtSeconds,maximumSubsteps);batch.commit();
-		boolean changed=energies[0]!=body.internalEnergyJ();
-		var deltas=new ArrayList<ContactDelta>();int owner=1;
-		var exactChange=SignedDyadic.of(energies[0]).subtract(SignedDyadic.of(body.internalEnergyJ()));
-		for(var contact:canonical){
-			var writes=new ArrayList<CarrierDelta>();var change=SignedDyadic.ZERO;double weighted=0,capacity=0;
-			for(var carrier:contact.carriers()){
-				double after=energies[owner++];writes.add(new CarrierDelta(carrier.owner(),carrier.internalEnergy(),after));
-				change=change.add(SignedDyadic.of(after).subtract(SignedDyadic.of(carrier.internalEnergy())));
-				var state=new ThermalContactExchange.Carrier(carrier.material(),carrier.mass(),carrier.baseEnergy(),after);
-				double c=state.heatCapacityJPerK();weighted+=state.temperatureK()*c;capacity+=c;
-			}
-			double delta=change.toDouble();changed|=delta!=0;
-			deltas.add(new ContactDelta(contact.ordinal(),delta,weighted/capacity,writes));
-			exactChange=exactChange.add(SignedDyadic.of(delta));
-		}
-		var after=new FiniteThermalBodyState(changed?Math.addExact(body.generation(),1):body.generation(),
-				body.thermalRegistryFingerprint(),body.thermalMaterialId(),body.massUnits(),energies[0]);
-		return new Plan(body,after,canonical,deltas,stats.substeps(),stats.maximumAbsoluteTransferJ(),exactChange);
-	}
 }

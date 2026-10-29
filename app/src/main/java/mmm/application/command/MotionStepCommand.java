@@ -15,8 +15,14 @@ public record MotionStepCommand(
 		boolean phaseChangeEnabled,
 		int maximumPhaseOperations,
 		boolean mechanicalAuditEnabled,
-		boolean pendingPhaseSettlementOnly
+		boolean pendingPhaseSettlementOnly,
+		boolean[] activeCells
 ) {
+	public MotionStepCommand(UUID id, long generation, List<MovingBodyFluidCoupling.Request> bodies,
+			boolean phase, int budget, boolean audit, boolean settlement) {
+		this(id, generation, bodies, phase, budget, audit, settlement, null);
+	}
+	@Override public boolean[] activeCells() { return activeCells == null ? null : activeCells.clone(); }
 	public MotionStepCommand(
 			UUID regionId, long expectedSolverGeneration,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
@@ -32,6 +38,7 @@ public record MotionStepCommand(
 
 	public MotionStepCommand {
 		Objects.requireNonNull(regionId, "regionId");
+		if (activeCells != null) activeCells = activeCells.clone();
 		if (expectedSolverGeneration < 0L) throw new IllegalArgumentException("Expected solver generation is invalid");
 		if (movingBodies == null || movingBodies.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP) {
 			throw new IllegalArgumentException("Moving-body command budget is invalid");

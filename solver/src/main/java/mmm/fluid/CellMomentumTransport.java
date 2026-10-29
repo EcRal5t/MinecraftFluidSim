@@ -13,7 +13,7 @@ final class CellMomentumTransport {
     record Prepared(MacMomentumState momentum, Map<Integer, SignedDyadic> heatByCell,
                     CellMacStage.WallImpulse wallImpulse) { }
 
-    private final FluidDomain domain;
+    private final HostFluidState domain;
     private final long[][] massFlux;
     private final BitSet[] massFaces = {new BitSet(), new BitSet(), new BitSet()};
     private final double[] heat;
@@ -22,7 +22,7 @@ final class CellMomentumTransport {
     private long[] before, after;
     private double[] fallbackVolume;
 
-    CellMomentumTransport(FluidDomain domain) {
+    CellMomentumTransport(HostFluidState domain) {
         this.domain = domain;
         massFlux = new long[][]{new long[domain.mac.velocityX.length],
                 new long[domain.mac.velocityY.length], new long[domain.mac.velocityZ.length]};

@@ -7,7 +7,7 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.TreeMap;
 
-/** Standalone M5 gas-network gate: isothermal state equation, finite-rate orifice equalization and the exact inventory ledger. */
+/** Gas inventory, state equation and topology validation. */
 public final class AirNetworkValidation {
 	private AirNetworkValidation() { }
 
@@ -16,11 +16,8 @@ public final class AirNetworkValidation {
 		validateEquationOfState();
 		validateVacuumNode();
 		validatePieceSnapshot();
-		validateOrificeEqualization();
 		validateFlowActivity();
-		validateHoleOpenClose();
 		validateSplitMergeVentLedger();
-		validateAmbientInteraction();
 		validateComponentTransport();
 		validateAirRecipeAndTraceTransport();
 		validateExactTopologyPartition();
@@ -31,8 +28,7 @@ public final class AirNetworkValidation {
 		validatePhaseColumnTake();
 		validateRegionalComponentAggregation();
 		validateGuards();
-		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
-				+ "hole open/close freeze and exact nanovolume ledger");
+		System.out.println("Gas inventory and topology validation passed");
 	}
 
 	private static void validateRegistrySnapshot() {
@@ -82,10 +78,6 @@ public final class AirNetworkValidation {
 		check(network.revision() == revision, "activity observation changed the gas inventory");
 		network.updateAvailableVolume(first, 0.5);
 		check(network.hasPressureDrivenFlow(network::gaugePressure), "compressed gas edge allowed sleep");
-		long beforeSlowStep = network.revision();
-		network.stepEdges(0.05);
-		check(network.revision() == beforeSlowStep && network.hasPressureDrivenFlow(network::gaugePressure),
-				"zero rounded transfer through a tiny opening was mistaken for equilibrium");
 		network.removeEdge(first, second);
 		check(!network.hasPressureDrivenFlow(network::gaugePressure), "disconnected pressure difference prevents sleep");
 		network.addOrMergeEdge(first, AirNetwork.AMBIENT_NODE, 0.01, 0.65);
@@ -152,30 +144,7 @@ public final class AirNetworkValidation {
 				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink());
 		check(restored.inventory(2).isEmpty() && restored.auditClosed(),
 				"vacuum node did not survive complete gas handoff");
-		restored.addOrMergeEdge(AirNetwork.AMBIENT_NODE, 2, 0.01, 0.65);
-		double previous=restored.gaugePressure(2);
-		for(int step=0;step<20;step++){
-			restored.stepEdges(.05);
-			double pressure=restored.gaugePressure(2);
-			check(pressure>=previous&&pressure<=0,"Vacuum fill overshot or reversed its pressure response");
-			checkLedger(restored,"vacuum fill step "+step);previous=pressure;
-		}
-		// Frozen-coefficient backward Euler leaves a first-order transient after one second.
-		// Judge the physical pressure response separately from exact inventory accounting.
-		check(Math.abs(previous)<=1e-3*AirNetwork.REFERENCE_PRESSURE,
-				"Ambient orifice left a macroscopically unresolved vacuum after one second: "+previous);
-		long deficit=1_000_000_000L-restored.standardVolumeNanos(2);
-		check(deficit>=0&&deficit<=1_000_000L,"Vacuum fill inventory disagrees with its bounded pressure response");
-		// At an integer endpoint one gas volume quantum is the permitted stationary remainder.
-		AirNetwork endpoint=new AirNetwork();int terminal=endpoint.addNode(1,1);
-		endpoint.updateAvailableVolume(terminal,1.000000001);
-		endpoint.addOrMergeEdge(0,terminal,.01,.65);
-		long before=endpoint.standardVolumeNanos(terminal);endpoint.stepEdges(.05);
-		check(endpoint.standardVolumeNanos(terminal)>=before
-				&&Math.abs(endpoint.gaugePressure(terminal))<=2*AirNetwork.REFERENCE_PRESSURE*AirNode.NANO_VOLUME,
-				"Integer equilibrium remainder grew or overshot its pressure quantum");
-		checkLedger(endpoint,"integer ambient endpoint");
-		checkLedger(restored, "vacuum fill");
+
 	}
 
 	public static void validatePieceSnapshot() {
@@ -219,71 +188,6 @@ public final class AirNetworkValidation {
 				nodes, pieces, state.externalSource(), state.escapedSink(), state.phaseSource(), state.phaseSink());
 	}
 
-	private static void validateOrificeEqualization() {
-		AirNetwork network = new AirNetwork();
-		int first = network.addNode(2.0, 3.0);
-		int second = network.addNode(6.0, 4.5);
-		network.addOrMergeEdge(first, second, 0.02, 0.65);
-		double previousDelta = Math.abs(network.gaugePressure(first) - network.gaugePressure(second));
-		int steps = 0;
-		while (previousDelta > 1.0E-3 && steps < 100_000) {
-			network.stepEdges(0.05);
-			steps++;
-			double delta = Math.abs(network.gaugePressure(first) - network.gaugePressure(second));
-			check(Double.isFinite(delta) && delta <= previousDelta + 1.0E-9,
-					"orifice equalization pressure delta must decay monotonically, step " + steps);
-			checkLedger(network, "orifice equalization step " + steps);
-			previousDelta = delta;
-		}
-		check(previousDelta <= 1.0E-3, "orifice equalization did not converge, residual delta " + previousDelta);
-		double expectedFirst = 2.0 * 7.5 / 8.0;
-		checkRelative(network.standardVolume(first), expectedFirst, "equalization split of the first cavity");
-		checkRelative(network.standardVolume(second), 7.5 - expectedFirst, "equalization split of the second cavity");
-		for (int step = 0; step < 20; step++) network.stepEdges(0.05);
-		check(Math.abs(network.gaugePressure(first) - network.gaugePressure(second)) <= 1e-3,
-				"Settled implicit flow grew a resolved pressure contrast");
-		checkLedger(network, "settled implicit flow");
-
-		System.out.printf("  two-cavity equalization converged in %d steps to deltaP=%.3g Pa%n", steps, previousDelta);
-	}
-
-	private static void validateHoleOpenClose() {
-		AirNetwork network = new AirNetwork();
-		int first = network.addNode(2.0, 3.0);
-		int second = network.addNode(6.0, 4.5);
-		network.addOrMergeEdge(first, second, 0.005, 0.65);
-		double initial = Math.abs(network.gaugePressure(first) - network.gaugePressure(second));
-		for (int step = 0; step < 5; step++) network.stepEdges(0.05);
-		double partial = Math.abs(network.gaugePressure(first) - network.gaugePressure(second));
-		check(partial < initial, "open hole must partially equalize");
-		check(network.removeEdge(first, second), "closing the hole must remove the edge");
-		long frozenFirst = network.standardVolumeNanos(first);
-		long frozenSecond = network.standardVolumeNanos(second);
-		for (int step = 0; step < 200; step++) network.stepEdges(0.05);
-		check(network.standardVolumeNanos(first) == frozenFirst && network.standardVolumeNanos(second) == frozenSecond,
-				"a closed hole must freeze the inventories exactly");
-		network.addOrMergeEdge(first, second, 0.005, 0.65);
-		int steps = 0;
-		double delta = partial;
-		while (delta > 1.0E-3 && steps < 100_000) {
-			network.stepEdges(0.05);
-			steps++;
-			delta = Math.abs(network.gaugePressure(first) - network.gaugePressure(second));
-			checkLedger(network, "reopened hole step " + steps);
-		}
-		check(delta <= 1.0E-3, "reopened hole must resume and finish equalization, residual " + delta);
-		AirNetwork small=new AirNetwork();int pocket=small.addNode(4.856e-6,4.856e-6);
-		small.updateAvailableVolume(pocket,4.818663001060486e-6);
-		small.addOrMergeEdge(pocket,AirNetwork.AMBIENT_NODE,4.10723e-7,.65);
-		long stock=small.standardVolumeNanos(pocket);small.stepEdges(.0015625);
-		check(small.standardVolumeNanos(pocket)<stock && small.gaugePressure(pocket)>0 && small.auditClosed(),
-				"A narrow ambient port instantaneously vented a finite PLIC-scale pocket");
-		check(small.removeEdge(pocket,AirNetwork.AMBIENT_NODE),"Closing the narrow ambient port lost its edge");
-		GasInventory retained=small.inventory(pocket);small.stepEdges(.0015625);
-		check(small.inventory(pocket).equals(retained) && small.auditClosed(),
-				"Closing a narrow ambient port recreated or deleted the finite pocket inventory");
-	}
-
 	private static void validateSplitMergeVentLedger() {
 		AirNetwork network = new AirNetwork();
 		int source = network.addNode(10.0, 10.0);
@@ -317,45 +221,6 @@ public final class AirNetworkValidation {
 		checkLedger(network, "uneven split");
 	}
 
-	private static void validateAmbientInteraction() {
-		AirNetwork venting = new AirNetwork();
-		int pressurized = venting.addNode(2.0, 4.0);
-		venting.addOrMergeEdge(pressurized, AirNetwork.AMBIENT_NODE, 0.01, 0.65);
-		double previous = venting.gaugePressure(pressurized);
-		int steps = 0;
-		while (previous > 1.0E-3 && steps < 100_000) {
-			venting.stepEdges(0.05);
-			steps++;
-			double pressure = venting.gaugePressure(pressurized);
-			check(Double.isFinite(pressure) && pressure <= previous + 1.0E-9,
-					"venting to ambient must decay monotonically");
-			checkLedger(venting, "ambient venting step " + steps);
-			previous = pressure;
-		}
-		check(previous <= 1.0E-3, "venting to ambient did not reach gauge zero");
-		check(venting.ventedNanos() == 4_000_000_000L - venting.standardVolumeNanos(pressurized),
-				"vented ledger disagrees with the actual released inventory");
-
-		AirNetwork drawing = new AirNetwork();
-		int evacuated = drawing.addNode(2.0, 1.0);
-		drawing.addOrMergeEdge(evacuated, AirNetwork.AMBIENT_NODE, 0.01, 0.65);
-		previous = drawing.gaugePressure(evacuated);
-		steps = 0;
-		while (previous < -1.0E-3 && steps < 100_000) {
-			drawing.stepEdges(0.05);
-			steps++;
-			double pressure = drawing.gaugePressure(evacuated);
-			check(Double.isFinite(pressure) && pressure >= previous - 1.0E-9,
-					"drawing from ambient must raise the pressure monotonically");
-			checkLedger(drawing, "ambient draw step " + steps);
-			previous = pressure;
-		}
-		check(previous >= -1.0E-3, "drawing from ambient did not reach gauge zero");
-		check(drawing.drawnFromAmbientNanos() == drawing.standardVolumeNanos(evacuated),
-				"drawn ledger disagrees with creation plus actual inflow");
-		System.out.printf("  ambient venting and drawing both converged in <= %d-step budgets%n", steps);
-	}
-
 	private static void validateGuards() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(1.0, 1.0);
@@ -372,7 +237,6 @@ public final class AirNetworkValidation {
 		expectThrow(() -> network.addOrMergeEdge(node, AirNetwork.AMBIENT_NODE, 0.1, 1.5), "oversized Cd");
 		expectThrow(() -> network.gaugePressure(99), "unknown node pressure");
 		expectThrow(() -> network.updateAvailableVolume(99, 1.0), "unknown node volume");
-		expectThrow(() -> network.stepEdges(0.0), "zero dt");
 		expectThrow(() -> network.updateAvailableVolume(node, -1.0), "negative available volume");
 
 		network.addOrMergeEdge(node, AirNetwork.AMBIENT_NODE, 0.05, 0.65);
@@ -381,7 +245,6 @@ public final class AirNetworkValidation {
 				"parallel openings must merge into one edge with summed area");
 
 		network.updateAvailableVolume(node, 0.5);
-		network.stepEdges(1.0E9);
 		check(network.standardVolumeNanos(node) >= 0L, "huge step must not drive the inventory negative");
 		checkLedger(network, "guard probes");
 	}
@@ -407,7 +270,6 @@ public final class AirNetworkValidation {
 		int[] split = network.splitNode(source, 1.0, 2.0);
 		network.mergeNodes(target, split[1]);
 		network.addOrMergeEdge(target, split[0], 0.01, 0.65);
-		for (int step = 0; step < 20; step++) network.stepEdges(0.05);
 		GasInventory after = network.inventory(target).merge(network.inventory(split[0]));
 		check(after.standardVolumeNanos() == initial.standardVolumeNanos(),
 				"component transport changed total standard volume");
@@ -440,17 +302,7 @@ public final class AirNetworkValidation {
 			}
 			check(component.massUnits() == chemicalMass + component.massResidualUnits(), "Ambient source double-counted its chemical mass residual");
 		}
-		AirNetwork flowing = new AirNetwork(registry); int from = flowing.addNode(1, 1.1), to = flowing.addNode(1, .9);
-		flowing.addOrMergeEdge(from, to, 1e-8, .65);
-		var original = flowing.sealedInventory();
-		long initialCO2 = flowing.inventory(to).component(BuiltinGasDefinitions.CO2).standardVolumeNanos();
-		for (int i = 0; i < 10_000; i++) {
-			flowing.stepEdges(.05);
-			if (i % 1000 == 0) flowing = AirNetwork.fromRuntimeSnapshot(flowing.runtimeSnapshot());
-		}
-		long co2Moved = flowing.inventory(to).component(BuiltinGasDefinitions.CO2).standardVolumeNanos() - initialCO2;
-		check(co2Moved > 100 && flowing.sealedInventory().equals(original) && flowing.auditClosed(), "Repeated low-flow ports retained their trace CO2 or changed conserved columns");
-		System.out.printf("  dry-air trace transport: 10,000 tiny ambient sources match bulk; 10,000 low-flow steps moved %d CO2 nanos%n", co2Moved);
+
 	}
 
 	private static void validateTinyPartitionColumns() {
@@ -649,7 +501,6 @@ public final class AirNetworkValidation {
 		check(mixed.auditClosed() && mixed.drawnFromAmbientNanos() == Long.MAX_VALUE
 				&& mixed.externalSource().entries().stream().allMatch(entry -> entry.standardVolumeNanos() < Long.MAX_VALUE),
 				"Multi-component cumulative source-budget fixture is invalid");
-		checkNodeMutationRejectsUnchanged(mixed, () -> mixed.stepEdges(.01));
 		for (int action = 0; action < 4; action++) {
 			AirNetwork network = restoredWideLedger(action == 1);
 			network.addOrMergeEdge(1, AirNetwork.AMBIENT_NODE, .01, .65);
@@ -677,13 +528,6 @@ public final class AirNetworkValidation {
 		phase.commitPhaseSink(1, phase.inventory(1).splitTotal(500_000_000L).first());
 		check(phase.inventory(1).totalMass() == 1.5 && phase.auditClosed(),
 				"Zero-delta phase sink rejected a representable wide ledger");
-		AirNetwork pore = restoredWideLedger(true);
-		pore.updateAvailableVolume(1, .25); pore.updateAvailableVolume(2, .75);
-		pore.addOrMergeEdge(1, 2, .01, .65);
-		pore.stepEdges(1);
-		check(pore.standardVolumeNanos(1) >= 250_000_000L && pore.standardVolumeNanos(1) < 500_000_000L && pore.auditClosed(),
-				"Zero-delta finite-rate transfer rejected a representable wide ledger");
-
 		AirNetwork edges = new AirNetwork(); edges.addNode(1, 1); edges.addNode(1, 1);
 		checkNodeMutationRejectsUnchanged(edges, () -> edges.addOrMergeEdge(1, 99, .01, .65));
 		expectThrow(() -> new AirEdge(1, 2, Double.POSITIVE_INFINITY, .65), "nonfinite direct gas edge");

@@ -46,7 +46,7 @@ final class GasLiquidContactGeometry {
   }
 
   /** Caller prepares physical state first; capture reads the same immutable frame throughout. */
-  static List<Contact> capture(FluidDomain domain) {
+  static List<Contact> capture(HostFluidState domain) {
     var frame = domain.gasState.frame;
     if (frame == null) return List.of();
     var areas = new TreeMap<Owner, Double>();
@@ -120,7 +120,7 @@ final class GasLiquidContactGeometry {
   }
 
   static List<Layer> layers(
-      FluidDomain domain,
+      HostFluidState domain,
       GasRuntimeGeometry frame,
       int cell,
       int support,
@@ -181,7 +181,7 @@ final class GasLiquidContactGeometry {
     }
   }
 
-  private static int neighbor(FluidDomain domain, int cell, int micro, int axis, int sign) {
+  private static int neighbor(HostFluidState domain, int cell, int micro, int axis, int sign) {
     int bit = micro >> axis & 1;
     if (bit == 0 && sign == 1 || bit == 1 && sign == -1) return 8 * cell + (micro ^ 1 << axis);
     int coordinate =

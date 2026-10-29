@@ -1,5 +1,7 @@
 package mmm.simulation;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.application.RegionApplicationService;
 import mmm.application.command.MotionStepCommand;
 import mmm.application.result.MotionStepResult;
@@ -32,15 +34,16 @@ final class MinecraftMotionExecutor {
 
 	/** Settles pending phase work with one authoritative mechanical projection. */
 	MotionStepResult settlePendingPhaseWork(FluidRegion region) {
-		if (!region.hasPendingPhaseMotionWork()) return null;
+		boolean[] active = region.activityForBodies(region.entityBodyState().bodies());
+		if (!region.hasPendingPhaseMotionWork(active)) return null;
 		long start = System.nanoTime();
-		MotionStepResult result = application.stepMotion(MotionStepCommand.pendingPhaseSettlement(
-				region.id(), region.solverGeneration()));
+		MotionStepResult result = application.stepMotion(new MotionStepCommand(
+				region.id(), region.solverGeneration(), List.of(), false, 0, false, true, active));
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous phase settlement: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);
-		if (region.hasPendingPhaseMotionWork()) {
-			throw new mmm.fluid.FluidDomain.ThermalPhaseBlockedException(
+		if (region.hasPendingPhaseMotionWork(active)) {
+			throw new mmm.fluid.FluidDomainContracts.ThermalPhaseBlockedException(
 					"Mechanical settlement retained pending phase work");
 		}
 		return result;
@@ -49,10 +52,12 @@ final class MinecraftMotionExecutor {
 	private MotionStepResult step(
 			FluidRegion region, List<MovingBodyFluidCoupling.Request> movingBodies, boolean phaseChange
 	) {
+		boolean[] active = region.activityForBodies(movingBodies);
+		if (active != null) movingBodies = MinecraftRegionInputs.retainBlockedBodies(region, movingBodies);
 		long start = System.nanoTime();
 		MotionStepResult result = application.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), movingBodies, phaseChange,
-				phaseChange ? policy.maximumPhaseOperationsPerStep() : 0, false));
+				phaseChange ? policy.maximumPhaseOperationsPerStep() : 0, false, false, active));
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous region state: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);

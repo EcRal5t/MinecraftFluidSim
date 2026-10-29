@@ -18,7 +18,6 @@ public final class LiquidInventoryAuthorityValidation {
 			"fabric/src/main/java",
 			"fabric/src/client/java",
 			"gpu-kernel/src/main/java",
-			"gpu-probe/src/main/java",
 	};
 
 	private static final List<String> FORBIDDEN_CALLS = List.of(

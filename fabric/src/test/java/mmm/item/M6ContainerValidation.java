@@ -1,9 +1,11 @@
 package mmm.item;
 
+import mmm.fluid.FluidDomainContracts;
+
 import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ExactRational;
-import mmm.fluid.FluidDomain;
+import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidDomainStateAssertions;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FluidMaterial;
@@ -301,7 +303,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testConversions() {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
 		domain.setVolume(4, 2, 4, 0.625F);
@@ -365,7 +367,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactInsert() {
-		var domain=new FluidDomain(6,4,6,CONFIG);domain.setSolid(0,0,0,true);
+		var domain=new HostFluidState(6,4,6,CONFIG);domain.setSolid(0,0,0,true);
 		var inserted=domain.tryInsertExactVolume(3,2,3,.375F,2);
 		check(inserted.transferred()&&inserted.volume()==.375
 				&&inventoryVolume(domain).equals(SignedDyadic.of(inserted.volume()))&&domain.totalMassUnits()==inserted.massUnits(),
@@ -373,11 +375,11 @@ public final class M6ContainerValidation {
 		var before=domain.captureAuthoritativeState();
 		check(!domain.tryInsertExactVolume(3,2,3,100,3).transferred(),"Insertion exceeded actual open capacity");
 		FluidDomainStateAssertions.assertSameState(before,domain.captureAuthoritativeState(),"Capacity-limited insertion");
-		var compact=new FluidDomain(6,4,6,CONFIG);
+		var compact=new HostFluidState(6,4,6,CONFIG);
 		var addition=compact.tryInsertExactVolume(3,2,3,1,2);
 		check(addition.transferred()&&inventoryVolume(compact).equals(SignedDyadic.of(1))&&compact.totalMassUnits()==addition.massUnits(),
 				"Insertion depended on the old display sampling budget");
-		var restored=FluidDomain.restoreAuthoritativeState(compact.captureAuthoritativeState());
+		var restored=HostFluidState.restoreAuthoritativeState(compact.captureAuthoritativeState());
 		check(restored.exportLiquidCellState().stocks().equals(compact.exportLiquidCellState().stocks()),"Inserted stock did not survive recovery");
 		before=compact.captureAuthoritativeState();
 		check(compact.tryInsertExactVolume(3,2,3,0,2).transferred(),"Zero-volume insertion failed");
@@ -385,7 +387,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactExtract() {
-		var domain=new FluidDomain(6,4,6,CONFIG);
+		var domain=new HostFluidState(6,4,6,CONFIG);
 		check(domain.tryInsertExactVolume(3,2,3,.375F,2).transferred(),"Extraction setup failed");
 		var source=domain.captureAuthoritativeState();var volume=inventoryVolume(domain);long mass=domain.totalMassUnits();
 		check(!domain.tryExtractExactVolume(3,2,3,.5F,2).transferred(),"Extraction exceeded available stock");
@@ -398,13 +400,13 @@ public final class M6ContainerValidation {
 		check(domain.tryExtractExactVolume(3,2,3,0,2).transferred(),"Zero-volume extraction failed");
 		FluidDomainStateAssertions.assertSameState(source,domain.captureAuthoritativeState(),"Zero-volume extraction");
 
-		var coarse=new FluidDomain(4,4,4,CONFIG);
+		var coarse=new HostFluidState(4,4,4,CONFIG);
 		check(coarse.tryInsertExactVolume(1,1,1,.125F,0).transferred(),"Small-transfer setup failed");
 		var original=coarse.captureAuthoritativeState();
 		// Display positions and float volume samples can stay unchanged while exact stock moves.
 		float request=.75F*(.125F-Math.nextDown(.125F));
 		for(boolean mixture:new boolean[]{false,true}){
-			var candidate=FluidDomain.restoreAuthoritativeState(original);
+			var candidate=HostFluidState.restoreAuthoritativeState(original);
 			var before=inventoryVolume(candidate);long beforeMass=candidate.totalMassUnits();
 			SignedDyadic removedVolume;long removedMass;
 			if(mixture){
@@ -420,7 +422,7 @@ public final class M6ContainerValidation {
 			check(removedVolume.equals(SignedDyadic.of(request))&&removedMass>0
 					&&inventoryVolume(candidate).add(removedVolume).equals(before)
 					&&Math.addExact(candidate.totalMassUnits(),removedMass)==beforeMass,"Fine transfer lost exact stock behind its display sample");
-			var restored=FluidDomain.restoreAuthoritativeState(candidate.captureAuthoritativeState());
+			var restored=HostFluidState.restoreAuthoritativeState(candidate.captureAuthoritativeState());
 			check(restored.exportLiquidCellState().stocks().equals(candidate.exportLiquidCellState().stocks()),"Fine transfer did not survive recovery");
 		}
 		float fineVolume=Math.scalb(1F,-30);
@@ -430,7 +432,7 @@ public final class M6ContainerValidation {
 		check(fine.transferred()&&fine.volume()==fineVolume&&fine.massUnits()>0
 				&&inventoryVolume(coarse).add(SignedDyadic.of(fine.volume())).equals(before)
 				&&Math.addExact(coarse.totalMassUnits(),fine.massUnits())==beforeMass,"Fine transfer next to a larger stock did not close V/M");
-		var mixture=FluidDomain.restoreAuthoritativeState(mixedScale);
+		var mixture=HostFluidState.restoreAuthoritativeState(mixedScale);
 		var fineMixture=mixture.tryExtractExactMixture(2,1,1,fineVolume,0);
 		var removedVolume=SignedDyadic.ZERO;long removedMass=0;
 		for(var portion:fineMixture.portions()){removedVolume=removedVolume.add(SignedDyadic.of(portion.volume()));removedMass=Math.addExact(removedMass,portion.massUnits());}
@@ -440,22 +442,22 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactMaterialMass() {
-		FluidDomain residual = new FluidDomain(4, 4, 4, CONFIG);
-		FluidDomain.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
+		HostFluidState residual = new HostFluidState(4, 4, 4, CONFIG);
+		FluidDomainContracts.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
 		check(seeded.transferred(), "could not seed a small inventory");
-		FluidDomain.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
+		FluidDomainContracts.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
 		check(tiny.transferred() && residual.totalVolumeExact() > 0.0
 				&& residual.totalVolumeExact() < 5.0E-7,
 				"exact extraction zeroed a positive sub-micro residual: transferred=" + tiny.transferred()
 						+ ", removed=" + tiny.volume() + ", residual=" + residual.totalVolumeExact());
 
-		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG);
+		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG);
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
 				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
 				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
 
 		double insertedMass = 123.456789012345;
-		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
+		FluidDomainContracts.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
 				2, 2, 2, 0.375F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(insertedMass), 1, 1);
 		check(inserted.transferred()
 				&& inserted.massUnits() == domain.totalMassUnits(),
@@ -468,7 +470,7 @@ public final class M6ContainerValidation {
 				"default-carrier extraction removed another material");
 		FluidDomainStateAssertions.assertSameState(materialBefore, domain.captureAuthoritativeState(),
 				"default-carrier extraction preserved non-default material");
-		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1, 1);
+		FluidDomainContracts.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1, 1);
 		check(extracted.transferred() && mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(extracted.massUnits()) > 0.0,
 				"material extraction did not return removed mass");
 		check(Math.abs(massBefore - (domain.totalMass() + mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(extracted.massUnits()))) <= 1.0E-12,
@@ -491,17 +493,17 @@ public final class M6ContainerValidation {
 			// expected: persisted strings are bounded before splitting or allocation
 		}
 
-		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG);
+		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG);
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
 				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
 				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
 
-		List<FluidDomain.MaterialPortion> portions = List.of(
-				new FluidDomain.MaterialPortion(1, 3.2, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(256.125)),
-				new FluidDomain.MaterialPortion(0, 4.8, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(480.875)));
-		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(2, 2, 2, portions, 2);
-		double insertedVolume = inserted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
-		double insertedMass = inserted.portions().stream().mapToDouble((FluidDomain.MaterialPortion p) -> mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(p.massUnits())).sum();
+		List<FluidDomainContracts.MaterialPortion> portions = List.of(
+				new FluidDomainContracts.MaterialPortion(1, 3.2, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(256.125)),
+				new FluidDomainContracts.MaterialPortion(0, 4.8, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(480.875)));
+		FluidDomainContracts.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(2, 2, 2, portions, 2);
+		double insertedVolume = inserted.portions().stream().mapToDouble(FluidDomainContracts.MaterialPortion::volume).sum();
+		double insertedMass = inserted.portions().stream().mapToDouble((FluidDomainContracts.MaterialPortion p) -> mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(p.massUnits())).sum();
 		check(inserted.transferred() && inserted.portions().size() == 2
 				&& Math.abs(domain.totalVolumeExact() - insertedVolume) <= 1.0E-15
 				&& Math.abs(domain.totalMass() - insertedMass) <= 1.0E-12
@@ -512,13 +514,13 @@ public final class M6ContainerValidation {
 						+ ", mass=" + domain.totalMass());
 		double volumeBeforeRefusal = domain.totalVolumeExact(), massBeforeRefusal = domain.totalMass();
 		check(!domain.tryInsertExactMixture(2, 2, 2,
-				List.of(new FluidDomain.MaterialPortion(0, 100.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(100.0))), 1).transferred()
+				List.of(new FluidDomainContracts.MaterialPortion(0, 100.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(100.0))), 1).transferred()
 				&& domain.totalVolumeExact() == volumeBeforeRefusal && domain.totalMass() == massBeforeRefusal,
 				"refused mixture insert left partial inventory");
 
-		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(2, 2, 2, 8.0F, 2);
-		double extractedVolume = extracted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
-		double extractedMass = extracted.portions().stream().mapToDouble((FluidDomain.MaterialPortion p) -> mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(p.massUnits())).sum();
+		FluidDomainContracts.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(2, 2, 2, 8.0F, 2);
+		double extractedVolume = extracted.portions().stream().mapToDouble(FluidDomainContracts.MaterialPortion::volume).sum();
+		double extractedMass = extracted.portions().stream().mapToDouble((FluidDomainContracts.MaterialPortion p) -> mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(p.massUnits())).sum();
 		check(extracted.transferred() && extracted.portions().size() == 2
 				&& Math.abs(extractedVolume - 8.0) <= 1.0E-12
 				&& Math.abs(insertedVolume - (domain.totalVolumeExact() + extractedVolume)) <= 1.0E-15
@@ -541,10 +543,10 @@ public final class M6ContainerValidation {
 			// A malformed item must be rejected during construction, before tooltip/WAL callers.
 		}
 
-		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG);
+		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG);
 		try {
 			domain.tryInsertExactMixture(2, 2, 2,
-					List.of(new FluidDomain.MaterialPortion(0, Double.NaN, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
+					List.of(new FluidDomainContracts.MaterialPortion(0, Double.NaN, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
 			throw new AssertionError("Expected non-finite material volume rejection");
 		} catch (IllegalArgumentException expected) {
 			check(inventoryVolume(domain).signum()==0&&domain.totalMassUnits()==0,
@@ -558,11 +560,11 @@ public final class M6ContainerValidation {
 	 * debits at most the container's balance. The combined ledger drift stays tiny and bounded.
 	 */
 	private static void testBucketRoundTrip() {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
 		// Initial pour: a full bucket empties into the region.
 		var units = mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize());
 		long containerNanos = BUCKET;
-		FluidDomain.ExactVolumeTransfer filled = domain.tryInsertExactVolume(3, 2, 3,
+		FluidDomainContracts.ExactVolumeTransfer filled = domain.tryInsertExactVolume(3, 2, 3,
 				(float) (ContainerFluidLedger.nanosToCubicMeters(containerNanos) / units.cubicMetersPerNormalizedVolume()), 3);
 		check(filled.transferred(), "could not insert one bucket volume");
 		containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos,
@@ -570,14 +572,14 @@ public final class M6ContainerValidation {
 		long initialNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(inventoryVolumeAsDouble(domain)));
 		long worstDrift = 0L;
 		for (int cycle = 0; cycle < 100; cycle++) {
-			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
+			FluidDomainContracts.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
 					(float) (ContainerFluidLedger.nanosToCubicMeters(BUCKET - containerNanos) / units.cubicMetersPerNormalizedVolume()), 3);
 			check(extracted.transferred(), "full-bucket extraction failed");
 			long taken = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(extracted.volume()));
 			containerNanos = ContainerFluidLedger.checkedAdd(containerNanos,
 					Math.min(taken, BUCKET - containerNanos));
 
-			FluidDomain.ExactVolumeTransfer reinserted = domain.tryInsertExactVolume(3, 2, 3,
+			FluidDomainContracts.ExactVolumeTransfer reinserted = domain.tryInsertExactVolume(3, 2, 3,
 					(float) (ContainerFluidLedger.nanosToCubicMeters(containerNanos) / units.cubicMetersPerNormalizedVolume()), 3);
 			check(reinserted.transferred(), "re-insertion failed");
 			long given = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(reinserted.volume()));
@@ -591,12 +593,12 @@ public final class M6ContainerValidation {
 		System.out.println("  worst bucket round-trip drift over 100 cycles: " + worstDrift + " quanta");
 	}
 
-	private static SignedDyadic inventoryVolume(FluidDomain domain){
+	private static SignedDyadic inventoryVolume(HostFluidState domain){
 		var volume=SignedDyadic.ZERO;
 		for(var stock:domain.exportLiquidCellState().stocks())volume=volume.add(stock.volume());
 		return volume;
 	}
-	private static double inventoryVolumeAsDouble(FluidDomain domain){return inventoryVolume(domain).toDouble();}
+	private static double inventoryVolumeAsDouble(HostFluidState domain){return inventoryVolume(domain).toDouble();}
 
 	private static void check(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);

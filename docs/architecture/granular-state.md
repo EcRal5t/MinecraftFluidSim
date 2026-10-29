@@ -10,22 +10,22 @@
   - 代码入口：
     - [GranularInventory](../../model/src/main/java/mmm/granular/GranularInventory.java)
     - [GranularCouplingFields](../../model/src/main/java/mmm/granular/GranularCouplingFields.java)
-  - 测试选择器：`granular`
+  - 验证入口：GPU 颗粒及完整步场景
 
 - **运动、反应和沉积**
   - 代码入口：
-    - [GranularMechanicalStage](../../solver/src/main/java/mmm/fluid/GranularMechanicalStage.java)
-    - [GranularPressureCoupling](../../solver/src/main/java/mmm/fluid/GranularPressureCoupling.java)
-    - [GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)
-    - [GranularTransitionStage](../../solver/src/main/java/mmm/fluid/GranularTransitionStage.java)
-  - 测试选择器：`granular`
+    - [VulkanGranularMotion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularMotion.java)
+    - [VulkanGranularPressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularPressure.java)
+    - [VulkanSolidLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSolidLiquidReactions.java)
+    - [VulkanGranularTransitions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularTransitions.java)
+  - 验证入口：GPU 颗粒及完整步场景
 
 - **水流起动与薄沙床阻力**
   - 代码入口：
-    - [GranularBedShear](../../solver/src/main/java/mmm/fluid/GranularBedShear.java)
-    - [BodyForceStage](../../solver/src/main/java/mmm/fluid/BodyForceStage.java)
-    - [GranularDepositDynamics](../../model/src/main/java/mmm/granular/GranularDepositDynamics.java)
-  - 测试选择器：`granular`
+    - [VulkanGranularPressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularPressure.java)：颗粒与液体的压力和阻力耦合
+    - [VulkanGranularTransitions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularTransitions.java)：床层转移与起动
+    - [GranularDepositDynamics](../../model/src/main/java/mmm/granular/GranularDepositDynamics.java)：宿主调度状态交接
+  - 验证入口：GPU 颗粒及完整步场景
 
 - **定义与存档**
   - 代码入口：[GranularRegistryCodec](../../fabric/src/main/java/mmm/granular/GranularRegistryCodec.java)
@@ -35,9 +35,9 @@
   - 代码入口：
     - [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)
     - [ContainerItemMapper](../../fabric/src/main/java/mmm/item/ContainerItemMapper.java)
-  - 测试选择器：`containers,granular`
+  - 测试选择器：`containers`
 
-执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+执行方式见 [验证指南](../maintenance/validation.md)。
 
 ## 本文内容
 
@@ -148,7 +148,7 @@ Cd = max(24/Re * (1 + 0.15*Re^0.687), 0.44)
 - `GranularComponentResponse`：接触组件的压缩、恢复、摩擦和回弹能量预算。
 - `GranularSpawnAdmission`：新代表的空间放置与共同接触解析尺度。
 - `GranularCollisionGeometry`：固定微盒与当前候选床体的共同位置准入。
-- `GranularReactionStage.precipitate` / `depositPrecipitate`：析出代表合并、共同生成及未解析析出物入床的物质、动量与能量交接。
+- 设备析出处理：析出代表合并、共同生成及未解析析出物入床的物质、动量与能量交接。
 
 接触组件的具体迭代、索引、缓存与收敛阈值由这些实现维护。
 正常密集场景的连续推进与完整步成本由[验证指南](../maintenance/validation.md)检查。
@@ -186,9 +186,7 @@ A_pressure = rho_reference * h^3 * H R H^T + A_gas_storage
 
 `M_face` 使用实际液体质量。
 低填充单元的压力有效面积受相邻控制体实际液量约束，两侧载荷同比缩放，几何接触支撑保持原面积。已知气压、静水载荷与压力增量均经过同一有限质量和阻力响应。预测列采用 binary64，最终合并实际压力后一次计算并发布速度。
-`D` 是本子步按源滑移准备的正半定成对阻力矩阵。`GranularImplicitDrag` 每轴分解一次粒子消元后的正定格面矩阵，预测、压力矩阵乘与最终速度共用其三角回代；`D=0` 时自然退化为原质量惯性响应。
-共同压力通过同一 `PressureLinearSolver` 和 `PressurePreconditioner` 求解液体、固体惯性与气腔储容。
-固体项采用原始数组的局部汇总与散布，沿每粒各轴至多八个格面准备一次，矩阵迭代复用这些系数与阻力因子。显式无阻力稀疏压力矩阵提供 IC(0) 预条件，含阻力的实际算子通过同一响应直接应用。
+`D` 表示按源滑移准备的颗粒与液体阻力。`VulkanGranularPressure` 准备颗粒和格面的质量、压力载荷及阻力项；`VulkanCoupledPressure` 与 `VulkanPressureKernel` 共同求解液体、固体惯性和气腔储容。各颗粒的局部面支撑参与共同压力与动量交接。
 
 液体面压力承担 `Af` 的份额，活动颗粒承担固定孔隙面积与 `Af` 之间的互补份额。
 同一面上的颗粒按代表体积权重分配该冲量，液体与颗粒合计恢复完整开放面压力载荷。
@@ -248,18 +246,7 @@ theta = tau / ((rho_s-rho_f)*g*d)
 
 ### 薄沙床与孔隙阻力
 
-`BodyForceStage` 使用 Kozeny–Carman 渗透率：
-
-```text
-Kp = d²*phi³ / (180*(1-phi)²)
-H = (1-f)*h
-Kt = f*Kp + (1-f)*H²/3
-u_next = u / (1 + dt*mu/rho*resistance)
-```
-
-`f` 为床层占格比例，切向按床层与自由层平行流动近似，法向叠加实际床厚的阻力。
-每面统一执行隐式 Darcy 更新，再进入压力投影。
-该模型覆盖薄床自由流与满床孔隙流，精度由单元内层状流动假设限制。
+床层的颗粒占容和孔隙率参与液体开放空间、颗粒起动和固液动量交接。床层上方的自由流动按单元尺度近似，颗粒运动、床层转移和压力耦合分别由设备阶段推进。
 
 ## 固液相转移
 

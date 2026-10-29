@@ -18,9 +18,9 @@ import java.util.TreeMap;
  * empty cells return {@code null}. This is the core-side source for loader query adapters.
  */
 final class CellInventoryReader {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 
-	CellInventoryReader(FluidDomain domain) {
+	CellInventoryReader(HostFluidState domain) {
 		this.domain = domain;
 	}
 
@@ -38,7 +38,7 @@ final class CellInventoryReader {
 		TreeMap<String, SolidObservationAccumulator> accumulated = new TreeMap<>();
 		if (domain.granularState != null) for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
 			GranularParcelStore.Parcel parcel = domain.granularState.parcels.parcel(ordinal);
-			if (domain.domainStep.granularParcelCell(parcel) == requested) addObservedSolid(accumulated,
+			if (domain.domainInventoryGeometry.granularParcelCell(parcel) == requested) addObservedSolid(accumulated,
 					CellCarrierInventoryView.SolidKind.ACTIVE,
 					domain.granularState.registry.material(parcel.materialHandle()).id(), parcel.solidVolumeSvq(), parcel.mass());
 		}
@@ -91,7 +91,7 @@ final class CellInventoryReader {
 		if (nextMarkerInCell(requested, -1) >= 0) return true;
 		if (domain.granularState != null) {
 			for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
-				if (domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(ordinal)) == requested) return true;
+				if (domain.domainInventoryGeometry.granularParcelCell(domain.granularState.parcels.parcel(ordinal)) == requested) return true;
 			}
 		}
 		if (domain.granularState != null && domain.granularState.deposits.cellSolidVolumeSvq(requested) > 0L) return true;

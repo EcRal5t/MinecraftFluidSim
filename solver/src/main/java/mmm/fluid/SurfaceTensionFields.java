@@ -9,7 +9,7 @@ import java.util.Arrays;
  * All fields are rebuilt from committed inventory and geometry.
  */
 final class SurfaceTensionFields {
-	private final FluidDomain domain;
+	private final HostFluidState domain;
 	final double[] columnHeights = new double[9];
 	final float[] surfaceTensionPressure;
 	final double[] surfaceTensionColor;
@@ -29,7 +29,7 @@ final class SurfaceTensionFields {
 		}
 	}
 
-	SurfaceTensionFields(FluidDomain domain) {
+	SurfaceTensionFields(HostFluidState domain) {
 		this.domain = domain;
 		int cellCount = domain.cellCount;
 		this.surfaceTensionPressure = new float[cellCount];
@@ -54,7 +54,7 @@ final class SurfaceTensionFields {
 	double surfaceTensionAtCell(int cell) {
 		if (domain.materialRegistry == null) return 0.0;
 		int phase = domain.domainFlowFields.dominantPhase(cell);
-		if (phase == FluidDomain.NO_PHASE) return 0.0;
+		if (phase == HostFluidState.NO_PHASE) return 0.0;
 		for (int handle = 0; handle < domain.materialRegistry.size(); handle++) {
 			if (domain.materialRegistry.phaseHandle(handle) == phase) {
 				return domain.materialRegistry.material(handle).surfaceTension();
@@ -190,7 +190,7 @@ final class SurfaceTensionFields {
 	double surfaceTensionContactAngleAtCell(int cell) {
 		if (domain.materialRegistry == null) return Math.PI / 2.0;
 		int phase = domain.domainFlowFields.dominantPhase(cell);
-		if (phase == FluidDomain.NO_PHASE) return Math.PI / 2.0;
+		if (phase == HostFluidState.NO_PHASE) return Math.PI / 2.0;
 		for (int handle = 0; handle < domain.materialRegistry.size(); handle++) {
 			if (domain.materialRegistry.phaseHandle(handle) == phase) {
 				return domain.materialRegistry.material(handle).contactAngleRadians();

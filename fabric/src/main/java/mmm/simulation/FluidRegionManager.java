@@ -10,6 +10,7 @@ import java.util.UUID;
 public final class FluidRegionManager {
 	private final RegionCatalog.Limits limits;
 	private final RegionCatalog<FluidRegion> catalog;
+	private mmm.fluid.FluidSolverBackend solverBackend;
 	private java.util.function.BiConsumer<FluidRegion, Boolean> committedObserver = (region, present) -> { };
 
 	public FluidRegionManager(RegionCatalog.Limits limits) {
@@ -87,7 +88,17 @@ public final class FluidRegionManager {
 		return result;
 	}
 
+	void solverBackend(mmm.fluid.FluidSolverBackend backend) {
+		solverBackend = Objects.requireNonNull(backend);
+		for (var region : catalog.values()) region.solverBackend(backend);
+	}
+
 	private void bind(FluidRegion region) {
+		if (solverBackend != null) {
+			region.solverBackend(solverBackend);
+			if (region.controllerManaged() && region.solverLoaded()) try { region.ensureDeviceResident(); }
+			catch (RuntimeException failure) { region.blockNumerical("Vulkan 区域初始化失败：" + failure.getMessage()); }
+		}
 		region.committedObservationListener(() -> committedObserver.accept(region, true));
 		committedObserver.accept(region, true);
 	}

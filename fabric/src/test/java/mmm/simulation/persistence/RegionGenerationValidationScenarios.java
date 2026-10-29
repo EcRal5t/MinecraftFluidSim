@@ -1,5 +1,6 @@
 package mmm.simulation.persistence;
 
+import mmm.simulation.TestHostAccess;
 import mmm.simulation.RegionCheckpointFixtures;
 import mmm.simulation.MinecraftRegionCheckpointSource;
 
@@ -39,7 +40,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
         var footprint=new mmm.simulation.controller.FluidRegionFootprint(origin,origin,origin.east(),interior,
                 Set.of(origin.below().asLong()),Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)),
                 mmm.model.region.RegionGeometry.RegionKind.POOL,Set.of(origin.above().asLong()),Set.of(returned));
-        var domain=new mmm.fluid.FluidDomain(4,2,2,CONFIG);
+        var domain=new mmm.fluid.HostFluidState(4,2,2,CONFIG);
         for(int z=0;z<2;z++) for(int y=0;y<2;y++) for(int x=0;x<2;x++) domain.setSolid(x,y,z,true);
         domain.setVolume(2,0,0,.5F);
         var region=new FluidRegion(new UUID(571,577),DIMENSION,origin,domain,footprint);
@@ -69,13 +70,13 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		var payloads = new ArrayList<RegionSectionState>();
 		for (var descriptor : first.manifest().sections()) payloads.add(files.readSection(first, descriptor.key()));
 		var complete = files.completeRead(first, payloads);
-		FluidDomainStateAssertions.assertSameDurableState(region.domain().captureAuthoritativeState(),
+		FluidDomainStateAssertions.assertSameDurableState(TestHostAccess.editable(region).captureAuthoritativeState(),
 				restorer(complete).reconstructAuthoritativeState(null, null, null, BuiltinGasDefinitions.createRegistry(), null),
 				"Incremental section read");
 		expectIOException(() -> files.completeRead(first, payloads.subList(0, payloads.size() - 1)),
 				"Incomplete section collection became a complete generation");
 		require(region.recordPublishedCheckpoint(1), "Section fixture did not accept its first checkpoint");
-		region.domain().setVolume(3, 2, 3, .5F);
+		TestHostAccess.edit(region, state -> state.setVolume(3, 2, 3, .5F));
 		var secondState = RegionCheckpointFixtures.capture(region, 2);
 		files.publish(secondState);
 		try { files.verifyReadView(first); throw new AssertionError("Changed HEAD kept an old read view valid"); }
@@ -115,8 +116,8 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 	static void validateExactRoundTripAndMetadataUnload() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "roundtrip-");
 		FluidRegion region = populatedRegion(new UUID(11L, 12L));
-		FlipParticleState before = region.domain().exportParticleState();
-		var authoritativeBefore=region.domain().captureAuthoritativeState();
+		FlipParticleState before = TestHostAccess.editable(region).exportParticleState();
+		var authoritativeBefore=TestHostAccess.editable(region).captureAuthoritativeState();
 		RegionState state = RegionCheckpointFixtures.capture(region, 1L);
 		require(state.sections().size() == 4, "cross-chunk controller was not split into four complete sections");
 		RegionGenerationStore files = new RegionGenerationStore(root);
@@ -148,8 +149,8 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		region.restoreAuthoritativeSolver(authoritativeAfter, 1L);
 		require(region.solverLoaded() && region.lifecycle().operatorPaused() && region.collisionRefreshRequired(),
 				"restore bypassed operator pause or current-world collision refresh");
-		assertParticleStateEquals(before, region.domain().exportParticleState());
-		FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,region.domain().captureAuthoritativeState(),"Region cold restore");
+		assertParticleStateEquals(before, TestHostAccess.editable(region).exportParticleState());
+		FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,TestHostAccess.editable(region).captureAuthoritativeState(),"Region cold restore");
 		for (long generation = 2L; generation <= 4L; generation++) {
 			RegionState repeated = RegionCheckpointFixtures.capture(region, generation);
 			files.publish(repeated);
@@ -157,8 +158,8 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 			require(region.releaseSolverAfterCheckpoint(generation), "repeated unload was rejected");
 			var restored=restorer(files.read(region.id())).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
 			region.restoreAuthoritativeSolver(restored, generation);
-			assertParticleStateEquals(before, region.domain().exportParticleState());
-			FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,region.domain().captureAuthoritativeState(),"Repeated region cold restore");
+			assertParticleStateEquals(before, TestHostAccess.editable(region).exportParticleState());
+			FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,TestHostAccess.editable(region).captureAuthoritativeState(),"Repeated region cold restore");
 		}
 	}
 
@@ -200,7 +201,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 			files.publish(first);
 			FlipParticleState firstParticles = restorer(first).reconstruct();
 			FluidRegion nextRegion = populatedRegion(region.id());
-			nextRegion.domain().setVolume(1, 1, 1, 0.5F);
+			TestHostAccess.edit(nextRegion, state -> state.setVolume(1, 1, 1, 0.5F));
 			RegionState second = RegionCheckpointFixtures.capture(nextRegion, 2L);
 			FlipParticleState secondParticles = restorer(second).reconstruct();
 			try {
@@ -230,7 +231,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		expectIOException(() -> new RegionState(original.manifest(), mixedSections).validate(), "mixed section owner was accepted");
 		files.publish(original);
 		require(region.recordPublishedCheckpoint(1L), "corruption fixture did not advance generation");
-		region.domain().setVolume(3, 2, 3, 0.5F);
+		TestHostAccess.edit(region, state -> state.setVolume(3, 2, 3, 0.5F));
 		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
 		RegionGenerationStore unsupported = new RegionGenerationStore(root, (source, target, replace) -> {
 			throw new AtomicMoveNotSupportedException(source.toString(), target.toString(), "validation");
@@ -271,7 +272,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		Files.createDirectory(unknownInactive);
 		Path foreignEvidence = unknownInactive.resolve("foreign.evidence");
 		Files.writeString(foreignEvidence, "retain");
-		unknownRegion.domain().setVolume(2, 2, 2, 0.25F);
+		TestHostAccess.edit(unknownRegion, state -> state.setVolume(2, 2, 2, 0.25F));
 		RegionState unknownSecond = RegionCheckpointFixtures.capture(unknownRegion, 2L);
 		expectIOException(() -> unknownFiles.publish(unknownSecond),
 				"unknown inactive-slot evidence was overwritten by a checkpoint");
@@ -468,7 +469,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		FluidRegion region = populatedRegion(id);
 		RegionState first = RegionCheckpointFixtures.capture(region, 1L);
 		files.publish(first);
-		region.domain().setVolume(3, 2, 3, 0.5F);
+		TestHostAccess.edit(region, state -> state.setVolume(3, 2, 3, 0.5F));
 		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
 		files.publish(second);
 

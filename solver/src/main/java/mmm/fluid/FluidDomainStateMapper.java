@@ -10,7 +10,7 @@ import java.util.List;
 final class FluidDomainStateMapper {
 	private FluidDomainStateMapper() { }
 
-	static FluidDomainState capture(FluidDomain domain) {
+	static FluidDomainState capture(HostFluidState domain) {
 		if (domain == null) throw new IllegalArgumentException("Domain is missing");
 		if (domain.domainPhaseInventory.collisionTransactionActive()) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
@@ -39,7 +39,7 @@ final class FluidDomainStateMapper {
 		return captured;
 	}
 
-	static FluidDomainState.Layout layout(FluidDomain domain) {
+	static FluidDomainState.Layout layout(HostFluidState domain) {
 		if (domain == null) throw new IllegalArgumentException("Domain is missing");
 		FluidDomainState.CarrierKind carrierKind = domain.chemistry != null
 				? FluidDomainState.CarrierKind.CHEMICAL
@@ -56,9 +56,9 @@ final class FluidDomainStateMapper {
 				domain.materialDefinitions == null ? "" : domain.materialDefinitions.fingerprint());
 	}
 
-	static FluidDomain restore(FluidDomainState state) {
+	static HostFluidState restore(FluidDomainState state) {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
-		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
+		HostFluidState domain = new HostFluidState(state.sizeX(), state.sizeY(), state.sizeZ(),
 				state.config(),state.fixedGeometry());
 		domain.restoreEntityBodyState(state.entityBodyState());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();

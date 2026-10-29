@@ -8,7 +8,7 @@ final class LiquidInsertionGasPlan {
 		private final int[] remainingCells;
 		private final boolean[] finiteStock;
 
-		CapacityRouting(FluidDomain domain) {
+		CapacityRouting(HostFluidState domain) {
 			groupsByCell = new int[domain.cellCount][];
 			if (domain.gasState.frame == null) { remainingCells = new int[0]; finiteStock = new boolean[0]; return; }
 			var frame = domain.gasState.frame;

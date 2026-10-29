@@ -16,14 +16,14 @@ final class GasVolumeAllocation {
     private final PhaseSourceColumns sources;
     private final SignedDyadic[] ambientControls;
 
-    private GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,PhaseSourceColumns sources,SignedDyadic[] ambientControls){
+    private GasVolumeAllocation(HostFluidState domain,LiquidCellInventory future,GasRuntimeGeometry frame,PhaseSourceColumns sources,SignedDyadic[] ambientControls){
         sourceGeometry=domain.gasState.frame;preparedFrame=frame;
         sourceNetwork=domain.gasState.network;networkRevision=sourceNetwork.revision();
         sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;
         this.sources=sources;this.ambientControls=ambientControls;
     }
     /** Receiver aggregation is transposed once; inventory, U, control and EOS work share its ordering. */
-    static GasVolumeAllocation fromTargetSources(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,
+    static GasVolumeAllocation fromTargetSources(HostFluidState domain,LiquidCellInventory future,GasRuntimeGeometry frame,
                                                  PhaseSourceColumns targetSources){
         int oldCount=domain.gasState.frame==null?0:domain.gasState.frame.nodeCount();
         var bySource=new PhaseSourceColumns(oldCount+2);
@@ -54,14 +54,14 @@ final class GasVolumeAllocation {
         return new GasVolumeAllocation(domain,future,frame,bySource,ambientControls);
     }
     /** Energy and composition settlement can rebind an unchanged volume successor. */
-    GasVolumeAllocation rebindFuture(FluidDomain domain,LiquidCellInventory future){
+    GasVolumeAllocation rebindFuture(HostFluidState domain,LiquidCellInventory future){
         requireSourceCurrent(domain);
         return new GasVolumeAllocation(domain,future,preparedFrame.rebindInventory(future),sources,ambientControls);
     }
     GasRuntimeGeometry preparedFrame(){return preparedFrame;}
     PhaseSourceColumns sources(){return sources;}
     SignedDyadic ambientControl(int node){return ambientControls==null?SignedDyadic.ZERO:ambientControls[node];}
-    private void requireSourceCurrent(FluidDomain domain){
+    private void requireSourceCurrent(HostFluidState domain){
         if(domain.gasState.frame!=sourceGeometry||domain.gasState.network!=sourceNetwork||sourceNetwork.revision()!=networkRevision)
             throw new IllegalStateException("Gas allocation source frame/network changed: plannedNetworkRevision="+networkRevision
                     +" actualNetworkRevision="+domain.gasState.network.revision());
@@ -69,13 +69,13 @@ final class GasVolumeAllocation {
             throw new IllegalStateException("Gas allocation source phase/support volume changed: plannedInventoryRevision="
                     +sourceInventory.revision()+" actualInventoryRevision="+domain.liquidCells.revision());
     }
-    void requireCurrent(FluidDomain domain,LiquidCellInventory future){
+    void requireCurrent(HostFluidState domain,LiquidCellInventory future){
         requireSourceCurrent(domain);
         if(!GasRuntimeGeometry.sameLiquidVolumes(future,futureInventory))
             throw new IllegalStateException("Gas allocation future support volume changed: plannedInventoryRevision="
                     +futureInventory.revision()+" actualInventoryRevision="+future.revision());
     }
-    static GasVolumeAllocation prepare(FluidDomain domain,LiquidCellInventory future,long[] occupied,byte[] masks){
+    static GasVolumeAllocation prepare(HostFluidState domain,LiquidCellInventory future,long[] occupied,byte[] masks){
         PhaseOccupancyTransport.ensure(domain);
         var retained=domain.gasState.frame;
         if(retained!=null&&retained.sealedExterior()==domain.gasState.sealedDomainBoundary

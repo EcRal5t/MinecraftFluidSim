@@ -77,7 +77,7 @@ public final class MinecraftControllerConsole {
 			return null;
 		}
 		return new CarrierCellObservation(region.id(), region.networkGeneration(), x, y, z,
-				region.domain().observeCellCarriers(x, y, z));
+				region.observeCellCarriers(x, y, z));
 	}
 
 	/** Returns the centre of the first liquid/granular/coherent cell along an already resolved interior ray. */

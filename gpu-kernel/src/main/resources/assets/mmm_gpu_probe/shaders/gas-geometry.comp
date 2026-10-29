@@ -3,278 +3,564 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-layout(local_size_x=128) in;
-layout(binding=0,std430) coherent buffer Candidate { uint words[]; };
-layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; int count; int gasPieces; int gasCounts; } p;
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) coherent buffer Candidate {
+    uint words[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errors;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+    int gasPieces;
+    int gasCounts;
+}
+p;
 // DYADIC_LIBRARY
 uvec2 poreWords;
-int h(int index) { return int(words[p.header+index]); }
-uint dyadicWord(int bank,int index) { return bank==2?poreWords[index]:words[index]; }
-void dyadicWrite(int index,uint value) { words[index]=value; }
-double number(int at) { return packDouble2x32(uvec2(words[at],words[at+1])); }
-void putNumber(int at,double value) { uvec2 bits=unpackDouble2x32(value);words[at]=bits.x;words[at+1]=bits.y; }
-int64_t integer(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
-bool finite(double value) { return !isnan(value)&&!isinf(value); }
-ivec3 dimensions() { return ivec3(h(0),h(1),h(2)); }
-bool inside(ivec3 position) { return all(greaterThanEqual(position,ivec3(0)))&&all(lessThan(position,dimensions())); }
-int indexOf(ivec3 position) { return (position.z*h(1)+position.y)*h(0)+position.x; }
-uint support(int cell) { return (~words[h(6)+cell])&255u; }
-uint queueSlot(int counter){uvec4 participants=subgroupBallot(true);uint base=0u;if(subgroupElect())base=atomicAdd(words[counter],subgroupBallotBitCount(participants));base=subgroupBroadcastFirst(base);return base+subgroupBallotExclusiveBitCount(participants);}
-bool present(int cell) { return cell>=0&&words[h(16)+cell]!=0u; }
-double cellSize() { return number(p.header+34); }
-DyadicTerm liquidTotal(int cell) {
-    int begin=int(words[h(11)+cell]),end=int(words[h(11)+cell+1]);
-    return DyadicTerm(1,h(14)+begin,end-begin,int(words[h(13)+cell]),int(words[h(12)+cell]));
+// HOST_LAYOUT
+int h(int index) {
+    return int(words[p.header + index]);
 }
-double exactDryNumber(DyadicTerm items[7],DyadicMeasure measure) {
-    DyadicCursor cursor=dyadicBegin(items,2);uvec3 top=uvec3(0);
-    while(cursor.position<=measure.lastWord) {
-        DyadicChunk chunk=dyadicNext(cursor,items,2);
-        for(int i=0;i<3;i++) {
-            int at=measure.lastWord-i;
-            if(at>=chunk.first&&at<chunk.first+chunk.count)top[i]=chunk.word;
+uint dyadicWord(int bank, int index) {
+    return bank == 2 ? poreWords[index] : words[index];
+}
+void dyadicWrite(int index, uint value) {
+    words[index] = value;
+}
+double number(int at) {
+    return packDouble2x32(uvec2(words[at], words[at + 1]));
+}
+void putNumber(int at, double value) {
+    uvec2 bits = unpackDouble2x32(value);
+    words[at] = bits.x;
+    words[at + 1] = bits.y;
+}
+int64_t integer(int at) {
+    return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32));
+}
+bool finite(double value) {
+    return !isnan(value) && !isinf(value);
+}
+ivec3 dimensions() {
+    return ivec3(h(GEO_H_SIZE_X), h(GEO_H_SIZE_Y), h(GEO_H_SIZE_Z));
+}
+bool inside(ivec3 position) {
+    return all(greaterThanEqual(position, ivec3(0))) && all(lessThan(position, dimensions()));
+}
+int indexOf(ivec3 position) {
+    return (position.z * h(GEO_H_SIZE_Y) + position.y) * h(GEO_H_SIZE_X) + position.x;
+}
+uint support(int cell) {
+    return (~words[h(GEO_H_MASKS) + cell]) & 255u;
+}
+uint queueSlot(int counter) {
+    uvec4 participants = subgroupBallot(true);
+    uint base = 0u;
+    if (subgroupElect())
+        base = atomicAdd(words[counter], subgroupBallotBitCount(participants));
+    base = subgroupBroadcastFirst(base);
+    return base + subgroupBallotExclusiveBitCount(participants);
+}
+bool present(int cell) {
+    return cell >= 0 && words[h(GEO_H_PRESENCE) + cell] != 0u;
+}
+double cellSize() {
+    return number(p.header + GEO_H_CELL_SIZE);
+}
+DyadicTerm liquidTotal(int cell) {
+    int begin = int(words[h(GEO_H_TOTAL_OFFSETS) + cell]), end = int(words[h(GEO_H_TOTAL_OFFSETS) + cell + 1]);
+    return DyadicTerm(1, h(GEO_H_TOTAL_LIMBS) + begin, end - begin, int(words[h(GEO_H_TOTAL_EXPONENTS) + cell]),
+                      int(words[h(GEO_H_TOTAL_SIGNS) + cell]));
+}
+double exactDryNumber(DyadicTerm items[7], DyadicMeasure measure) {
+    DyadicCursor cursor = dyadicBegin(items, 2);
+    uvec3 top = uvec3(0);
+    while (cursor.position <= measure.lastWord) {
+        DyadicChunk chunk = dyadicNext(cursor, items, 2);
+        for (int i = 0; i < 3; i++) {
+            int at = measure.lastWord - i;
+            if (at >= chunk.first && at < chunk.first + chunk.count)
+                top[i] = chunk.word;
         }
     }
-    int64_t power=int64_t(measure.minimumExponent)+int64_t(measure.lastWord)*int64_t(32);
-    double leading=double(top.x)+double(top.y)*2.3283064365386962890625e-10LF
-                                  +double(top.z)*5.4210108624275221700372640043497e-20LF;
-    double value=power<int64_t(-1106)?0.0:ldexp(leading,int(power));
-    double scale=cellSize();value*=scale*scale*scale;
+    int64_t power = int64_t(measure.minimumExponent) + int64_t(measure.lastWord) * int64_t(32);
+    double leading = double(top.x) + double(top.y) * 2.3283064365386962890625e-10LF +
+                     double(top.z) * 5.4210108624275221700372640043497e-20LF;
+    double value = power < int64_t(-1106) ? 0.0 : ldexp(leading, int(power));
+    double scale = cellSize();
+    value *= scale * scale * scale;
     // Presence stays exact even below the numerical geometry's representable volume.
-    return max(value,packDouble2x32(uvec2(1u,0u)));
+    return max(value, packDouble2x32(uvec2(1u, 0u)));
 }
 void captureCell(int cell) {
-    words[h(16)+cell]=0u;putNumber(h(17)+2*cell,0.0);words[h(18)+cell]=0u;words[h(19)+cell]=0u;
-    words[h(22)+cell+1]=uint(-1);words[h(23)+cell]=0u;words[h(24)+cell]=uint(-1);
-    if(errors!=0u)return;
-    uint open=support(cell);int64_t occupied=integer(h(7)+2*cell);
-    int64_t pore=(int64_t(bitCount(open))<<21)-occupied;
-    if(occupied<int64_t(0)||pore<int64_t(0)){atomicOr(errors,8192u);return;}
-    poreWords=uvec2(uint(pore),uint(uint64_t(pore)>>32));
-    DyadicTerm items[7];items[0]=DyadicTerm(2,0,pore==int64_t(0)?0:poreWords.y==0u?1:2,-24,pore==int64_t(0)?0:1);
-    items[1]=liquidTotal(cell);items[1].sign=-items[1].sign;
-    DyadicMeasure dry=dyadicMeasure(items,2);
-    if(dry.status==DYADIC_ZERO)return;
+    words[h(GEO_H_PRESENCE) + cell] = 0u;
+    putNumber(h(GEO_H_DRY_VOLUMES) + 2 * cell, 0.0);
+    words[h(GEO_H_DRY_MASKS) + cell] = 0u;
+    words[h(GEO_H_COMPACT) + cell] = 0u;
+    words[h(GEO_H_PARENTS) + cell + 1] = uint(-1);
+    words[h(GEO_H_EXTERIOR_REACHABLE) + cell] = 0u;
+    words[h(GEO_H_CELL_NODES) + cell] = uint(-1);
+    if (errors != 0u)
+        return;
+    uint open = support(cell);
+    int64_t occupied = integer(h(GEO_H_OCCUPIED) + 2 * cell);
+    int64_t pore = (int64_t(bitCount(open)) << 21) - occupied;
+    if (occupied < int64_t(0) || pore < int64_t(0)) {
+        atomicOr(errors, 8192u);
+        return;
+    }
+    poreWords = uvec2(uint(pore), uint(uint64_t(pore) >> 32));
+    DyadicTerm items[7];
+    items[0] = DyadicTerm(2, 0, pore == int64_t(0) ? 0 : poreWords.y == 0u ? 1 : 2, -24, pore == int64_t(0) ? 0 : 1);
+    items[1] = liquidTotal(cell);
+    items[1].sign = -items[1].sign;
+    DyadicMeasure dry = dyadicMeasure(items, 2);
+    if (dry.status == DYADIC_ZERO)
+        return;
     // The shared PLIC geometry cannot resolve sub-resolution phase displacement.
     // Keep the exact inventory and let the next capacity solve transport the excess.
-    if(dry.status==DYADIC_NEGATIVE&&number(h(8)+8*cell)-number(h(8)+8*cell+4)<=4e-5)return;
-    if(dry.status!=DYADIC_POSITIVE||open==0u){atomicOr(errors,8192u);return;}
-    double volume=exactDryNumber(items,dry);
-    if(!finite(volume)){atomicOr(errors,8192u);return;}
-    words[h(42)+int(queueSlot(h(43)+2))]=uint(cell);
-    words[h(16)+cell]=1u;putNumber(h(17)+2*cell,volume);words[h(22)+cell+1]=uint(cell+1);
-    double microPore=double(pore)/16777216.0/double(bitCount(open));uint dryMask=0u;
-    double numericPore=number(h(8)+8*cell+4),fill=number(h(8)+8*cell+6);
-    double numericMicro=numericPore/double(bitCount(open));
-    bool bypass=fill>0.0&&fill<1.0&&fill<=0.015625&&numericPore>0.0;
-    for(int micro=0;micro<8;micro++)words[h(33)+8*cell+micro]=floatBitsToUint(bypass?0.0:numericMicro>0.0?float(clamp(number(h(10)+2*(8*cell+micro))/numericMicro,0.0LF,1.0LF)):1.0);
-    for(int micro=0;micro<8;micro++)if((open&(1u<<micro))!=0u)
-        if(number(h(10)+2*(8*cell+micro))<microPore)dryMask|=1u<<micro;
-    if(dryMask==0u){dryMask=1u<<findLSB(open);words[h(19)+cell]=1u;}
-    words[h(18)+cell]=dryMask;
+    if (dry.status == DYADIC_NEGATIVE &&
+        number(h(GEO_H_CELLS) + 8 * cell) - number(h(GEO_H_CELLS) + 8 * cell + 4) <= 4e-5)
+        return;
+    if (dry.status != DYADIC_POSITIVE || open == 0u) {
+        atomicOr(errors, 8192u);
+        return;
+    }
+    double volume = exactDryNumber(items, dry);
+    if (!finite(volume)) {
+        atomicOr(errors, 8192u);
+        return;
+    }
+    words[h(GEO_H_PRESENT_CELLS) + int(queueSlot(h(GEO_H_DISPATCH) + 2))] = uint(cell);
+    words[h(GEO_H_PRESENCE) + cell] = 1u;
+    putNumber(h(GEO_H_DRY_VOLUMES) + 2 * cell, volume);
+    words[h(GEO_H_PARENTS) + cell + 1] = uint(cell + 1);
+    double microPore = double(pore) / 16777216.0 / double(bitCount(open));
+    uint dryMask = 0u;
+    double numericPore = number(h(GEO_H_CELLS) + 8 * cell + 4), fill = number(h(GEO_H_CELLS) + 8 * cell + 6);
+    double numericMicro = numericPore / double(bitCount(open));
+    bool bypass = fill > 0.0 && fill < 1.0 && fill <= 0.015625 && numericPore > 0.0;
+    for (int micro = 0; micro < 8; micro++)
+        words[h(GEO_H_MICRO_FRACTIONS) + 8 * cell + micro] = floatBitsToUint(
+            bypass ? 0.0
+            : numericMicro > 0.0
+                ? float(clamp(number(h(GEO_H_MICRO) + 2 * (8 * cell + micro)) / numericMicro, 0.0LF, 1.0LF))
+                : 1.0);
+    for (int micro = 0; micro < 8; micro++)
+        if ((open & (1u << micro)) != 0u)
+            if (number(h(GEO_H_MICRO) + 2 * (8 * cell + micro)) < microPore)
+                dryMask |= 1u << micro;
+    if (dryMask == 0u) {
+        dryMask = 1u << findLSB(open);
+        words[h(GEO_H_COMPACT) + cell] = 1u;
+    }
+    words[h(GEO_H_DRY_MASKS) + cell] = dryMask;
 }
 ivec3 faceEndpoints(int face) {
-    int xFaces=(h(0)+1)*h(1)*h(2),yFaces=h(0)*(h(1)+1)*h(2);
-    int axis=face<xFaces?0:face<xFaces+yFaces?1:2,local=face-(axis==0?0:axis==1?xFaces:xFaces+yFaces);
-    ivec3 shape=dimensions();shape[axis]++;
-    ivec3 position=ivec3(local%shape.x,local/shape.x%shape.y,local/(shape.x*shape.y)),step=ivec3(0);step[axis]=1;
-    return ivec3(inside(position-step)?indexOf(position-step):-1,inside(position)?indexOf(position):-1,axis);
+    int xFaces = (h(GEO_H_SIZE_X) + 1) * h(GEO_H_SIZE_Y) * h(GEO_H_SIZE_Z),
+        yFaces = h(GEO_H_SIZE_X) * (h(GEO_H_SIZE_Y) + 1) * h(GEO_H_SIZE_Z);
+    int axis = face < xFaces            ? 0
+               : face < xFaces + yFaces ? 1
+                                        : 2,
+        local = face - (axis == 0   ? 0
+                        : axis == 1 ? xFaces
+                                    : xFaces + yFaces);
+    ivec3 shape = dimensions();
+    shape[axis]++;
+    ivec3 position = ivec3(local % shape.x, local / shape.x % shape.y, local / (shape.x * shape.y)), step = ivec3(0);
+    step[axis] = 1;
+    return ivec3(inside(position - step) ? indexOf(position - step) : -1, inside(position) ? indexOf(position) : -1,
+                 axis);
 }
-float fraction(int cell,int micro) {
-    return uintBitsToFloat(words[h(33)+8*cell+micro]);
+float fraction(int cell, int micro) {
+    return uintBitsToFloat(words[h(GEO_H_MICRO_FRACTIONS) + 8 * cell + micro]);
 }
-int clipDry(inout vec2 polygon[8],int count,vec3 plane) {
-    if(count==0)return 0;
-    vec2 next[8],previous=polygon[count-1];float before=dot(plane.xy,previous)-plane.z;int size=0;
-    for(int i=0;i<count;i++) {
-        vec2 point=polygon[i];float distance=dot(plane.xy,point)-plane.z;
-        if((distance>=0)!=(before>=0))next[size++]=mix(previous,point,before/(before-distance));
-        if(distance>=0)next[size++]=point;
-        previous=point;before=distance;
+int clipDry(inout vec2 polygon[8], int count, vec3 plane) {
+    if (count == 0)
+        return 0;
+    vec2 next[8], previous = polygon[count - 1];
+    float before = dot(plane.xy, previous) - plane.z;
+    int size = 0;
+    for (int i = 0; i < count; i++) {
+        vec2 point = polygon[i];
+        float distance = dot(plane.xy, point) - plane.z;
+        if ((distance >= 0) != (before >= 0))
+            next[size++] = mix(previous, point, before / (before - distance));
+        if (distance >= 0)
+            next[size++] = point;
+        previous = point;
+        before = distance;
     }
-    for(int i=0;i<size;i++)polygon[i]=next[i];return size;
+    for (int i = 0; i < size; i++)
+        polygon[i] = next[i];
+    return size;
 }
-int clipCell(inout vec2 polygon[8],int count,int cell,int axis,int side,int a,int b) {
-    int tangent=(axis+1)%3,other=(axis+2)%3;
-    vec4 plane=vec4(number(h(9)+8*cell),number(h(9)+8*cell+2),number(h(9)+8*cell+4),number(h(9)+8*cell+6));
-    float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float(a))-plane[other]*(.5*float(b));
-    return clipDry(polygon,count,vec3(plane[tangent],plane[other],offset));
+int clipCell(inout vec2 polygon[8], int count, int cell, int axis, int side, int a, int b) {
+    int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+    vec4 plane = vec4(number(h(GEO_H_PLANES) + 8 * cell), number(h(GEO_H_PLANES) + 8 * cell + 2),
+                      number(h(GEO_H_PLANES) + 8 * cell + 4), number(h(GEO_H_PLANES) + 8 * cell + 6));
+    float offset =
+        plane.w - plane[axis] * float(side) - plane[tangent] * (.5 * float(a)) - plane[other] * (.5 * float(b));
+    return clipDry(polygon, count, vec3(plane[tangent], plane[other], offset));
 }
-float microArea(int left,int right,int axis,int a,int b) {
-    int tangent=(axis+1)%3,other=(axis+2)%3,low=(a<<tangent)|(b<<other),high=low|(1<<axis);
-    if(left>=0&&(support(left)&(1u<<high))==0u)return 0.0;
-    if(right>=0&&(support(right)&(1u<<low))==0u)return 0.0;
-    float l=left<0?0.0:fraction(left,high),r=right<0?0.0:fraction(right,low);
-    if(l>=1.0||r>=1.0)return 0.0;if(l<=0.0&&r<=0.0)return .25;
-    vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);
-    int count=4;if(l>0.0)count=clipCell(polygon,count,left,axis,1,a,b);
-    if(r>0.0)count=clipCell(polygon,count,right,axis,0,a,b);
-    float twice=0.0;
-    for(int i=1;i+1<count;i++) { vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x; }
-    return clamp(abs(twice)*.5,0.0,.25);
+float microArea(int left, int right, int axis, int a, int b) {
+    int tangent = (axis + 1) % 3, other = (axis + 2) % 3, low = (a << tangent) | (b << other), high = low | (1 << axis);
+    if (left >= 0 && (support(left) & (1u << high)) == 0u)
+        return 0.0;
+    if (right >= 0 && (support(right) & (1u << low)) == 0u)
+        return 0.0;
+    float l = left < 0 ? 0.0 : fraction(left, high), r = right < 0 ? 0.0 : fraction(right, low);
+    if (l >= 1.0 || r >= 1.0)
+        return 0.0;
+    if (l <= 0.0 && r <= 0.0)
+        return .25;
+    vec2 polygon[8];
+    polygon[0] = vec2(0);
+    polygon[1] = vec2(.5, 0);
+    polygon[2] = vec2(.5);
+    polygon[3] = vec2(0, .5);
+    int count = 4;
+    if (l > 0.0)
+        count = clipCell(polygon, count, left, axis, 1, a, b);
+    if (r > 0.0)
+        count = clipCell(polygon, count, right, axis, 0, a, b);
+    float twice = 0.0;
+    for (int i = 1; i + 1 < count; i++) {
+        vec2 x = polygon[i] - polygon[0], y = polygon[i + 1] - polygon[0];
+        twice += x.x * y.y - x.y * y.x;
+    }
+    return clamp(abs(twice) * .5, 0.0, .25);
 }
 void captureFace(int face) {
-    putNumber(h(20)+2*face,0.0);words[h(21)+face]=0u;if(errors!=0u)return;
-    ivec3 ends=faceEndpoints(face);int left=ends.x,right=ends.y,axis=ends.z;
-    if((left>=0&&!present(left))||(right>=0&&!present(right)))return;
-    float area=0.0;for(int a=0;a<2;a++)for(int b=0;b<2;b++)area+=microArea(left,right,axis,a,b);
-    if(area<=0.0)return;
-    uint positive=axis==0?0xaau:axis==1?0xccu:0xf0u;
-    bool full=(left<0||(support(left)&positive)==positive)&&(right<0||(support(right)&(positive^255u))==(positive^255u));
-    double scale=cellSize();putNumber(h(20)+2*face,double(area)*scale*scale);words[h(21)+face]=full?1u:0u;
+    putNumber(h(GEO_H_FACE_AREAS) + 2 * face, 0.0);
+    words[h(GEO_H_FULL_CONNECTIONS) + face] = 0u;
+    if (errors != 0u)
+        return;
+    ivec3 ends = faceEndpoints(face);
+    int left = ends.x, right = ends.y, axis = ends.z;
+    if ((left >= 0 && !present(left)) || (right >= 0 && !present(right)))
+        return;
+    float area = 0.0;
+    for (int a = 0; a < 2; a++)
+        for (int b = 0; b < 2; b++)
+            area += microArea(left, right, axis, a, b);
+    if (area <= 0.0)
+        return;
+    uint positive = axis == 0 ? 0xaau : axis == 1 ? 0xccu : 0xf0u;
+    bool full = (left < 0 || (support(left) & positive) == positive) &&
+                (right < 0 || (support(right) & (positive ^ 255u)) == (positive ^ 255u));
+    double scale = cellSize();
+    putNumber(h(GEO_H_FACE_AREAS) + 2 * face, double(area) * scale * scale);
+    words[h(GEO_H_FULL_CONNECTIONS) + face] = full ? 1u : 0u;
 }
-float polygonArea(vec2 polygon[8],int count){
-    float twice=0.0;for(int i=1;i+1<count;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}
-    return clamp(abs(twice)*.5,0.0,.25);
+float polygonArea(vec2 polygon[8], int count) {
+    float twice = 0.0;
+    for (int i = 1; i + 1 < count; i++) {
+        vec2 x = polygon[i] - polygon[0], y = polygon[i + 1] - polygon[0];
+        twice += x.x * y.y - x.y * y.x;
+    }
+    return clamp(abs(twice) * .5, 0.0, .25);
 }
-int clipPort(inout vec2 polygon[8],int count,vec4 plane,int axis,int side,int a,int b){
-    int tangent=(axis+1)%3,other=(axis+2)%3;
-    float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float(a))-plane[other]*(.5*float(b));
-    return clipDry(polygon,count,vec3(plane[tangent],plane[other],offset));
+int clipPort(inout vec2 polygon[8], int count, vec4 plane, int axis, int side, int a, int b) {
+    int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+    float offset =
+        plane.w - plane[axis] * float(side) - plane[tangent] * (.5 * float(a)) - plane[other] * (.5 * float(b));
+    return clipDry(polygon, count, vec3(plane[tangent], plane[other], offset));
 }
 // Gas may ignore a thin-film plane or a numerically empty microcell. Clip its subset first,
 // then finish the physical dry intersection used by the liquid wet union. Each plane is clipped once.
-vec2 sharedMicroAreas(float leftFill,float rightFill,vec4 leftPlane,vec4 rightPlane,
-                      float leftFraction,float rightFraction,bool gasEnabled,int axis,int a,int b){
-    vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);
-    bool gasClosed=!gasEnabled||leftFraction>=1.0||rightFraction>=1.0;
-    bool gasLeft=!gasClosed&&leftFraction>0.0,gasRight=!gasClosed&&rightFraction>0.0;
-    int count=4;
-    if(gasLeft)count=clipPort(polygon,count,leftPlane,axis,1,a,b);
-    if(gasRight)count=clipPort(polygon,count,rightPlane,axis,0,a,b);
-    float gasArea=gasClosed?0.0:polygonArea(polygon,count),physicalDry=0.0;
-    if(leftFill<1.0&&rightFill<1.0){
-        if(leftFill>0.0&&!gasLeft)count=clipPort(polygon,count,leftPlane,axis,1,a,b);
-        if(rightFill>0.0&&!gasRight)count=clipPort(polygon,count,rightPlane,axis,0,a,b);
-        physicalDry=polygonArea(polygon,count);
+vec2 sharedMicroAreas(float leftFill, float rightFill, vec4 leftPlane, vec4 rightPlane, float leftFraction,
+                      float rightFraction, bool gasEnabled, int axis, int a, int b) {
+    vec2 polygon[8];
+    polygon[0] = vec2(0);
+    polygon[1] = vec2(.5, 0);
+    polygon[2] = vec2(.5);
+    polygon[3] = vec2(0, .5);
+    bool gasClosed = !gasEnabled || leftFraction >= 1.0 || rightFraction >= 1.0;
+    bool gasLeft = !gasClosed && leftFraction > 0.0, gasRight = !gasClosed && rightFraction > 0.0;
+    int count = 4;
+    if (gasLeft)
+        count = clipPort(polygon, count, leftPlane, axis, 1, a, b);
+    if (gasRight)
+        count = clipPort(polygon, count, rightPlane, axis, 0, a, b);
+    float gasArea = gasClosed ? 0.0 : polygonArea(polygon, count), physicalDry = 0.0;
+    if (leftFill < 1.0 && rightFill < 1.0) {
+        if (leftFill > 0.0 && !gasLeft)
+            count = clipPort(polygon, count, leftPlane, axis, 1, a, b);
+        if (rightFill > 0.0 && !gasRight)
+            count = clipPort(polygon, count, rightPlane, axis, 0, a, b);
+        physicalDry = polygonArea(polygon, count);
     }
-    return vec2(physicalDry,gasArea);
+    return vec2(physicalDry, gasArea);
 }
-void captureSharedFace(int face){
-    putNumber(h(20)+2*face,0.0);words[h(21)+face]=0u;if(errors!=0u)return;
-    ivec3 ends=faceEndpoints(face);int left=ends.x,right=ends.y,axis=ends.z,tangent=(axis+1)%3,other=(axis+2)%3;
-    bool internal=left>=0&&right>=0,gasEnabled=(left<0||present(left))&&(right<0||present(right));
-    uint leftSupport=left<0?255u:support(left),rightSupport=right<0?255u:support(right);
-    float leftFill=left<0?0.0:float(number(h(8)+8*left+6)),rightFill=right<0?0.0:float(number(h(8)+8*right+6));
-    vec4 leftPlane=left<0?vec4(0):vec4(number(h(9)+8*left),number(h(9)+8*left+2),number(h(9)+8*left+4),number(h(9)+8*left+6));
-    vec4 rightPlane=right<0?vec4(0):vec4(number(h(9)+8*right),number(h(9)+8*right+2),number(h(9)+8*right+4),number(h(9)+8*right+6));
-    float open=0.0,wet=0.0,dry=0.0;
-    for(int a=0;a<2;a++)for(int b=0;b<2;b++){
-        int low=(a<<tangent)|(b<<other),high=low|(1<<axis);
-        if((leftSupport&(1u<<high))==0u||(rightSupport&(1u<<low))==0u)continue;
-        open+=.25;
-        float l=gasEnabled&&left>=0?fraction(left,high):0.0,r=gasEnabled&&right>=0?fraction(right,low):0.0;
-        vec2 areas=sharedMicroAreas(leftFill,rightFill,leftPlane,rightPlane,l,r,gasEnabled,axis,a,b);
-        // The wet union is the complement of the same physical dry intersection, then uses
-        // the existing fill-based wet-area limit at the PLIC geometry's float resolution.
-        wet+=min(clamp(.25-areas.x,0.0,.25),.25*(leftFill+rightFill));dry+=areas.y;
+void captureSharedFace(int face) {
+    putNumber(h(GEO_H_FACE_AREAS) + 2 * face, 0.0);
+    words[h(GEO_H_FULL_CONNECTIONS) + face] = 0u;
+    if (errors != 0u)
+        return;
+    ivec3 ends = faceEndpoints(face);
+    int left = ends.x, right = ends.y, axis = ends.z, tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+    bool internal = left >= 0 && right >= 0, gasEnabled = (left < 0 || present(left)) && (right < 0 || present(right));
+    uint leftSupport = left < 0 ? 255u : support(left), rightSupport = right < 0 ? 255u : support(right);
+    float leftFill = left < 0 ? 0.0 : float(number(h(GEO_H_CELLS) + 8 * left + 6)),
+          rightFill = right < 0 ? 0.0 : float(number(h(GEO_H_CELLS) + 8 * right + 6));
+    vec4 leftPlane = left < 0 ? vec4(0)
+                              : vec4(number(h(GEO_H_PLANES) + 8 * left), number(h(GEO_H_PLANES) + 8 * left + 2),
+                                     number(h(GEO_H_PLANES) + 8 * left + 4), number(h(GEO_H_PLANES) + 8 * left + 6));
+    vec4 rightPlane = right < 0
+                          ? vec4(0)
+                          : vec4(number(h(GEO_H_PLANES) + 8 * right), number(h(GEO_H_PLANES) + 8 * right + 2),
+                                 number(h(GEO_H_PLANES) + 8 * right + 4), number(h(GEO_H_PLANES) + 8 * right + 6));
+    float open = 0.0, wet = 0.0, dry = 0.0;
+    for (int a = 0; a < 2; a++)
+        for (int b = 0; b < 2; b++) {
+            int low = (a << tangent) | (b << other), high = low | (1 << axis);
+            if ((leftSupport & (1u << high)) == 0u || (rightSupport & (1u << low)) == 0u)
+                continue;
+            open += .25;
+            float l = gasEnabled && left >= 0 ? fraction(left, high) : 0.0,
+                  r = gasEnabled && right >= 0 ? fraction(right, low) : 0.0;
+            vec2 areas = sharedMicroAreas(leftFill, rightFill, leftPlane, rightPlane, l, r, gasEnabled, axis, a, b);
+            // The wet union is the complement of the same physical dry intersection, then uses
+            // the existing fill-based wet-area limit at the PLIC geometry's float resolution.
+            wet += min(clamp(.25 - areas.x, 0.0, .25), .25 * (leftFill + rightFill));
+            dry += areas.y;
+        }
+    double mass = .5 * ((left < 0 ? 0.0 : number(h(GEO_H_CELLS) + 8 * left + 2)) +
+                        (right < 0 ? 0.0 : number(h(GEO_H_CELLS) + 8 * right + 2))),
+           speed = 0.0;
+    if (internal && open > 0.0 && mass > 0.0) {
+        int xFaces = (h(GEO_H_SIZE_X) + 1) * h(GEO_H_SIZE_Y) * h(GEO_H_SIZE_Z),
+            yFaces = h(GEO_H_SIZE_X) * (h(GEO_H_SIZE_Y) + 1) * h(GEO_H_SIZE_Z),
+            local = face - (axis == 0   ? 0
+                            : axis == 1 ? xFaces
+                                        : xFaces + yFaces);
+        speed = number(h(37 + axis) + 2 * local) / mass;
     }
-    double mass=.5*((left<0?0.0:number(h(8)+8*left+2))+(right<0?0.0:number(h(8)+8*right+2))),speed=0.0;
-    if(internal&&open>0.0&&mass>0.0){
-        int xFaces=(h(0)+1)*h(1)*h(2),yFaces=h(0)*(h(1)+1)*h(2),local=face-(axis==0?0:axis==1?xFaces:xFaces+yFaces);
-        speed=number(h(37+axis)+2*local)/mass;
+    int target = h(GEO_H_LIQUID_FACES) + 8 * face;
+    putNumber(target, mass);
+    putNumber(target + 2, speed);
+    putNumber(target + 4, internal ? double(open) : 0.0);
+    putNumber(target + 6, internal ? double(wet) : 0.0);
+    if (dry > 0.0) {
+        double scale = cellSize();
+        putNumber(h(GEO_H_FACE_AREAS) + 2 * face, double(dry) * scale * scale);
+        words[h(GEO_H_FULL_CONNECTIONS) + face] = open == 1.0 ? 1u : 0u;
     }
-    int target=h(36)+8*face;putNumber(target,mass);putNumber(target+2,speed);putNumber(target+4,internal?double(open):0.0);putNumber(target+6,internal?double(wet):0.0);
-    if(dry>0.0){double scale=cellSize();putNumber(h(20)+2*face,double(dry)*scale*scale);words[h(21)+face]=open==1.0?1u:0u;}
 }
 
-void appendConnection(int face){if(words[h(21)+face]!=0u)words[h(41)+int(queueSlot(h(43)+1))]=uint(face);}
-// Binary micro fractions need no polygon; partial physical or gas cuts retain the PLIC path.
-bool regularFace(int face){
- ivec3 ends=faceEndpoints(face);int left=ends.x,right=ends.y,axis=ends.z,tangent=(axis+1)%3,other=(axis+2)%3;
- bool sharesLiquidFaces=h(36)>=0,enabled=(left<0||present(left))&&(right<0||present(right));
- float lf=left<0?0.0:float(number(h(8)+8*left+6)),rf=right<0?0.0:float(number(h(8)+8*right+6));
- if(sharesLiquidFaces&&((lf>0.0&&lf<1.0)||(rf>0.0&&rf<1.0)))return false;
- uint ls=left<0?255u:support(left),rs=right<0?255u:support(right);float open=0.0,dry=0.0;
- for(int a=0;a<2;a++)for(int b=0;b<2;b++){int low=(a<<tangent)|(b<<other),high=low|(1<<axis);if((ls&(1u<<high))==0u||(rs&(1u<<low))==0u)continue;
-  open+=.25;float l=enabled&&left>=0?fraction(left,high):0.0,r=enabled&&right>=0?fraction(right,low):0.0;
-  if(enabled&&((l>0.0&&l<1.0)||(r>0.0&&r<1.0)))return false;
-  if(enabled&&l<1.0&&r<1.0)dry+=.25;
- }
- double scale=cellSize();putNumber(h(20)+2*face,double(dry)*scale*scale);
- uint positive=axis==0?0xaau:axis==1?0xccu:0xf0u;
- bool full=(left<0||(ls&positive)==positive)&&(right<0||(rs&(positive^255u))==(positive^255u));
- words[h(21)+face]=dry>0.0&&(sharesLiquidFaces?open==1.0:full)?1u:0u;
- if(sharesLiquidFaces){bool internal=left>=0&&right>=0;double mass=.5*((left<0?0.0:number(h(8)+8*left+2))+(right<0?0.0:number(h(8)+8*right+2))),speed=0.0;
-  if(internal&&open>0.0&&mass>0.0){int xFaces=(h(0)+1)*h(1)*h(2),yFaces=h(0)*(h(1)+1)*h(2),local=face-(axis==0?0:axis==1?xFaces:xFaces+yFaces);speed=number(h(37+axis)+2*local)/mass;}
-  int target=h(36)+8*face;putNumber(target,mass);putNumber(target+2,speed);putNumber(target+4,internal?double(open):0.0);putNumber(target+6,internal&&lf+rf>0.0?double(open):0.0);
- }return true;
+void appendConnection(int face) {
+    if (words[h(GEO_H_FULL_CONNECTIONS) + face] != 0u)
+        words[h(GEO_H_CONNECTED_FACES) + int(queueSlot(h(GEO_H_DISPATCH) + 1))] = uint(face);
 }
-void scheduleQueues(){for(int i=0;i<3;i++){uint total=words[h(43)+i],groups=(total+127u)/128u;int at=h(43)+3+3*i;words[at]=min(groups,65535u);words[at+1]=max(1u,(groups+65534u)/65535u);words[at+2]=1u;}}
+// Binary micro fractions need no polygon; partial physical or gas cuts retain the PLIC path.
+bool regularFace(int face) {
+    ivec3 ends = faceEndpoints(face);
+    int left = ends.x, right = ends.y, axis = ends.z, tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+    bool sharesLiquidFaces = h(GEO_H_LIQUID_FACES) >= 0,
+         enabled = (left < 0 || present(left)) && (right < 0 || present(right));
+    float lf = left < 0 ? 0.0 : float(number(h(GEO_H_CELLS) + 8 * left + 6)),
+          rf = right < 0 ? 0.0 : float(number(h(GEO_H_CELLS) + 8 * right + 6));
+    if (sharesLiquidFaces && ((lf > 0.0 && lf < 1.0) || (rf > 0.0 && rf < 1.0)))
+        return false;
+    uint ls = left < 0 ? 255u : support(left), rs = right < 0 ? 255u : support(right);
+    float open = 0.0, dry = 0.0;
+    for (int a = 0; a < 2; a++)
+        for (int b = 0; b < 2; b++) {
+            int low = (a << tangent) | (b << other), high = low | (1 << axis);
+            if ((ls & (1u << high)) == 0u || (rs & (1u << low)) == 0u)
+                continue;
+            open += .25;
+            float l = enabled && left >= 0 ? fraction(left, high) : 0.0,
+                  r = enabled && right >= 0 ? fraction(right, low) : 0.0;
+            if (enabled && ((l > 0.0 && l < 1.0) || (r > 0.0 && r < 1.0)))
+                return false;
+            if (enabled && l < 1.0 && r < 1.0)
+                dry += .25;
+        }
+    double scale = cellSize();
+    putNumber(h(GEO_H_FACE_AREAS) + 2 * face, double(dry) * scale * scale);
+    uint positive = axis == 0 ? 0xaau : axis == 1 ? 0xccu : 0xf0u;
+    bool full =
+        (left < 0 || (ls & positive) == positive) && (right < 0 || (rs & (positive ^ 255u)) == (positive ^ 255u));
+    words[h(GEO_H_FULL_CONNECTIONS) + face] = dry > 0.0 && (sharesLiquidFaces ? open == 1.0 : full) ? 1u : 0u;
+    if (sharesLiquidFaces) {
+        bool internal = left >= 0 && right >= 0;
+        double mass = .5 * ((left < 0 ? 0.0 : number(h(GEO_H_CELLS) + 8 * left + 2)) +
+                            (right < 0 ? 0.0 : number(h(GEO_H_CELLS) + 8 * right + 2))),
+               speed = 0.0;
+        if (internal && open > 0.0 && mass > 0.0) {
+            int xFaces = (h(GEO_H_SIZE_X) + 1) * h(GEO_H_SIZE_Y) * h(GEO_H_SIZE_Z),
+                yFaces = h(GEO_H_SIZE_X) * (h(GEO_H_SIZE_Y) + 1) * h(GEO_H_SIZE_Z),
+                local = face - (axis == 0   ? 0
+                                : axis == 1 ? xFaces
+                                            : xFaces + yFaces);
+            speed = number(h(37 + axis) + 2 * local) / mass;
+        }
+        int target = h(GEO_H_LIQUID_FACES) + 8 * face;
+        putNumber(target, mass);
+        putNumber(target + 2, speed);
+        putNumber(target + 4, internal ? double(open) : 0.0);
+        putNumber(target + 6, internal && lf + rf > 0.0 ? double(open) : 0.0);
+    }
+    return true;
+}
+void scheduleQueues() {
+    for (int i = 0; i < 3; i++) {
+        uint total = words[h(GEO_H_DISPATCH) + i], groups = (total + 127u) / 128u;
+        int at = h(GEO_H_DISPATCH) + 3 + 3 * i;
+        words[at] = min(groups, 65535u);
+        words[at + 1] = max(1u, (groups + 65534u) / 65535u);
+        words[at + 2] = 1u;
+    }
+}
 uint root(uint node) {
-    uint parent=atomicAdd(words[h(22)+int(node)],0u);
-    while(parent!=node){
-        uint grandparent=atomicAdd(words[h(22)+int(parent)],0u);
-        atomicCompSwap(words[h(22)+int(node)],parent,grandparent);
-        node=parent;parent=grandparent;
-    }return node;
+    uint parent = atomicAdd(words[h(GEO_H_PARENTS) + int(node)], 0u);
+    while (parent != node) {
+        uint grandparent = atomicAdd(words[h(GEO_H_PARENTS) + int(parent)], 0u);
+        atomicCompSwap(words[h(GEO_H_PARENTS) + int(node)], parent, grandparent);
+        node = parent;
+        parent = grandparent;
+    }
+    return node;
 }
 void joinFace(int face) {
-    if(errors!=0u||words[h(21)+face]==0u)return;
-    ivec3 ends=faceEndpoints(face);if((ends.x<0||ends.y<0)&&h(5)!=0)return;
-    uint a=ends.x<0?0u:uint(ends.x+1),b=ends.y<0?0u:uint(ends.y+1);
-    for(;;){
-        uint first=root(a),second=root(b);if(first==second)return;
-        uint high=max(first,second),low=min(first,second);
+    if (errors != 0u || words[h(GEO_H_FULL_CONNECTIONS) + face] == 0u)
+        return;
+    ivec3 ends = faceEndpoints(face);
+    if ((ends.x < 0 || ends.y < 0) && h(GEO_H_SEALED_EXTERIOR) != 0)
+        return;
+    uint a = ends.x < 0 ? 0u : uint(ends.x + 1), b = ends.y < 0 ? 0u : uint(ends.y + 1);
+    for (;;) {
+        uint first = root(a), second = root(b);
+        if (first == second)
+            return;
+        uint high = max(first, second), low = min(first, second);
         // A successful root link permanently connects this edge. Failed competitors retry.
-        if(atomicCompSwap(words[h(22)+int(high)],high,low)==high)return;
+        if (atomicCompSwap(words[h(GEO_H_PARENTS) + int(high)], high, low) == high)
+            return;
     }
 }
 void compress(int cell) {
-    if(errors!=0u||!present(cell))return;uint owner=root(uint(cell+1));
-    atomicExchange(words[h(22)+cell+1],owner);
+    if (errors != 0u || !present(cell))
+        return;
+    uint owner = root(uint(cell + 1));
+    atomicExchange(words[h(GEO_H_PARENTS) + cell + 1], owner);
 }
 void rootFlag(int item) {
-    if(errors!=0u)return;
-    if(words[h(25)]!=0u){atomicOr(errors,8192u);return;}
-    words[h(27)+item]=item>0&&words[h(22)+item]==uint(item)?1u:0u;
+    if (errors != 0u)
+        return;
+    if (words[h(GEO_H_CHANGED)] != 0u) {
+        atomicOr(errors, 8192u);
+        return;
+    }
+    words[h(GEO_H_ROOT_FLAGS) + item] = item > 0 && words[h(GEO_H_PARENTS) + item] == uint(item) ? 1u : 0u;
 }
 void assignNode(int cell) {
-    if(errors!=0u)return;
-    if(cell==0)words[h(26)]=words[h(28)+h(3)+1];
-    if(!present(cell))return;
-    uint owner=words[h(22)+cell+1];int node=owner==0u?0:int(words[h(28)+int(owner)])+1;
-    words[h(24)+cell]=uint(node);words[h(23)+cell]=node==0?1u:0u;
-    atomicAdd(words[h(29)+node],1u);
+    if (errors != 0u)
+        return;
+    if (cell == 0)
+        words[h(GEO_H_COMPONENT_COUNT)] = words[h(GEO_H_ROOT_OFFSETS) + h(GEO_H_CELL_COUNT) + 1];
+    if (!present(cell))
+        return;
+    uint owner = words[h(GEO_H_PARENTS) + cell + 1];
+    int node = owner == 0u ? 0 : int(words[h(GEO_H_ROOT_OFFSETS) + int(owner)]) + 1;
+    words[h(GEO_H_CELL_NODES) + cell] = uint(node);
+    words[h(GEO_H_EXTERIOR_REACHABLE) + cell] = node == 0 ? 1u : 0u;
+    atomicAdd(words[h(GEO_H_COMPONENT_COUNTS) + node], 1u);
 }
 void scatterMember(int cell) {
-    if(errors!=0u||!present(cell))return;int node=int(words[h(24)+cell]);
-    uint local=atomicAdd(words[h(31)+node],1u);words[h(32)+int(words[h(30)+node]+local)]=uint(cell);
+    if (errors != 0u || !present(cell))
+        return;
+    int node = int(words[h(GEO_H_CELL_NODES) + cell]);
+    uint local = atomicAdd(words[h(GEO_H_COMPONENT_CURSORS) + node], 1u);
+    words[h(GEO_H_COMPONENT_MEMBERS) + int(words[h(GEO_H_COMPONENT_OFFSETS) + node] + local)] = uint(cell);
 }
 // The committed gas inventory owns its source cell membership. Rebuilt PLIC ports
 // describe geometry; the successor remap settles any changed chamber partition.
 void assignImportedNode(int cell) {
-    if(errors!=0u)return;
-    if(cell==0)words[h(26)]=words[p.gasCounts];
-    int node=-1;
-    for(int micro=0;micro<8;micro++) {
-        int next=int(words[p.gasPieces+8*cell+micro]);
-        if(next<0)continue;
-        if(node>=0&&node!=next){atomicOr(errors,8192u);return;}
-        node=next;
+    if (errors != 0u)
+        return;
+    if (cell == 0)
+        words[h(GEO_H_COMPONENT_COUNT)] = words[p.gasCounts];
+    int node = -1;
+    for (int micro = 0; micro < 8; micro++) {
+        int next = int(words[p.gasPieces + 8 * cell + micro]);
+        if (next < 0)
+            continue;
+        if (node >= 0 && node != next) {
+            atomicOr(errors, 8192u);
+            return;
+        }
+        node = next;
     }
-    if((node>=0)!=present(cell)||node>int(words[p.gasCounts])){atomicOr(errors,8192u);return;}
-    if(node<0)return;
-    words[h(24)+cell]=uint(node);words[h(23)+cell]=node==0?1u:0u;
-    atomicAdd(words[h(29)+node],1u);
+    if ((node >= 0) != present(cell) || node > int(words[p.gasCounts])) {
+        atomicOr(errors, 8192u);
+        return;
+    }
+    if (node < 0)
+        return;
+    words[h(GEO_H_CELL_NODES) + cell] = uint(node);
+    words[h(GEO_H_EXTERIOR_REACHABLE) + cell] = node == 0 ? 1u : 0u;
+    atomicAdd(words[h(GEO_H_COMPONENT_COUNTS) + node], 1u);
 }
 void main() {
-    uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
-    if(id>=uint(p.count))return;int item=int(id);
-    if(p.stage==0) {
-        if(item==0)for(int i=0;i<12;i++)words[h(43)+i]=0u;
-        words[h(27)+item]=0u;words[h(29)+item]=0u;words[h(31)+item]=0u;
-        if(item==0){words[h(22)]=0u;words[h(25)]=1u;words[h(26)]=0u;}
-    } else if(p.stage==1)captureCell(item);
-    else if(p.stage==2){putNumber(h(20)+2*item,0.0);words[h(21)+item]=0u;if(errors!=0u)return;if(regularFace(item))appendConnection(item);else words[h(40)+int(queueSlot(h(43)))]=uint(item);}
-    else if(p.stage==9||p.stage==11){if(item==0)scheduleQueues();}
-    else if(p.stage==10){if(uint(item)>=words[h(43)])return;int face=int(words[h(40)+item]);if(h(36)>=0)captureSharedFace(face);else captureFace(face);appendConnection(face);}
-    else if(p.stage==3)words[h(25)]=0u;
-    else if(p.stage==4){if(uint(item)<words[h(43)+1])joinFace(int(words[h(41)+item]));}
-    else if(p.stage==5){if(uint(item)<words[h(43)+2])compress(int(words[h(42)+item]));}
-    else if(p.stage==6)rootFlag(item);
-    else if(p.stage==7)assignNode(item);
-    else if(p.stage==12)assignImportedNode(item);
-    else scatterMember(item);
+    uint id = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x;
+    if (id >= uint(p.count))
+        return;
+    int item = int(id);
+    if (p.stage == 0) {
+        if (item == 0)
+            for (int i = 0; i < 12; i++)
+                words[h(GEO_H_DISPATCH) + i] = 0u;
+        words[h(GEO_H_ROOT_FLAGS) + item] = 0u;
+        words[h(GEO_H_COMPONENT_COUNTS) + item] = 0u;
+        words[h(GEO_H_COMPONENT_CURSORS) + item] = 0u;
+        if (item == 0) {
+            words[h(GEO_H_PARENTS)] = 0u;
+            words[h(GEO_H_CHANGED)] = 1u;
+            words[h(GEO_H_COMPONENT_COUNT)] = 0u;
+        }
+    } else if (p.stage == 1)
+        captureCell(item);
+    else if (p.stage == 2) {
+        putNumber(h(GEO_H_FACE_AREAS) + 2 * item, 0.0);
+        words[h(GEO_H_FULL_CONNECTIONS) + item] = 0u;
+        if (errors != 0u)
+            return;
+        if (regularFace(item))
+            appendConnection(item);
+        else
+            words[h(GEO_H_CUT_FACES) + int(queueSlot(h(GEO_H_DISPATCH)))] = uint(item);
+    } else if (p.stage == 9 || p.stage == 11) {
+        if (item == 0)
+            scheduleQueues();
+    } else if (p.stage == 10) {
+        if (uint(item) >= words[h(GEO_H_DISPATCH)])
+            return;
+        int face = int(words[h(GEO_H_CUT_FACES) + item]);
+        if (h(GEO_H_LIQUID_FACES) >= 0)
+            captureSharedFace(face);
+        else
+            captureFace(face);
+        appendConnection(face);
+    } else if (p.stage == 3)
+        words[h(GEO_H_CHANGED)] = 0u;
+    else if (p.stage == 4) {
+        if (uint(item) < words[h(GEO_H_DISPATCH) + 1])
+            joinFace(int(words[h(GEO_H_CONNECTED_FACES) + item]));
+    } else if (p.stage == 5) {
+        if (uint(item) < words[h(GEO_H_DISPATCH) + 2])
+            compress(int(words[h(GEO_H_PRESENT_CELLS) + item]));
+    } else if (p.stage == 6)
+        rootFlag(item);
+    else if (p.stage == 7)
+        assignNode(item);
+    else if (p.stage == 12)
+        assignImportedNode(item);
+    else
+        scatterMember(item);
 }

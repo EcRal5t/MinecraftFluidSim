@@ -21,7 +21,7 @@ final class FluidThermalBinding {
 	private FluidThermalBinding() { }
 
 	/** Reference energy follows the allocated integer species; only sensible U follows mass. */
-	static LiquidCellInventory.EnergyPartitioner liquidEnergyPartitioner(FluidDomain domain) {
+	static LiquidCellInventory.EnergyPartitioner liquidEnergyPartitioner(HostFluidState domain) {
 		if (domain.thermalState == null) return null;
 		var thermal = domain.thermalState;
 		var function = thermal.stateFunction();

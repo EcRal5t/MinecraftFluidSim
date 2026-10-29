@@ -5,7 +5,7 @@ import java.util.Arrays;
 
 /** One bounded fluid aperture and complementary parcel pressure shares on the MAC faces. */
 final class GranularFaceVolumes {
-		private final FluidDomain domain;
+		private final HostFluidState domain;
 	private final int[] offsets = new int[3];
 	private final float[] liquid, fixedPore;
 	private int[] parcelFaces=new int[0],parcelCounts=new int[0];
@@ -15,7 +15,7 @@ final class GranularFaceVolumes {
 	private final double[] volumes = new double[8];
 	private long revision;
 
-	GranularFaceVolumes(FluidDomain domain) {
+	GranularFaceVolumes(HostFluidState domain) {
 		this.domain = domain;
 		offsets[1] = domain.mac.velocityX.length;
 		offsets[2] = offsets[1] + domain.mac.velocityY.length;
