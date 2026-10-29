@@ -80,7 +80,7 @@ public final class ShellFluidQueryValidation {
 				"Empty world produced captured liquid");
 		require(FluidRegionFactory.captureWater(region, position -> position.equals(BlockPos.ZERO) ? 1.0F : 0.0F) == 8,
 				"A source block did not fill its eight solver cells");
-		require(domain.totalVolume() == 8.0F, "Captured source block did not retain one cubic metre");
+		require(region.editableHost().totalVolume() == 8.0F, "Captured source block did not retain one cubic metre");
 	}
 
 	private static void validateControllerDemoLayout() {

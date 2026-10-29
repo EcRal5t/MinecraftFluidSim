@@ -321,11 +321,11 @@ public final class FluidNetworkProtocolValidation {
 		require(FluidProtocol.serverOffer(TestProfiles.pure()).equals(FluidProtocol.materialServerOffer())
 				&& FluidProtocol.serverOffer(TestProfiles.materials()).equals(FluidProtocol.materialServerOffer())
 				&& FluidProtocol.serverOffer(TestProfiles.chemical(BuiltinChemicalDefinitions.REGISTRY))
-						.equals(FluidProtocol.chemicalServerOffer())
+						.equals(FluidProtocol.thermalServerOffer(true, false))
 				&& FluidProtocol.serverOffer(TestProfiles.granular(null, BuiltinGranularDefinitions.createRegistry()))
 						.equals(FluidProtocol.granularServerOffer(false))
 				&& FluidProtocol.serverOffer(TestProfiles.granular(BuiltinChemicalDefinitions.REGISTRY,
-						BuiltinGranularDefinitions.createRegistry())).equals(FluidProtocol.granularServerOffer(true)),
+						BuiltinGranularDefinitions.createRegistry())).equals(FluidProtocol.thermalServerOffer(true, true)),
 				"world capability profiles did not select exact semantic server layouts");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require((offer.requiredCapabilities() & FluidProtocol.CAP_DEMO_WORKBENCH) != 0

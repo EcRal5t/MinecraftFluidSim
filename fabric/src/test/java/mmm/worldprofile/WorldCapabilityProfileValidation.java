@@ -59,12 +59,11 @@ public final class WorldCapabilityProfileValidation {
 	private static void partialCapabilitySetsDeriveUniqueLayouts() {
 		requireLayout("pure", Set.of());
 		requireLayout("material", EnumSet.of(WorldCapability.MATERIALS));
-		requireLayout("chemical", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY));
 		requireLayout("granular", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.GRANULAR));
-		requireLayout("granular", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY,
-				WorldCapability.GRANULAR, WorldCapability.PRECIPITATION));
+		requireLayout("thermal", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY,
+				WorldCapability.GRANULAR, WorldCapability.PRECIPITATION, WorldCapability.THERMAL));
 		requireLayout("thermal", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.THERMAL));
-		requireLayout("thermal", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.THERMAL, WorldCapability.PHASECHANGE));
+		requireLayout("thermal", EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY, WorldCapability.THERMAL, WorldCapability.PHASECHANGE));
 	}
 
 	private static void requireLayout(String expected, Set<WorldCapability> capabilities) {
@@ -77,6 +76,9 @@ public final class WorldCapabilityProfileValidation {
 	private static void dependencyViolationsAreRejected() {
 		expectIllegal("requires mmm:materials",
 				() -> WorldCapabilityProfile.of(EnumSet.of(WorldCapability.CHEMISTRY), bindingsFor(EnumSet.of(WorldCapability.CHEMISTRY))));
+		expectIllegal("requires mmm:thermal",
+				() -> WorldCapabilityProfile.of(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY),
+						bindingsFor(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY))));
 		expectIllegal("requires mmm:materials",
 				() -> WorldCapabilityProfile.of(EnumSet.of(WorldCapability.GRANULAR), bindingsFor(EnumSet.of(WorldCapability.GRANULAR))));
 		expectIllegal("requires mmm:materials",
@@ -89,6 +91,10 @@ public final class WorldCapabilityProfileValidation {
 				() -> WorldCapabilityProfile.of(
 						EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY, WorldCapability.PHASECHANGE),
 						bindingsFor(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY, WorldCapability.PHASECHANGE))));
+		expectIllegal("requires mmm:chemistry",
+				() -> WorldCapabilityProfile.of(
+						EnumSet.of(WorldCapability.MATERIALS, WorldCapability.THERMAL, WorldCapability.PHASECHANGE),
+						bindingsFor(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.THERMAL, WorldCapability.PHASECHANGE))));
 	}
 
 	private static void bindingMismatchIsRejected() {

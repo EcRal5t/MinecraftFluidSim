@@ -28,6 +28,7 @@ public final class GpuResidentStateValidation {
         domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bindThermal(thermal,fluids,300);
         domain.bootstrapGasState("");
         var initial=domain.captureAuthoritativeState();var codec=new VulkanFluidStateCodec(initial);var audit=domain.thermalAudit();long expectedMass=domain.totalMassUnits();
+        validateCapabilityContracts(initial);
         if(!initial.hasGas()||initial.gas().nodes().isEmpty())throw new AssertionError("Resident fixture did not initialize a finite gas chamber");
         try(var context=new VulkanDeviceContext(device,true,true);var geometry=new VulkanLiquidGeometry(context);
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
@@ -71,10 +72,40 @@ public final class GpuResidentStateValidation {
             System.out.println("Production state import, rejected private candidate, mechanical/thermal adoption, device readout and exact checkpoint passed");
         }
         validateSmallGeometry(device);
+        validateGranularColdImport(device);
         long expectedGasMass=0;for(var node:initial.gas().nodes())expectedGasMass=Math.addExact(expectedGasMass,node.inventory().totalMassUnits());
         for (int attempt = 0; attempt < Integer.getInteger("mmm.residentAttempts", 1); attempt++) {
             System.out.println("resident_attempt=" + attempt);
             validateBackend(device,initial,expectedMass,expectedGasMass);
+        }
+    }
+    private static void validateCapabilityContracts(FluidDomainState thermalOnly) {
+        expectIllegal(() -> new FluidStepRequest(0, thermalOnly, List.of(), true, 1));
+        expectIllegal(() -> new FluidThermalStepRequest(0, thermalOnly, true, 1));
+        var domain = new HostFluidState(2, 2, 2, thermalOnly.config());
+        domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)));
+        domain.bindChemistry(mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+        expectIllegal(() -> new VulkanFluidStateCodec(domain.captureAuthoritativeState()));
+        var simple = new HostFluidState(2, 2, 2, thermalOnly.config()).captureAuthoritativeState();
+        if (simple.hasGas() || !new VulkanFluidStateCodec(simple).template().hasGas())
+            throw new AssertionError("Cold import must initialize its gas state");
+    }
+    private static void expectIllegal(Runnable action) {
+        try { action.run(); } catch (IllegalArgumentException expected) { return; }
+        throw new AssertionError("Unsupported capability combination was accepted");
+    }
+    private static void validateGranularColdImport(int device) {
+        var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,200,1e-5f,.002f));
+        var fluids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+        domain.bindMaterialRegistry(fluids);
+        domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+        domain.bindGranular(mmm.granular.BuiltinGranularDefinitions.createRegistry(), fluids, BuiltinFluidMaterials.createRegistry());
+        var initial = domain.captureAuthoritativeState();
+        if (initial.hasGas()) throw new AssertionError("Expected uninitialized gas fixture");
+        try (var backend = new VulkanFluidSolverBackend(device);
+             var candidate = backend.evaluate(new FluidStepRequest(0, initial, List.of(), false, 0));
+             var prepared = candidate.claimPreparedDeviceState()) {
+            if (!prepared.exportState().hasGas()) throw new AssertionError("Granular import lost its gas state");
         }
     }
     private static void validateSmallGeometry(int device){

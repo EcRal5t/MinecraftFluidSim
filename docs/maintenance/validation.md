@@ -223,6 +223,10 @@
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-10-30 S1 交接复审修复：`assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuResidentStateValidation :gpu-kernel:runGpuActivityMaskValidation :gpu-kernel:runGpuGranularTransitionsBenchmark` 通过，宿主选择 `lifecycle,containers,region-state,protocol`，记录 `build/review-s1-handoff.log`（45 秒）。回归覆盖全加载宿主规划的独立组和几何变更、化学／相变能力依赖、无热学颗粒的缺气腔冷导入与推进、反应布局机械／热候选后的部分可用性，以及同代非零颗粒和气流控制计数的观察。上下两层沉积床分别覆盖松弛和起动，并检查上层暂停时的质量、体积与内能保留。架构扫描 611 个生产源通过。
+
+同轮默认生产水流 120 步与七类热相变通过，记录 `build/review-s1-production.log`（32 秒）。覆盖保存恢复、暂停单步、编辑续算、整数质量和热账；本轮确认事件观察正确，未新增关于提前休眠的实测结论。构建产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-10-30 初始化与活动组交接复审：`assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuResidentStateValidation :fabric:runGpuProductionDemoValidation` 通过，选择 `hostValidation=lifecycle,containers,region-state`、`gpuDemo=flow`、`gpuDemoSteps=120`、`gpuDemoStage=complete`。记录 `build/review-state-isolation.log`，耗时 54 秒。新增宿主回归覆盖设备创建／首次上传失败及释放异常、暂停组相变任务保留时另一组容器预览与装取、超过设备预算的暂停实体观测及扫掠保留；设备失败采用受控注入。真实 GPU 回归检查冷导入 300 K 和编辑导入 350 K 的即时热显示，完整水流完成保存恢复、单步及编辑续算。架构扫描 611 个生产源通过；产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 2026-10-30 其余 shader 可读性整理：53 个 shader／共享片段完成主要变量、函数、阶段、记录字段及魔数命名。常驻状态、七类热相变、固液反应、整数输运及 74,743 行压力图重放通过，对应任务输出见 `build/shader-readability-integration.log`。完整 GPU 水流 120 步、实体耦合、checkpoint 恢复、暂停单步和编辑续算通过，记录 `build/shader-readability-delivery.log`。相变行共享库同步改名后，`assemble :gpu-kernel:runGpuThermalPhaseValidation :gpu-kernel:runGpuSolidLiquidReactionsValidation` 通过，最终证据为 `build/shader-readability-phase-final.log`。算法、布局、参数和迭代预算保持不变，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。

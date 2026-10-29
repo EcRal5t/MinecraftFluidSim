@@ -61,6 +61,71 @@ public final class GpuGranularTransitionsBenchmark {
                     result.toSnapshot(n,n,n,h);System.out.printf("Continuous lifecycle complete: settled=%d,woken=%d,relaxed=%d,SVQ=%d,massUnits=%d%n",settled,woken,relaxed,finalVolume,finalMass);
                 }
             }
+            stackedBeds(context,geometry,lifecycle,false,false);
+            stackedBeds(context,geometry,lifecycle,true,false);
+            stackedBeds(context,geometry,lifecycle,false,true);
+            stackedBeds(context,geometry,lifecycle,true,true);
+        }
+    }
+    private static void stackedBeds(VulkanDeviceContext context,VulkanGranularGeometry geometry,VulkanGranularTransitions lifecycle,boolean pauseUpper,boolean wake){
+        int n=8,cells=n*n*n;double h=.5;long alignment=Math.max(8,context.storageOffsetAlignment());
+        var fixture=GpuLiquidGeometryBenchmark.fixture(n,false);
+        var liquid=VulkanLiquidStateLayout.forState(fixture.inventory(),fixture.momentum(),alignment);
+        var registry=mmm.granular.BuiltinGranularDefinitions.createRegistry();
+        var ids=registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList();
+        var state=new VulkanGranularStateLayout(n,n,n,16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),alignment);
+        long cursor=state.endOffset();var coherent=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,8);cursor=coherent.offset()+coherent.bytes();
+        var masks=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,4);cursor=masks.offset()+masks.bytes();
+        var occupancy=new VulkanGranularGeometry.Layout(state,coherent,cursor,alignment);cursor=occupancy.endOffset();
+        var cellData=new VulkanLiquidStateLayout.Column(align(cursor,alignment),4*cells,8);cursor=cellData.offset()+cellData.bytes();
+        int faceCount=3*(n+1)*n*n;var faces=new VulkanLiquidStateLayout.Column(align(cursor,alignment),4*faceCount,8);cursor=faces.offset()+faces.bytes();
+        var mu=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,8);cursor=mu.offset()+mu.bytes();
+        var activity=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,4);cursor=activity.offset()+activity.bytes();
+        var transitions=new VulkanGranularTransitions.Layout(state,occupancy,cellData,faces,liquid,masks,mu,cursor,alignment);
+        transitions.bindActivity(Math.toIntExact(activity.offset()/4));
+        var initial=ByteBuffer.allocate(Math.toIntExact(transitions.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
+        liquid.importState(initial,fixture.inventory(),fixture.momentum());occupancy.initializeHeader(initial);
+        initial.duplicate().position(Math.toIntExact(transitions.header.offset())).put(transitions.headerBytes());
+        initial.duplicate().position(Math.toIntExact(transitions.column(VulkanGranularTransitions.Field.MATERIALS).offset())).put(transitions.materialBytes(registry));
+        int sand=registry.materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND);long volume=8_000_000;
+        if(wake)initial.putDouble(Math.toIntExact(transitions.column(VulkanGranularTransitions.Field.MATERIALS).offset()+8L*(7*sand+3)),1000);
+        double mass=registry.material(sand).referenceDensity()*volume/134217728.0;
+        var row=new VulkanGranularStateLayout.Row(sand,volume,mmm.units.Mass.fromKilograms(mass),false,0,new int[0],new long[0],mass*800*293.15);
+        int lower=5*n*n+5,upper=(5*n+4)*n+5;
+        var lowerBed=new VulkanGranularStateLayout.Deposit(row,lower,.38f);var upperBed=new VulkanGranularStateLayout.Deposit(row,upper,.38f);
+        state.importState(initial,new VulkanGranularStateLayout.State(state.definitions(),List.of(),List.of(lowerBed,upperBed),List.of(),List.of()));
+        for(int c=0;c<cells;c++){
+            int y=c/n%n;initial.putInt(Math.toIntExact(masks.offset()+4L*c),y==3?255:0);
+            initial.putInt(Math.toIntExact(activity.offset()+4L*c),pauseUpper&&y>=4?0:1);
+            int off=Math.toIntExact(cellData.offset()+32L*c);initial.putDouble(off,1).putDouble(off+8,125).putDouble(off+16,1);
+            initial.putDouble(Math.toIntExact(mu.offset()+8L*c),.001);
+        }
+        initial.duplicate().position(Math.toIntExact(faces.offset())).put(faceData(faceCount,wake?1:0));
+        try(var storage=new VulkanRegionStorage(context,transitions.endOffset(),1024*1024)){
+            storage.initialize(initial,0);
+            try(var source=storage.capture();var candidate=storage.prepare(source)){
+                var feedback=candidate.beginBatch(0,(cmd,input,output,errors,staging,stack)->{
+                    var arena=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
+                    geometry.rebindRanges(arena,err);lifecycle.rebindRanges(arena,err);
+                    geometry.recordSupports(cmd,occupancy,h);geometry.recordOccupancy(cmd,occupancy);lifecycle.record(cmd,transitions,output,h,.05,9.81);
+                },transitions.column(VulkanGranularTransitions.Field.CONTROL).offset(),24);
+                var control=feedback.feedback().order(ByteOrder.LITTLE_ENDIAN);
+                if(feedback.error()!=0||control.getInt(wake?16:20)<(pauseUpper?1:2))
+                    throw new IllegalStateException("Stacked bed transitions: error="+feedback.error()+", woken="+control.getInt(16)+", relaxed="+control.getInt(20));
+                int error=candidate.finishBatch((cmd,input,output,errors,staging,stack)->{});
+                if(error!=0)throw new IllegalStateException("Stacked bed finish="+error);candidate.commit();
+            }
+            try(var source=storage.capture()){
+                var data=ByteBuffer.allocate(Math.toIntExact(state.bytes()));storage.read(source,state.baseOffset(),data);var result=state.exportState(data.flip());
+                long actualVolume=0,actualMass=0,upperVolume=0,upperMass=0;double upperEnergy=0;
+                for(var particle:result.particles()){actualVolume+=particle.inventory().solidVolumeSvq();actualMass+=particle.inventory().massUnits();}
+                for(var deposit:result.deposits()){
+                    actualVolume+=deposit.inventory().solidVolumeSvq();actualMass+=deposit.inventory().massUnits();
+                    if(deposit.cell()/n%n>=4){upperVolume+=deposit.inventory().solidVolumeSvq();upperMass+=deposit.inventory().massUnits();upperEnergy+=deposit.inventory().internalEnergy();}
+                }
+                if(actualVolume!=2*volume||actualMass!=2*row.massUnits()||pauseUpper&&(upperVolume!=volume||upperMass!=row.massUnits()||upperEnergy!=row.internalEnergy()))
+                    throw new IllegalStateException("Stacked bed inventory or paused upper bed changed");
+            }
         }
     }
     private static ByteBuffer faceData(int count,double velocity){var b=ByteBuffer.allocateDirect(32*count).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<count;i++)b.putDouble(125).putDouble(velocity).putDouble(1).putDouble(1);return b.flip();}

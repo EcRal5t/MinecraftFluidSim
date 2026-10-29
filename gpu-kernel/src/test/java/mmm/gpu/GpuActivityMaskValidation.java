@@ -26,6 +26,8 @@ public final class GpuActivityMaskValidation {
         var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
         domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());domain.sealDomainBoundary();
         for(int z=0;z<Z;z++)for(int y=0;y<Y;y++)domain.setSolidMicroMask(3,y,z,255);
+        // An isolated cut cell connects to the active chamber through a partial face.
+        domain.setSolidMicroMask(0,3,3,2);domain.setSolidMicroMask(0,2,3,255);domain.setSolidMicroMask(0,3,2,255);
         domain.setVolume(1,2,1,.5f);domain.setVolume(1,1,1,.5f);domain.setVolume(4,2,1,.5f);
         domain.bindChemistry(chemistry);domain.bindGasRegistry(gas);
         domain.bindGranular(granular,fluids,BuiltinFluidMaterials.createRegistry());
@@ -53,7 +55,9 @@ public final class GpuActivityMaskValidation {
             var imported=backend.prepareState(null,initial,null,List.of());var resident=imported.commit()) {
             var before=resident.exportState();
             try(var candidate=backend.evaluate(new FluidStepRequest(0,resident,List.of(retainedBody),false,0,false,false,active));
-                var prepared=candidate.claimPreparedDeviceState();var state=prepared.commit()) {
+                var prepared=candidate.claimPreparedDeviceState();var state=(ResidentFluidState)prepared.commit()) {
+            checkMechanicalCounters(state);
+            checkActivity(state,active);
             var after=state.exportState();
             if (!after.entityBodyState().equals(before.entityBodyState()))
                 throw new AssertionError("Paused body geometry changed");
@@ -64,7 +68,10 @@ public final class GpuActivityMaskValidation {
             if(beforeActive.equals(afterActive))throw new AssertionError("Active group did not transport liquid");
             checkMomenta(before.momentum(),after.momentum());
             try(var thermalCandidate=backend.evaluateThermal(new FluidThermalStepRequest(1,state,true,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP,active));
-                var thermalPrepared=thermalCandidate.claimPreparedDeviceState();var thermalState=thermalPrepared.commit()) {
+                var thermalPrepared=thermalCandidate.claimPreparedDeviceState();var thermalState=(ResidentFluidState)thermalPrepared.commit()) {
+                checkActivity(thermalState,active);
+                if(thermalState.observation().gasPressureFlow())
+                    throw new AssertionError("Thermal candidate must not report an earlier mechanical gas flow");
                 var heated=thermalState.exportState();
                 checkPaused(after,heated);
                 if(liquidEnergy(after,true).equals(liquidEnergy(heated,true)))
@@ -73,6 +80,30 @@ public final class GpuActivityMaskValidation {
             System.out.println("GPU activity groups: active transport/heat and paused liquid, gas, solid, energy and momentum passed");
             }
         } finally { initial.close(); }
+    }
+    private static void checkMechanicalCounters(ResidentFluidState state) throws Exception {
+        var captureField=state.getClass().getDeclaredField("capture");captureField.setAccessible(true);
+        var capture=(VulkanLiquidRegion.Capture)captureField.get(state);
+        var gasField=capture.getClass().getDeclaredField("currentGas");gasField.setAccessible(true);
+        if(!gasField.getBoolean(capture))throw new AssertionError("Fixture must complete phase gas topology");
+        var layoutField=capture.getClass().getDeclaredField("layout");layoutField.setAccessible(true);
+        var layout=(VulkanLiquidWorkspace)layoutField.get(capture);
+        var read=capture.getClass().getDeclaredMethod("read",long.class,long.class);read.setAccessible(true);
+        var control=layout.transport.dynamics.transitions.column(VulkanGranularTransitions.Field.CONTROL);
+        var raw=(java.nio.ByteBuffer)read.invoke(capture,control.offset(),24L);
+        int[] expected=new int[6];raw.asIntBuffer().get(expected);
+        if(expected[0]==0)throw new AssertionError("Fixture must retain a granular parcel in the mechanical control");
+        if(!Arrays.equals(expected,capture.granularCounters()))
+            throw new AssertionError("Granular counters differ from the mechanical candidate control");
+        var pairs=(java.nio.ByteBuffer)read.invoke(capture,layout.transport.aperture.flow.requiredPairsOffset(),4L);
+        if(pairs.getInt(0)<=0)throw new AssertionError("Fixture must have a finite gas aperture");
+        if(capture.gasFlowActive()!=(pairs.getInt(0)>0))
+            throw new AssertionError("Gas flow observation differs from the mechanical candidate control");
+    }
+    private static void checkActivity(ResidentFluidState state,boolean[] world) {
+        var available=state.activityGraph().available(world);
+        if(!available[index(1,1,1)]||available[index(4,1,1)])
+            throw new AssertionError("Current gas groups must preserve partial availability after a candidate");
     }
     private static void validateActivityGraph() {
         byte[] masks = {0, 0, (byte) 255, 0, 0};

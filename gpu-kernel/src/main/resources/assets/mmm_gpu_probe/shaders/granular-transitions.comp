@@ -26,6 +26,8 @@ const int MODE_RELOCATED = 4;
 const double MASS_UNIT_KG = 1e-10;
 const double SOLID_VOLUME_QUANTA_PER_CELL = 16777216.0;
 const double SOLID_VOLUME_QUANTA_PER_MICROCELL = 2097152.0;
+const uint MICROCELL_BOTTOM_MASK = 0x33u;
+const uint MICROCELL_TOP_MASK = 0xccu;
 const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
 const int STAGE_INITIALIZE = 0;
 const int STAGE_COUNT_COLUMNS = 1;
@@ -198,14 +200,21 @@ double bedCenter(int cellIndex, double bulkVolume) {
            moment = (lowerCapacity > 0.0 ? lowerVolume * .25 * lowerVolume / lowerCapacity : 0.0) + (upperCapacity > 0.0 ? upperVolume * (.5 + .25 * upperVolume / upperCapacity) : 0.0);
     return (double(cellCoordinates(cellIndex).y) + moment / bulkVolume) * p.cellSize;
 }
-int surfaceCell(int column) {
-    int x = column % headerValue(H_SIZE_X), z = column / headerValue(H_SIZE_X);
-    for (int y = headerValue(H_SIZE_Y) - 1; y >= 0; y--) {
-        int c = cell(ivec3(x, y, z));
-        if (read(FIELD_CELL_BULK, c) > 0.0)
-            return c;
+bool hasBedAbove(int c) {
+    ivec3 q = cellCoordinates(c);
+    for (int y = q.y; y + 1 < headerValue(H_SIZE_Y); y++) {
+        int lower = cell(ivec3(q.x, y, q.z)), upper = cell(ivec3(q.x, y + 1, q.z));
+        uint lowerOpen = (~words[headerValue(H_MASKS) + lower] & MICROCELL_TOP_MASK) >> 2;
+        uint upperOpen = ~words[headerValue(H_MASKS) + upper] & MICROCELL_BOTTOM_MASK;
+        if ((lowerOpen & upperOpen) == 0u)
+            break;
+        if (read(FIELD_CELL_BULK, upper) > 0.0)
+            return true;
     }
-    return -1;
+    return false;
+}
+bool exposedSurface(int c) {
+    return read(FIELD_CELL_BULK, c) > 0.0 && !hasBedAbove(c);
 }
 bool sphereFits(dvec3 position, double radius, int exclude) {
     if (any(lessThan(position, dvec3(radius))) || any(greaterThan(position, dvec3(gridDimensions()) * p.cellSize - radius)))
@@ -362,7 +371,6 @@ void settleColumn(int column) {
     words[targetFieldOffset(GRANULAR_STABLE_AGE) + column] = allActive
                                                 ? (changed ? 0u : min(20u, words[sourceFieldOffset(GRANULAR_STABLE_AGE) + column] + 1u))
                                                 : words[sourceFieldOffset(GRANULAR_STABLE_AGE) + column];
-    writeFieldInt(FIELD_SURFACE, column, surfaceCell(column));
 }
 int exposedDeposit(int col, int c) {
     int best = -1;
@@ -375,28 +383,13 @@ int exposedDeposit(int col, int c) {
     }
     return best;
 }
-void relaxPair(int column) {
-    int axis = p.color / 2, parity = p.color % 2;
-    ivec2 a = ivec2(column % headerValue(H_SIZE_X), column / headerValue(H_SIZE_X));
-    if ((a[axis] & 1) != parity)
-        return;
-    ivec2 b = a;
-    b[axis]++;
-    if (b.x >= headerValue(H_SIZE_X) || b.y >= headerValue(H_SIZE_Z))
-        return;
-    int other = b.y * headerValue(H_SIZE_X) + b.x;
-    int firstSurface = surfaceCell(column), secondSurface = surfaceCell(other);
-    double firstHeight = firstSurface < 0 ? 0.0 : bedHeight(firstSurface, read(FIELD_CELL_BULK, firstSurface)),
-           secondHeight = secondSurface < 0 ? 0.0 : bedHeight(secondSurface, read(FIELD_CELL_BULK, secondSurface));
-    int from = firstHeight >= secondHeight ? column : other, to = firstHeight >= secondHeight ? other : column, sourceCellIndex = firstHeight >= secondHeight ? firstSurface : secondSurface;
-    if (sourceCellIndex < 0)
+void relaxSurface(int from, int to, int sourceCellIndex) {
+    if (!exposedSurface(sourceCellIndex) || !activeCell(sourceCellIndex))
         return;
     int row = exposedDeposit(from, sourceCellIndex);
-    if (row < 0 || !activeCell(sourceCellIndex))
+    if (row < 0)
         return;
     int materialIndex = materialOf(row);
-    if (abs(firstHeight - secondHeight) <= p.cellSize * materialProperty(materialIndex, MATERIAL_REPOSE_TANGENT))
-        return;
     int64_t movedVolume = min(solidVolume(row), 1048576l);
     if (words[sourceFieldOffset(GRANULAR_MIXTURE_PRESENT) + row] != 0u && movedVolume != solidVolume(row))
         return;
@@ -405,13 +398,25 @@ void relaxPair(int column) {
         return;
     ivec3 sourceCoord = cellCoordinates(sourceCellIndex);
     ivec2 targetColumn = ivec2(to % headerValue(H_SIZE_X), to / headerValue(H_SIZE_X));
+    double sourceHeight = bedHeight(sourceCellIndex, read(FIELD_CELL_BULK, sourceCellIndex));
+    double radius = sphereRadius(movedVolume), lowestHeight = sourceHeight;
+    dvec3 start = (dvec3(sourceCoord) + .5) * p.cellSize;
+    start.y = sourceHeight + radius;
     int targetCell = -1;
-    for (int y = 0; y <= sourceCoord.y; y++) {
+    for (int y = sourceCoord.y; y >= 0; y--) {
         int c = cell(ivec3(targetColumn.x, y, targetColumn.y));
-        if (activeCell(c) && read(FIELD_CELL_BULK, c) + bulkPortion(row, movedVolume) <= read(FIELD_AVAILABLE_BULK, c)) {
-            targetCell = c;
-            break;
-        }
+        double bulk = read(FIELD_CELL_BULK, c), newBulk = bulk + bulkPortion(row, movedVolume);
+        if (!activeCell(c) || newBulk > read(FIELD_AVAILABLE_BULK, c) || hasBedAbove(c))
+            continue;
+        double height = bulk > 0.0 ? bedHeight(c, bulk) : double(y) * p.cellSize;
+        if (height >= lowestHeight || sourceHeight - height <= p.cellSize * materialProperty(materialIndex, MATERIAL_REPOSE_TANGENT))
+            continue;
+        dvec3 end = (dvec3(cellCoordinates(c)) + .5) * p.cellSize;
+        end.y = bedHeight(c, newBulk) + radius;
+        if (!pathOpen(start, end, radius))
+            continue;
+        targetCell = c;
+        lowestHeight = height;
     }
     if (targetCell < 0)
         return;
@@ -424,12 +429,6 @@ void relaxPair(int column) {
                      sourceMass * bedCenter(sourceCellIndex, sourceOldBulk) - targetMass * bedCenter(targetCell, targetOldBulk));
     if (potentialChange > 0.0 || !bedFits(targetCell, targetNewBulk, -1))
         return;
-    double radius = sphereRadius(movedVolume);
-    dvec3 start = (dvec3(sourceCoord) + .5) * p.cellSize, end = (dvec3(cellCoordinates(targetCell)) + .5) * p.cellSize;
-    start.y = bedHeight(sourceCellIndex, sourceOldBulk) + radius;
-    end.y = bedHeight(targetCell, targetNewBulk) + radius;
-    if (!pathOpen(start, end, radius))
-        return;
     writeFieldInt(FIELD_MODE, row, MODE_RELOCATED);
     writeFieldInt(FIELD_TARGET, row, targetCell);
     writeQuantity(FIELD_MOVED_VOLUME, row, movedVolume);
@@ -440,6 +439,21 @@ void relaxPair(int column) {
     words[targetFieldOffset(GRANULAR_STABLE_AGE) + from] = 0u;
     words[targetFieldOffset(GRANULAR_STABLE_AGE) + to] = 0u;
     atomicAdd(words[fieldOffset(FIELD_CONTROL) + 5], 1u);
+}
+void relaxPair(int column) {
+    int axis = p.color / 2, parity = p.color % 2;
+    ivec2 a = ivec2(column % headerValue(H_SIZE_X), column / headerValue(H_SIZE_X));
+    if ((a[axis] & 1) != parity)
+        return;
+    ivec2 b = a;
+    b[axis]++;
+    if (b.x >= headerValue(H_SIZE_X) || b.y >= headerValue(H_SIZE_Z))
+        return;
+    int other = b.y * headerValue(H_SIZE_X) + b.x;
+    for (int y = headerValue(H_SIZE_Y) - 1; y >= 0; y--) {
+        relaxSurface(column, other, cell(ivec3(a.x, y, a.y)));
+        relaxSurface(other, column, cell(ivec3(b.x, y, b.y)));
+    }
 }
 int nx() {
     return (headerValue(H_SIZE_X) + 1) * headerValue(H_SIZE_Y) * headerValue(H_SIZE_Z);
@@ -510,12 +524,8 @@ double shearStress(double speed, double distance, double density, double viscosi
     double friction = speed / (.5 * (low + high));
     return density * friction * friction;
 }
-void wakeColumn(int column) {
-    ivec2 xy = ivec2(column % headerValue(H_SIZE_X), column / headerValue(H_SIZE_X));
-    if ((xy.x & 1) + 2 * (xy.y & 1) != p.color)
-        return;
-    int c = surfaceCell(column);
-    if (c < 0)
+void wakeSurface(int column, int c) {
+    if (!exposedSurface(c))
         return;
     ivec3 q = cellCoordinates(c);
     if (q.y + 1 >= headerValue(H_SIZE_Y))
@@ -606,6 +616,13 @@ void wakeColumn(int column) {
     cellState(c, newBulk, oldMass - movedMassKg, read(FIELD_CELL_SOLID, c) - double(movedVolume));
     words[targetFieldOffset(GRANULAR_STABLE_AGE) + column] = 0u;
     atomicAdd(words[fieldOffset(FIELD_CONTROL) + 4], 1u);
+}
+void wakeColumn(int column) {
+    ivec2 xy = ivec2(column % headerValue(H_SIZE_X), column / headerValue(H_SIZE_X));
+    if ((xy.x & 1) + 2 * (xy.y & 1) != p.color)
+        return;
+    for (int y = headerValue(H_SIZE_Y) - 1; y >= 0; y--)
+        wakeSurface(column, cell(ivec3(xy.x, y, xy.y)));
 }
 int hashSlot(int key, bool insert) {
     uint mixed = uint(key) * 2654435761u;
@@ -774,7 +791,6 @@ void main() {
         if (id < headerValue(H_SIZE_X) * headerValue(H_SIZE_Z)) {
             writeFieldInt(FIELD_COLUMN_COUNTS, id, 0);
             writeFieldInt(FIELD_COLUMN_CURSORS, id, 0);
-            writeFieldInt(FIELD_SURFACE, id, -1);
         }
         if (id < headerValue(H_INPUT_ROWS)) {
             writeFieldInt(FIELD_MODE, id, MODE_UNASSIGNED);

@@ -7,11 +7,11 @@ import java.util.List;
 /** Semantic world capability with fixed dependency edges; stable ids are the only persisted form. */
 public enum WorldCapability {
 	MATERIALS("mmm:materials"),
-	CHEMISTRY("mmm:chemistry", MATERIALS),
+	THERMAL("mmm:thermal", MATERIALS),
+	CHEMISTRY("mmm:chemistry", MATERIALS, THERMAL),
 	GRANULAR("mmm:granular", MATERIALS),
 	PRECIPITATION("mmm:precipitation", CHEMISTRY, GRANULAR),
-	THERMAL("mmm:thermal", MATERIALS),
-	PHASECHANGE("mmm:phasechange", THERMAL);
+	PHASECHANGE("mmm:phasechange", THERMAL, CHEMISTRY);
 
 	private final String stableId;
 	private final List<WorldCapability> dependencies;

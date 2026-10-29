@@ -25,7 +25,15 @@ final class VulkanFluidStateCodec {
     }
     VulkanFluidStateCodec(
         FluidDomainState template, FiniteThermalDeviceInventory devices, List<VulkanThermalDeviceLayout.Port> ports) {
-        this.template = java.util.Objects.requireNonNull(template);
+        java.util.Objects.requireNonNull(template);
+        if (template.chemicalRegistry() != null && template.thermalRegistry() == null)
+            throw new IllegalArgumentException("Vulkan chemistry requires thermal state for reactions");
+        if (!template.hasGas()) {
+            var host = mmm.fluid.HostFluidState.restoreAuthoritativeState(template);
+            host.bootstrapGasState(template.chemicalRegistry() == null ? "" : template.chemicalRegistry().fingerprint());
+            template = host.captureAuthoritativeState();
+        }
+        this.template = template;
         this.boundaryTemperatures = template.copyThermalBoundaryTemperaturesK();
         this.devices = devices;
         this.ports = List.copyOf(ports);

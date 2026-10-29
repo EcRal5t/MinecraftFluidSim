@@ -72,11 +72,14 @@ final class PhysicalActivityGroups {
         if(available==null||available.length!=domain.cellCount)throw new IllegalArgumentException("World availability has the wrong cell layout");
         var before=worldAvailable;
         boolean all=true;for(boolean value:available)all&=value;
-        if(all&&before==null)return;
         worldAvailable=all?null:available.clone();
         if(before!=null)for(int cell=0;cell<available.length;cell++)if(available[cell]&&!before[cell]) {
             if(requestedWake==null)requestedWake=new boolean[domain.cellCount];requestedWake[cell]=true;
         }
+        refreshObservedGroups();
+    }
+
+    private void refreshObservedGroups() {
         // Availability observation preserves quiet ages and accepted inventory comparisons.
         var wake=requestedWake==null?null:requestedWake.clone();
         beginStep();enabled=false;requestedWake=wake;
@@ -89,13 +92,14 @@ final class PhysicalActivityGroups {
     boolean hasAvailableGroups(){if(worldAvailable==null)return true;for(int cell=0;cell<domain.cellCount;cell++)if(root(cell)>=0&&groupAvailable(cell))return true;return false;}
     boolean pendingInGroups(List<FluidDomainContracts.CellCandidate> cells) {
         if (!domain.pendingPhaseMotion.hasWork() || cells.isEmpty()) return false;
+        if (!enabled) refreshObservedGroups();
         for (var pending : domain.pendingPhaseMotion.capture().entries()) {
             if (!groupAvailable(pending.cell())) continue;
             int pendingRoot = root(pending.cell());
             for (var candidate : cells) {
                 if (!groupAvailable(candidate.index())) continue;
                 int candidateRoot = root(candidate.index());
-                if (pendingRoot < 0 || candidateRoot < 0 || pendingRoot == candidateRoot) return true;
+                if (pending.cell() == candidate.index() || pendingRoot >= 0 && pendingRoot == candidateRoot) return true;
             }
         }
         return false;

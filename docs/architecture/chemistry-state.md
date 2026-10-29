@@ -36,7 +36,7 @@
 
 ## Registry
 
-化学功能默认关闭并依赖材料功能。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
+新世界默认启用全部能力；世界化学能力依赖材料与热学，反应按同代内能结算。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
 
 当前数据包与 snapshot 不一致只报告 definition mismatch，不重解释已有库存。snapshot 未知、损坏或身份不符时区域和容器状态保留并 LOCKED。
 

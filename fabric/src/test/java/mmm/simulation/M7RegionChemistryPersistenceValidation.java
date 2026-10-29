@@ -234,15 +234,16 @@ public final class M7RegionChemistryPersistenceValidation {
 	}
 
 	private static void validateGranularFeatureLayout() throws Exception {
-		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		var definitions = FullCapabilityTestFixture.load();
+		ChemicalRegistry chemistry = definitions.chemical();
+		GranularRegistry granular = definitions.granular();
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "granular-gate-off-");
 		FluidRegion source = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(source);
-		source.editableHost().bindChemistry(chemistry);
-		source.editableHost().bindGranular(granular, source.editableHost().materialRegistry(), TestProfiles.materialRegistry());
-		new RegionGenerationStore(gateRoot, chemistry, granular).publish(RegionCheckpointFixtures.captureGranular(source, 1L));
+		FullCapabilityTestFixture.bindFull(source.editableHost(), definitions, 293.15, 4);
+		var profile = TestProfiles.full();
+		new RegionRepositoryAdapter(gateRoot, profile, chemistry, granular, definitions.thermal(), definitions.gas(), TestProfiles.materialRegistry()).checkpoint(source);
 		FluidRegionManager currentManager = manager();
-		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null, TestProfiles.materialRegistry());
+		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, profile, chemistry, granular, definitions.thermal(), definitions.gas(), TestProfiles.materialRegistry());
 		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		check(restored.editableHost().hasChemistryState() && restored.editableHost().hasGranularState()
@@ -254,14 +255,16 @@ public final class M7RegionChemistryPersistenceValidation {
 	}
 
 	private static void validateChemicalFeatureLayout() throws Exception {
-		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var definitions = FullCapabilityTestFixture.load();
+		ChemicalRegistry chemistry = definitions.chemical();
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "chemical-gate-off-");
 		FluidRegion chemical = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(chemical);
-		chemical.editableHost().bindChemistry(chemistry);
-		new RegionGenerationStore(gateRoot, chemistry).publish(RegionCheckpointFixtures.captureChemical(chemical, 1L));
+		FullCapabilityTestFixture.bindFull(chemical.editableHost(), definitions, 293.15, 4);
+		var profile = TestProfiles.full();
+		new RegionRepositoryAdapter(gateRoot, profile, chemistry, definitions.granular(), definitions.thermal(), definitions.gas(), TestProfiles.materialRegistry()).checkpoint(chemical);
 		FluidRegionManager currentManager = manager();
-		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.chemical(chemistry), chemistry, null, null, null, TestProfiles.materialRegistry());
+		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, profile, chemistry, definitions.granular(), definitions.thermal(), definitions.gas(), TestProfiles.materialRegistry());
 		check(current.loadMetadata(currentManager).isEmpty(), "current chemical layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		assertChemicalStateEquals(chemical.editableHost().exportChemicalParticleState(), restored.editableHost().exportChemicalParticleState());

@@ -12,6 +12,7 @@ final class RegionHostHandoffValidation {
     static void validate() throws Exception {
         finiteDeviceReloadUsesCheckpoint();
         hostEditsRespectCurrentActivity();
+        fullyLoadedPlannerGroupsRemainIndependent();
     }
 
     private static void finiteDeviceReloadUsesCheckpoint() throws Exception {
@@ -89,6 +90,36 @@ final class RegionHostHandoffValidation {
         region.prepareGroupAvailability(available);
         require(region.hostSnapshot().containerExtractableVolumeNear(0,0,0,6,-1)==0,
                 "Recovered pending work did not block extraction before projection");
+    }
+
+    private static void fullyLoadedPlannerGroupsRemainIndependent() throws Exception {
+        var host = new HostFluidState(6, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        for (int z=0;z<2;z++) for (int y=0;y<2;y++) host.setSolid(2,y,z,true);
+        host.setVolume(0,0,0,.5f);
+        host.setVolume(4,0,0,.75f);
+        host.restorePendingPhaseMotionState(new PendingPhaseMotionState(24,
+                List.of(new PendingPhaseMotionState.Entry(4))));
+        var registries = FullCapabilityTestFixture.load();
+        host.sealDomainBoundary();
+        host.bindMaterialRegistry(registries.liquids());
+        host.bindGasRegistry(registries.gas());
+        host.bindThermal(registries.thermal(), registries.liquids(), 300);
+        // Direct host planning and a fresh all-loaded snapshot must both build physical groups.
+        require(host.containerExtractableVolumeNear(0,0,0,0,-1)==.5,
+                "Unprepared host groups blocked an unrelated edit");
+        var restored = HostFluidState.restoreAuthoritativeState(host.captureAuthoritativeState());
+        var available = new boolean[24]; java.util.Arrays.fill(available,true);
+        restored.prepareGroupAvailability(available);
+        require(restored.containerExtractableVolumeNear(0,0,0,0,-1)==.5
+                && restored.containerExtractableVolumeNear(4,0,0,0,-1)==0,
+                "Fully loaded snapshot failed to isolate pending phase work");
+        require(restored.removeVolumeNear(0,0,0,.25f,0)==.25f
+                && restored.exportPendingPhaseMotionState().entries().size()==1,
+                "Independent edit changed pending work");
+        // Removing the separating wall makes the pending task relevant to the same planner.
+        for (int z=0;z<2;z++) for (int y=0;y<2;y++) restored.setSolid(2,y,z,false);
+        require(restored.containerExtractableVolumeNear(0,0,0,0,-1)==0,
+                "Planner reused stale groups after geometry changed");
     }
 
     private static FluidRegion region(HostFluidState host) {

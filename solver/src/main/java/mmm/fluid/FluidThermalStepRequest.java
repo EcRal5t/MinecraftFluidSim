@@ -26,7 +26,7 @@ public record FluidThermalStepRequest(
 			activeCells = activeCells.clone();
 		}
 		if (stateAccess.layout().thermalRegistryFingerprint().isEmpty()) throw new IllegalArgumentException("Thermal-only request requires thermal state");
-		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
+		if (phaseChangeEnabled && (stateAccess.layout().chemicalRegistryFingerprint().isEmpty() || maximumPhaseOperations <= 0
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Phase-change request is incompatible with the operation budget");
 		}

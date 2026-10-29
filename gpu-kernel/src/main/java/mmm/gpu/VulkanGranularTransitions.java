@@ -53,7 +53,7 @@ final class VulkanGranularTransitions implements AutoCloseable {
     enum Field {
         CONTROL(4),COLUMN_COUNTS(4),COLUMN_OFFSETS(4),COLUMN_CURSORS(4),COLUMN_ENTRIES(4),
         MODE(4),TARGET(4),MOVED_VOLUME(8),MOVED_MASS(8),POSITION(8),HEAT(8),
-        CELL_BULK(8),CELL_MASS(8),SURFACE(4),HASH_KEYS(4),HASH_COUNTS(4),HASH_OFFSETS(4),
+        CELL_BULK(8),CELL_MASS(8),HASH_KEYS(4),HASH_COUNTS(4),HASH_OFFSETS(4),
         ACTIVE_COUNTS(4),ACTIVE_OFFSETS(4),DESTINATIONS(4),ROW_COUNTS(4),ROW_OFFSETS(4),ROW_CURSORS(4),ROW_ENTRIES(4),
         SPECIES_COUNTS(4),MATERIALS(8),SCAN(4),CELL_SOLID(8),AVAILABLE_BULK(8),REACTION_IMPULSE(8),LIFT_TERMS(8),FINAL_ENERGY(8);
         final int width;Field(int width){this.width=width;}
@@ -84,7 +84,7 @@ final class VulkanGranularTransitions implements AutoCloseable {
             for(var f:Field.values()){
                 int count=switch(f){
                     case CONTROL->12;
-                    case COLUMN_COUNTS,COLUMN_CURSORS,SURFACE->columnsCount;
+                    case COLUMN_COUNTS,COLUMN_CURSORS->columnsCount;
                     case COLUMN_OFFSETS->columnsCount+1;
                     case COLUMN_ENTRIES,MODE,TARGET,MOVED_VOLUME,MOVED_MASS,HEAT,ACTIVE_COUNTS->inputRows;
                     case POSITION->3*inputRows;

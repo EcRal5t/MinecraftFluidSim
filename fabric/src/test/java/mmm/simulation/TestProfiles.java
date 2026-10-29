@@ -38,28 +38,32 @@ public final class TestProfiles {
 	public static WorldCapabilityProfile pure() { return of(EnumSet.noneOf(WorldCapability.class), null, null, null, null); }
 	public static WorldCapabilityProfile materials() { return of(EnumSet.of(WorldCapability.MATERIALS), null, null, null, null); }
 	public static WorldCapabilityProfile chemical(ChemicalRegistry chemical) {
-		return of(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY), chemical, null, null, null);
+		return of(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.CHEMISTRY, WorldCapability.THERMAL),
+				chemical, null, fullRegistries().thermal(), GAS);
 	}
 	public static WorldCapabilityProfile granular(ChemicalRegistry chemical, GranularRegistry granular) {
 		Set<WorldCapability> capabilities = EnumSet.of(WorldCapability.MATERIALS, WorldCapability.GRANULAR);
 		if (chemical != null) {
 			capabilities.add(WorldCapability.CHEMISTRY);
 			capabilities.add(WorldCapability.PRECIPITATION);
+			capabilities.add(WorldCapability.THERMAL);
 		}
-		return of(capabilities, chemical, granular, null, null);
+		return of(capabilities, chemical, granular, chemical == null ? null : fullRegistries().thermal(), chemical == null ? null : GAS);
 	}
 	public static WorldCapabilityProfile thermal(ChemicalRegistry chemical, ThermalRegistry thermal) {
 		return of(EnumSet.of(WorldCapability.MATERIALS, WorldCapability.THERMAL), chemical, null, thermal, GAS);
 	}
 	public static WorldCapabilityProfile full() {
-		FullCapabilityTestFixture.Registries registries;
+		var registries = fullRegistries();
+		return of(EnumSet.allOf(WorldCapability.class), registries.chemical(), registries.granular(),
+				registries.thermal(), registries.gas());
+	}
+	private static FullCapabilityTestFixture.Registries fullRegistries() {
 		try {
-			registries = FullCapabilityTestFixture.load();
+			return FullCapabilityTestFixture.load();
 		} catch (Exception unavailable) {
 			throw new AssertionError("Production datapack registries are unavailable", unavailable);
 		}
-		return of(EnumSet.allOf(WorldCapability.class), registries.chemical(), registries.granular(),
-				registries.thermal(), registries.gas());
 	}
 
 	public static MaterialRegistry materialRegistry() { return MATERIAL; }
