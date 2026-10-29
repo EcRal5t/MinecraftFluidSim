@@ -66,10 +66,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		var store = new mmm.simulation.persistence.WorldCapabilityBundleStore(root,
 				new mmm.simulation.persistence.WorldCapabilityBundleStore.QuarantineAdmission(64, 64L << 20));
 		var committed = store.openOrPublish(definitions).bundle();
-		FluidSolverConfig noSlip = new FluidSolverConfig(CONFIG.cellSize(), CONFIG.density(), CONFIG.gravity(),
-				CONFIG.timeStep(), CONFIG.maxPressureIterations(), CONFIG.pressureTolerance(),
-				CONFIG.fluidEpsilon(), FluidSolverConfig.WallCondition.NO_SLIP);
-		FluidRegion source = populatedRegion(UUID.randomUUID(), noSlip);
+		FluidRegion source = populatedRegion(UUID.randomUUID(), CONFIG);
 		bindDefaultMaterials(source);
 		FullCapabilityTestFixture.bindFull(source.editableHost(), new FullCapabilityTestFixture.Registries(
 				production.liquids(), production.chemical(), production.granular(), production.gas(),
@@ -113,8 +110,6 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(reader.loadMetadata(manager).isEmpty(), "custom viscosity checkpoint metadata was rejected");
 		FluidRegion restored = manager.regions().getFirst();
 		reader.restore(restored);
-		check(restored.editableHost().config().viscousWallCondition() == FluidSolverConfig.WallCondition.NO_SLIP,
-				"disk restore lost explicit no-slip boundary definition");
 		mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(
 				source.editableHost().captureAuthoritativeState(), restored.editableHost().captureAuthoritativeState(),
 				"custom viscosity disk restore");

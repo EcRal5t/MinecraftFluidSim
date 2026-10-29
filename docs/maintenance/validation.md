@@ -107,6 +107,31 @@
 - `:gpu-kernel:runGpuResidentStateValidation`：生产 ServiceLoader 发现、设备状态连续推进、实体运动插入与 checkpoint 导出恢复。
 - `:gpu-kernel:runGpuThermalPhaseValidation`：冻结、熔化、汽化、凝结热相变，有限气腔 CO₂ 溶解与外界析气膜传质；检查整数质量、物种与内能账闭合。
 
+<a id="simulation-capabilities"></a>
+## 仿真能力补全验证
+
+S1 的针对性入口：
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuWetWallValidation :gpu-kernel:runGpuEntityBodyCouplingBenchmark :gpu-kernel:runGpuChannelFlowValidation --offline --no-daemon --console=plain --max-workers=1
+```
+
+2026-10-30，RTX 5070 Ti 上湿壁几何、静止无额外生热和黏性动能转热通过；覆盖满液、半液、贴壁薄层及紧凑小液滴，干顶墙接触面积为零。规定运动物体的黏性外功等于液体动能变化加耗散热，反作用及外部功沿同一账本结算。记录 `build/simulation-s1-physics.log`。
+
+压差通道使用相同初始液位差、h=0.5 m、16 个 0.05 s 连续设备机械步，比较真实几何和黏度。基准通道长 4 格、截面 2×2 格、μ=20 Pa·s，向低液位侧转移约 0.58327 m³；黏度加倍为 0.54583 m³，长度增至 8 格为 0.39675 m³，截面增至 2×3 格为 0.78551 m³。这是有限液柱的短时流量趋势，未作充分发展流或实际湍流压降标定。入口检查实际整数质量、液体体积和候选热账。
+
+原规模成本继续使用 `runGpuLiquidMechanicalBenchmark` 的 64³ 切格及 32³／256 颗粒场景。该入口覆盖连续设备机械步及可选导热，反应、相变、生产调度、世界与展示另由生产演示评价；两类成本分别登记。湿壁派生列在 64³ 时每代占 24 MiB，两代共 48 MiB，几何复用时随同代派生字段复制。
+
+同日统一构建 `assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuChannelFlowValidation :gpu-kernel:runGpuThermalContactsBenchmark :gpu-kernel:runGpuThermalPhaseValidation :fabric:runGpuProductionDemoValidation` 通过；参数为 `hostValidation=region-state`、`gpuDemo=flow`、`gpuDemoSteps=120`、`gpuDemoStage=complete`，使用 `--offline --no-daemon --console=plain --max-workers=1`。架构扫描 611 个生产源，完整区域存档及世界定义恢复通过。有限热设备与区域热步的能量账闭合，七类热相变均含机械续算和 checkpoint。水流场景完成实体交互、暂停单步、导出恢复、库存编辑和继续推进；119 个非冷导入步墙钟中位数 23.092 ms、P95 30.538 ms、最大 47.036 ms，未触发耗时暂停。该计时涵盖生产演示的输入、设备与采用流程，逐步诊断在计时之外。记录 `build/simulation-s1-delivery.log`，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
+原规模验收未通过：64³ 切格保持有限气体、导热、3 步预热与 12 步计时，在第 4 个计时步达到容量修正 512 轮上限；32³／256 颗粒与床层保持有限气体、导热、1 步预热与 3 步计时，在首个预热步的位移计算达到同一上限。日志为 `build/simulation-s1-cut64.log`、`build/simulation-s1-granular32.log`，失败输入分别为 `build/simulation-s1-cut64-capacity.bin` 和 `build/simulation-s1-granular32-capacity.bin`。输入静态分析确认两者的原格留存满足单元与气组容量，因此这里是搜索未完成。原规模完整步性能尚无通过结果，不能据小型演示宣布 64³／50 ms 达标。
+
+32³ 失败短重放保持 512 轮，仍有少量正余额，现有诊断未能确认局部实现错误；残差传播与满气组之间的交接成本交给后续共同压力／通量设计处理。新增诊断读取剩余顶点、相邻残差、距离和流量，生产算法及预算保持原值。记录 `build/simulation-s1-capacity-detail.log`，重放方式：
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuLiquidCapacityReplay '-PgpuCapacityReplayFile=D:/Proj/260817-MinecraftMod/fabric-example-mod/build/simulation-s1-granular32-capacity.bin' -PgpuCapacityRounds=512 --offline --no-daemon --console=plain --max-workers=1
+```
+
 <a id="host"></a>
 ## 宿主事务、存档与协议验证
 

@@ -28,7 +28,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         OWNER_CAPACITY(9),
         FIXED_MASKS(11),
         BATH_TEMPERATURES(12),
-        OPEN_FACE_FRACTIONS(13),
+        FACES(13),
         LIQUID_COUNTS(14),
         GAS_COUNTS(15),
         GRANULAR_COUNTS(16),
@@ -92,9 +92,8 @@ final class VulkanThermalContacts implements AutoCloseable {
         PORT_WALL_CONDUCTIVITY(145),
         PORT_FILM_THICKNESS(146),
         PORT_CAPACITY(147),
-        GAS_PLANES(148),
-        GAS_CELLS(149),
-        GAS_MICRO(150),
+        PLIC_PLANES(148),
+        PLIC_CELLS(149),
         CONDUCTION_HEADER(151),
         ACTIVITY_CELLS(152);
         final int word;
@@ -119,26 +118,37 @@ final class VulkanThermalContacts implements AutoCloseable {
                   VulkanGranularStateLayout granular,VulkanLiquidThermodynamics.Layout granularThermal,
                   VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
                   VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceThermal,
-                  int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize,int activityCellWord){
+                  int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize,int activityCellWord,
+                  int plicPlanesWord,int plicCellsWord){
         Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,
                VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,
                VulkanGranularStateLayout granular,VulkanLiquidThermodynamics.Layout granularThermal,
                VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
                VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceThermal,
-               int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize){
+               int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize,int activityCellWord){
             this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,coherent,coherentThermal,
-                    device,deviceThermal,fixedMasksWord,bathTemperaturesWord,openFaceFractionsWord,cellSize,-1);
+                    device,deviceThermal,fixedMasksWord,bathTemperaturesWord,facesWord,cellSize,activityCellWord,
+                    gasGeometry==null?-1:gasGeometry.planesWordOffset(),gasGeometry==null?-1:gasGeometry.cellsWordOffset());
+        }
+        Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,
+               VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,
+               VulkanGranularStateLayout granular,VulkanLiquidThermodynamics.Layout granularThermal,
+               VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
+               VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceThermal,
+               int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize){
+            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,coherent,coherentThermal,
+                    device,deviceThermal,fixedMasksWord,bathTemperaturesWord,facesWord,cellSize,-1);
         }
         Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,VulkanGasStateLayout gas,
                VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,VulkanGranularStateLayout granular,
                VulkanLiquidThermodynamics.Layout granularThermal,VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
-               int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize){
-            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,coherent,coherentThermal,null,null,fixedMasksWord,bathTemperaturesWord,openFaceFractionsWord,cellSize);
+               int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize){
+            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,coherent,coherentThermal,null,null,fixedMasksWord,bathTemperaturesWord,facesWord,cellSize);
         }
         Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,VulkanGasStateLayout gas,
                VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,VulkanGranularStateLayout granular,
-               VulkanLiquidThermodynamics.Layout granularThermal,int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize){
-            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,null,null,null,null,fixedMasksWord,bathTemperaturesWord,openFaceFractionsWord,cellSize);
+               VulkanLiquidThermodynamics.Layout granularThermal,int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize){
+            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,null,null,null,null,fixedMasksWord,bathTemperaturesWord,facesWord,cellSize);
         }
         Inputs{if(liquid==null||liquidThermal==null||fixedMasksWord<0||!(Double.isFinite(cellSize)&&cellSize>0)
                 ||(gas==null)!=(gasThermal==null)||(gas==null)!=(gasGeometry==null)||(granular==null)!=(granularThermal==null)||(coherent==null)!=(coherentThermal==null)||(device==null)!=(deviceThermal==null))
@@ -188,7 +198,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         ByteBuffer headerBytes(){
             int[] d=new int[160];var l=input.liquid();var g=input.gas();var s=input.granular();
             d[Header.LIQUID_CAPACITY.word]=l.stockCapacity();d[Header.GAS_CAPACITY.word]=g==null?0:g.nodeCapacity();d[Header.PARTICLE_CAPACITY.word]=s==null?0:s.particleCapacity();d[Header.DEPOSIT_CAPACITY.word]=s==null?0:s.depositCapacity();
-            d[Header.CELL_COUNT.word]=cells;d[Header.SIZE_X.word]=l.sizeX();d[Header.SIZE_Y.word]=l.sizeY();d[Header.SIZE_Z.word]=l.sizeZ();d[Header.SAMPLE_CAPACITY.word]=samples;d[Header.OWNER_CAPACITY.word]=owners;d[Header.FIXED_MASKS.word]=input.fixedMasksWord();d[Header.BATH_TEMPERATURES.word]=input.bathTemperaturesWord();d[Header.OPEN_FACE_FRACTIONS.word]=input.openFaceFractionsWord();
+            d[Header.CELL_COUNT.word]=cells;d[Header.SIZE_X.word]=l.sizeX();d[Header.SIZE_Y.word]=l.sizeY();d[Header.SIZE_Z.word]=l.sizeZ();d[Header.SAMPLE_CAPACITY.word]=samples;d[Header.OWNER_CAPACITY.word]=owners;d[Header.FIXED_MASKS.word]=input.fixedMasksWord();d[Header.BATH_TEMPERATURES.word]=input.bathTemperaturesWord();d[Header.FACES.word]=input.facesWord();
             d[Header.LIQUID_COUNTS.word]=lw(l,VulkanLiquidStateLayout.Field.COUNTS);d[Header.GAS_COUNTS.word]=g==null?-1:gw(g,VulkanGasStateLayout.Field.COUNTS);d[Header.GRANULAR_COUNTS.word]=s==null?-1:s.word(VulkanGranularStateLayout.Field.COUNTS);
             d[Header.LIQUID_CELL_OFFSETS.word]=lw(l,VulkanLiquidStateLayout.Field.CELL_OFFSETS);d[Header.LIQUID_MATERIALS.word]=lw(l,VulkanLiquidStateLayout.Field.MATERIALS);d[Header.LIQUID_SUPPORT_MASKS.word]=lw(l,VulkanLiquidStateLayout.Field.SUPPORT_MASKS);
             d[Header.LIQUID_VOLUMES.word]=lw(l,VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES);d[Header.LIQUID_MASS.word]=lw(l,VulkanLiquidStateLayout.Field.MASS_UNITS);d[Header.LIQUID_ENERGY.word]=lw(l,VulkanLiquidStateLayout.Field.ENERGY_BITS);d[Header.LIQUID_TEMPERATURE.word]=VulkanThermalContacts.columnWord(input.liquidThermal().temperatures());
@@ -202,7 +212,7 @@ final class VulkanThermalContacts implements AutoCloseable {
                 for(int i=0;i<fields.length;i++)d[134+i]=v.word(fields[i]);d[Header.DEVICE_TEMPERATURE.word]=columnWord(input.deviceThermal().temperatures());
                 var more=new VulkanThermalDeviceLayout.Field[]{VulkanThermalDeviceLayout.Field.GENERATION,VulkanThermalDeviceLayout.Field.REQUEST_GENERATION,VulkanThermalDeviceLayout.Field.DEVICE_ENERGY_CHANGE,VulkanThermalDeviceLayout.Field.PORT_DEVICE,VulkanThermalDeviceLayout.Field.PORT_CELL,VulkanThermalDeviceLayout.Field.PORT_DIRECTION,VulkanThermalDeviceLayout.Field.PORT_WALL_THICKNESS,VulkanThermalDeviceLayout.Field.PORT_WALL_K,VulkanThermalDeviceLayout.Field.PORT_FILM_THICKNESS};
                 for(int i=0;i<more.length;i++)d[138+i]=v.word(more[i]);d[Header.PORT_CAPACITY.word]=v.portCapacity();}
-            if(g!=null){d[Header.GAS_PLANES.word]=input.gasGeometry().planesWordOffset();d[Header.GAS_CELLS.word]=input.gasGeometry().cellsWordOffset();d[Header.GAS_MICRO.word]=input.gasGeometry().microWordOffset();}else{d[Header.GAS_PLANES.word]=-1;d[Header.GAS_CELLS.word]=-1;d[Header.GAS_MICRO.word]=-1;}
+            d[Header.PLIC_PLANES.word]=input.plicPlanesWord();d[Header.PLIC_CELLS.word]=input.plicCellsWord();
             d[Header.CONDUCTION_HEADER.word]=conduction.headerWordOffset();
             d[Header.ACTIVITY_CELLS.word]=input.activityCellWord();
             for(Field f:Field.values())d[WORK_FIELDS+f.ordinal()]=word(f);
@@ -282,6 +292,6 @@ final class VulkanThermalContacts implements AutoCloseable {
     private static int columnWord(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}
     private static long align(long n,long a){return Math.addExact(n,a-1)&-a;}
     private static VulkanLiquidStateLayout.Column allocate(long[] cursor,int n,int width,long a){var c=new VulkanLiquidStateLayout.Column(align(cursor[0],a),n,width);cursor[0]=Math.addExact(c.offset(),c.bindingBytes());return c;}
-    private static String shader(){try(var in=VulkanThermalContacts.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/thermal-contacts.comp")){if(in==null)throw new IllegalStateException("Thermal contact shader missing");return new String(in.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout());}catch(IOException e){throw new IllegalStateException("Thermal contact shader unavailable",e);}}
+    private static String shader(){try(var in=VulkanThermalContacts.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/thermal-contacts.comp")){if(in==null)throw new IllegalStateException("Thermal contact shader missing");return new String(in.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout()).replace("// PLIC_FACE_LIBRARY", VulkanLiquidPhaseRows.resource("plic-face.glsl"));}catch(IOException e){throw new IllegalStateException("Thermal contact shader unavailable",e);}}
     @Override public void close(){try{scan.close();}finally{try{bindings.close();}finally{cacheResources.close();}}}
 }

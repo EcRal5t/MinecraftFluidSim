@@ -21,6 +21,7 @@ p;
 // DYADIC_LIBRARY
 uvec2 poreWords;
 // HOST_LAYOUT
+// PLIC_FACE_LIBRARY
 const int STAGE_INITIALIZE = 0;
 const int STAGE_CAPTURE_CELL = 1;
 const int STAGE_CLASSIFY_FACES = 2;
@@ -230,6 +231,12 @@ float microArea(int left, int right, int axis, int a, int b) {
         return 0.0;
     if (l <= 0.0 && r <= 0.0)
         return .25;
+    if ((l > 0.0) != (r > 0.0)) {
+        int cell = l > 0.0 ? left : right, side = l > 0.0 ? 1 : 0;
+        int base = headerWord(GEO_H_PLANES) + 8 * cell;
+        dvec4 plane = dvec4(readDouble(base), readDouble(base + 2), readDouble(base + 4), readDouble(base + 6));
+        return float(.25LF - plicWetPort(plane, axis, double(side), low));
+    }
     vec2 polygon[8];
     polygon[0] = vec2(0);
     polygon[1] = vec2(.5, 0);
@@ -285,7 +292,7 @@ int clipPort(inout vec2 polygon[8], int count, vec4 plane, int axis, int side, i
 }
 // Gas may ignore a thin-film plane or a numerically empty microcell. Clip its subset first,
 // then finish the physical dry intersection used by the liquid wet union. Each plane is clipped once.
-vec2 sharedMicroAreas(float leftFill, float rightFill, vec4 leftPlane, vec4 rightPlane, float leftFraction,
+dvec2 sharedMicroAreas(double leftFill, double rightFill, dvec4 leftPlane, dvec4 rightPlane, float leftFraction,
                       float rightFraction, bool gasEnabled, int axis, int a, int b) {
     vec2 polygon[8];
     polygon[0] = vec2(0);
@@ -296,18 +303,27 @@ vec2 sharedMicroAreas(float leftFill, float rightFill, vec4 leftPlane, vec4 righ
     bool gasLeft = !gasClosed && leftFraction > 0.0, gasRight = !gasClosed && rightFraction > 0.0;
     int count = 4;
     if (gasLeft)
-        count = clipPort(polygon, count, leftPlane, axis, 1, a, b);
+        count = clipPort(polygon, count, vec4(leftPlane), axis, 1, a, b);
     if (gasRight)
-        count = clipPort(polygon, count, rightPlane, axis, 0, a, b);
-    float gasArea = gasClosed ? 0.0 : polygonArea(polygon, count), physicalDry = 0.0;
+        count = clipPort(polygon, count, vec4(rightPlane), axis, 0, a, b);
+    float gasArea = gasClosed ? 0.0 : polygonArea(polygon, count);
+    double physicalWet = .25LF;
     if (leftFill < 1.0 && rightFill < 1.0) {
         if (leftFill > 0.0 && !gasLeft)
-            count = clipPort(polygon, count, leftPlane, axis, 1, a, b);
+            count = clipPort(polygon, count, vec4(leftPlane), axis, 1, a, b);
         if (rightFill > 0.0 && !gasRight)
-            count = clipPort(polygon, count, rightPlane, axis, 0, a, b);
-        physicalDry = polygonArea(polygon, count);
+            count = clipPort(polygon, count, vec4(rightPlane), axis, 0, a, b);
+        if ((leftFill > 0.0) != (rightFill > 0.0)) {
+            int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+            int bit = (a << tangent) | (b << other);
+            bool left = leftFill > 0.0;
+            physicalWet = plicWetPort(left ? leftPlane : rightPlane, axis, left ? 1.0LF : 0.0LF, bit);
+        } else if (leftFill <= 0.0 && rightFill <= 0.0)
+            physicalWet = 0.0;
+        else
+            physicalWet = .25LF - double(polygonArea(polygon, count));
     }
-    return vec2(physicalDry, gasArea);
+    return dvec2(physicalWet, double(gasArea));
 }
 void captureSharedFace(int face) {
     writeDouble(headerWord(GEO_H_FACE_AREAS) + 2 * face, 0.0);
@@ -318,28 +334,27 @@ void captureSharedFace(int face) {
     int left = ends.x, right = ends.y, axis = ends.z, tangent = (axis + 1) % 3, other = (axis + 2) % 3;
     bool internal = left >= 0 && right >= 0, gasEnabled = (left < 0 || present(left)) && (right < 0 || present(right));
     uint leftSupport = left < 0 ? 255u : support(left), rightSupport = right < 0 ? 255u : support(right);
-    float leftFill = left < 0 ? 0.0 : float(readDouble(headerWord(GEO_H_CELLS) + 8 * left + 6)),
-          rightFill = right < 0 ? 0.0 : float(readDouble(headerWord(GEO_H_CELLS) + 8 * right + 6));
-    vec4 leftPlane = left < 0 ? vec4(0)
-                              : vec4(readDouble(headerWord(GEO_H_PLANES) + 8 * left), readDouble(headerWord(GEO_H_PLANES) + 8 * left + 2),
+    double leftFill = left < 0 ? 0.0LF : readDouble(headerWord(GEO_H_CELLS) + 8 * left + 6),
+           rightFill = right < 0 ? 0.0LF : readDouble(headerWord(GEO_H_CELLS) + 8 * right + 6);
+    dvec4 leftPlane = left < 0 ? dvec4(0)
+                              : dvec4(readDouble(headerWord(GEO_H_PLANES) + 8 * left), readDouble(headerWord(GEO_H_PLANES) + 8 * left + 2),
                                      readDouble(headerWord(GEO_H_PLANES) + 8 * left + 4), readDouble(headerWord(GEO_H_PLANES) + 8 * left + 6));
-    vec4 rightPlane = right < 0
-                          ? vec4(0)
-                          : vec4(readDouble(headerWord(GEO_H_PLANES) + 8 * right), readDouble(headerWord(GEO_H_PLANES) + 8 * right + 2),
+    dvec4 rightPlane = right < 0
+                          ? dvec4(0)
+                          : dvec4(readDouble(headerWord(GEO_H_PLANES) + 8 * right), readDouble(headerWord(GEO_H_PLANES) + 8 * right + 2),
                                  readDouble(headerWord(GEO_H_PLANES) + 8 * right + 4), readDouble(headerWord(GEO_H_PLANES) + 8 * right + 6));
-    float open = 0.0, wet = 0.0, dry = 0.0;
+    double open = 0.0, wet = 0.0, dry = 0.0;
     for (int a = 0; a < 2; a++)
         for (int b = 0; b < 2; b++) {
             int low = (a << tangent) | (b << other), high = low | (1 << axis);
-            if ((leftSupport & (1u << high)) == 0u || (rightSupport & (1u << low)) == 0u)
+            if (!plicOpenPort(leftSupport, rightSupport, high, low))
                 continue;
             open += .25;
             float l = gasEnabled && left >= 0 ? fraction(left, high) : 0.0,
                   r = gasEnabled && right >= 0 ? fraction(right, low) : 0.0;
-            vec2 areas = sharedMicroAreas(leftFill, rightFill, leftPlane, rightPlane, l, r, gasEnabled, axis, a, b);
-            // The wet union is the complement of the same physical dry intersection, then uses
-            // the existing fill-based wet-area limit at the PLIC geometry's float resolution.
-            wet += min(clamp(.25 - areas.x, 0.0, .25), .25 * (leftFill + rightFill));
+            dvec2 areas = sharedMicroAreas(leftFill, rightFill, leftPlane, rightPlane, l, r, gasEnabled, axis, a, b);
+            // The wet union uses the physical cut and the existing fill-based transport limit.
+            wet += min(areas.x, .25LF * (leftFill + rightFill));
             dry += areas.y;
         }
     double mass = .5 * ((left < 0 ? 0.0 : readDouble(headerWord(GEO_H_CELLS) + 8 * left + 2)) +

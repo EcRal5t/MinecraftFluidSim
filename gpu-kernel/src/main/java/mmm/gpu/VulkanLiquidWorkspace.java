@@ -79,6 +79,7 @@ final class VulkanLiquidWorkspace {
                 case FIXED_MASKS, OCCUPIED_SOLID -> cells;
                 case CELLS, PLANES -> Math.multiplyExact(4, cells);
                 case LIQUID_MICRO -> Math.multiplyExact(8, cells);
+                case WALL_GEOMETRY -> Math.multiplyExact(12, cells);
                 case FACES -> Math.multiplyExact(4, faces);
                 case FLUXES -> Math.multiplyExact(2, faces);
             };
@@ -542,7 +543,7 @@ final class VulkanLiquidWorkspace {
         }
         void copySourceGeometry(org.lwjgl.vulkan.VkCommandBuffer command,VulkanLiquidWorkspace source,boolean sourceCurrentGas,GpuBuffer input,GpuBuffer output,org.lwjgl.system.MemoryStack stack){
             var plan=new VulkanBufferCopyPlan.Builder();
-            for(var f:new GeometryField[]{GeometryField.CELLS,GeometryField.PLANES,GeometryField.LIQUID_MICRO})plan.copy(source.geometry.get(f),geometry.get(f));
+            for(var f:new GeometryField[]{GeometryField.CELLS,GeometryField.PLANES,GeometryField.LIQUID_MICRO,GeometryField.WALL_GEOMETRY})plan.copy(source.geometry.get(f),geometry.get(f));
             var completedFaces=sourceCurrentGas?source.geometry.get(GeometryField.FACES):source.transport.futureFaces;
             plan.copy(completedFaces,geometry.get(GeometryField.FACES));
             if(transport!=null&&transport.gas!=null){var old=source.transport;transport.gas.geometry.copyDerived(plan,sourceCurrentGas?old.gas.geometry:old.successor.geometry);}
@@ -595,32 +596,11 @@ final class VulkanLiquidWorkspace {
     void recordActivity(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,org.lwjgl.system.MemoryStack stack) {
         VulkanActivityPending.recordInput(region,liquid,activityCells,activityFaces,command,output,stack);
     }
-    ArrayList<FlipKernelBindings.BufferRange> geometryRanges(GpuBuffer buffer,GpuBuffer errors,VulkanLiquidStateLayout.Column faces) {
+    List<FlipKernelBindings.BufferRange> geometryRanges(GpuBuffer buffer,GpuBuffer errors,VulkanLiquidStateLayout.Column faces) {
         return geometryRanges(buffer,errors,faces,occupied());
     }
-    ArrayList<FlipKernelBindings.BufferRange> geometryRanges(GpuBuffer buffer,GpuBuffer errors,VulkanLiquidStateLayout.Column faces,VulkanLiquidStateLayout.Column solid) {
-        var ranges = new ArrayList<FlipKernelBindings.BufferRange>(VulkanLiquidGeometry.Binding.values().length);
-        for (var binding : VulkanLiquidGeometry.Binding.values()) {
-            var column = switch (binding) {
-                case OFFSETS -> liquid.column(CELL_OFFSETS);
-                case VOLUMES -> liquid.column(NUMERIC_VOLUMES);
-                case MASSES -> liquid.column(MASS_UNITS);
-                case MASKS -> geometry.get(GeometryField.FIXED_MASKS);
-                case SOLIDS -> solid;
-                case MOMENTUM_X -> liquid.column(MOMENTUM_X);
-                case MOMENTUM_Y -> liquid.column(MOMENTUM_Y);
-                case MOMENTUM_Z -> liquid.column(MOMENTUM_Z);
-                case CELLS -> geometry.get(GeometryField.CELLS);
-                case PLANES -> geometry.get(GeometryField.PLANES);
-                case MICRO -> geometry.get(GeometryField.LIQUID_MICRO);
-                case FACES -> faces;
-                case FLUX_PREFERENCES -> geometry.get(GeometryField.FLUXES);
-                case ERRORS -> null;
-            };
-            ranges.add(column == null ? new FlipKernelBindings.BufferRange(errors)
-                    : new FlipKernelBindings.BufferRange(buffer, column.offset(), column.bindingBytes()));
-        }
-        return ranges;
+    List<FlipKernelBindings.BufferRange> geometryRanges(GpuBuffer buffer,GpuBuffer errors,VulkanLiquidStateLayout.Column faces,VulkanLiquidStateLayout.Column solid) {
+        return VulkanLiquidGeometry.ranges(liquid,geometry,buffer,errors,faces,solid);
     }
 
     final class Transport {
@@ -673,7 +653,7 @@ final class VulkanLiquidWorkspace {
             sourceThermal=VulkanLiquidThermodynamics.layout(liquid,definitions.thermal(),word(materialReference),word(speciesReference),definitions.speciesStride(),volumes.endOffset(),liquid.alignment());
             sourceEntity=bodyCapacity==0?null:new VulkanEntityBodyCoupling.Layout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),bodyCapacity,bodyEntries,pressureColumns.get(PressureField.ROWS).count(),geometry.get(GeometryField.FIXED_MASKS),geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.OCCUPIED_SOLID),sourceThermal.endOffset(),liquid.alignment());
             entity=sourceEntity==null?null:new VulkanEntityBodyCoupling.Layout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),bodyCapacity,bodyEntries,pressureColumns.get(PressureField.ROWS).count(),geometry.get(GeometryField.FIXED_MASKS),geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.OCCUPIED_SOLID),sourceEntity.endOffset(),liquid.alignment());
-            viscosity=new VulkanLiquidViscosity.Layout(liquid,geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.FIXED_MASKS),word(sourceThermal.cellTemperatures()),word(activityFaces),word(activityCells),
+            viscosity=new VulkanLiquidViscosity.Layout(liquid,geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.WALL_GEOMETRY),word(sourceThermal.cellTemperatures()),word(activityFaces),word(activityCells),
                     definitions.viscosity(),entity==null?null:entity.prescribedContacts(),definitions.noSlip(),entity==null?sourceThermal.endOffset():entity.endOffset(),liquid.alignment());
             forces=VulkanLiquidForces.layout(liquid,definitions.forces(),word(sourceThermal.cellTemperatures()),word(geometry.get(GeometryField.FACES)),-1,word(activityFaces),viscosity.endOffset(),liquid.alignment());
             surface=VulkanSurfaceTension.layout(liquid,definitions.surface(),word(geometry.get(GeometryField.CELLS)),word(geometry.get(GeometryField.FACES)),word(geometry.get(GeometryField.PLANES)),
@@ -720,7 +700,8 @@ final class VulkanLiquidWorkspace {
                 var inputs=new VulkanThermalContacts.Inputs(liquid,liquidThermal,gas==null?null:gas.state,aperture==null?null:aperture.eos,
                         successor==null?null:successor.geometry,granular==null?null:granular.state,granular==null?null:granular.thermal,
                         coherent==null?null:coherent.state,coherent==null?null:coherent.thermal,devices==null?null:devices.state,devices==null?null:devices.thermal,
-                        word(geometry.get(GeometryField.FIXED_MASKS)),bathTemperatures.count()==0?-1:word(bathTemperatures),-1,region.thermalConfiguration.cellSize(),word(activityCells));
+                        word(geometry.get(GeometryField.FIXED_MASKS)),bathTemperatures.count()==0?-1:word(bathTemperatures),word(geometry.get(GeometryField.FACES)),region.thermalConfiguration.cellSize(),word(activityCells),
+                        word(geometry.get(GeometryField.PLANES)),word(geometry.get(GeometryField.CELLS)));
                 thermal=VulkanRegionThermal.layout(inputs,region.thermalConfiguration,thermalContactCapacity,thermalBathCapacity,tail[0],liquid.alignment());thermalBase=thermal.endOffset();}
             VulkanRegionReactions.SolidInputs solidReactions=null;
             if(region.reactionConfiguration!=null&&granular!=null){

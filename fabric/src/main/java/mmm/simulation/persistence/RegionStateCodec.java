@@ -346,16 +346,13 @@ final class RegionStateCodec {
 		tag.putInt("Gravity", Float.floatToRawIntBits(config.gravity())); tag.putInt("TimeStep", Float.floatToRawIntBits(config.timeStep()));
 		tag.putInt("PressureIterations", config.maxPressureIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
 		tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
-		tag.putString("ViscousWallCondition", config.viscousWallCondition().name());
 		return tag;
 	}
 
 	private static FluidSolverConfig decodeConfig(CompoundTag tag) throws IOException {
 		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "FluidEpsilon")) require(tag, field, Tag.TAG_INT);
-		require(tag, "ViscousWallCondition", Tag.TAG_STRING);
 		return new FluidSolverConfig(bits(tag, "CellSize"), bits(tag, "Density"), bits(tag, "Gravity"), bits(tag, "TimeStep"),
-				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "FluidEpsilon"),
-				FluidSolverConfig.WallCondition.valueOf(tag.getStringOr("ViscousWallCondition", "")));
+				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "FluidEpsilon"));
 	}
 
 	private static CompoundTag encodeRuntime(RegionRuntimeIntent runtime) {

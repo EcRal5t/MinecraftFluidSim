@@ -29,6 +29,7 @@ layout(push_constant) uniform Metadata {
 }
 pc;
 // HOST_LAYOUT
+// PLIC_FACE_LIBRARY
 layout(std430, binding = B_OFFSETS) readonly buffer Offsets {
     int offsets[];
 };
@@ -64,6 +65,9 @@ layout(std430, binding = B_MICRO) buffer Micro {
 };
 layout(std430, binding = B_FACES) buffer Faces {
     dvec4 faces[];
+};
+layout(std430, binding = B_WALL_GEOMETRY) buffer WallGeometry {
+    double wallGeometry[];
 };
 layout(std430, binding = B_ERRORS) buffer Errors {
     uint errors;
@@ -159,6 +163,63 @@ void prepareCellTotals(int cell) {
         atomicOr(errors, ERROR_LIQUID_GEOMETRY);
     cells[cell] = dvec4(liquidVolume, double(massUnits) * MASS_UNIT_KG, poreVolume, poreVolume > 0 ? clamp(liquidVolume / poreVolume, 0.0, 1.0) : 0);
 }
+// Fixed microbox faces share the PLIC used for liquid transport. Each normal/side
+// stores wet area and the sum of area divided by effective wall distance, in cell units.
+bool solidMicro(ivec3 micro) {
+    ivec3 extent = 2 * ivec3(pc.sx, pc.sy, pc.sz);
+    if (any(lessThan(micro, ivec3(0))) || any(greaterThanEqual(micro, extent)))
+        return true;
+    ivec3 c = micro / 2, local = micro - 2 * c;
+    int bit = local.x | (local.y << 1) | (local.z << 2);
+    return (masks[cellIndex(c)] & (1u << bit)) != 0u;
+}
+void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
+    for (int face = 0; face < 6; face++) {
+        wallGeometry[12 * cell + 2 * face] = 0.0;
+        wallGeometry[12 * cell + 2 * face + 1] = 0.0;
+    }
+    if (cells[cell][CELL_LIQUID_VOLUME] <= 0.0 || support == 0u)
+        return;
+    ivec3 base = 2 * position(cell);
+    bool full = cells[cell][CELL_LIQUID_VOLUME] >= cells[cell][CELL_PORE_VOLUME];
+    for (int bit = 0; bit < 8; bit++) {
+        if ((support & (1u << bit)) == 0u)
+            continue;
+        double volume = microVolume[8 * cell + bit];
+        if (volume <= 0.0)
+            continue;
+        ivec3 local = ivec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1);
+        for (int axis = 0; axis < 3; axis++) {
+            int a = (axis + 1) % 3, b = (axis + 2) % 3;
+            for (int side = 0; side < 2; side++) {
+                ivec3 neighbor = base + local;
+                neighbor[axis] += 2 * side - 1;
+                if (!solidMicro(neighbor))
+                    continue;
+                double coordinate = .5LF * double(local[axis] + side);
+                int tangentBits = (local[a] << a) | (local[b] << b);
+                double area = (full ? .25LF : plicWetPort(plane, axis, coordinate, tangentBits)) * porosity;
+                if (area <= 0.0)
+                    continue;
+                // Extend the column away from the wall through the other open microbox.
+                // Its area-equivalent liquid depth preserves the thin-film limit.
+                double columnVolume = volume, columnLength = .5LF;
+                int away = local[axis] + (side == 0 ? 1 : -1);
+                if (away >= 0 && away < 2) {
+                    int nextBit = bit ^ (1 << axis);
+                    if ((support & (1u << nextBit)) != 0u) {
+                        columnVolume += microVolume[8 * cell + nextBit];
+                        columnLength = 1.0LF;
+                    }
+                }
+                double distance = min(columnLength, columnVolume / (2.0LF * area));
+                int face = 2 * axis + side, offset = 12 * cell + 2 * face;
+                wallGeometry[offset] += area;
+                wallGeometry[offset + 1] += area / distance;
+            }
+        }
+    }
+}
 void reconstructInterface(int cell) {
     ivec3 cellPosition = position(cell);
     double fill = cells[cell][CELL_FILL];
@@ -227,6 +288,7 @@ void reconstructInterface(int cell) {
                                  : liquidVolume <= 0              ? 0
                                  : gasVolume <= 0                 ? .125 * porosity
                                                             : boxVolume(normal, offset, microcell, .5) * porosity;
+    prepareWetWalls(cell, support, porosity, planes[cell]);
 }
 int clip(inout dvec2 polygon[8], int count, dvec3 plane) {
     if (count == 0)
@@ -255,11 +317,8 @@ double portArea(double fill, dvec4 plane, int axis, int side, int firstPort, int
     if (fill >= 1)
         return .25;
     int firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3;
-    dvec3 normal = dvec3(0);
-    normal[firstTangent] = plane[firstTangent];
-    normal[secondTangent] = plane[secondTangent];
     int bit = (firstPort << firstTangent) | (secondPort << secondTangent);
-    return boxVolume(normal, plane.w - double(side) * plane[axis], bit, .5) * 2;
+    return plicWetPort(plane, axis, double(side), bit);
 }
 void faceGeometry(int face) {
     int xCount = (pc.sx + 1) * pc.sy * pc.sz, yCount = pc.sx * (pc.sy + 1) * pc.sz;
@@ -289,7 +348,7 @@ void faceGeometry(int face) {
     for (int a = 0; a < 2; a++)
         for (int b = 0; b < 2; b++) {
             int bit = (a << firstTangent) | (b << secondTangent);
-            if ((masks[leftCell] & (1u << (bit | (1 << axis)))) != 0 || (masks[rightCell] & (1u << bit)) != 0)
+            if (!plicOpenPort((~masks[leftCell]) & 255u, (~masks[rightCell]) & 255u, bit | (1 << axis), bit))
                 continue;
             openArea += .25;
             double leftArea = portArea(leftFill, leftPlane, axis, 1, a, b), rightArea = portArea(rightFill, rightPlane, axis, 0, a, b);
@@ -366,7 +425,7 @@ void transportPreference(int face) {
     int leftCell = cellIndex(left), rightCell = cellIndex(right), firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3, openPorts = 0;
     for (int port = 0; port < 4; port++) {
         int bit = ((port & 1) << firstTangent) | ((port >> 1) << secondTangent);
-        if ((masks[leftCell] & (1u << (bit | (1 << axis)))) == 0u && (masks[rightCell] & (1u << bit)) == 0u)
+        if (plicOpenPort((~masks[leftCell]) & 255u, (~masks[rightCell]) & 255u, bit | (1 << axis), bit))
             openPorts |= 1 << port;
     }
     if (openPorts == 0)

@@ -14,24 +14,13 @@ public record FluidSolverConfig(
 		float timeStep,
 		int maxPressureIterations,
 		float pressureTolerance,
-		float fluidEpsilon,
-		WallCondition viscousWallCondition
+		float fluidEpsilon
 ) {
 	/** Subgrid layers share one physical scale: thin dry gaps transmit column support,
 	 * and small liquid amounts use compact drops with open gas faces.
 	 * Inventory, actual pore capacity and the gas state equation retain their quantities. */
 	public static final double UNRESOLVED_LAYER_FRACTION = 1.0 / 64.0;
-	public enum WallCondition { FREE_SLIP, NO_SLIP }
-
-	public FluidSolverConfig(float cellSize, float density, float gravity, float timeStep,
-			int maxPressureIterations, float pressureTolerance,
-			float fluidEpsilon) {
-		this(cellSize, density, gravity, timeStep, maxPressureIterations, pressureTolerance,
-				fluidEpsilon, WallCondition.FREE_SLIP);
-	}
-
 	public FluidSolverConfig {
-		java.util.Objects.requireNonNull(viscousWallCondition, "viscousWallCondition");
 		if (!(Float.isFinite(cellSize) && cellSize > 0.0F)) throw new IllegalArgumentException("cellSize must be finite and positive");
 		if (!(Float.isFinite(density) && density > 0.0F)) throw new IllegalArgumentException("density must be finite and positive");
 		if (!(Float.isFinite(gravity) && gravity >= 0.0F)) throw new IllegalArgumentException("gravity must be finite and non-negative");

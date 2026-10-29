@@ -51,6 +51,7 @@ public final class GpuLiquidCapacityReplay {
                         long positive=0;int count=0,maximumHeight=0;int[] kinds=new int[4];
                         for(int v=0;v<vertices;v++)if(balances.getLong(8*v)>0){positive=Math.addExact(positive,balances.getLong(8*v));count++;maximumHeight=Math.max(maximumHeight,labels.getInt(4*v));kinds[v<layout.cells()?0:v<2*layout.cells()?1:v==vertices-1?3:2]++;}
                         System.out.printf("positive_vertices=%d positive_quanta=%d maximum_height=%d donor_receiver_group_sink=%s%n",count,positive,maximumHeight,java.util.Arrays.toString(kinds));
+                        printResidualEdges(candidate,solve,layout,initial,balances,labels,sx,sy,sz);
                     }
                     if(result.error()!=0||status!=VulkanLiquidCapacity.FEASIBLE)throw new IllegalStateException("Capacity replay failed status="+status+", rounds="+rounds+", error="+result.error());
                     var solveState=ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);
@@ -66,6 +67,62 @@ public final class GpuLiquidCapacityReplay {
                 System.out.println("All source quotas, receiver bounds and finite-group capacities passed; moved_quanta="+moved);
             }
         }
+    }
+    private static void printResidualEdges(VulkanRegionStorage.Candidate candidate,VulkanLiquidCapacity.Layout solve,
+            VulkanLiquidCapacityLayout layout,ByteBuffer input,ByteBuffer balances,ByteBuffer labels,int sx,int sy,int sz) {
+        int cells=layout.cells(),groups=layout.groups(),sink=2*cells+groups;
+        var routes=ByteBuffer.allocate(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.FLOW).bytes())).order(ByteOrder.LITTLE_ENDIAN);
+        var tails=ByteBuffer.allocate(Math.toIntExact(solve.column(VulkanLiquidCapacity.Field.TAIL_FLOW).bytes())).order(ByteOrder.LITTLE_ENDIAN);
+        candidate.read(layout.column(VulkanLiquidCapacityLayout.Field.FLOW).offset(),routes);
+        candidate.read(solve.column(VulkanLiquidCapacity.Field.TAIL_FLOW).offset(),tails);
+        int printed=0;
+        for(int v=0;v<sink && printed<8;v++) {
+            if(balances.getLong(8*v)<=0)continue;
+            System.out.printf("residual_vertex=%d balance=%d height=%d%n",v,balances.getLong(8*v),labels.getInt(4*v));
+            int[] counts={0,0};
+            if(v<cells) {
+                int mask=input.getInt(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.OPEN_NEIGHBORS).offset()+4L*v));
+                long limit=value(input,layout,VulkanLiquidCapacityLayout.Field.K,v);
+                for(int slot=0;slot<7;slot++) {
+                    int cell=slot==0?v:neighbor(v,slot-1,sx,sy,sz);
+                    if(cell>=0&&(slot==0||(mask&(1<<(slot-1)))!=0))
+                        printResidualEdge(v,v,cells+cell,0,limit,routes.getLong(8*(7*v+slot)),balances,labels,counts);
+                }
+            } else if(v<2*cells) {
+                int cell=v-cells;
+                printResidualEdge(v,cell,v,0,value(input,layout,VulkanLiquidCapacityLayout.Field.K,cell),routes.getLong(8*(7*cell)),balances,labels,counts);
+                for(int side=0;side<6;side++) {
+                    int donor=neighbor(cell,side,sx,sy,sz);
+                    if(donor<0)continue;
+                    int mask=input.getInt(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.OPEN_NEIGHBORS).offset()+4L*donor));
+                    if((mask&(1<<(side^1)))!=0)
+                        printResidualEdge(v,donor,v,0,value(input,layout,VulkanLiquidCapacityLayout.Field.K,donor),routes.getLong(8*(7*donor+1+(side^1))),balances,labels,counts);
+                }
+                int group=input.getInt(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.GROUP_ID).offset()+4L*cell));
+                if(group<0)group=groups-1;
+                printResidualEdge(v,v,2*cells+group,value(input,layout,VulkanLiquidCapacityLayout.Field.LOWER,cell),value(input,layout,VulkanLiquidCapacityLayout.Field.UPPER,cell),tails.getLong(8*cell),balances,labels,counts);
+            } else {
+                int group=v-2*cells;
+                for(int cell=0;cell<cells;cell++) {
+                    int g=input.getInt(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.GROUP_ID).offset()+4L*cell));
+                    if((g<0?groups-1:g)==group)
+                        printResidualEdge(v,cells+cell,v,value(input,layout,VulkanLiquidCapacityLayout.Field.LOWER,cell),value(input,layout,VulkanLiquidCapacityLayout.Field.UPPER,cell),tails.getLong(8*cell),balances,labels,counts);
+                }
+                long limit=group==groups-1?0x3fffffffffffffffL:value(input,layout,VulkanLiquidCapacityLayout.Field.GROUP_CAPACITY,group);
+                printResidualEdge(v,v,sink,0,limit,tails.getLong(8*(cells+group)),balances,labels,counts);
+            }
+            System.out.printf("residual_edges_total=%d admissible=%d%n",counts[0],counts[1]);
+            printed++;
+        }
+    }
+    private static void printResidualEdge(int vertex,int from,int to,long lower,long upper,long flow,
+            ByteBuffer balances,ByteBuffer labels,int[] counts) {
+        int peer=vertex==from?to:from;long residual=vertex==from?upper-flow:flow-lower;
+        if(residual<=0)return;
+        boolean admissible=labels.getInt(4*vertex)==labels.getInt(4*peer)+1;
+        counts[0]++;if(admissible)counts[1]++;
+        if(counts[0]<=8||(admissible&&counts[1]<=8))System.out.printf("  peer=%d peer_balance=%d peer_height=%d residual=%d flow=%d lower=%d upper=%d admissible=%s%n",
+                peer,balances.getLong(8*peer),labels.getInt(4*peer),residual,flow,lower,upper,admissible);
     }
     static long verify(VulkanLiquidCapacityLayout layout,ByteBuffer initial,ByteBuffer accepted,int sx,int sy,int sz){
         int groups=layout.gasGroups();

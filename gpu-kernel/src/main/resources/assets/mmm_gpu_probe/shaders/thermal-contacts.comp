@@ -9,6 +9,7 @@ layout(binding=1,std430)buffer Errors{uint errors;};
 layout(binding=2,std430)buffer FrozenConductance{double frozenG[];};
 layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
 // HOST_LAYOUT
+// PLIC_FACE_LIBRARY
 const uint ERROR_INVALID_STATE = 2097152u;
 const int STAGE_CLEAR = 0;
 const int STAGE_FLAG_OWNER = 1;
@@ -146,22 +147,18 @@ void coverage(int cell){double sums[32];for(int i=0;i<32;i++)sums[i]=0.0;
 double harmonic(double a,double b){if(a==0.0||b==0.0)return 0.0;double lo=min(a,b),hi=max(a,b);return lo*(2.0LF/(1.0LF+lo/hi));}
 ivec3 shape(){return ivec3(headerWord(H_SIZE_X),headerWord(H_SIZE_Y),headerWord(H_SIZE_Z));}ivec3 xyz(int cell){ivec3 s=shape();return ivec3(cell%s.x,cell/s.x%s.y,cell/(s.x*s.y));}
 int neighbor(int cell,int axis,int side){ivec3 q=xyz(cell),s=shape();q[axis]+=side==0?-1:1;if(any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s)))return -1;return (q.z*s.y+q.y)*s.x+q.x;}
-double blocked(int cell,int axis,int side){if(headerWord(H_OPEN_FACE_FRACTIONS)>=0)return 1.0LF-readDouble(headerWord(H_OPEN_FACE_FRACTIONS)+2*(6*cell+2*axis+side));int other=neighbor(cell,axis,side);if(other<0)return 1.0;
- int a=openMask(cell),b=openMask(other),ports=0;for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(a&(1<<bit))!=0&&(b&(1<<(bit^(1<<axis))))!=0)ports++;return 1.0LF-double(ports)*.25LF;}
-int clipPort(inout vec2 polygon[8],int count,vec3 plane){
- vec2 next[8],previous=polygon[count-1];float before=dot(plane.xy,previous)-plane.z;int n=0;
- for(int i=0;i<count;i++){vec2 point=polygon[i];float d=dot(plane.xy,point)-plane.z;if((d>=0)!=(before>=0))next[n++]=mix(previous,point,before/(before-d));if(d>=0)next[n++]=point;previous=point;before=d;}
- for(int i=0;i<n;i++)polygon[i]=next[i];return n;
+int macFace(int cell,int axis,int side){
+ ivec3 q=xyz(cell),dims=shape();q[axis]+=side;dims[axis]++;
+ int offset=axis==0?0:axis==1?(shape().x+1)*shape().y*shape().z:(shape().x+1)*shape().y*shape().z+shape().x*(shape().y+1)*shape().z;
+ return offset+(q.z*dims.y+q.y)*dims.x+q.x;
 }
-double dryPort(int cell,int bit,int axis,int side){
- if(headerWord(H_GAS_PLANES)<0)return 0.0;double pore=readDouble(headerWord(H_GAS_CELLS)+8*cell+4),fill=readDouble(headerWord(H_GAS_CELLS)+8*cell+6);
- if(fill>0.0&&fill<1.0&&fill<=.015625&&pore>0.0)return .25;
- double microPore=pore/double(bitCount(uint(openMask(cell)))),fraction=microPore>0.0?readDouble(headerWord(H_GAS_MICRO)+2*(8*cell+bit))/microPore:1.0;
- if(fraction<=0.0)return .25;if(fraction>=1.0)return 0.0;
- int tangent=(axis+1)%3,other=(axis+2)%3;vec4 plane=vec4(readDouble(headerWord(H_GAS_PLANES)+8*cell),readDouble(headerWord(H_GAS_PLANES)+8*cell+2),readDouble(headerWord(H_GAS_PLANES)+8*cell+4),readDouble(headerWord(H_GAS_PLANES)+8*cell+6));
- float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float((bit>>tangent)&1))-plane[other]*(.5*float((bit>>other)&1));
- vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);int n=clipPort(polygon,4,vec3(plane[tangent],plane[other],offset));float twice=0.0;
- for(int i=1;i+1<n;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}return double(clamp(abs(twice)*.5,0.0,.25));
+double wetPort(int cell,int bit,int axis,int side){
+ if(headerWord(H_PLIC_PLANES)<0)return .25LF;
+ double fill=readDouble(headerWord(H_PLIC_CELLS)+8*cell+6);
+ if(fill<=0.0)return 0.0;if(fill>=1.0)return .25LF;
+ int base=headerWord(H_PLIC_PLANES)+8*cell;
+ dvec4 plane=dvec4(readDouble(base),readDouble(base+2),readDouble(base+4),readDouble(base+6));
+ return plicWetPort(plane,axis,double(side),bit);
 }
 double sameConductance(int point,int q){
  int owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),other=int(words[workField(FIELD_SAMPLE_OWNER)+q]);int overlap=bitCount(words[workField(FIELD_SAMPLE_MASK)+point]&words[workField(FIELD_SAMPLE_MASK)+q]);
@@ -183,9 +180,24 @@ double crossConductance(int point,int q,int axis){
  precise double conductance=harmonic(readDouble(workField(FIELD_OWNER_K)+2*owner),readDouble(workField(FIELD_OWNER_K)+2*otherOwner))*cellSize()*area;return conductance;
 }
 double bathConductance(int point,int axis,int side){
- int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]),mask=int(words[workField(FIELD_SAMPLE_MASK)+point]),pieces=0;
- for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0)pieces++;
- precise double conductance=2.0LF*readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+point]))*cellSize()*.25LF*double(pieces)*fraction(point)*blocked(cell,axis,side);return conductance;
+ int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]),mask=int(words[workField(FIELD_SAMPLE_MASK)+point]);
+ int owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),fam=family(owner),other=neighbor(cell,axis,side);
+ if(headerWord(H_FACES)>=0&&readDouble(headerWord(H_FACES)+8*macFace(cell,axis,side)+4)>=1.0LF)return 0.0;
+ int open=openMask(cell),otherOpen=other<0?0:openMask(other),count=bitCount(uint(open));
+ double pore=headerWord(H_PLIC_CELLS)<0?.125LF*double(count):readDouble(headerWord(H_PLIC_CELLS)+8*cell+4);
+ double porosity=count==0?0.0:pore/(.125LF*double(count)),area=0.0,fp=fraction(point);
+ for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0&&(open&(1<<bit))!=0
+         &&(otherOpen&(1<<(bit^(1<<axis))))==0){
+  double covered=0.0;
+  for(int at=int(words[workField(FIELD_CELL_OFFSETS)+cell]);at<int(words[workField(FIELD_CELL_OFFSETS)+cell+1]);at++){
+   int q=int(words[workField(FIELD_CELL_SAMPLES)+at]);
+   if(family(int(words[workField(FIELD_SAMPLE_OWNER)+q]))==fam&&(int(words[workField(FIELD_SAMPLE_MASK)+q])&(1<<bit))!=0)covered+=fraction(q);
+  }
+  if(covered<=0.0)continue;
+  double wet=wetPort(cell,bit,axis,side),physical=fam==0?wet*porosity:fam==1?(.25LF-wet)*porosity:.25LF*min(1.0LF,covered);
+  area+=physical*(fp/covered);
+ }
+ return 2.0LF*readDouble(workField(FIELD_OWNER_K)+2*owner)*cellSize()*area;
 }
 double deviceConductance(int point,int port){
  int mask=int(words[workField(FIELD_SAMPLE_MASK)+point]),owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),fam=family(owner);
@@ -194,8 +206,8 @@ double deviceConductance(int point,int port){
  for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0){
   double factor=readDouble(workField(FIELD_COVERAGE)+2*(8*headerWord(H_CELL_COUNT)+24*port+8*fam+bit));
   if(factor>=0.0)area+=factor*fp;
-  else{int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]);double covered=-factor,dry=dryPort(cell,bit,axis,side),pore=headerWord(H_GAS_CELLS)<0?.125LF*double(bitCount(uint(openMask(cell)))):readDouble(headerWord(H_GAS_CELLS)+8*cell+4);
-   double porosity=pore/(.125LF*double(bitCount(uint(openMask(cell))))),physical=fam==0?(.25LF-dry)*porosity:fam==1?dry*porosity:.25LF*min(1.0LF,covered/.125LF);
+  else{int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]);double covered=-factor,wet=wetPort(cell,bit,axis,side),dry=.25LF-wet,pore=headerWord(H_PLIC_CELLS)<0?.125LF*double(bitCount(uint(openMask(cell)))):readDouble(headerWord(H_PLIC_CELLS)+8*cell+4);
+   double porosity=pore/(.125LF*double(bitCount(uint(openMask(cell))))),physical=fam==0?wet*porosity:fam==1?dry*porosity:.25LF*min(1.0LF,covered/.125LF);
    area+=physical*(fp*.125LF)/covered;
   }
  }
@@ -217,14 +229,14 @@ void projectContactGeometry(int id){
  }
  if(id<livePorts()){
   int cell=int(words[headerWord(H_PORT_CELL)+id]),direction=int(words[headerWord(H_PORT_DIRECTION)+id]),axis=direction/2,side=direction&1,open=bitCount(uint(openMask(cell)));
-  double pore=headerWord(H_GAS_CELLS)<0?.125LF*double(open):readDouble(headerWord(H_GAS_CELLS)+8*cell+4),porosity=open==0?0.0:pore/(.125LF*double(open));
+  double pore=headerWord(H_PLIC_CELLS)<0?.125LF*double(open):readDouble(headerWord(H_PLIC_CELLS)+8*cell+4),porosity=open==0?0.0:pore/(.125LF*double(open));
   for(int bit=0;bit<8;bit++){
    int base=workField(FIELD_COVERAGE)+2*(8*headerWord(H_CELL_COUNT)+24*id+bit);
    double liquid=readDouble(base),gas=readDouble(base+16),solid=readDouble(base+32);
    double liquidWeight=0.0,gasWeight=0.0,solidWeight=0.0;
    if(((bit>>axis)&1)==side&&open>0){
-    double dry=dryPort(cell,bit,axis,side);
-    if(liquid>0.0){liquidWeight=(.25LF-dry)*porosity*.125LF/liquid;if(!isFinite(liquidWeight))liquidWeight=-liquid;}
+    double wet=wetPort(cell,bit,axis,side),dry=.25LF-wet;
+    if(liquid>0.0){liquidWeight=wet*porosity*.125LF/liquid;if(!isFinite(liquidWeight))liquidWeight=-liquid;}
     if(gas>0.0){gasWeight=dry*porosity*.125LF/gas;if(!isFinite(gasWeight))gasWeight=-gas;}
     if(solid>0.0){solidWeight=(.25LF*min(1.0LF,solid/.125LF))*.125LF/solid;if(!isFinite(solidWeight))solidWeight=-solid;}
    }

@@ -66,7 +66,7 @@ final class VulkanRegionThermal implements AutoCloseable {
     }
     static Layout currentGas(Layout layout,VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry,long alignment){
         var i=layout.input();var input=new VulkanThermalContacts.Inputs(i.liquid(),i.liquidThermal(),i.gas(),eos,geometry,i.granular(),i.granularThermal(),
-                i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.openFaceFractionsWord(),i.cellSize(),i.activityCellWord());
+                i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.facesWord(),i.cellSize(),i.activityCellWord(),i.plicPlanesWord(),i.plicCellsWord());
         var contacts=VulkanThermalContacts.layout(input,layout.contacts().materials,layout.conduction(),layout.contacts().header.offset(),alignment);
         return new Layout(input,layout.conduction(),contacts,layout.reservoir(),layout.roundoff(),layout.endOffset());
     }

@@ -343,3 +343,13 @@ registerGpuProbe('runGpuLiquidCapacityInputsValidation', 'Checks gas reservation
     'mmm.gpu.GpuLiquidCapacityInputsValidation', 'gpu-liquid-capacity-inputs-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
+
+registerGpuProbe('runGpuWetWallValidation', 'Checks wet fixed-wall geometry and viscous energy settlement.',
+    'mmm.gpu.GpuWetWallValidation', 'gpu-wet-wall-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuChannelFlowValidation', 'Runs pressure-driven resolved liquid channels through complete mechanical steps.',
+    'mmm.gpu.GpuChannelFlowValidation', 'gpu-channel-flow-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), providers.gradleProperty('gpuChannelSteps').getOrElse('16')
+}

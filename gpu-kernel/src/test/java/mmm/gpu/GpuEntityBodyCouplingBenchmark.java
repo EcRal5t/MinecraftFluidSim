@@ -26,7 +26,7 @@ public final class GpuEntityBodyCouplingBenchmark {
             var second=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,2),new mmm.world.MovingBodyFluidCoupling.Bounds(.75,.875,1,1.5,1.375,1.75),.4,.2,0);
             var config=new VulkanEntityBodyCoupling.Configuration(new mmm.fluid.EntityBodyState(List.of(first,second)),grid,grid,grid,h);
             var body=new VulkanEntityBodyCoupling.Layout(grid,grid,grid,4,2*config.cellEntries(),size,geometry.masks(),geometry.cells(),geometry.faces(),geometry.occupied(),cursor[0],a);
-            var viscous=new VulkanLiquidViscosity.Layout(liquid,geometry.cells(),geometry.faces(),geometry.masks(),word(temperatures),-1,
+            var viscous=new VulkanLiquidViscosity.Layout(liquid,geometry.cells(),geometry.faces(),geometry.walls(),word(temperatures),-1,
                     new VulkanLiquidViscosity.Tables(new int[]{0,1,2},new double[]{273,1000,.001,.001,273,1000,.05,.05}),body.prescribedContacts(),false,body.endOffset(),a);
             body.bindPressure(pressure,null);body.bindViscosity(viscous);
             var initial=ByteBuffer.allocate(Math.toIntExact(viscous.endOffset())).order(ByteOrder.LITTLE_ENDIAN);liquid.importState(initial,fixture.inventory(),fixture.momentum());
@@ -49,6 +49,12 @@ public final class GpuEntityBodyCouplingBenchmark {
                     if(feedback.error()!=0)throw new IllegalStateException("Entity body candidate error="+feedback.error());int error=candidate.finishBatch((cmd,input,output,errors,staging,stack)->{});if(error!=0)throw new IllegalStateException("Entity body finish error="+error);
                     result=body.result(feedback.feedback(),config);var occupied=ByteBuffer.allocate(8*n).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.OCCUPIED_SVQ).offset(),occupied);exactVolume=0;for(int c=0;c<n;c++)exactVolume+=occupied.getLong(8*c);
                     var sourceWork=ByteBuffer.allocate(8*n).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.SOURCE_WORK).offset(),sourceWork);sumWork=0;for(int c=0;c<n;c++)sumWork+=sourceWork.getDouble(8*c);
+                    double viscousWork=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.SOURCE_CELL_WORK));
+                    double viscousHeat=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT));
+                    double beforeK=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.SOURCE_FACE_K));
+                    double afterK=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.FINAL_FACE_K));
+                    if(viscousWork<=0||viscousHeat<=0||Math.abs(viscousWork+beforeK-afterK-viscousHeat)>1e-8*Math.max(1,viscousWork))
+                        throw new IllegalStateException("Moving body viscous work, kinetic energy and heat differ");
                     if(Math.abs(exactVolume/134217728.0-expectedUnion)>n/134217728.0||Math.abs(sumWork-result.externalWorkJoules())>1e-9)
                         throw new IllegalStateException("Entity union or actual source work differs from body work");
                     candidate.commit();System.out.printf("step=%d volume=%.9g impulse=(%.9g,%.9g,%.9g) work=%.9g wall_ms=%.3f%n",step,result.coupledVolumeCubicMetres(),result.impulseXKilogramMetresPerSecond(),result.impulseYKilogramMetresPerSecond(),result.impulseZKilogramMetresPerSecond(),result.externalWorkJoules(),(System.nanoTime()-begin)*1e-6);
@@ -60,5 +66,6 @@ public final class GpuEntityBodyCouplingBenchmark {
         }
     }
     private static int word(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}
+    private static double sum(VulkanRegionStorage.Candidate candidate,VulkanLiquidStateLayout.Column column){var data=ByteBuffer.allocate(Math.toIntExact(column.bytes())).order(ByteOrder.LITTLE_ENDIAN);candidate.read(column.offset(),data);double sum=0;for(int i=0;i<data.capacity();i+=8)sum+=data.getDouble(i);return sum;}
     private static VulkanLiquidStateLayout.Column column(long[] cursor,int n,int width,long a){long offset=(cursor[0]+a-1)&-a;var c=new VulkanLiquidStateLayout.Column(offset,n,width);cursor[0]=offset+c.bindingBytes();return c;}
 }

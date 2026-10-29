@@ -156,8 +156,7 @@ final class VulkanFluidStateCodec {
         var definitions = new VulkanLiquidRegion.MechanicalDefinitions(stocks, inventory.speciesHandles().length,
             Math.max(1, inventory.volumes().limbs().length), 4, -40, phases, speciesMass, reference, speciesReference,
             stride, VulkanLiquidThermodynamics.tables(liquidMaterials), viscosity, forces,
-            VulkanSurfaceTension.tables(fluids),
-            template.config().viscousWallCondition() == mmm.fluid.FluidSolverConfig.WallCondition.NO_SLIP);
+            VulkanSurfaceTension.tables(fluids), true);
         VulkanLiquidRegion.GasConfiguration gas = null;
         var gasMaterials = new ArrayList<ThermalMaterialDefinition>();
         if (template.hasGas()) {

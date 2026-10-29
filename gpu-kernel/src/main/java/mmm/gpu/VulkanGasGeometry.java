@@ -175,7 +175,7 @@ final class VulkanGasGeometry implements AutoCloseable {
     private FlipKernelBindings.BufferRange arena;
     VulkanGasGeometry(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 2,
-                resource("gas-geometry.comp").replace("// HOST_LAYOUT", shaderLayout()).replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 20);
+                resource("gas-geometry.comp").replace("// HOST_LAYOUT", shaderLayout()).replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")).replace("// PLIC_FACE_LIBRARY", resource("plic-face.glsl")), 20);
         try { scan = new VulkanPrefixScan(context); }
         catch (RuntimeException | LinkageError failure) {
             try { bindings.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }

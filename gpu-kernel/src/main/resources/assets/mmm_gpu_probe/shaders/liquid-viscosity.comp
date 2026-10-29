@@ -129,13 +129,6 @@ bool wet(int c) {
 bool enabled(int f) {
     return f >= 0 && faceValue(f, FACE_MASS) > 0.0 && faceValue(f, FACE_OPEN_AREA) > 0.0 && (headerWord(H_ACTIVITY) < 0 || words[headerWord(H_ACTIVITY) + f] != 0u);
 }
-bool solid(ivec3 micro) {
-    ivec3 dims = 2 * shape();
-    if (any(lessThan(micro, ivec3(0))) || any(greaterThanEqual(micro, dims)))
-        return true;
-    int c = cellIndex(micro / 2), bit = (micro.x & 1) + 2 * (micro.y & 1) + 4 * (micro.z & 1);
-    return (words[headerWord(H_MASKS) + c] & (1u << bit)) != 0u;
-}
 double harmonic(double a, double b) {
     double lo = min(a, b), hi = max(a, b);
     return lo / (.5 + .5 * lo / hi);
@@ -212,27 +205,16 @@ void prepareCell(int c) {
     writeDoubleField(FIELD_MU, c, mu);
     writeIntField(FIELD_CARRIER, c, material);
 
-    // Count blocked micro-faces to form wall conductance for each tangential velocity.
-    ivec3 base = 2 * cellPosition(c);
-    dvec3 area = dvec3(0.0);
-    if (headerWord(H_NO_SLIP) != 0) {
-        for (int bit = 0; bit < 8; bit++) {
-            if ((words[headerWord(H_MASKS) + c] & (1u << bit)) != 0u)
-                continue;
-            ivec3 micro = base + ivec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1);
-            for (int axis = 0; axis < 3; axis++) {
-                ivec3 direction = ivec3(0);
-                direction[axis] = 1;
-                area[axis] += (solid(micro - direction) ? .25 : 0.0) + (solid(micro + direction) ? .25 : 0.0);
-            }
-        }
-    }
+    // The common PLIC geometry supplies only wetted fixed walls and their effective distances.
+    // Split each cell's tangential drag equally between its two MAC velocity samples.
     for (int tangent = 0; tangent < 3; tangent++) {
         double sum = 0.0;
-        for (int axis = 0; axis < 3; axis++)
-            if (axis != tangent)
-                sum += area[axis];
-        writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + tangent, mu * p.h * sum / min(cellValue(c, CELL_VOLUME), cellValue(c, CELL_CAPACITY)));
+        if (headerWord(H_NO_SLIP) != 0)
+            for (int axis = 0; axis < 3; axis++)
+                if (axis != tangent)
+                    for (int side = 0; side < 2; side++)
+                        sum += candidateDouble(headerWord(H_WALL_GEOMETRY) + 2 * (12 * c + 2 * (2 * axis + side) + 1));
+        writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + tangent, .5 * mu * p.h * sum);
     }
 }
 void prepareFace(int f) {

@@ -32,7 +32,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
 
     /** Header words shared with the viscosity shader. */
     private enum Header {
-        SIZE_X, SIZE_Y, SIZE_Z, CELL_COUNT, FACE_COUNT, CELLS, FACES, MASKS, TEMPERATURE, ACTIVITY,
+        SIZE_X, SIZE_Y, SIZE_Z, CELL_COUNT, FACE_COUNT, CELLS, FACES, WALL_GEOMETRY, TEMPERATURE, ACTIVITY,
         NO_SLIP, MATERIAL_COUNT, CONTACT_FACE_OFFSETS, CONTACT_BODY_HANDLES, CONTACT_AREA_OVER_DISTANCE,
         CONTACT_VELOCITIES, CONTACT_CAPACITY, BODY_COUNT, ACTIVITY_CELLS
     }
@@ -81,19 +81,19 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         private final VulkanLiquidStateLayout.Column header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         private final Tables tables;private final PrescribedContacts contacts;
-        private final int cellsWord,facesWord,masksWord,temperatureWord,activityWord,activityCellsWord,faces;
+        private final int cellsWord,facesWord,wallsWord,temperatureWord,activityWord,activityCellsWord,faces;
         private final boolean noSlip;private final long endOffset;
         private final int[] colourOffsets=new int[19];
         Layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
-               VulkanLiquidStateLayout.Column masks,int cellTemperatureWord,int faceActivityWord,Tables tables,
+               VulkanLiquidStateLayout.Column walls,int cellTemperatureWord,int faceActivityWord,Tables tables,
                PrescribedContacts contacts,boolean noSlip,long scratchBase,long alignment) {
-            this(source,cells,faces,masks,cellTemperatureWord,faceActivityWord,-1,tables,contacts,noSlip,scratchBase,alignment);
+            this(source,cells,faces,walls,cellTemperatureWord,faceActivityWord,-1,tables,contacts,noSlip,scratchBase,alignment);
         }
         Layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
-               VulkanLiquidStateLayout.Column masks,int cellTemperatureWord,int faceActivityWord,int cellActivityWord,Tables tables,
+               VulkanLiquidStateLayout.Column walls,int cellTemperatureWord,int faceActivityWord,int cellActivityWord,Tables tables,
                PrescribedContacts contacts,boolean noSlip,long scratchBase,long alignment) {
             this.source=source;this.tables=tables;this.contacts=contacts;this.noSlip=noSlip;
-            cellsWord=word(cells);facesWord=word(faces);masksWord=word(masks);temperatureWord=cellTemperatureWord;activityWord=faceActivityWord;activityCellsWord=cellActivityWord;
+            cellsWord=word(cells);facesWord=word(faces);wallsWord=word(walls);temperatureWord=cellTemperatureWord;activityWord=faceActivityWord;activityCellsWord=cellActivityWord;
             this.faces=faces.count()/4;
             if(scratchBase<source.bytes()||alignment<8||(alignment&(alignment-1))!=0||cells.count()!=4*source.cellCount()||cellTemperatureWord<0)
                 throw new IllegalArgumentException("Viscous fields differ from resident liquid");
@@ -123,7 +123,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         ByteBuffer headerBytes(VulkanLiquidStateLayout sourceLayout){
             var out=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[HEADER_WORDS];
             data[Header.SIZE_X.ordinal()]=source.sizeX();data[Header.SIZE_Y.ordinal()]=source.sizeY();data[Header.SIZE_Z.ordinal()]=source.sizeZ();data[Header.CELL_COUNT.ordinal()]=source.cellCount();data[Header.FACE_COUNT.ordinal()]=faces;
-            data[Header.CELLS.ordinal()]=cellsWord;data[Header.FACES.ordinal()]=facesWord;data[Header.MASKS.ordinal()]=masksWord;data[Header.TEMPERATURE.ordinal()]=temperatureWord;data[Header.ACTIVITY.ordinal()]=activityWord;data[Header.NO_SLIP.ordinal()]=noSlip?1:0;
+            data[Header.CELLS.ordinal()]=cellsWord;data[Header.FACES.ordinal()]=facesWord;data[Header.WALL_GEOMETRY.ordinal()]=wallsWord;data[Header.TEMPERATURE.ordinal()]=temperatureWord;data[Header.ACTIVITY.ordinal()]=activityWord;data[Header.NO_SLIP.ordinal()]=noSlip?1:0;
             data[Header.ACTIVITY_CELLS.ordinal()]=activityCellsWord;
             data[Header.MATERIAL_COUNT.ordinal()]=tables.offsets().length-1;
             data[Header.CONTACT_FACE_OFFSETS.ordinal()]=contacts==null?-1:word(contacts.faceOffsets());data[Header.CONTACT_BODY_HANDLES.ordinal()]=contacts==null?0:word(contacts.bodyHandles());

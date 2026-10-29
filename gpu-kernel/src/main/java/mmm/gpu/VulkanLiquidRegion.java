@@ -13,7 +13,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Resident liquid/gas mechanical candidates, with replaceable layouts and shared native pipelines. */
 final class VulkanLiquidRegion implements AutoCloseable {
-    enum GeometryField { FIXED_MASKS, OCCUPIED_SOLID, CELLS, PLANES, LIQUID_MICRO, FACES, FLUXES }
+    enum GeometryField { FIXED_MASKS, OCCUPIED_SOLID, CELLS, PLANES, LIQUID_MICRO, WALL_GEOMETRY, FACES, FLUXES }
     enum PressureField { STARTS, COLUMNS, VALUES, ROWS, INPUT, PRESSURE, WORK, META, PROBLEM, CONTROL, PARTIALS }
     final VulkanDeviceContext context;
     final VulkanLiquidGeometry kernel;
