@@ -10,7 +10,7 @@ import static mmm.gpu.VulkanRegionStorage.barrier;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Exact dry presence, PLIC dry ports, and chamber membership for one resident generation. */
+/** Local gas presence and dry PLIC ports for one resident generation. */
 final class VulkanGasGeometry implements AutoCloseable {
     private enum Header {
         SIZE_X(0),
@@ -30,10 +30,6 @@ final class VulkanGasGeometry implements AutoCloseable {
         CELL_NODES(24),
         MICRO_FRACTIONS(33),
         CELL_SIZE(34),
-        LIQUID_FACES(36),
-        MOMENTUM_X(37),
-        MOMENTUM_Y(38),
-        MOMENTUM_Z(39),
         MIXTURE_STATES(44);
         final int word;
         Header(int word) { this.word = word; }
@@ -46,20 +42,15 @@ final class VulkanGasGeometry implements AutoCloseable {
 
     record Layout(VulkanLiquidCellVolumes.Layout totals, int masksWordOffset, int occupiedWordOffset,
                   int cellsWordOffset, int planesWordOffset, int microWordOffset, boolean sealedExterior,
-                  double cellSize, int liquidFacesWordOffset, int mixtureStatesWordOffset,
+                  double cellSize, int mixtureStatesWordOffset,
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column presence,
                   VulkanLiquidStateLayout.Column dryVolumes, VulkanLiquidStateLayout.Column dryMasks,
                   VulkanLiquidStateLayout.Column faceAreas, VulkanLiquidStateLayout.Column cellNodes,
                   VulkanLiquidStateLayout.Column microFractions, long endOffset) {
-        Layout withLiquidFaces(int wordOffset) {
-            return new Layout(totals,masksWordOffset,occupiedWordOffset,cellsWordOffset,planesWordOffset,microWordOffset,
-                    sealedExterior,cellSize,wordOffset,mixtureStatesWordOffset,header,presence,dryVolumes,dryMasks,
-                    faceAreas,cellNodes,microFractions,endOffset);
-        }
         Layout withMixture(VulkanMixtureState.Layout mixture) {
             if(mixture.inputs().cells()!=cells())throw new IllegalArgumentException("Mixture and gas geometry dimensions differ");
             return new Layout(totals,masksWordOffset,occupiedWordOffset,cellsWordOffset,planesWordOffset,microWordOffset,
-                    sealedExterior,cellSize,liquidFacesWordOffset,mixture.statesWord(),header,presence,dryVolumes,dryMasks,
+                    sealedExterior,cellSize,mixture.statesWord(),header,presence,dryVolumes,dryMasks,
                     faceAreas,cellNodes,microFractions,endOffset);
         }
         int headerWordOffset() { return word(header); }
@@ -77,10 +68,7 @@ final class VulkanGasGeometry implements AutoCloseable {
             data[Header.MASKS.word]=masksWordOffset;data[Header.CELLS.word]=cellsWordOffset;data[Header.PLANES.word]=planesWordOffset;data[Header.MICRO.word]=microWordOffset;
             data[Header.PRESENCE.word]=word(presence);data[Header.DRY_VOLUMES.word]=word(dryVolumes);data[Header.DRY_MASKS.word]=word(dryMasks);
             data[Header.FACE_AREAS.word]=word(faceAreas);data[Header.CELL_NODES.word]=word(cellNodes);data[Header.MICRO_FRACTIONS.word]=word(microFractions);
-            data[Header.LIQUID_FACES.word]=liquidFacesWordOffset;data[Header.MIXTURE_STATES.word]=mixtureStatesWordOffset;
-            data[Header.MOMENTUM_X.word]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_X));
-            data[Header.MOMENTUM_Y.word]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_Y));
-            data[Header.MOMENTUM_Z.word]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_Z));
+            data[Header.MIXTURE_STATES.word]=mixtureStatesWordOffset;
             for(int i=0;i<data.length;i++)target.putInt(4*i,data[i]);target.putDouble(4*Header.CELL_SIZE.word,cellSize);return target;
         }
     }
@@ -98,7 +86,7 @@ final class VulkanGasGeometry implements AutoCloseable {
         var areas=column(cursor,faces,8,alignment);var nodes=column(cursor,cells,4,alignment);
         var fractions=column(cursor,Math.multiplyExact(cells,8),4,alignment);
         return new Layout(totals,masksWordOffset,occupiedWordOffset,cellsWordOffset,planesWordOffset,microWordOffset,
-                sealedExterior,cellSize,-1,-1,header,presence,volumes,masks,areas,nodes,fractions,align(cursor[0],alignment));
+                sealedExterior,cellSize,-1,header,presence,volumes,masks,areas,nodes,fractions,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
     VulkanGasGeometry(VulkanDeviceContext context) {

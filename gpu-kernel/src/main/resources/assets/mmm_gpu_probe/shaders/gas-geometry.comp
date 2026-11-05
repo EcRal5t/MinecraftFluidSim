@@ -128,72 +128,9 @@ void captureFace(int face) {
     double scale = cellSize();
     writeDouble(headerWord(GEO_H_FACE_AREAS) + 2 * face, double(area) * scale * scale);
 }
-// Fixed opening and the two phase areas share the same axis-aligned cuts.
-dvec2 sharedMicroAreas(double leftFill, double rightFill, dvec4 leftPlane, dvec4 rightPlane,
-                       float leftFraction, float rightFraction, bool gasEnabled, int axis, int a, int b) {
-    int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
-    int bit = (a << tangent) | (b << other);
-    double physicalDry = leftFill >= 1.0 || rightFill >= 1.0 ? 0.0
-        : dryRectangle(leftPlane, rightPlane, leftFill > 0.0, rightFill > 0.0, axis, bit);
-    double gas = !gasEnabled || leftFraction >= 1.0 || rightFraction >= 1.0 ? 0.0
-        : dryRectangle(leftPlane, rightPlane, leftFraction > 0.0, rightFraction > 0.0, axis, bit);
-    return dvec2(.25LF - physicalDry, gas);
-}
-void captureSharedFace(int face) {
-    writeDouble(headerWord(GEO_H_FACE_AREAS) + 2 * face, 0.0);
-    if (errors != 0u)
-        return;
-    ivec3 ends = faceEndpoints(face);
-    int left = ends.x, right = ends.y, axis = ends.z, tangent = (axis + 1) % 3, other = (axis + 2) % 3;
-    bool internal = left >= 0 && right >= 0, gasEnabled = (left < 0 || present(left)) && (right < 0 || present(right));
-    uint leftSupport = left < 0 ? 255u : support(left), rightSupport = right < 0 ? 255u : support(right);
-    double leftFill = left < 0 ? 0.0LF : readDouble(headerWord(GEO_H_CELLS) + 8 * left + 6),
-           rightFill = right < 0 ? 0.0LF : readDouble(headerWord(GEO_H_CELLS) + 8 * right + 6);
-    dvec4 leftPlane = left < 0 ? dvec4(0)
-                              : dvec4(readDouble(headerWord(GEO_H_PLANES) + 8 * left), readDouble(headerWord(GEO_H_PLANES) + 8 * left + 2),
-                                     readDouble(headerWord(GEO_H_PLANES) + 8 * left + 4), readDouble(headerWord(GEO_H_PLANES) + 8 * left + 6));
-    dvec4 rightPlane = right < 0
-                          ? dvec4(0)
-                          : dvec4(readDouble(headerWord(GEO_H_PLANES) + 8 * right), readDouble(headerWord(GEO_H_PLANES) + 8 * right + 2),
-                                 readDouble(headerWord(GEO_H_PLANES) + 8 * right + 4), readDouble(headerWord(GEO_H_PLANES) + 8 * right + 6));
-    double open = 0.0, wet = 0.0, dry = 0.0;
-    for (int a = 0; a < 2; a++)
-        for (int b = 0; b < 2; b++) {
-            int low = (a << tangent) | (b << other), high = low | (1 << axis);
-            if (!plicOpenPort(leftSupport, rightSupport, high, low))
-                continue;
-            open += .25;
-            float l = gasEnabled && left >= 0 ? fraction(left, high) : 0.0,
-                  r = gasEnabled && right >= 0 ? fraction(right, low) : 0.0;
-            dvec2 areas = sharedMicroAreas(leftFill, rightFill, leftPlane, rightPlane, l, r, gasEnabled, axis, a, b);
-            wet += areas.x;
-            dry += areas.y;
-        }
-    double mass = .5 * ((left < 0 ? 0.0 : readDouble(headerWord(GEO_H_CELLS) + 8 * left + 2)) +
-                        (right < 0 ? 0.0 : readDouble(headerWord(GEO_H_CELLS) + 8 * right + 2))),
-           speed = 0.0;
-    if (internal && open > 0.0 && mass > 0.0) {
-        int xFaces = (headerWord(GEO_H_SIZE_X) + 1) * headerWord(GEO_H_SIZE_Y) * headerWord(GEO_H_SIZE_Z),
-            yFaces = headerWord(GEO_H_SIZE_X) * (headerWord(GEO_H_SIZE_Y) + 1) * headerWord(GEO_H_SIZE_Z),
-            local = face - (axis == 0   ? 0
-                            : axis == 1 ? xFaces
-                                        : xFaces + yFaces);
-        speed = readDouble(headerWord(37 + axis) + 2 * local) / mass;
-    }
-    int target = headerWord(GEO_H_LIQUID_FACES) + 8 * face;
-    writeDouble(target, mass);
-    writeDouble(target + 2, speed);
-    writeDouble(target + 4, internal ? double(open) : 0.0);
-    writeDouble(target + 6, internal ? double(wet) : 0.0);
-    if (dry > 0.0) {
-        double scale = cellSize();
-        writeDouble(headerWord(GEO_H_FACE_AREAS) + 2 * face, double(dry) * scale * scale);
-    }
-}
-
 void main() {
     uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
     if(id>=uint(p.count))return;
     if(p.stage==13)captureLocalCell(int(id));
-    else if(p.stage==14){if(headerWord(GEO_H_LIQUID_FACES)>=0)captureSharedFace(int(id));else captureFace(int(id));}
+    else if(p.stage==14)captureFace(int(id));
 }

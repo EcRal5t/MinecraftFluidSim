@@ -1,5 +1,7 @@
 package mmm.gpu;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -168,7 +170,7 @@ final class VulkanLiquidWorkspaceSections {
             String phase=geometryKernel==region.kernel?"source":"future";
             recordThermodynamics(command,output,errors,dt,phase);
             var arena=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
-            region.kernels.timed(command,phase+"-liquid-shapes",()->geometryKernel.recordInterfaces(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
+            region.kernels.timed(command,phase+"-liquid-shapes",()->geometryKernel.recordShapes(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
             region.kernels.gasGeometry.rebindRanges(arena,err);
             region.kernels.timed(command,phase+"-gas-geometry",()->region.kernels.gasGeometry.recordLocalGeometry(command,geometry));
         }

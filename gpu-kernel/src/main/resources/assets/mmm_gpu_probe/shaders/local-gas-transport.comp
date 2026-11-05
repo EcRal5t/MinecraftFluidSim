@@ -268,6 +268,20 @@ double gasEnergyAtTemperature(int cell,double temperature){
     }
     return cold;
 }
+double gasLogRatio(double numerator,double denominator){
+    int exponent;
+    double mantissa=frexp(numerator/denominator,exponent);
+    if(mantissa<.7071067811865475244LF){mantissa*=2.0LF;exponent--;}
+    double z=(mantissa-1.0LF)/(mantissa+1.0LF),square=z*z;
+    double series=1.0LF/15.0LF;
+    series=1.0LF/13.0LF+square*series;
+    series=1.0LF/11.0LF+square*series;
+    series=1.0LF/9.0LF+square*series;
+    series=1.0LF/7.0LF+square*series;
+    series=1.0LF/5.0LF+square*series;
+    series=1.0LF/3.0LF+square*series;
+    return 2.0LF*z*(1.0LF+square*series)+double(exponent)*.6931471805599453094LF;
+}
 void applyPressureWork(int cell){
     ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));double outgoing=0.0,incoming=0.0,externalVolume=0.0;
     for(int side=0;side<6;side++){
@@ -311,8 +325,8 @@ void applyPressureWork(int cell){
                 double scale=(limit-pressure)/bulk;
                 double gasVolume=poreVolume-liquidReference*scale;
                 finalTemperature=pressure*gasVolume/(constant*scale);
-                double residual=double(log(float((gasVolume+b*finalTemperature)/referenceVolume)))
-                    +a*double(log(float(finalTemperature/temperature)));
+                double residual=gasLogRatio(gasVolume+b*finalTemperature,referenceVolume)
+                    +a*gasLogRatio(finalTemperature,temperature);
                 if(abs(residual)<=1e-7LF||iteration==47)break;
                 if(residual<0.0LF)low=pressure;else high=pressure;
                 double dTemperature=finalTemperature*(1.0LF/pressure+liquidReference/(bulk*gasVolume)+1.0LF/(bulk*scale));
