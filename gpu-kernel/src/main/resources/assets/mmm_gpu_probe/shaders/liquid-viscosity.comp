@@ -122,9 +122,11 @@ ivec2 faceCells(int f) {
     a[axis]--;
     return ivec2(cellIndex(a), cellIndex(b));
 }
+bool liquidGeometry(int c) {
+    return c >= 0 && (headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + c] != 0u) && cellValue(c, CELL_VOLUME) > 0.0;
+}
 bool wet(int c) {
-    return c >= 0 && (headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + c] != 0u) && cellValue(c, CELL_VOLUME) > 0.0 &&
-           cellValue(c, CELL_MASS) > 0.0;
+    return liquidGeometry(c) && readDoubleField(FIELD_MU, c) > 0.0LF;
 }
 bool enabled(int f) {
     return f >= 0 && faceValue(f, FACE_MASS) > 0.0 && faceValue(f, FACE_OPEN_AREA) > 0.0 && (headerWord(H_ACTIVITY) < 0 || words[headerWord(H_ACTIVITY) + f] != 0u);
@@ -147,7 +149,8 @@ double blend(double x) {
     }
     return 1.0 - ldexp(sum, e);
 }
-// Select the dominant liquid material and interpolate its viscosity in Pa s at the cell temperature in K.
+// Evaluate each liquid carrier at its own temperature, then volume-average the
+// stresses represented by this cell's shared velocity. Carrier stocks remain distinct.
 void prepareCell(int c) {
     if (c == 0) {
         for (int colour = 0; colour < 18; colour++)
@@ -156,7 +159,6 @@ void prepareCell(int c) {
     writeDoubleField(FIELD_SOURCE_CELL_HEAT, c, 0.0);
     writeDoubleField(FIELD_SOURCE_CELL_WORK, c, 0.0);
     writeDoubleField(FIELD_MU, c, 0.0);
-    writeIntField(FIELD_CARRIER, c, -1);
     writeIntField(FIELD_EXTRAPOLATED, c, 0);
     for (int axis = 0; axis < 3; axis++) {
         writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + axis, 0.0);
@@ -164,46 +166,82 @@ void prepareCell(int c) {
         writeDoubleField(FIELD_STRESS_HEAT, 3 * c + axis, 0.0);
         writeDoubleField(FIELD_STRESS_HEAT, 3 * cellCount() + 3 * c + axis, 0.0);
     }
-    if (!wet(c))
+    if (!liquidGeometry(c))
         return;
 
     int first = int(source[stockField(STOCK_CELL_OFFSETS) + c]);
     int last = int(source[stockField(STOCK_CELL_OFFSETS) + c + 1]);
-    int material = -1;
-    double largest = -1.0;
+    double weightedViscosity = 0.0, totalVolume = 0.0;
+    bool extrapolated = false;
     for (int row = first; row < last; row++) {
         double volume = sourceDouble(stockField(STOCK_NUMERIC_VOLUMES) + 2 * row);
-        if (volume > largest) {
-            largest = volume;
-            material = int(source[stockField(STOCK_MATERIALS) + row]);
+        int massWord = stockField(STOCK_MASS_UNITS) + 2 * row;
+        if (volume <= 0.0 || (source[massWord] == 0u && source[massWord + 1] == 0u))
+            continue;
+        int material = int(source[stockField(STOCK_MATERIALS) + row]);
+        if (material < 0 || material >= headerWord(H_MATERIAL_COUNT)) {
+            atomicOr(errors, INVALID_VISCOSITY_ERROR);
+            return;
         }
+        double temperature = candidateDouble(headerWord(H_TEMPERATURE) + 2 * row);
+        int begin = readIntField(FIELD_MATERIAL_OFFSETS, material);
+        int end = readIntField(FIELD_MATERIAL_OFFSETS, material + 1);
+        int segment = begin;
+        if (begin == end || !(temperature > 0.0)) {
+            atomicOr(errors, INVALID_VISCOSITY_ERROR);
+            return;
+        }
+        extrapolated = extrapolated ||
+            temperature < readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * begin + SEGMENT_MIN_TEMPERATURE) ||
+            temperature > readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * (end - 1) + SEGMENT_MAX_TEMPERATURE);
+        while (segment + 1 < end && temperature > readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MAX_TEMPERATURE))
+            segment++;
+        double lo = readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MIN_TEMPERATURE);
+        double hi = readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MAX_TEMPERATURE);
+        double t = clamp((temperature - lo) / (hi - lo), 0.0, 1.0);
+        double viscosity = mix(readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MIN_VISCOSITY),
+                               readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MAX_VISCOSITY), t);
+        if (material == headerWord(H_AQUEOUS_MATERIAL) && headerWord(H_WATER_SPECIES) >= 0 &&
+                source[stockField(STOCK_MIXTURE_PRESENT) + row] != 0u) {
+            uint64_t water = uint64_t(0), ethanol = uint64_t(0), sodium = uint64_t(0), chloride = uint64_t(0), salt = uint64_t(0);
+            bool known = true;
+            int speciesFirst = int(source[stockField(STOCK_SPECIES_OFFSETS) + row]);
+            int speciesLast = int(source[stockField(STOCK_SPECIES_OFFSETS) + row + 1]);
+            for (int item = speciesFirst; item < speciesLast; item++) {
+                int species = int(source[stockField(STOCK_SPECIES_HANDLES) + item]);
+                int address = stockField(STOCK_SPECIES_AMOUNTS) + 2 * item;
+                uint64_t amount = uint64_t(source[address]) | (uint64_t(source[address + 1]) << 32);
+                if (amount == uint64_t(0)) continue;
+                if (species == headerWord(H_WATER_SPECIES)) water += amount;
+                else if (species == headerWord(H_ETHANOL_SPECIES)) ethanol += amount;
+                else if (species == headerWord(H_SODIUM_SPECIES)) sodium += amount;
+                else if (species == headerWord(H_CHLORIDE_SPECIES)) chloride += amount;
+                else if (species == headerWord(H_SALT_SPECIES)) salt += amount;
+                else known = false;
+            }
+            if (known && sodium == chloride && (water > uint64_t(0) || (ethanol > uint64_t(0) && salt == uint64_t(0)))) {
+                double mass = double(uint64_t(source[massWord]) | (uint64_t(source[massWord + 1]) << 32)) * 1e-10LF;
+                double fraction = clamp(double(ethanol) * 1e-6LF * .046LF / mass, 0.0LF, 1.0LF);
+                viscosity = mix(viscosity, ETHANOL_VISCOSITY, fraction);
+                double saltMoles = (double(sodium) + double(salt)) * 1e-6;
+                double molality = water > uint64_t(0) ? saltMoles / (double(water) * 1e-6 * .018) : 0.0;
+                double molarity = saltMoles / (volume * p.h * p.h * p.h * 1000.0);
+                if (saltMoles > 0.0) {
+                    viscosity *= 1.0 + NACL_VISCOSITY_A * sqrt(molarity) + NACL_VISCOSITY_B * molarity;
+                    extrapolated = extrapolated || molality > NACL_MAX_MOLALITY || abs(temperature - NACL_REFERENCE_TEMPERATURE) > .01;
+                }
+            } else {
+                extrapolated = true;
+            }
+        }
+        weightedViscosity += volume * viscosity;
+        totalVolume += volume;
     }
-    if (material < 0 || material >= headerWord(H_MATERIAL_COUNT)) {
-        atomicOr(errors, INVALID_VISCOSITY_ERROR);
+    if (!(totalVolume > 0.0))
         return;
-    }
-    double temperature = candidateDouble(headerWord(H_TEMPERATURE) + 2 * c);
-    int begin = readIntField(FIELD_MATERIAL_OFFSETS, material);
-    int end = readIntField(FIELD_MATERIAL_OFFSETS, material + 1);
-    int segment = begin;
-    if (begin == end || !(temperature > 0.0)) {
-        atomicOr(errors, INVALID_VISCOSITY_ERROR);
-        return;
-    }
-    writeIntField(FIELD_EXTRAPOLATED, c,
-        temperature < readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * begin + SEGMENT_MIN_TEMPERATURE) ||
-                temperature > readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * (end - 1) + SEGMENT_MAX_TEMPERATURE)
-            ? 1
-            : 0);
-    while (segment + 1 < end && temperature > readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MAX_TEMPERATURE))
-        segment++;
-    double lo = readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MIN_TEMPERATURE);
-    double hi = readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MAX_TEMPERATURE);
-    double t = clamp((temperature - lo) / (hi - lo), 0.0, 1.0);
-    double mu =
-        mix(readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MIN_VISCOSITY), readDoubleField(FIELD_VISCOSITY_SEGMENTS, VISCOSITY_SEGMENT_STRIDE * segment + SEGMENT_MAX_VISCOSITY), t);
+    double mu = weightedViscosity / totalVolume;
+    writeIntField(FIELD_EXTRAPOLATED, c, extrapolated ? 1 : 0);
     writeDoubleField(FIELD_MU, c, mu);
-    writeIntField(FIELD_CARRIER, c, material);
 
     // The common PLIC geometry supplies only wetted fixed walls and their effective distances.
     // Split each cell's tangential drag equally between its two MAC velocity samples.

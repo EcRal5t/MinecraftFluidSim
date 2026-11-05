@@ -18,7 +18,7 @@ import static mmm.gpu.VulkanRegionStorage.barrier;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Derived ideal-gas states with heterogeneous piecewise-constant caloric models. Inventory U is unchanged. */
+/** Derived local gas states with heterogeneous piecewise-constant caloric models. */
 final class VulkanGasThermodynamics implements AutoCloseable {
     private enum Header {
         NODE_CAPACITY(0),
@@ -31,18 +31,10 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         ANCHOR_ENERGY(7),
         SPECIES_REFERENCE(8),
         STATES(9),
-        LONG_VOLUMES(10),
-        VOLUME_DISPATCH(11),
         STANDARD_TEMPERATURE(32),
         MINIMUM_TEMPERATURE(34),
         PRESSURE_FACTOR(36),
-        ISOTHERMAL(38),
-        SELF_PIVOT(39),
-        PART_OFFSETS(40),
-        PART_CAPACITY(41),
-        SPECIES_CAPACITY(42),
-        SOURCE_STANDARD_VOLUME(43),
-        SOURCE_MASS(44);
+        ISOTHERMAL(38);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -51,7 +43,9 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         var result = new StringBuilder();
         for (var field : Header.values()) result.append("#define GAS_H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define GAS_FIELDS ").append(GAS_FIELDS).append('\n');
-        return result + VulkanShaderLayout.fields("GAS_", VulkanGasStateLayout.Field.values());
+        return result + VulkanShaderLayout.fields("GAS_", VulkanGasStateLayout.Field.values())
+                + "\n#define GAS_MIXTURE_BULK " + mmm.thermal.MixtureVolumeModel.LIQUID_BULK_PA + "LF\n#define GAS_MIXTURE_LIMIT "
+                + mmm.thermal.MixtureVolumeModel.PRESSURE_LIMIT_PA + "LF\n";
     }
 
     static final int STATE_WIDTH = 9;
@@ -99,8 +93,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column segmentOffsets,
                   VulkanLiquidStateLayout.Column segmentUpper, VulkanLiquidStateLayout.Column segmentHeatCapacity,
                   VulkanLiquidStateLayout.Column specificAnchorEnergy, VulkanLiquidStateLayout.Column speciesReference,
-                  VulkanLiquidStateLayout.Column states, VulkanLiquidStateLayout.Column longVolumes,
-                  VulkanLiquidStateLayout.Column volumeDispatch, long endOffset, VulkanGasRemap.Layout selfParts) {
+                  VulkanLiquidStateLayout.Column states, long endOffset) {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
         long stateOffset(int node, Quantity quantity) {
@@ -117,25 +110,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
             data[Header.SPECIES_STRIDE.word] = tables.definitions().speciesIds().size(); data[Header.NODE_VOLUMES.word] = nodeVolumesWordOffset;
             data[Header.SEGMENT_OFFSETS.word] = word(segmentOffsets); data[Header.SEGMENT_UPPER.word] = word(segmentUpper); data[Header.SEGMENT_CAPACITY.word] = word(segmentHeatCapacity);
             data[Header.ANCHOR_ENERGY.word] = word(specificAnchorEnergy); data[Header.SPECIES_REFERENCE.word] = word(speciesReference); data[Header.STATES.word] = word(states);
-            data[Header.LONG_VOLUMES.word]=word(longVolumes);data[Header.VOLUME_DISPATCH.word]=word(volumeDispatch);data[Header.SELF_PIVOT.word]=-1;
             for (var field : VulkanGasStateLayout.Field.values()) data[GAS_FIELDS + field.ordinal()] = Math.toIntExact(gas.column(field).offset() / 4);
-            if(selfParts!=null){
-                var source=selfParts.routes.gas();
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.COUNTS.ordinal()]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.TOPOLOGY_KEYS.ordinal()]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.TOPOLOGY_KEYS).offset()/4);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS.ordinal()]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.COMPONENT_HANDLES.ordinal()]=selfParts.word(VulkanGasRemap.Field.PART_HANDLES);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS.ordinal()]=selfParts.word(VulkanGasRemap.Field.PART_NANOS);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.MASS_UNITS.ordinal()]=selfParts.word(VulkanGasRemap.Field.PART_MASS);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.COMPONENT_SPECIES_OFFSETS.ordinal()]=selfParts.word(VulkanGasRemap.Field.SPECIES_OFFSETS);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.SPECIES_HANDLES.ordinal()]=selfParts.word(VulkanGasRemap.Field.SPECIES_HANDLES);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.SPECIES_AMOUNTS.ordinal()]=selfParts.word(VulkanGasRemap.Field.SPECIES_AMOUNTS);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.ENERGY_PRESENT.ordinal()]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.ENERGY_PRESENT).offset()/4);
-                data[GAS_FIELDS + VulkanGasStateLayout.Field.INTERNAL_ENERGY.ordinal()]=selfParts.word(VulkanGasRemap.Field.TRANSPORT_RETAINED_ENERGY);
-                data[Header.SELF_PIVOT.word]=selfParts.word(VulkanGasRemap.Field.SOURCE_PIVOT);
-                data[Header.PART_OFFSETS.word]=selfParts.word(VulkanGasRemap.Field.PART_OFFSETS);
-                data[Header.PART_CAPACITY.word]=selfParts.partCapacity;data[Header.SPECIES_CAPACITY.word]=selfParts.speciesCapacity;data[Header.SOURCE_STANDARD_VOLUME.word]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS).offset()/4);data[Header.SOURCE_MASS.word]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.MASS_UNITS).offset()/4);
-            }
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * Header.STANDARD_TEMPERATURE.word, GasRegistry.STANDARD_TEMPERATURE_K);
             target.putDouble(4 * Header.MINIMUM_TEMPERATURE.word, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
@@ -180,46 +155,25 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         var anchor = column(cursor, tables.specificAnchorEnergy().length, 8, alignment);
         var species = column(cursor, tables.speciesReference().length, 8, alignment);
         var states = column(cursor, Math.multiplyExact(gas.nodeCapacity(), STATE_WIDTH), 8, alignment);
-        var longVolumes=column(cursor,gas.nodeCapacity(),4,alignment);var dispatch=column(cursor,4,4,alignment);
-        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states,longVolumes,dispatch, align(cursor[0], alignment),null);
-    }
-    /** Exact self-route parts provide the retained caloric inventory without canonical CSR copies. */
-    static Layout selfPartsLayout(VulkanGasRemap.Layout remap,Tables tables,int volumes,long base,long alignment){
-        if(!remap.transport)throw new IllegalArgumentException("Self parts require gas transport");
-        var l=layout(remap.retained,tables,volumes,base,alignment);
-        return new Layout(l.gas,l.tables,l.nodeVolumesWordOffset,l.header,l.segmentOffsets,l.segmentUpper,l.segmentHeatCapacity,
-                l.specificAnchorEnergy,l.speciesReference,l.states,l.longVolumes,l.volumeDispatch,l.endOffset,remap);
+        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states, align(cursor[0], alignment));
     }
     private final FlipKernelBindings bindings;
-    private FlipKernelBindings.BufferRange arena;
     VulkanGasThermodynamics(VulkanDeviceContext context) { bindings = new FlipKernelBindings(context, 2, shader(), 32); }
     void rebindRanges(FlipKernelBindings.BufferRange candidate, FlipKernelBindings.BufferRange errors) {
-        arena=candidate;bindings.rebindRanges(List.of(candidate, errors));
+        bindings.rebindRanges(List.of(candidate, errors));
     }
-    void record(VkCommandBuffer command, Layout layout) { stage(command, layout, 1, null); }
-    /** Inventory topology keys and geometry must describe the same generation. This only sums volumes;
-     * changing chamber membership requires gas inventory remapping and new topology keys first.
-     */
-    void recordVolumes(VkCommandBuffer command, Layout layout, VulkanGasGeometry.Layout geometry) {
-        stage(command,layout,2,geometry);
-        stage(command,layout,3,geometry);
-        stage(command,layout,4,geometry);
-        stage(command, layout, 0, geometry);
-    }
-    private void stage(VkCommandBuffer command, Layout layout, int stage, VulkanGasGeometry.Layout geometry) {
+    void record(VkCommandBuffer command, Layout layout) { stage(command, layout, 1); }
+    /** Derive temperature and caloric properties at unit volume before mixture closure. */
+    void recordCaloric(VkCommandBuffer command, Layout layout) { stage(command, layout, 5); }
+    private void stage(VkCommandBuffer command, Layout layout, int stage) {
         int count = layout.gas().nodeCapacity();if (count == 0) return;
-        int groups = stage==2||stage==4?1:(int) (((long) count + 127) / 128);
+        int groups = (int) (((long) count + 127) / 128);
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(layout.headerWordOffset(), stage, count,
-                            geometry == null ? 0 : word(geometry.componentOffsets()), geometry == null ? 0 : word(geometry.componentMembers()),
-                            geometry == null ? 0 : word(geometry.dryVolumes()), geometry == null ? 0 : word(geometry.cellNodes()),
-                            geometry == null ? 0 : geometry.cells()));
-            if(stage==0){
-                barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.volumeDispatch().offset());
-            }else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
+                            0, 0, 0, 0, 0));
+            vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
         }

@@ -19,7 +19,7 @@ public abstract class ThermalValidationSupport {
 	public static List<ThermalMaterialDefinition> builtinGasMaterials(){return BUILTIN_GAS_MATERIALS;}
 	private static List<ThermalMaterialDefinition> loadBuiltinGasMaterials(){
 		var result=new java.util.ArrayList<ThermalMaterialDefinition>();
-		for(String name:List.of("nitrogen","oxygen","co2","water_vapor")){
+		for(String name:List.of("nitrogen","oxygen","co2","water_vapor","ethanol_vapor")){
 			try(var reader=new java.io.InputStreamReader(java.util.Objects.requireNonNull(ThermalValidationSupport.class.getResourceAsStream(
 					"/data/mmm/mmm/thermal_materials/"+name+".json")),java.nio.charset.StandardCharsets.UTF_8)){
 				result.add(mmm.thermal.ThermalDefinitionCodec.decodeMaterial("mmm:"+name,reader));
@@ -41,7 +41,7 @@ public abstract class ThermalValidationSupport {
 	public static List<mmm.thermal.ThermalSpeciesOffset> thermalOffsets(List<ThermalMaterialDefinition> materials,List<mmm.thermal.ThermalSpeciesOffset> offsets){
 		var result=new java.util.ArrayList<>(offsets);
 		for(var material:materials)if(material.carrierKind()==ThermalMaterialDefinition.CarrierKind.GAS){
-			String species=switch(material.carrierId()){case "mmm:nitrogen"->"mmm:n2";case "mmm:oxygen"->"mmm:o2";case "mmm:co2"->"mmm:co2";case "mmm:water_vapor"->"mmm:h2o";default->null;};
+			String species=switch(material.carrierId()){case "mmm:nitrogen"->"mmm:n2";case "mmm:oxygen"->"mmm:o2";case "mmm:co2"->"mmm:co2";case "mmm:water_vapor"->"mmm:h2o";case "mmm:ethanol_vapor"->"mmm:ethanol";default->null;};
 			if(species!=null&&result.stream().noneMatch(o->o.hostThermalMaterialId().equals(material.id())&&o.speciesId().equals(species)))
 				result.add(new mmm.thermal.ThermalSpeciesOffset("zztest:offset/"+material.id().replace(':','/')+"/"+species.substring(4),species,material.id(),mmm.chemistry.ExactRational.ZERO));
 		}

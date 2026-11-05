@@ -22,6 +22,7 @@
 | 放大毛细效应的进阶实验 | `tensiondemo [angle]` |
 | 颗粒物品与状态 | `granularcontainer ...`、`granstatus` |
 | 气压场景 | `airdemo [ambient/pressure/vacuum]` |
+| 周期投料、驱动与取样 | `process`、`process feed <间隔tick>`、`process drive <秒数>`、`process sample`、`process stop` |
 | 世界方块归属检查 | `ownership` |
 | 调试显示、实体与日志 | `debug`、`entities`、`logpath` |
 | 容器事务故障注入 | `transferwal [fault <point>]`；在事务恢复测试场景中使用 |
@@ -50,6 +51,16 @@
 ## 调节恒温源
 
 用 `/give @s mmm:thermal_reservoir` 取得方块。放置后，手持物质场探针右击它，在服务器提供的界面中设置温度，单位为 K。调节要求创造模式和相应写权限，允许温区由当前世界保存的热学定义决定。
+
+## 工艺操作
+
+先用控制器或 `regions select <uuid>` 选择同维度已加载的区域，保持区域运行。工艺命令需要管理员权限。
+
+- 持装有物料的液体或颗粒容器，对准该区域容器接口的蓝框正面，执行 `process feed 20`，每 20 tick 执行一次正常投料。普通模式消耗实际容器库存，空容器等待补充；创造模式沿用创造物料来源。玩家离线或区域暂停时等待，接口失效或目标改变时停止。
+- 对准内部开放格，执行 `process drive 10`，让该处构件往复运动 10 秒。也可用 `/give @s mmm:mechanical_driver` 取得驱动方块，安装在所选区域外壳后空手点击朝外的一面，沿该面法线驱动相邻求解格的内部构件；容器端口采用同一接触面定位，潜行点击驱动方块停止。
+- 对准内部物料执行 `process sample`，查看该格液体、气体和固体库存。手持空混合液桶潜行使用接口，从内侧对应的单个流体格取样；样品保留组成和内能。
+- 水–乙醇冷凝可从热池底部接口持续供料，蒸气在普通金属冷壁上凝结，在独立承接区用混合液桶取样。热池液面与气道之间建议留出至少 1 m 自由高度，减少原料液夹带。
+- `process` 查看投料和驱动状态，`process stop` 停止两者。工艺设置随世界保存，`regions checkpoint` 保存当前区域物理状态，恢复后沿原库存继续。
 
 ## 切换流体显色
 

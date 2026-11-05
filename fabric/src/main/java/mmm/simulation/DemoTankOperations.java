@@ -111,7 +111,7 @@ final class DemoTankOperations {
         if (recipe == null || port == null || port.length != 3)
             throw new IllegalArgumentException("演示配方或接口缺失");
         HostFluidState domain = candidate.editableHost();
-        restoreAmbientGas(world, domain);
+        restoreAmbientGas(domain);
         if (recipe == Recipe.WATER) {
             int material = domain.hasMaterialState() ? domain.materialRegistry().handle("mmm:water") : 0;
             for (int bucket = 0; bucket < 2; bucket++) requireFull(MinecraftContainerTransferOperations.pourIntoCell(
@@ -136,23 +136,8 @@ final class DemoTankOperations {
     }
 
     /** Refill every finite cavity from the ambient source at its current open volume. */
-    private static void restoreAmbientGas(CommittedWorldRegistries world, HostFluidState domain) {
-        var gas = domain.gasBoundary();
-        if (!gas.topologyInitialized()) domain.bootstrapGasState(
-                world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry().fingerprint() : "");
-        for (int node : gas.nodeIds()) {
-            long target = mmm.fluid.air.AirNetwork.nanos(gas.availableVolume(node));
-            long current = gas.standardVolumeNanos(node);
-            if (current == target && (current == 0 || Math.abs(domain.gasNodeTemperatureK(node)
-                    - mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K) < 1e-8)) continue;
-            if (domain.hasThermalState()) {
-                if (current > 0) domain.editGas(node, null, current, mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, true);
-                if (target > 0) domain.editGas(node, null, target, mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, false);
-            } else {
-                domain.setGasNodeStandardVolume(node, 0);
-                domain.setGasNodeStandardVolume(node, gas.availableVolume(node));
-            }
-        }
+    private static void restoreAmbientGas(HostFluidState domain) {
+        domain.resetAmbientGas();
     }
 
     /** Explicitly removes only a region registered by this runtime; block cleanup belongs to its creator. */
@@ -205,7 +190,7 @@ final class DemoTankOperations {
             var outward = state.getValue(FluidPortBlock.FACING);
             var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), level.dimension(),
                     position, outward, outward.getOpposite());
-            if (target != null) return FluidWorldTargetResolver.cellAtInteriorBlock(region, target.interiorBlock());
+            if (target != null) return target.cell();
         }
         return null;
     }

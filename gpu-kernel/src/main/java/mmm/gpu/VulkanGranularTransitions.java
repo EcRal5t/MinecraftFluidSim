@@ -67,12 +67,6 @@ final class VulkanGranularTransitions implements AutoCloseable {
         final long endOffset;
         private final int[] inputs;
         Layout(VulkanGranularStateLayout state,VulkanGranularGeometry.Layout geometry,
-               VulkanGasPressure.Layout flow,VulkanLiquidStateLayout liquid,
-               VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column viscosity,long base,long alignment){
-            this(state,geometry,flow.cells(),flow.faces(),liquid,masks,viscosity,base,alignment);
-            if(base<flow.endOffset())throw new IllegalArgumentException("Granular transitions overlap the source flow");
-        }
-        Layout(VulkanGranularStateLayout state,VulkanGranularGeometry.Layout geometry,
                VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,VulkanLiquidStateLayout liquid,
                VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column viscosity,long base,long alignment){
             if(geometry.state()!=state||liquid.cellCount()!=state.cells()||base<Math.max(state.endOffset(),geometry.endOffset()))

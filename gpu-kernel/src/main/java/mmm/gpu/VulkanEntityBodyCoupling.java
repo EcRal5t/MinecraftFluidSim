@@ -17,10 +17,8 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         SIZE_X(0), SIZE_Y(1), SIZE_Z(2), CELLS(3),
         FACES(4), BODY_CAPACITY(5), ENTRY_CAPACITY(6), CONTACT_CAPACITY(7),
         PRESSURE_ROWS(8), MASKS(9), GEOMETRY_CELLS(10), GEOMETRY_FACES(11),
-        BASE_SOLID(12), GAS_PRESSURE(13), COUPLED_PRESSURE(14), CONTACT_IMPULSE(15),
-        CONTACT_WORK(16), SOURCE_CELL_WORK(17), PRESSURE_STARTS(18), PRESSURE_VALUES(19),
-        PRESSURE_ROW_META(20), PRESSURE_VALUES_OUTPUT(21), PRESSURE_META(22), PRESSURE_PROBLEM(23),
-        ACTIVITY_FACES(24), FIELDS(32);
+        BASE_SOLID(12), MIXTURE_STATES(13), COUPLED_PRESSURE(14), CONTACT_IMPULSE(15),
+        SOURCE_CELL_WORK(17), SOURCE_OCCUPATION(18), ACTIVITY_FACES(24), FIELDS(32);
         final int word; Header(int word) { this.word = word; }
     }
 
@@ -35,22 +33,19 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         GATHER_FACE_OCCUPATION,
         GATHER_BODY_TOTALS,
         PREPARE_CONTACT_DISTANCES,
-        APPLY_FACE_APERTURES,
-        RESET_PRESSURE_ROWS,
         BUILD_PRESSURE_CONTACTS,
-        SCATTER_PRESSURE_ENTRIES,
         ASSEMBLE_BODY_VOLUME_RATE,
         GATHER_BODY_RESULTS,
         SETTLE_CELL_WORK,
-        SETTLE_GAS_WORK,
         APPLY_LIQUID_WET_FRACTION,
         COMBINE_SOLID_OCCUPATION
     }
     private enum Control { BODY_COUNT, ENTRY_COUNT, CONTACT_COUNT, RESERVED }
     private enum BodyTotal { WET_AREA_X, WET_AREA_Y, WET_AREA_Z, CONTACT_VOLUME_X, CONTACT_VOLUME_Y, CONTACT_VOLUME_Z, WET_VOLUME }
-    private enum BodyResult { IMPULSE_X, IMPULSE_Y, IMPULSE_Z, PRESSURE_WORK, SHEAR_WORK, COUPLED_VOLUME, RESERVED_0, RESERVED_1 }
+    private enum BodyResult { IMPULSE_X, IMPULSE_Y, IMPULSE_Z, COUPLED_VOLUME }
     private static final int BODY_TOTAL_STRIDE = BodyTotal.values().length;
     private static final int BODY_RESULT_STRIDE = BodyResult.values().length;
+    static final int BODY_RESULT_BYTES = Double.BYTES * BODY_RESULT_STRIDE;
 
     private static String shaderLayout() {
         var result = new StringBuilder();
@@ -62,12 +57,9 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         result.append(VulkanShaderLayout.fields("BODY_RESULT_", BodyResult.values()));
         result.append("#define BODY_TOTAL_STRIDE ").append(BODY_TOTAL_STRIDE).append('\n');
         result.append("#define BODY_RESULT_STRIDE ").append(BODY_RESULT_STRIDE).append('\n');
-        for (var field : VulkanGasPressure.Header.values()) result.append("#define GAS_H_").append(field.name()).append(' ').append(field.word).append('\n');
         for (var field : VulkanCoupledPressure.Header.values()) result.append("#define COUPLED_H_").append(field.name()).append(' ').append(field.word).append('\n');
-        result.append("#define GAS_WORK_FIELDS ").append(VulkanGasPressure.WORK_FIELDS).append('\n');
         result.append("#define COUPLED_WORK_FIELDS ").append(VulkanCoupledPressure.WORK_FIELDS).append('\n');
-        return result + VulkanShaderLayout.fields("GAS_F_", VulkanGasPressure.Field.values())
-                + VulkanShaderLayout.fields("COUPLED_F_", VulkanCoupledPressure.Field.values());
+        return result + VulkanShaderLayout.fields("COUPLED_F_", VulkanCoupledPressure.Field.values());
     }
     record Configuration(mmm.fluid.EntityBodyState bodies,int sizeX,int sizeY,int sizeZ,double cellSize){
         Configuration{if(bodies==null||sizeX<1||sizeY<1||sizeZ<1||!(cellSize>0))throw new IllegalArgumentException("Invalid prescribed-body configuration");}
@@ -83,8 +75,8 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         CONTROL(4),BOUNDS(8),VELOCITIES(8),BODY_OFFSETS(4),ENTRY_CELL(4),ENTRY_BODY(4),ENTRY_VOLUME(8),ENTRY_WET_AREA(8),
         CELL_COUNTS(4),CELL_OFFSETS(4),CELL_CURSORS(4),CELL_ENTRIES(4),OCCUPIED_SVQ(8),COMBINED_SVQ(8),
         FACE_COUNTS(4),FACE_OFFSETS(4),FACE_CURSORS(4),CONTACT_BODY(4),CONTACT_ENTRY(4),CONTACT_FACE(4),CONTACT_SHARE(8),CONTACT_DISTANCE(8),FACE_AREA(8),
-        BODY_TOTALS(8),PRESSURE_ROW(4),PRESSURE_COEFFICIENT(8),ROW_COUNTS(4),ROW_OFFSETS(4),ROW_CURSORS(4),ROW_ENTRIES(4),
-        BODY_RESULTS(8),SOURCE_WORK(8),SCAN(4),ENTRY_CONTACTS(4),ROW_BODY_RATE(8),GAS_EXTERNAL_WORK(8);
+        BODY_TOTALS(8),PRESSURE_ROW(4),PRESSURE_COEFFICIENT(8),
+        BODY_RESULTS(8),SOURCE_WORK(8),SCAN(4),ENTRY_CONTACTS(4),ROW_BODY_RATE(8);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -109,9 +101,8 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
                     case FACE_COUNTS,FACE_CURSORS,FACE_AREA->this.faces;case FACE_OFFSETS->this.faces+1;
                     case CONTACT_BODY,CONTACT_ENTRY,CONTACT_FACE,CONTACT_SHARE,CONTACT_DISTANCE->contactCapacity;
                     case BODY_TOTALS->BODY_TOTAL_STRIDE*bodyCapacity;case BODY_RESULTS->BODY_RESULT_STRIDE*bodyCapacity;
-                    case PRESSURE_ROW,PRESSURE_COEFFICIENT,ROW_ENTRIES->2*contactCapacity;
-                    case ROW_COUNTS,ROW_CURSORS,ROW_BODY_RATE->pressureRows;case ROW_OFFSETS->pressureRows+1;
-                    case GAS_EXTERNAL_WORK->pressureRows-this.cells;
+                    case PRESSURE_ROW,PRESSURE_COEFFICIENT->2*contactCapacity;
+                    case ROW_BODY_RATE->pressureRows;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(this.cells,Math.max(this.faces,pressureRows)))/4);
                 };
                 var c=new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,f.width);columns.put(f,c);cursor=c.offset()+c.bindingBytes();
@@ -125,19 +116,17 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         long endOffset(){return endOffset;}
         VulkanLiquidViscosity.PrescribedContacts prescribedContacts(){return new VulkanLiquidViscosity.PrescribedContacts(contactCapacity,bodyCapacity,
                 column(Field.FACE_OFFSETS),column(Field.CONTACT_BODY),column(Field.CONTACT_DISTANCE),column(Field.VELOCITIES));}
-        void bindPressure(VulkanGasPressure.Layout gas,VulkanCoupledPressure.Layout coupled){
-            if(gas.pressureSize()!=pressureRows||coupled!=null&&coupled.pressureSize()!=pressureRows)throw new IllegalArgumentException("Body pressure rows differ");
-            inputs[Header.GAS_PRESSURE.word]=gas.headerWordOffset();inputs[Header.COUPLED_PRESSURE.word]=coupled==null?-1:coupled.headerWordOffset();
-        }
         void bindViscosity(VulkanLiquidViscosity.Layout viscosity){
-            inputs[Header.CONTACT_IMPULSE.word]=word(viscosity.column(VulkanLiquidViscosity.Field.CONTACT_IMPULSE));inputs[Header.CONTACT_WORK.word]=word(viscosity.column(VulkanLiquidViscosity.Field.CONTACT_WORK));
+            inputs[Header.CONTACT_IMPULSE.word]=word(viscosity.column(VulkanLiquidViscosity.Field.CONTACT_IMPULSE));
             inputs[Header.SOURCE_CELL_WORK.word]=word(viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_WORK));
         }
         void bindBaseSolid(VulkanLiquidStateLayout.Column base){inputs[Header.BASE_SOLID.word]=word(base);}
+        void bindSourceOccupation(Layout source){inputs[Header.SOURCE_OCCUPATION.word]=source.word(Field.OCCUPIED_SVQ);}
         void bindActivity(int faceWord){inputs[Header.ACTIVITY_FACES.word]=faceWord;}
-        void bindPressure(VulkanGasPressure.PressureBuffers pressure){
-            inputs[Header.PRESSURE_STARTS.word]=word(pressure.starts());inputs[Header.PRESSURE_VALUES.word]=word(pressure.values());inputs[Header.PRESSURE_ROW_META.word]=word(pressure.rows());
-            inputs[Header.PRESSURE_VALUES_OUTPUT.word]=word(pressure.pressure());inputs[Header.PRESSURE_META.word]=word(pressure.meta());inputs[Header.PRESSURE_PROBLEM.word]=word(pressure.problem());
+        void bindPressure(VulkanMixtureState.Layout mixture,VulkanCoupledPressure.Layout coupled){
+            if(mixture.inputs().cells()!=cells||coupled.pressureSize()!=pressureRows)throw new IllegalArgumentException("Body pressure rows differ");
+            inputs[Header.MIXTURE_STATES.word]=mixture.statesWord();
+            inputs[Header.COUPLED_PRESSURE.word]=coupled.headerWordOffset();
         }
         ByteBuffer headerBytes(){var b=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<inputs.length;i++)b.putInt(4*i,inputs[i]);
             for(var f:Field.values())b.putInt(4*(Header.FIELDS.word+f.ordinal()),word(f));return b;}
@@ -154,16 +143,10 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         List<Chunk> bodyChunks(Configuration configuration){var data=bodiesBytes(configuration);int count=configuration.bodies().bodies().size();
             return List.of(new Chunk(column(Field.CONTROL).offset(),data.slice(0,8)),new Chunk(column(Field.BOUNDS).offset(),data.slice(8,48*count)),
                     new Chunk(column(Field.VELOCITIES).offset(),data.slice(8+48*count,24*count)),new Chunk(column(Field.BODY_OFFSETS).offset(),data.slice(8+72*count,4*(count+1))));}
-        List<VulkanEnergyLedger.Stream> externalWorkRoundoffStreams(){
-            return List.of(new VulkanEnergyLedger.Stream(1,word(Field.SOURCE_WORK),cells,2,1),
-                    new VulkanEnergyLedger.Stream(1,word(Field.GAS_EXTERNAL_WORK),pressureRows-cells,2,1),
-                    new VulkanEnergyLedger.Stream(1,word(Field.BODY_RESULTS)+2*BodyResult.PRESSURE_WORK.ordinal(),bodyCapacity,2*BODY_RESULT_STRIDE,-1),
-                    new VulkanEnergyLedger.Stream(1,word(Field.BODY_RESULTS)+2*BodyResult.SHEAR_WORK.ordinal(),bodyCapacity,2*BODY_RESULT_STRIDE,-1));
-        }
-        mmm.world.MovingBodyFluidCoupling.Result result(ByteBuffer buffer,Configuration config){
-            var b=buffer.slice().order(ByteOrder.LITTLE_ENDIAN);double ix=0,iy=0,iz=0,work=0,volume=0;var impulses=new java.util.ArrayList<mmm.world.MovingBodyFluidCoupling.BodyImpulse>();
+        mmm.world.MovingBodyFluidCoupling.Result result(ByteBuffer buffer,Configuration config,double work){
+            var b=buffer.slice().order(ByteOrder.LITTLE_ENDIAN);double ix=0,iy=0,iz=0,volume=0;var impulses=new java.util.ArrayList<mmm.world.MovingBodyFluidCoupling.BodyImpulse>();
             for(int body=0;body<config.bodies().bodies().size();body++){int off=Double.BYTES*BODY_RESULT_STRIDE*body;double x=b.getDouble(off),y=b.getDouble(off+Double.BYTES*BodyResult.IMPULSE_Y.ordinal()),z=b.getDouble(off+Double.BYTES*BodyResult.IMPULSE_Z.ordinal());
-                ix+=x;iy+=y;iz+=z;work+=b.getDouble(off+Double.BYTES*BodyResult.PRESSURE_WORK.ordinal())+b.getDouble(off+Double.BYTES*BodyResult.SHEAR_WORK.ordinal());volume+=b.getDouble(off+Double.BYTES*BodyResult.COUPLED_VOLUME.ordinal());
+                ix+=x;iy+=y;iz+=z;volume+=b.getDouble(off+Double.BYTES*BodyResult.COUPLED_VOLUME.ordinal());
                 impulses.add(new mmm.world.MovingBodyFluidCoupling.BodyImpulse(config.bodies().bodies().get(body).bodyId(),-x,-y,-z));}
             return new mmm.world.MovingBodyFluidCoupling.Result(impulses.size(),volume,ix,iy,iz,work,impulses);
         }
@@ -192,17 +175,13 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         stage(command,l,Stage.SCATTER_FACE_CONTACTS,l.entryCapacity,h,1);stage(command,l,Stage.GATHER_FACE_OCCUPATION,l.faces,h,1);stage(command,l,Stage.GATHER_BODY_TOTALS,l.bodyCapacity,h,1);stage(command,l,Stage.PREPARE_CONTACT_DISTANCES,l.contactCapacity,h,1);
     }
     void recordCombinedOccupancy(VkCommandBuffer command,Layout l,double h){stage(command,l,Stage.COMBINE_SOLID_OCCUPATION,l.cells,h,1);}
-    /** For the pure-fluid path. GranularPressure can instead read FACE_AREA directly. */
-    void recordApertures(VkCommandBuffer command,Layout l,double h){stage(command,l,Stage.APPLY_FACE_APERTURES,l.faces,h,1);}
     /** After source pressure preparation and any granular incidence, before the shared solve. */
     void recordPressure(VkCommandBuffer command,Layout l,double h,double dt){
-        stage(command,l,Stage.RESET_PRESSURE_ROWS,l.pressureRows,h,dt);stage(command,l,Stage.BUILD_PRESSURE_CONTACTS,l.contactCapacity,h,dt);
-        scan.record(command,l.pressureRows,l.word(Field.ROW_COUNTS),l.word(Field.ROW_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,Stage.SCATTER_PRESSURE_ENTRIES,2*l.contactCapacity,h,dt);stage(command,l,Stage.ASSEMBLE_BODY_VOLUME_RATE,l.pressureRows,h,dt);
+        stage(command,l,Stage.BUILD_PRESSURE_CONTACTS,l.contactCapacity,h,dt);stage(command,l,Stage.ASSEMBLE_BODY_VOLUME_RATE,l.pressureRows,h,dt);
     }
     /** After projection, before common mechanical-energy posting. */
     void recordResult(VkCommandBuffer command,Layout l,double h,double dt){
-        stage(command,l,Stage.SETTLE_GAS_WORK,l.pressureRows-l.cells,h,dt);stage(command,l,Stage.GATHER_BODY_RESULTS,l.bodyCapacity,h,dt);stage(command,l,Stage.SETTLE_CELL_WORK,l.cells,h,dt);
+        stage(command,l,Stage.GATHER_BODY_RESULTS,l.bodyCapacity,h,dt);stage(command,l,Stage.SETTLE_CELL_WORK,l.cells,h,dt);
     }
     private void stage(VkCommandBuffer command,Layout l,Stage stage,int count,double h,double dt){if(count==0)return;
         try(var stack=stackPush()){bindings.bind(command,stack);var push=stack.malloc(40).putInt(l.headerWord()).putInt(stage.ordinal()).putInt(count).putInt(0).putDouble(h).putDouble(dt).putDouble(0).flip();

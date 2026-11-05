@@ -17,9 +17,9 @@ final class FluidDomainStateMapper {
 		}
 		var chemistry = domain.chemistry == null ? null : domain.chemistry.registry();
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
+		if(domain.gasState.spatial==null)domain.domainCapabilities.initializeSpatialGas();
 		domain.ensurePhaseOccupancy();
-		var gas = domain.gasState.frame == null ? null : FluidDomainState.GasContinuation.runtime(
-				domain.gasState.frame,domain.gasState.network.runtimeSnapshot(),domain.gasState.network.registry().fingerprint());
+		var gas = FluidDomainState.GasContinuation.spatial(domain.gasState.spatial);
 		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,
 				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.snapshot(),
 				domain.entityBodies,domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
@@ -56,6 +56,22 @@ final class FluidDomainStateMapper {
 				domain.materialDefinitions == null ? "" : domain.materialDefinitions.fingerprint());
 	}
 
+	/** Sampling uses the same liquid/gas face inertia without running pressure or thermal preparation. */
+	static HostFluidState samplingState(FluidDomainState state){
+		if(state.thermalOwner()!=null)return restore(state);
+		var domain=new HostFluidState(state.sizeX(),state.sizeY(),state.sizeZ(),state.config(),state.fixedGeometry());
+		if(!state.materialPalette().isEmpty())domain.materialRegistry=new FluidMaterialRegistry(state.materialPalette());
+		if(state.chemicalRegistry()!=null){
+			domain.chemistry=new mmm.chemistry.RegionChemistry(state.chemicalRegistry(),domain.cellCount);
+			domain.chemistry.restoreAuditLedgers(state.chemicalSource(),state.chemicalSink());
+		}
+		domain.liquidCells=LiquidCellInventory.fromValidatedSnapshot(state.liquid(),state.chemicalRegistry());
+		domain.gasState.network=new mmm.fluid.air.AirNetwork(state.gasRegistry());
+		domain.gasState.spatial=state.spatialGas();domain.gasState.sealedDomainBoundary=state.sealedDomainBoundary();
+		domain.markCellInventoryChanged();domain.mac.restoreMomentum(state.momentum());
+		return domain;
+	}
+
 	static HostFluidState restore(FluidDomainState state) {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
 		HostFluidState domain = new HostFluidState(state.sizeX(), state.sizeY(), state.sizeZ(),
@@ -76,6 +92,7 @@ final class FluidDomainStateMapper {
 		if (state.pendingPhaseMotion() != null) domain.restorePendingPhaseMotionState(state.pendingPhaseMotion());
 
 		if (state.materialDefinitions() != null) domain.bindMaterialDefinitions(state.materialDefinitions());
+		if(state.spatialGas()!=null){domain.gasState.spatial=state.spatialGas();domain.gasState.network=new mmm.fluid.air.AirNetwork(state.gasRegistry());domain.gasState.pressureActive=state.spatialGas().cells().stream().anyMatch(g->!g.isEmpty());}
 		if (state.granular() != null) {
 			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry(),
 					state.materialDefinitions());
@@ -84,10 +101,10 @@ final class FluidDomainStateMapper {
 		var liquidVolumes = new mmm.units.SignedDyadic[domain.cellCount];
 		for (int cell = 0; cell < domain.cellCount; cell++) liquidVolumes[cell] = domain.liquidCells.exactCellVolume(cell);
 		DomainPhaseInventory.requireJointCapacity(domain, liquidVolumes, domain.occupiedSolidSvq());
-		if (state.gasRuntimeGeometry() != null) PhaseOccupancyTransport.publish(domain,state.phaseOccupancy());
+		if (state.spatialGas()!=null) PhaseOccupancyTransport.publish(domain,state.phaseOccupancy());
 		else domain.restorePhaseOccupancyState(state.phaseOccupancy());
-		if (!state.hasGas()) domain.bindGasRegistry(state.gasRegistry());
-		else if (state.gasRuntimeGeometry() != null) domain.gasTopologyCoordinator.restoreRuntime(state.gasRuntimeGeometry(),state.gasRuntimeNetwork());
+		if(state.spatialGas()!=null) { }
+		else if (!state.hasGas()) domain.bindGasRegistry(state.gasRegistry());
 		else domain.restoreGasState(state.gas(),state.gasRegistry(),state.thermalOwner());
 		if (state.thermalOwner() != null) {
 			domain.restoreThermalOwnerState(state.thermalOwner(), state.thermalRegistry(),
@@ -95,6 +112,7 @@ final class FluidDomainStateMapper {
 			double[] thermalBoundary = state.copyThermalBoundaryTemperaturesK();
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
 		}
+		if(state.spatialGas()!=null)PhaseOccupancyTransport.requireCurrentGeometry(domain,state.phaseOccupancy());
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
 		if(state.pressureContinuation()!=null)domain.pressureSystem.restoreLiquidPressure(state.pressureContinuation());
 		domain.activityGroups.restore(state.activityState());

@@ -20,10 +20,16 @@ final class VulkanLiquidGeometry implements AutoCloseable {
     }
 
     private final FlipKernelBindings bindings;
+    private boolean sealedExterior=true;
+    private float ambientCellMass;
     VulkanLiquidGeometry(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, Binding.values().length, shader(), 24);
+        bindings = new FlipKernelBindings(context, Binding.values().length, shader(), 32);
     }
     void rebindRanges(List<FlipKernelBindings.BufferRange> ranges) { bindings.rebindRanges(ranges); }
+    void setExterior(boolean sealed,double ambientCellMass){
+        if(!(Double.isFinite(ambientCellMass)&&ambientCellMass>=0&&ambientCellMass<=Float.MAX_VALUE))throw new IllegalArgumentException("Invalid ambient cell mass");
+        this.sealedExterior=sealed;this.ambientCellMass=(float)ambientCellMass;
+    }
     static List<FlipKernelBindings.BufferRange> ranges(VulkanLiquidStateLayout liquid,
             Map<GeometryField, VulkanLiquidStateLayout.Column> geometry, GpuBuffer buffer, GpuBuffer errors,
             VulkanLiquidStateLayout.Column faces, VulkanLiquidStateLayout.Column solid) {
@@ -55,6 +61,16 @@ final class VulkanLiquidGeometry implements AutoCloseable {
         for (int stage = 0; stage < 3; stage++) recordStage(command, sizeX, sizeY, sizeZ, stage, 0, 0);
     }
 
+    /** Reads conserved reference liquid volume and pore capacity before the local mixture EOS. */
+    void recordTotals(VkCommandBuffer command,int sizeX,int sizeY,int sizeZ){
+        recordStage(command,sizeX,sizeY,sizeZ,0,0,0);
+    }
+    /** Uses EOS-derived physical cell volumes and total fluid mass to reconstruct PLIC and MAC faces. */
+    void recordShapes(VkCommandBuffer command,int sizeX,int sizeY,int sizeZ){
+        recordStage(command,sizeX,sizeY,sizeZ,1,0,0);
+        recordStage(command,sizeX,sizeY,sizeZ,2,0,0);
+    }
+
     /** Reconstructs shared PLIC cells; a paired gas geometry pass assembles both face openings. */
     void recordCells(VkCommandBuffer command,int sizeX,int sizeY,int sizeZ){
         recordStage(command,sizeX,sizeY,sizeZ,0,0,0);recordStage(command,sizeX,sizeY,sizeZ,1,0,0);
@@ -76,8 +92,9 @@ final class VulkanLiquidGeometry implements AutoCloseable {
                 Math.multiplyExact(sizeY + 1, sizeX * sizeZ)), Math.multiplyExact(sizeZ + 1, sizeX * sizeY));
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
-            var constants = stack.malloc(24);
-            constants.putInt(sizeX).putInt(sizeY).putInt(sizeZ).putInt(stage).putFloat(h).putFloat(dt).flip();
+            var constants = stack.malloc(32);
+            constants.putInt(sizeX).putInt(sizeY).putInt(sizeZ).putInt(stage).putFloat(h).putFloat(dt)
+                    .putInt(sealedExterior?1:0).putFloat(ambientCellMass).flip();
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, constants);
             vkCmdDispatch(command, ((stage >= 2 ? faces : cells) + 127) / 128, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,

@@ -165,6 +165,9 @@ public final class MmmRuntimeFactory {
 				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
 		DispenserContainerTransferAdapter dispenserContainerTransfers = new DispenserContainerTransferAdapter(
 				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
+		MinecraftProcessOperations processes = new MinecraftProcessOperations(worldRoot, regionManager, targets, playerContainerTransfers, startup);
+		regionInputs.prescribedBodies(processes::bodies);
+		regionManager.observeRemoval(processes::regionRemoved);
 		MinecraftRegionOperatorActions operatorActions = new MinecraftRegionOperatorActions(
 				startup, regionManager, targets, regionOperations, snapshots, takeover, debugFixtures,
 				availability, regionTick, motion, phaseWorkBarrier, policy, containerRecovery);
@@ -179,7 +182,7 @@ public final class MmmRuntimeFactory {
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				worldRegistries, committedEvents, startup,transferApi, solverBackend);
+				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes);
 		} catch (RuntimeException | Error failure) {
 			try { solverBackend.close(); }
 			catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }
@@ -193,7 +196,6 @@ public final class MmmRuntimeFactory {
 		long started = System.nanoTime();
 		HostFluidState domain = FluidRegionFactory.createDomain(1, 1, 1);
 		worldRegistries.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep());
-		domain.synchronizeGasTopologyForPersistence();
 		backend.prepare(domain.captureAuthoritativeState());
 		MmmMod.LOGGER.info("Matter, Motion & Mechanics solver preparation: {} ms",
 				(System.nanoTime() - started) / 1_000_000);

@@ -21,13 +21,6 @@ layout(push_constant) uniform Params {
 p;
 // HOST_LAYOUT
 const uint ERROR_INVALID_STATE = 16384u;
-const int STAGE_REDUCE_VOLUME = 0;
-const int STAGE_CLEAR_VOLUME_DISPATCH = 2;
-const int STAGE_SHORT_VOLUME = 3;
-const int STAGE_PREPARE_VOLUME_DISPATCH = 4;
-
-shared double volumeParts[128];
-shared int volumeBegin, volumeEnd, volumeValid;
 int headerWord(int index) {
     return int(words[p.header + index]);
 }
@@ -57,124 +50,21 @@ void addCompensated(inout double sum, inout double correction, double value) {
     correction = (next - sum) - adjusted;
     sum = next;
 }
-void reduceVolume(int node, int lane) {
-    // Uniform exits precede every barrier. Errors arising in one workgroup never strand another.
-    if (node >= p.count)
-        return;
-    if (lane == 0) {
-        volumeBegin = 0;
-        volumeEnd = 0;
-        volumeValid = 0;
-        int actual = int(words[gasField(GAS_COUNTS)]);
-        if (actual < 0 || actual > headerWord(GAS_H_NODE_CAPACITY))
-            reportInvalid();
-        else if (node < actual && errors == 0u) {
-            int key = int(words[gasField(GAS_TOPOLOGY_KEYS) + node]), cell = key / 8;
-            if (key < 0 || cell >= p.cells)
-                reportInvalid();
-            else {
-                int row = int(words[p.cellNodes + cell]);
-                if (row <= 0 || row > p.cells)
-                    reportInvalid();
-                else {
-                    volumeBegin = int(words[p.memberOffsets + row]);
-                    volumeEnd = int(words[p.memberOffsets + row + 1]);
-                    volumeValid = 1;
-                }
-            }
-        }
-    }
-    barrier();
-    double sum = 0.0, correction = 0.0;
-    for (int item = volumeBegin + lane; item < volumeEnd; item += 128) {
-        int cell = int(words[p.members + item]);
-        double volume = readDouble(p.dryVolumes + 2 * cell);
-        addCompensated(sum, correction, volume);
-    }
-    volumeParts[lane] = sum;
-    barrier();
-    for (int width = 64; width > 0; width >>= 1) {
-        if (lane < width)
-            volumeParts[lane] += volumeParts[lane + width];
-        barrier();
-    }
-    if (lane == 0) {
-        double volume = volumeParts[0];
-        if (volumeValid != 0 && (!isFinite(volume) || volume <= 0.0))
-            reportInvalid();
-        writeDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node, volumeValid != 0 ? volume : 0.0);
-    }
-}
-void shortVolume(int node) {
-    if (node >= p.count)
-        return;
-    int actual = int(words[gasField(GAS_COUNTS)]);
-    writeDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node, 0.0);
-    if (actual < 0 || actual > headerWord(GAS_H_NODE_CAPACITY)) {
-        reportInvalid();
-        return;
-    }
-    if (node >= actual || errors != 0u)
-        return;
-    int key = int(words[gasField(GAS_TOPOLOGY_KEYS) + node]), cell = key / 8;
-    if (key < 0 || cell >= p.cells) {
-        reportInvalid();
-        return;
-    }
-    int row = int(words[p.cellNodes + cell]);
-    if (row <= 0 || row > p.cells) {
-        reportInvalid();
-        return;
-    }
-    int first = int(words[p.memberOffsets + row]), last = int(words[p.memberOffsets + row + 1]);
-    if (last - first > 16) {
-        uint slot = atomicAdd(words[headerWord(GAS_H_VOLUME_DISPATCH) + 3], 1u);
-        words[headerWord(GAS_H_LONG_VOLUMES) + slot] = uint(node);
-        return;
-    }
-    double sum = 0.0, correction = 0.0;
-    for (int at = first; at < last; at++)
-        addCompensated(sum, correction, readDouble(p.dryVolumes + 2 * int(words[p.members + at])));
-    if (!isFinite(sum) || sum <= 0.0)
-        reportInvalid();
-    else
-        writeDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node, sum);
-}
-bool inventory(int node, out int first, out int last, out double anchor, out double mass, out double r) {
-    if (headerWord(GAS_H_SELF_PIVOT) >= 0) {
-        int sourceFirst = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node]),
-            sourceLast = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
-        bool sourcePresent = false;
-        for (int c = sourceFirst; c < sourceLast; c++)
-            if (readInt64(headerWord(GAS_H_SOURCE_STANDARD_VOLUME) + 2 * c) != int64_t(0) ||
-                readInt64(headerWord(GAS_H_SOURCE_MASS) + 2 * c) != int64_t(0)) {
-                sourcePresent = true;
-                break;
-            }
-        if (!sourcePresent) {
-            first = 0;
-            last = 0;
-        } else {
-            int self = int(words[headerWord(GAS_H_SELF_PIVOT) + node]);
-            if (self < 0) {
-                reportInvalid();
-                return false;
-            }
-            first = int(words[headerWord(GAS_H_PART_OFFSETS) + self]);
-            last = int(words[headerWord(GAS_H_PART_OFFSETS) + self + 1]);
-        }
-    } else {
-        first = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node]);
-        last = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
-    }
-    int components = headerWord(GAS_H_SELF_PIVOT) >= 0 ? headerWord(GAS_H_PART_CAPACITY) : int(words[gasField(GAS_COUNTS) + 1]),
-        species = headerWord(GAS_H_SELF_PIVOT) >= 0 ? headerWord(GAS_H_SPECIES_CAPACITY) : int(words[gasField(GAS_COUNTS) + 2]);
+bool inventory(int node, out int first, out int last, out double anchor, out double mass, out double r,
+               out double hotCapacity,out double coldCapacity,out double hotBoundary,out double coldBoundary) {
+    first = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node]);
+    last = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
+    int components = int(words[gasField(GAS_COUNTS) + 1]), species = int(words[gasField(GAS_COUNTS) + 2]);
     if (first < 0 || last < first || last > components) {
         reportInvalid();
         return false;
     }
     anchor = 0.0;
-    double correction = 0.0;
+    hotCapacity=0.0LF;coldCapacity=0.0LF;
+    hotBoundary=packDouble2x32(uvec2(0u,0x7ff00000u));
+    coldBoundary=readDouble(p.header+GAS_H_MINIMUM_TEMPERATURE);
+    double correction = 0.0,hotCorrection=0.0LF,coldCorrection=0.0LF;
+    double standardTemperature=readDouble(p.header+GAS_H_STANDARD_TEMPERATURE);
     int64_t totalMass = int64_t(0), totalNanos = int64_t(0);
     for (int component = first; component < last; component++) {
         int64_t componentMass = readInt64(gasField(GAS_MASS_UNITS) + 2 * component),
@@ -197,7 +87,16 @@ bool inventory(int node, out int first, out int last, out double anchor, out dou
         }
         totalMass += componentMass;
         totalNanos += nanos;
-        addCompensated(anchor, correction, double(componentMass) * 1e-10LF * reference);
+        double componentKg=double(componentMass)*1e-10LF;
+        addCompensated(anchor, correction, componentKg * reference);
+        int hot=begin;
+        while(hot+1<end && standardTemperature>=readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*hot))hot++;
+        int cold=hot;
+        if(hot>begin && standardTemperature==readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*(hot-1)))cold--;
+        addCompensated(hotCapacity,hotCorrection,componentKg*readDouble(headerWord(GAS_H_SEGMENT_CAPACITY)+2*hot));
+        addCompensated(coldCapacity,coldCorrection,componentKg*readDouble(headerWord(GAS_H_SEGMENT_CAPACITY)+2*cold));
+        if(hot+1<end)hotBoundary=min(hotBoundary,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*hot));
+        if(cold>begin)coldBoundary=max(coldBoundary,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*(cold-1)));
         int speciesBegin = int(words[gasField(GAS_COMPONENT_SPECIES_OFFSETS) + component]),
             speciesEnd = int(words[gasField(GAS_COMPONENT_SPECIES_OFFSETS) + component + 1]);
         if (speciesBegin < 0 || speciesEnd < speciesBegin || speciesEnd > species) {
@@ -273,14 +172,14 @@ void derive(int node) {
     }
     if (node >= actual)
         return;
-    double volume = readDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node), energy = readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node);
+    double volume = p.stage == 5 ? 1.0LF : readDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node), energy = readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node);
     if (!isFinite(volume) || volume < 0.0 || !isFinite(energy)) {
         reportInvalid();
         return;
     }
     int first, last;
-    double anchor, mass, r;
-    if (!inventory(node, first, last, anchor, mass, r))
+    double anchor, mass, r,hotCapacity,coldCapacity,hotBoundary,coldBoundary;
+    if (!inventory(node, first, last, anchor, mass, r,hotCapacity,coldCapacity,hotBoundary,coldBoundary))
         return;
     double temperature = readDouble(p.header + GAS_H_STANDARD_TEMPERATURE);
     if (first == last) {
@@ -306,35 +205,39 @@ void derive(int node) {
         return;
     }
     bool heating = residual >= 0.0;
-    double remaining = abs(residual), capacity, boundary;
+    double remaining=abs(residual),capacity=heating?hotCapacity:coldCapacity,
+           boundary=heating?hotBoundary:coldBoundary;
     while (true) {
-        capacity = capacityAndBoundary(first, last, temperature, heating, boundary);
         if (!(isFinite(capacity) && capacity > 0.0)) {
             reportInvalid();
             return;
         }
-        double step = remaining / capacity;
-        double span = heating ? boundary - temperature : temperature - boundary;
-        if (step <= span) {
-            temperature += heating ? step : -step;
+        double step=remaining/capacity,previous=temperature;
+        double span=heating?boundary-temperature:temperature-boundary;
+        if(step<=span){
+            temperature+=heating?step:-step;
+            // The reported endpoint derivative belongs to the upper-temperature segment.
+            if((heating && isFinite(boundary) && temperature>=boundary) || (!heating && temperature==previous))
+                capacity=capacityAndBoundary(first,last,temperature,true,boundary);
             break;
         }
         if (!(span > 0.0 && isFinite(span))) {
             reportInvalid();
             return;
         }
-        remaining -= span * capacity;
-        temperature = boundary;
+        remaining-=span*capacity;
+        temperature=boundary;
+        capacity=capacityAndBoundary(first,last,temperature,heating,boundary);
     }
     if (!isFinite(temperature) || temperature < readDouble(p.header + GAS_H_MINIMUM_TEMPERATURE)) {
         reportInvalid();
         return;
     }
-    // At a caloric endpoint, the reported derivative uses the upper-temperature segment.
-    capacity = capacityAndBoundary(first, last, temperature, true, boundary);
-    double pressure = r * temperature / volume, density = mass / volume,
+    double pressure = GAS_MIXTURE_LIMIT * r * temperature / (GAS_MIXTURE_BULK * volume + r * temperature), density = mass / volume,
            gamma = headerWord(GAS_H_ISOTHERMAL) != 0 ? 1.0 : 1.0 + r / capacity;
-    double bulk = gamma * pressure, sound = sqrt(bulk / density), compliance = 1.0 / bulk;
+    double gasScale=GAS_MIXTURE_BULK*volume/(GAS_MIXTURE_BULK*volume+r*temperature);
+    double bulk=pressure*gasScale*(1.0LF+(gamma-1.0LF)*gasScale*GAS_MIXTURE_LIMIT/GAS_MIXTURE_BULK);
+    double sound = sqrt(bulk / density), compliance = 1.0 / bulk;
     if (!(isFinite(pressure) && pressure > 0.0 && isFinite(density) && density > 0.0 && isFinite(capacity) &&
           capacity > 0.0 && isFinite(r) && r > 0.0 && isFinite(gamma) && gamma >= 1.0 && isFinite(bulk) && bulk > 0.0 &&
           isFinite(sound) && sound > 0.0 && isFinite(compliance) && compliance > 0.0)) {
@@ -352,28 +255,6 @@ void derive(int node) {
     writeDouble(outputOffset + 16, compliance);
 }
 void main() {
-    int group = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x);
-    if (p.stage == STAGE_CLEAR_VOLUME_DISPATCH) {
-        if (group == 0 && lane == 0)
-            words[headerWord(GAS_H_VOLUME_DISPATCH) + 3] = 0u;
-        return;
-    }
-    if (p.stage == STAGE_SHORT_VOLUME) {
-        shortVolume(group * 128 + lane);
-        return;
-    }
-    if (p.stage == STAGE_PREPARE_VOLUME_DISPATCH) {
-        if (group == 0 && lane == 0) {
-            int count = errors == 0u ? int(words[headerWord(GAS_H_VOLUME_DISPATCH) + 3]) : 0;
-            words[headerWord(GAS_H_VOLUME_DISPATCH)] = uint(min(count, 65535));
-            words[headerWord(GAS_H_VOLUME_DISPATCH) + 1] = uint(max(1, (count + 65534) / 65535));
-            words[headerWord(GAS_H_VOLUME_DISPATCH) + 2] = 1u;
-        }
-        return;
-    }
-    if (p.stage == STAGE_REDUCE_VOLUME) {
-        if (group < int(words[headerWord(GAS_H_VOLUME_DISPATCH) + 3]))
-            reduceVolume(int(words[headerWord(GAS_H_LONG_VOLUMES) + group]), lane);
-    } else
-        derive(group * 128 + lane);
+    int item=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
+    derive(item);
 }

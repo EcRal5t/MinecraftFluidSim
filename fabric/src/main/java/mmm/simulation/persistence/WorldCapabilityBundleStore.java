@@ -550,6 +550,15 @@ public final class WorldCapabilityBundleStore {
 		private static void validateReferences(MaterialRegistry material, ChemicalRegistry chemical,
 				GranularRegistry granular, GasRegistry gas, ThermalRegistry thermal) {
 			validateMassTransferReferences(chemical, gas, thermal);
+			for (var transition : thermal.transitions()) if (transition.interfaceRequirement() == mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS) {
+				var liquid=thermal.material(thermal.materialHandle(transition.lowerEnergyMaterialId()));
+				var vapor=thermal.material(thermal.materialHandle(transition.upperEnergyMaterialId()));
+				var phase=chemical.phase(chemical.phaseHandleForMaterial(liquid.carrierId()));
+				if (!phase.allowedSpecies().contains(transition.speciesId()) || !gas.component(vapor.carrierId()).allowsSpecies(transition.speciesId()))
+					throw new IllegalArgumentException("Phase transition species is absent from a participating phase: " + transition.id());
+				thermal.speciesOffset(thermal.materialHandle(liquid.id()),transition.speciesId());
+				thermal.speciesOffset(thermal.materialHandle(vapor.id()),transition.speciesId());
+			}
 			for (ChemicalPhaseDefinition phase : chemical.phases()) {
 				if (!material.hasMaterial(phase.materialId())) {
 					throw new IllegalArgumentException("Chemical phase references unknown material " + phase.materialId());

@@ -15,7 +15,7 @@ final class PhysicalActivityGroups {
 	private List<int[]> connections = List.of();
 	private List<int[]> thermalConnections = List.of();
 	private boolean[] requestedWake;
-	private int[] parent = new int[0], gasCells = new int[0], mechanicalQuiet = new int[0], thermalQuiet = new int[0];
+	private int[] parent = new int[0], mechanicalQuiet = new int[0], thermalQuiet = new int[0];
 	private boolean[] mechanical = new boolean[0], thermal = new boolean[0], keepMechanical = new boolean[0], keepThermal = new boolean[0];
 	private LiquidCellInventory.Snapshot startLiquid;
 	private long[] startAuxiliary;
@@ -150,14 +150,6 @@ final class PhysicalActivityGroups {
 			if(y+1<domain.sizeY&&geometry.faceOpen(1)[domain.domainFlowFields.yFaceIndex(x,y+1,z)]>0)coupleCells(cell,cell+domain.sizeX);
 			if(z+1<domain.sizeZ&&geometry.faceOpen(2)[domain.domainFlowFields.zFaceIndex(x,y,z+1)]>0)coupleCells(cell,cell+domain.sizeX*domain.sizeY);
 		}
-		var frame=domain.gasState.frame;
-		gasCells=new int[domain.gasState.network.nodeCount()+1];Arrays.fill(gasCells,-1);
-		if(frame!=null)for(int cell=0;cell<count;cell++)if(parent[cell]>=0)for(int micro=0;micro<8;micro++) {
-			int node=frame.nodeOfPiece(8*cell+micro);
-			if(node>0) { if(gasCells[node]<0)gasCells[node]=cell;else coupleCells(gasCells[node],cell); }
-		}
-		for(var edge:domain.gasState.network.edges())if(edge.firstNode()>0&&edge.secondNode()>0)
-			coupleCells(gasCells[edge.firstNode()],gasCells[edge.secondNode()]);
 		if(previous.geometry!=geometry)thermalConnections=List.of();
 		for(var cells:connections)joinCells(cells,false);
 		for(var cells:thermalConnections)joinCells(cells,false);
@@ -166,10 +158,6 @@ final class PhysicalActivityGroups {
             var carriers=mmm.thermal.ThermalCarrierTransport.prepare(domain.thermalState.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext()));
             CarrierThermalConduction.contacts(domain,carriers);
         }
-		if(domain.gasState.pressureActive) domain.gasState.network.forEachPressureDrivenNode(
-				domain.thermalState!=null && domain.thermalState.gasModelBound()
-						?domain.thermalState.gasThermodynamics(domain.gasState.network):null,
-				node->{ if(node<gasCells.length) {keepMechanicsAwake(gasCells[node]);keepThermalAwake(gasCells[node]);} });
 		for(var body:domain.entityBodies.bodies()) {
 			var cells=bodyCells(body.bounds());joinCells(cells,false);
 			for(int cell:cells)keepMechanicsAwake(cell);
@@ -240,7 +228,7 @@ final class PhysicalActivityGroups {
 	boolean mechanicsSleeping(int cell) {int r=root(cell);return r>=0&&!mechanical[r];}
 	boolean gasNodeIsActive(int node) {
 		if(!enabled&&worldAvailable==null)return true;
-		int cell=gasCell(node);
+		int cell=node-1;
 		return mechanicsActive(cell)||thermalActive(cell);
 	}
 
@@ -327,18 +315,11 @@ final class PhysicalActivityGroups {
 				if(domain.thermalState!=null)values[cell]+=Double.doubleToLongBits(domain.thermalState.granularColumn().depositEnergy(new GranularEnergyColumn.DepositKey(cell,material,composition)));
 			});
 		}
-		for(int node=1;node<=domain.gasState.network.nodeCount();node++) {
-			int cell=gasCell(node);if(cell<0)continue;
-			values[cell]=31*values[cell]+domain.gasState.network.inventory(node).components().hashCode();
-			if(domain.thermalState!=null)values[cell]+=Double.doubleToLongBits(domain.thermalState.gasNodeEnergy(node,domain.gasState.network));
+		if(domain.gasState.spatial!=null){
+			var gas=domain.gasState.spatial;
+			for(int cell=0;cell<domain.cellCount;cell++)values[cell]=31*values[cell]+gas.cells().get(cell).components().hashCode()+Double.doubleToLongBits(gas.energyAt(cell));
 		}
 		return values;
-	}
-
-	private int gasCell(int node) {
-		if(node<=0||domain.gasState.frame==null)return -1;
-		var chambers=domain.gasState.frame.topology().chambers();
-		return node<=chambers.size()?chambers.get(node-1).minimumPiece()/8:-1;
 	}
 
 	FluidDomainContracts.ActivityStats stats() {

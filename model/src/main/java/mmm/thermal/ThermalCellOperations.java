@@ -339,7 +339,7 @@ final class ThermalCellOperations {
 	}
 
 	private PhaseOwner prepareOwner(ThermalStateFunction.InventoryPortion portion) {
-		return new PhaseOwner(registry.material(portion.materialHandle()), portion.massKg(),
+		return new PhaseOwner(stateFunction.materialForComposition(portion.materialHandle(),portion.massKg(),portion.speciesQuanta()), portion.massKg(),
 				stateFunction.baseEnergy(portion.materialHandle(), portion.massKg(), portion.speciesQuanta()));
 	}
 
@@ -591,7 +591,8 @@ final class ThermalCellOperations {
 	}
 
 	private ThermalMaterialDefinition liquidMaterial(int marker, ThermalCarrierContext markers) {
-		return registry.material(materialByFluidHandle[markers.fluidMaterialHandle(marker)]);
+		return stateFunction.materialForComposition(materialByFluidHandle[markers.fluidMaterialHandle(marker)],
+                unitScale.kilograms(markers.mass(marker)),markers.mixture(marker),markers.chemicalRegistry());
 	}
 
 	private double liquidBaseEnergy(int marker, ThermalCarrierContext markers) {

@@ -8,6 +8,7 @@ import com.google.gson.JsonParser;
 
 import java.io.Reader;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 /** Strict JSON codecs for world-snapshotted thermal definitions. All floating values are JSON strings. */
@@ -57,9 +58,12 @@ public final class ThermalDefinitionCodec {
 
 	public static ThermalPhaseTransition decodeTransition(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "lower_energy_material", "upper_energy_material",
+		var fields = new ArrayList<>(List.of("lower_energy_material", "upper_energy_material",
 				"lower_volume_svq_per_batch", "upper_volume_svq_per_batch", "mass_kg_per_batch",
-				"interface_requirement", "equilibrium_curve");
+				"interface_requirement", "equilibrium_curve"));
+		if (root.has("species_id")) fields.add("species_id");
+		if (root.has("transfer_velocity_m_per_s")) fields.add("transfer_velocity_m_per_s");
+		requireOnly(root, fields.toArray(String[]::new));
 		ThermalPhaseTransition.InterfaceRequirement requirement;
 		try { requirement = ThermalPhaseTransition.InterfaceRequirement.valueOf(string(root, "interface_requirement")); }
 		catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Unknown interface_requirement", invalid); }
@@ -78,7 +82,8 @@ public final class ThermalDefinitionCodec {
 					finiteDouble(point, "pressure_pa"), finiteDouble(point, "temperature_k")));
 		}
 		return new ThermalPhaseTransition(stableId, string(root, "lower_energy_material"),
-				string(root, "upper_energy_material"),
+				string(root, "upper_energy_material"), root.has("species_id") ? string(root, "species_id") : null,
+				root.has("transfer_velocity_m_per_s") ? finiteDouble(root, "transfer_velocity_m_per_s") : null,
 				exactLong(root, "lower_volume_svq_per_batch"), exactLong(root, "upper_volume_svq_per_batch"),
 				ExactRational.parse(string(root, "mass_kg_per_batch")), requirement, curve);
 	}

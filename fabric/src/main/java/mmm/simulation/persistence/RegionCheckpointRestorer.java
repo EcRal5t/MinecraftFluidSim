@@ -26,13 +26,18 @@ public final class RegionCheckpointRestorer {
 		var chemicalAudit=manifest.hasChemicalState()?decodeChemicalAuditExtension():new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY);
 		var solids=manifest.hasGranularState()?reconstructGranular(granular):null;
 		var gasRegistry=gas==null?BuiltinGasDefinitions.createRegistry():gas;
-		var gasState=manifest.hasGasState()?reconstructGas(gasRegistry,chemistry):null;
+		boolean local=manifest.hasGasState()&&spatialGasPayload();
+		var localGas=local?reconstructSpatialGas(gasRegistry,chemistry):null;
+		if(manifest.hasGasState()&&!local)throw new IOException("Gas checkpoint requires local spatial inventory");
 		var heat=manifest.hasThermalState()?reconstructThermalOwners(thermal):null;
-		if(heat!=null){var liquidU=SignedDyadic.ZERO;for(var stock:liquid.stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));heat.requireClosed(liquidU,cells);}
+		if(localGas!=null&&thermal!=null){var model=new GasThermalModel(thermal,gasRegistry);try{
+			for(int cell=0;cell<localGas.cellCount();cell++)model.requireInventoryEnergy(localGas.cells().get(cell),localGas.energyAt(cell));
+		}catch(IllegalArgumentException invalid){throw new IOException("Spatial gas thermal state is invalid",invalid);}}
+		if(heat!=null){var liquidU=SignedDyadic.ZERO;for(var stock:liquid.stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));if(localGas!=null)liquidU=liquidU.add(SignedDyadic.sum(localGas.internalEnergy()));heat.requireClosed(liquidU,cells);}
 		try{return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),runtime.entityBodies(),manifest.materialPalette(),
 				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,runtime.cursor(),
 				runtime.massTransferPending(),
-				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,FluidDomainState.GasContinuation.persisted(gasState),heat==null?null:thermal,heat,
+				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,FluidDomainState.GasContinuation.spatial(localGas),heat==null?null:thermal,heat,
 				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseMotion(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
 		}catch(IllegalArgumentException invalid){throw new IOException("Invalid complete cell/MAC region state",invalid);}
 	}
@@ -81,9 +86,11 @@ public final class RegionCheckpointRestorer {
 	public FlipChemicalParticleState reconstructChemical(ChemicalRegistry chemistry)throws IOException{if(!manifest.hasChemicalState())throw new IOException("Chemical diagnostic layout differs");return debugState(chemistry).chemicals();}
 	private FluidDomainState debugState(ChemicalRegistry chemistry)throws IOException {
 		var run=runtime();var audit=chemistry==null?new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY):decodeChemicalAuditExtension();
-		return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),run.entityBodies(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),run.massTransferPending(),null,null,null,false,BuiltinGasDefinitions.createRegistry(),null,null,null,0,null,null,null,null);
+		return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),run.entityBodies(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),run.massTransferPending(),null,null,null,false,BuiltinGasDefinitions.createRegistry(),manifest.hasGasState()?FluidDomainState.GasContinuation.spatial(reconstructSpatialGasPayload(null,null)):null,null,null,0,null,null,null,null);
 	}
-	public GasStateSnapshot reconstructGas(GasRegistry gas,ChemicalRegistry chemistry)throws IOException {validateCheckpoint();return reconstructGasPayload(gas,chemistry);}
+	public SpatialGasState reconstructSpatialGas(GasRegistry gas,ChemicalRegistry chemistry)throws IOException {validateCheckpoint();return reconstructSpatialGasPayload(gas,chemistry);}
+	private boolean spatialGasPayload() throws IOException {return GasRegionStateCodec.isSpatial(requiredExtension(manifest.extensions(),GasRegionStateCodec.MANIFEST_EXTENSION).payload());}
+	public boolean hasSpatialGas() throws IOException { return manifest.hasGasState() && spatialGasPayload(); }
 	public ThermalOwnerSnapshot reconstructThermalOwners(ThermalRegistry registry)throws IOException {
 		validateCheckpoint();var codec=new ThermalRegionStateCodec();var thermal=codec.decodeManifest(requiredExtension(manifest.extensions(),ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
 		if(registry==null||!registry.fingerprint().equals(thermal.registryFingerprint()))throw new IOException("Thermal registry differs");
@@ -100,10 +107,12 @@ public final class RegionCheckpointRestorer {
 	}
 	public FlipThermalParticleState reconstructThermal(ThermalRegistry registry)throws IOException {
 		var owners=reconstructThermalOwners(registry);double[] liquid=sections.stream().flatMap(section->section.liquidStocks().stream()).sorted(Comparator.comparing(LiquidCellInventory.Stock::key)).filter(stock->stock.massUnits()>0).mapToDouble(LiquidCellInventory.Stock::internalEnergy).toArray();
-		return new FlipThermalParticleState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig().cellSize(),liquid.length,registry.fingerprint(),owners.insertionTemperatureK(),liquid,owners.copyActiveParcelEnergy(),owners.copyDepositEnergy(),owners.coherentGroups(),owners.copyGasNodeEnergy(),owners.audit());
+		return new FlipThermalParticleState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig().cellSize(),liquid.length,registry.fingerprint(),owners.insertionTemperatureK(),liquid,owners.copyActiveParcelEnergy(),owners.copyDepositEnergy(),owners.coherentGroups(),reconstructSpatialGasPayload(null,null).internalEnergy(),owners.audit());
 	}
 	public FlipThermalParticleState reconstructThermal(ThermalRegistry thermal,GasRegistry gas,ChemicalRegistry chemistry)throws IOException {
-		var result=reconstructThermal(thermal);var state=reconstructGas(gas,chemistry);var model=new GasThermalModel(thermal,gas);double[] energy=result.copyGasNodeEnergy();for(int i=0;i<energy.length;i++)model.requireInventoryEnergy(state.nodes().get(i).inventory(),energy[i]);return result;
+		var result=reconstructThermal(thermal);var model=new GasThermalModel(thermal,gas);
+		var state=reconstructSpatialGas(gas,chemistry);for(int i=0;i<state.cellCount();i++)model.requireInventoryEnergy(state.cells().get(i),state.energyAt(i));
+		return result;
 	}
 	private record ThermalDepositEnergy(GranularStateSnapshot.DepositGroup group,double energy){private static final Comparator<ThermalDepositEnergy> ORDER=Comparator.comparingInt((ThermalDepositEnergy entry)->entry.group().cell()).thenComparingInt(entry->entry.group().materialPaletteIndex()).thenComparingInt(entry->entry.group().solidCompositionIndex());}
 	/** Sparse absence is the canonical empty record; presence is valid only in a complete thermal generation. */
@@ -198,83 +207,41 @@ public final class RegionCheckpointRestorer {
 		if (found == null) throw new IOException("Chemical audit ledger is missing");
 		return ChemicalAuditLedgerCodec.decode(found.payload());
 	}
-	private GasStateSnapshot reconstructGasPayload(GasRegistry registry, ChemicalRegistry chemicalRegistry) throws IOException {
-		GasRegionStateCodec codec = new GasRegionStateCodec();
-		GasRegionStateCodec.ManifestData data = codec.decodeManifest(
-				requiredExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION).payload());
-		boolean chemicalCapability = (data.capabilities() & GasRegionStateCodec.CAP_CHEMISTRY) != 0;
-		if (chemicalCapability != manifest.hasChemicalState()
-				|| chemicalCapability && !data.chemicalRegistryFingerprint().equals(manifest.registryFingerprint())) {
-			throw new IOException("Gas capability/chemical identity disagrees with the complete generation");
-		}
-		Map<RegionSectionState.SectionKey, GasRegionStateCodec.SectionLedger> ledgers = new HashMap<>();
-		for (GasRegionStateCodec.SectionLedger ledger : data.sectionLedgers()) {
-			if (ledgers.put(ledger.key(), ledger) != null) throw new IOException("Duplicate gas section ledger");
-		}
-		if (ledgers.size() != sections.size()) throw new IOException("Gas section ledger cardinality mismatch");
-		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
-		int[] memberships = new int[Math.multiplyExact(8, cellCount)];
-		java.util.Arrays.fill(memberships, -1);
-		boolean[] seenCells = new boolean[cellCount];
-		for (RegionSectionState section : sections) {
-			GasRegionStateCodec.SectionData sectionData = codec.decodeSection(
-					requiredExtension(section.extensions(), GasRegionStateCodec.SECTION_EXTENSION).payload(),
-					Math.multiplyExact(Math.multiplyExact(section.sizeX(), section.sizeY()), section.sizeZ()), data.nodes().size());
-			int sealed = 0, source = 0;
-			int[] slice = sectionData.pieceNodeOrdinal();
-			for (int z = 0; z < section.sizeZ(); z++) for (int y = 0; y < section.sizeY(); y++) for (int x = 0; x < section.sizeX(); x++) {
-				int cell = section.localStartX() + x + manifest.sizeX() *
-						(section.localStartY() + y + manifest.sizeY() * (section.localStartZ() + z));
-				if (cell < 0 || cell >= cellCount || seenCells[cell]) throw new IOException("Gas section coverage overlaps or lies outside the region");
-				seenCells[cell] = true;
-				System.arraycopy(slice, source, memberships, cell * 8, 8);
-				for (int piece = 0; piece < 8; piece++) if (slice[source + piece] > 0) sealed++;
-				source += 8;
+	private SpatialGasState reconstructSpatialGasPayload(GasRegistry registry,ChemicalRegistry chemicalRegistry) throws IOException {
+		var codec=new GasRegionStateCodec();var data=codec.decodeSpatialManifest(requiredExtension(manifest.extensions(),GasRegionStateCodec.MANIFEST_EXTENSION).payload());
+		if(((data.capabilities()&GasRegionStateCodec.CAP_CHEMISTRY)!=0)!=manifest.hasChemicalState()
+				||manifest.hasChemicalState()&&!data.chemicalRegistryFingerprint().equals(manifest.registryFingerprint()))
+			throw new IOException("Spatial gas chemical identity differs from region");
+		if(registry!=null&&!data.registryFingerprint().equals(registry.fingerprint()))throw new IOException("Spatial gas registry differs");
+		if(chemicalRegistry!=null&&!data.chemicalRegistryFingerprint().equals(chemicalRegistry.fingerprint()))throw new IOException("Spatial gas chemistry differs");
+		int sx=manifest.sizeX(),sy=manifest.sizeY(),sz=manifest.sizeZ(),cells=Math.multiplyExact(Math.multiplyExact(sx,sy),sz);
+		var inventory=new ArrayList<GasInventory>(Collections.nCopies(cells,GasInventory.EMPTY));double[] energy=new double[cells];boolean[] seen=new boolean[cells];
+		for(var section:sections){
+			int nx=section.sizeX(),ny=section.sizeY(),nz=section.sizeZ(),count=Math.multiplyExact(Math.multiplyExact(nx,ny),nz);
+			var entries=codec.decodeSpatialSection(requiredExtension(section.extensions(),GasRegionStateCodec.SECTION_EXTENSION).payload(),count);
+			for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++){
+				int cell=section.localStartX()+x+sx*(section.localStartY()+y+sy*(section.localStartZ()+z));
+				if(cell<0||cell>=cells||seen[cell])throw new IOException("Spatial gas section coverage overlaps");seen[cell]=true;
 			}
-			GasRegionStateCodec.SectionLedger ledger = ledgers.remove(section.key());
-			if (ledger == null || ledger.sealedPieceCount() != sealed) {
-				throw new IOException("Gas section does not match its topology ledger");
+			for(var entry:entries){int local=entry.cell(),x=local%nx,y=local/nx%ny,z=local/(nx*ny);
+				int cell=section.localStartX()+x+sx*(section.localStartY()+y+sy*(section.localStartZ()+z));
+				inventory.set(cell,entry.inventory());energy[cell]=entry.energy();
+				if(registry!=null)validateGasInventoryRegistry(entry.inventory(),registry,chemicalRegistry);
 			}
 		}
-		if (!ledgers.isEmpty()) throw new IOException("Gas manifest names missing sections");
-		for (boolean seen : seenCells) if (!seen) throw new IOException("Incomplete gas microbox coverage");
-		List<GasStateSnapshot.Node> nodes = data.nodes().stream()
-				.map(node -> new GasStateSnapshot.Node(node.topologyKey(), node.inventory())).toList();
-		GasStateSnapshot snapshot;
+		for(boolean present:seen)if(!present)throw new IOException("Spatial gas section coverage is incomplete");
 		try {
-			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
-					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
-					data.externalSource(), data.escapedSink(), data.phaseSource(), data.phaseSink());
-			AirNetwork audit = new AirNetwork(registry == null
-					? mmm.fluid.air.BuiltinGasDefinitions.createRegistry() : registry);
-			double[] available = new double[nodes.size()]; java.util.Arrays.fill(available, 1.0);
-			audit.restoreNodes(available, nodes.stream().map(GasStateSnapshot.Node::inventory).toList(),
-					snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink());
-		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid gas inventory/topology: " + invalid.getMessage(), invalid);
-		}
-		if (registry != null) {
-			if (!snapshot.registryFingerprint().equals(registry.fingerprint())) {
-				throw new IOException("Gas registry fingerprint does not match the world snapshot");
-			}
-			for (GasStateSnapshot.Node node : snapshot.nodes()) validateGasInventoryRegistry(node.inventory(), registry, chemicalRegistry);
-			validateGasAuditRegistry(snapshot.externalSource(), registry, chemicalRegistry);
-			validateGasAuditRegistry(snapshot.escapedSink(), registry, chemicalRegistry);
-			validateGasAuditRegistry(snapshot.phaseSource(), registry, chemicalRegistry);
-			validateGasAuditRegistry(snapshot.phaseSink(), registry, chemicalRegistry);
-		}
-		if (chemicalCapability) {
-			if (chemicalRegistry == null || !data.chemicalRegistryFingerprint().equals(chemicalRegistry.fingerprint())) {
-				if (registry != null) throw new IOException("Gas species require the authoritative chemical registry");
-			} else if (!manifest.speciesPalette().equals(chemicalRegistry.species().stream()
-					.map(mmm.chemistry.ChemicalSpecies::id).toList())) {
-				throw new IOException("Gas chemical palette does not match the authoritative registry");
-			}
-		}
-		return snapshot;
+			var total=GasRegionAudit.aggregate(inventory);
+			if(!total.equals(data.inventory())||!GasRegionAudit.closed(total,data.externalSource().add(data.phaseSource()),data.escapedSink().add(data.phaseSink()))
+					||!SignedDyadic.sum(energy).equals(data.energy()))throw new IOException("Spatial gas inventory or energy audit differs");
+			if(registry!=null){validateGasAuditRegistry(data.externalSource(),registry,chemicalRegistry);validateGasAuditRegistry(data.escapedSink(),registry,chemicalRegistry);
+				validateGasAuditRegistry(data.phaseSource(),registry,chemicalRegistry);validateGasAuditRegistry(data.phaseSink(),registry,chemicalRegistry);}
+			return new SpatialGasState(sx,sy,sz,data.registryFingerprint(),data.chemicalRegistryFingerprint(),inventory,energy,
+					data.externalSource(),data.escapedSink(),data.phaseSource(),data.phaseSink());
+		} catch(IllegalArgumentException|ArithmeticException invalid){throw new IOException("Invalid spatial gas inventory",invalid);}
 	}
 
-	void validateGasLedgers() throws IOException { reconstructGasPayload(null, null); }
+	void validateGasLedgers() throws IOException { if(!spatialGasPayload())throw new IOException("Gas checkpoint requires local spatial inventory");reconstructSpatialGasPayload(null,null); }
 
 	private void validateCheckpoint() throws IOException {
 		if (validated) return;
@@ -303,7 +270,14 @@ public final class RegionCheckpointRestorer {
 	) throws IOException {
 		try { registry.requireCompatible(inventory); }
 		catch (IllegalArgumentException invalid) { throw new IOException(invalid.getMessage(), invalid); }
-		for (GasComponentAmount amount : inventory.components()) validateGasSpecies(amount.species(), chemicalRegistry);
+		for (GasComponentAmount amount : inventory.components()) {
+			validateGasSpecies(amount.species(), chemicalRegistry);
+			if(chemicalRegistry!=null){long mass=amount.massResidualUnits();
+				try{for(var species:amount.species())mass=Math.addExact(mass,chemicalRegistry.speciesMassUnits(chemicalRegistry.speciesHandle(species.speciesId()),species.amountQuanta()));}
+				catch(ArithmeticException invalid){throw new IOException("Gas species mass exceeds representation",invalid);}
+				if(mass!=amount.massUnits())throw new IOException("Gas component mass differs from species and residual: component="
+						+amount.componentId()+", mass="+amount.massUnits()+", accounted="+mass+", residual="+amount.massResidualUnits()+", species="+amount.species());}
+		}
 	}
 
 	private static void validateGasAuditRegistry(
@@ -313,6 +287,10 @@ public final class RegionCheckpointRestorer {
 			try { registry.requireCompatible(entry.componentId(), entry.species()); }
 			catch (IllegalArgumentException invalid) { throw new IOException(invalid.getMessage(), invalid); }
 			validateGasSpecies(entry.species(), chemicalRegistry);
+			if(chemicalRegistry!=null){long mass=entry.massResidualUnits();
+				try{for(var species:entry.species())mass=Math.addExact(mass,chemicalRegistry.speciesMassUnits(chemicalRegistry.speciesHandle(species.speciesId()),species.amountQuanta()));}
+				catch(ArithmeticException invalid){throw new IOException("Gas audit mass exceeds representation",invalid);}
+				if(mass!=entry.massUnits())throw new IOException("Gas audit mass differs from species and residual");}
 		}
 	}
 

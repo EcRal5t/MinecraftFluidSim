@@ -43,12 +43,13 @@ public final class GranularDefinitionCodec {
 		JsonObject root = object(input);
 		requireOnly(root, "liquid_phase", "aqueous_stoichiometry", "solid_material", "solid_composition",
 				"saturation_concentration_mol_per_m3", "solid_extent_per_batch", "solid_volume_svq_per_batch",
-				"accessible_surface_svq_per_cell_step", "reversible");
+				"accessible_surface_svq_per_cell_step", "reversible", "solvent_species", "solubility_reference_k", "solubility_ratio", "solubility_slope_per_k", "solubility_min_k", "solubility_max_k", "diffusivity_m2_per_s");
 		return new SolidLiquidReaction(stableId, string(root, "liquid_phase"), integerMap(root, "aqueous_stoichiometry"),
 				string(root, "solid_material"), integerMap(root, "solid_composition"),
 				ExactRational.parse(string(root, "saturation_concentration_mol_per_m3")),
 				exactLong(root, "solid_extent_per_batch"), exactLong(root, "solid_volume_svq_per_batch"),
-				exactLong(root, "accessible_surface_svq_per_cell_step"), bool(root, "reversible"));
+				exactLong(root, "accessible_surface_svq_per_cell_step"), bool(root, "reversible"),
+				root.has("solvent_species")?new SolidLiquidReaction.Solubility(string(root,"solvent_species"),finiteDouble(root,"solubility_reference_k"),finiteDouble(root,"solubility_ratio"),finiteDouble(root,"solubility_slope_per_k"),finiteDouble(root,"solubility_min_k"),finiteDouble(root,"solubility_max_k"),finiteDouble(root,"diffusivity_m2_per_s")):null);
 	}
 
 	private static JsonObject object(Reader input) {

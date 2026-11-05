@@ -52,30 +52,6 @@ final class GasRuntimeGeometry {
 		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
 		openedPoreVolumes=captureOpenedPore(old);
 	}
-	/** Rebinds a value-equivalent inventory endpoint while retaining its prepared geometry. */
-	private GasRuntimeGeometry(GasRuntimeGeometry prepared,LiquidCellInventory.Snapshot future){
-		cellSize=prepared.cellSize;sealedExterior=prepared.sealedExterior;
-		occupiedSvq=prepared.occupiedSvq;sourceOccupiedSvq=prepared.sourceOccupiedSvq;sourceFixedGeometry=prepared.sourceFixedGeometry;
-		sourceCells=prepared.sourceCells;targetCells=future;sourceOccupancy=prepared.sourceOccupancy;occupancy=prepared.occupancy;
-		phase=prepared.phase;geometry=prepared.geometry;topology=prepared.topology;capacity=prepared.capacity;
-		openedPoreVolumes=prepared.openedPoreVolumes;
-	}
-	GasRuntimeGeometry rebindInventory(LiquidCellInventory future){
-		if(!sameLiquidVolumes(future,targetCells))throw new IllegalStateException(
-				"Prepared gas successor has different liquid support volumes: plannedRevision="+targetCells.revision()+" actualRevision="+future.revision());
-		return new GasRuntimeGeometry(this,future.snapshot());
-	}
-	/** The caller has retained volumes, fixed pores, collisions and exterior mode for this operation. */
-	GasRuntimeGeometry continueInventory(HostFluidState domain,LiquidCellInventory future){
-		return new GasRuntimeGeometry(this,domain,future.snapshot());
-	}
-	private GasRuntimeGeometry(GasRuntimeGeometry retained,HostFluidState domain,LiquidCellInventory.Snapshot future){
-		cellSize=retained.cellSize;sealedExterior=retained.sealedExterior;occupiedSvq=retained.occupiedSvq;
-		sourceOccupiedSvq=retained.occupiedSvq;sourceFixedGeometry=retained.geometry.actualCapacity().fixedGeometry;
-		sourceCells=domain.liquidCells.snapshot();targetCells=future;sourceOccupancy=domain.phaseOccupancy;
-		occupancy=retained.occupancy;phase=retained.phase;geometry=retained.geometry;
-		topology=retained.topology;capacity=retained.capacity;openedPoreVolumes=null;
-	}
 	/** Identity is a cache shortcut; independently settled plans can carry equal support volumes. */
 	static boolean sameLiquidVolumes(LiquidCellInventory actual,LiquidCellInventory.Snapshot expected){
 		if(actual.hasSameGeometry(expected))return true;

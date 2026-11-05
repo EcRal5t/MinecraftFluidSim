@@ -187,7 +187,7 @@ final class ThermalRegionStateCodec {
 			throw new IllegalArgumentException("Thermal manifest energy/count ledger does not close");
 		}
 		for (long bits : data.gasNodeEnergyBits()) requireFinite(bits, "gas node energy");
-		if (!SignedDyadic.sum(toDoubles(data.gasNodeEnergyBits())).equals(data.gasEnergy())) {
+		if (data.gasNodeCount()>0 && !SignedDyadic.sum(toDoubles(data.gasNodeEnergyBits())).equals(data.gasEnergy())) {
 			throw new IllegalArgumentException("Thermal gas energy ledger does not close");
 		}
 	}

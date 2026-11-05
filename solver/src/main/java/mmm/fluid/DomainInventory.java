@@ -69,15 +69,34 @@ final class DomainInventory {
 	}
 	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
 		preflightCondensedClear(plan);
-		var gas = domain.gasTopologyCoordinator.planAfterCondensedClear(plan.liquid().inventory().future());
-		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
-		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(domain.thermalState.thermalRevision(),
-				plan.liquid().internalEnergy(), plan.coherentEnergy(), SignedDyadic.ZERO,
-				gas == null ? null : gas.thermalPlan());
-		CondensedClear cleared = applyCondensedClear(plan);
-		if (gas != null) domain.gasTopologyCoordinator.commit(gas);
-		return cleared;
-	}
+        var mixture=prepareCondensedClear(plan,false);
+        if(domain.thermalState!=null)domain.thermalState.requireCanCommitOperatorClear(domain.thermalState.thermalRevision(),
+                plan.liquid().internalEnergy(),plan.coherentEnergy(),SignedDyadic.ZERO);
+        var result=applyCondensedClear(plan,mixture);
+        finishCondensedClear(mixture);
+        return result;
+    }
+    HostMixtureEdit prepareCondensedClear(CondensedClearPlan plan,boolean clearGranular){
+        long[] occupied=new long[domain.cellCount];
+        if(!clearGranular&&domain.granularState!=null){
+            var coupling=new mmm.granular.GranularCouplingFields(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize());
+            coupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);occupied=coupling.copySolidSvq();
+        }
+        occupied=domain.entityBodyCoupling.addTo(occupied);
+        var cells=new java.util.ArrayList<Integer>();for(int cell=0;cell<domain.cellCount;cell++)cells.add(cell);
+        return HostMixtureEdit.prepare(domain,plan.liquid().inventory(),occupied,null,cells);
+    }
+    private void finishCondensedClear(HostMixtureEdit mixture){
+        if(mixture.gas()!=null)mixture.gas().commit(domain);
+        domain.cellMacStage.commitMomentum(mixture.momentum());
+        if(domain.thermalState!=null){
+            var audit=domain.thermalState.auditLedger().withMechanicalWork(mixture.inventory().mechanicalHeat()).withRoundoff(mixture.inventory().energyRoundoff());
+            if(mixture.gas()!=null)audit=mixture.gas().applyAudit(audit);
+            domain.thermalState.restoreAuditLedger(audit);
+        }
+        domain.markCellInventoryChanged();
+    }
+
 	void preflightCondensedClear(CondensedClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
 		plan.liquid().inventory().requireCurrent();requireChemicalAudit(plan.chemicalAudit());
@@ -103,7 +122,7 @@ final class DomainInventory {
 			throw new IllegalStateException("Coherent phase inventory changed after condensed clear planning");
 		}
 	}
-	CondensedClear applyCondensedClear(CondensedClearPlan plan) {
+	CondensedClear applyCondensedClear(CondensedClearPlan plan,HostMixtureEdit mixture) {
 		if (domain.chemistry != null) {
 			domain.chemistry.commitAuditExchange(plan.chemicalAudit());
 		}
@@ -111,9 +130,7 @@ final class DomainInventory {
 			domain.thermalState.recordExternalSink(plan.liquid().internalEnergy());
 			domain.thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
 		}
-		plan.liquid().inventory().commit();
-		domain.mac.restoreMomentum(new MacMomentumState(domain.sizeX, domain.sizeY, domain.sizeZ, new double[domain.mac.velocityX.length],
-				new double[domain.mac.velocityY.length], new double[domain.mac.velocityZ.length]));
+		mixture.inventory().commit();
 		domain.markCellInventoryChanged();
 		domain.domainCapabilities.refreshCoherentOccupancy();
 		domain.gridDirty = true;
@@ -133,11 +150,11 @@ final class DomainInventory {
 		}
 		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(
 				plan.thermalRevision, plan.condensed.liquid().internalEnergy(), plan.condensed.coherentEnergy(),
-				plan.granular.internalEnergy(), plan.gasTopology == null ? null : plan.gasTopology.thermalPlan());
-		if (plan.gasTopology != null) domain.gasTopologyCoordinator.preflight(plan.gasTopology);
-		CondensedClear condensed = applyCondensedClear(plan.condensed());
+				plan.granular.internalEnergy());
+		if(plan.mixture.gas()!=null)plan.mixture.gas().requireCurrent(domain);
+		CondensedClear condensed = applyCondensedClear(plan.condensed(),plan.mixture);
 		FluidDomainContracts.GranularClear granular = ((HostFluidState) domain).domainPhaseInventory.applyGranularClear(plan.granular());
-		if (plan.gasTopology != null) domain.gasTopologyCoordinator.commit(plan.gasTopology);
+		finishCondensedClear(plan.mixture);
 		return new OperatorClear(condensed, granular);
 	}
 	public OperatorGasVentPlan planOperatorVentSealedGas() {

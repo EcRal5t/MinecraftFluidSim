@@ -49,33 +49,21 @@ public final class FluidDomainState implements FluidStateAccess {
 	private final MaterialRegistry materialDefinitions;
 	private final PhysicalActivityGroups.Snapshot activityState;
 	public PhysicalActivityGroups.Snapshot activityState() { return activityState; }
-	/** Exactly one captured gas representation; the persistence projection is derived lazily. */
+	/** Local continuation or an explicit chamber initial condition. */
 	public static final class GasContinuation {
-		private final GasRuntimeGeometry geometry;
-		private final mmm.fluid.air.AirNetwork.RuntimeSnapshot network;
 		private final String registryFingerprint;
 		private final GasStateSnapshot persisted;
-		private GasContinuation(GasStateSnapshot state,GasRuntimeGeometry geometry,
-				mmm.fluid.air.AirNetwork.RuntimeSnapshot network,String fingerprint) {
-			this.persisted=state;this.geometry=geometry;this.network=network;this.registryFingerprint=fingerprint;
+		private final mmm.fluid.air.SpatialGasState spatial;
+		private GasContinuation(GasStateSnapshot state,mmm.fluid.air.SpatialGasState spatial,String fingerprint){
+			this.persisted=state;this.spatial=spatial;this.registryFingerprint=fingerprint;
 		}
-		public static GasContinuation persisted(GasStateSnapshot state) {
-			return state==null?null:new GasContinuation(state,null,null,state.registryFingerprint());
+		public static GasContinuation persisted(GasStateSnapshot state){
+			return state==null?null:new GasContinuation(state,null,state.registryFingerprint());
 		}
-		static GasContinuation runtime(GasRuntimeGeometry geometry,mmm.fluid.air.AirNetwork.RuntimeSnapshot network,String fingerprint) {
-			return new GasContinuation(null,Objects.requireNonNull(geometry),Objects.requireNonNull(network),fingerprint);
-		}
-		private GasStateSnapshot snapshot(int x,int y,int z,String chemicalFingerprint) {
-			var result=persisted;
-			if(result==null){
-				result=GasStateSnapshot.capture(x,y,z,geometry.pieceNodes(),
-						mmm.fluid.air.AirNetwork.fromRuntimeSnapshot(network),chemicalFingerprint);
-			}
-			return result;
+		public static GasContinuation spatial(mmm.fluid.air.SpatialGasState state){
+			return state==null?null:new GasContinuation(null,state,state.registryFingerprint());
 		}
 	}
-	GasRuntimeGeometry gasRuntimeGeometry() { return gas==null?null:gas.geometry; }
-	mmm.fluid.air.AirNetwork.RuntimeSnapshot gasRuntimeNetwork() { return gas==null?null:gas.network; }
 	private volatile FlipParticleState debugParticles;
 	private volatile FlipMaterialParticleState debugMaterials;
 	private volatile FlipChemicalParticleState debugChemicals;
@@ -124,15 +112,25 @@ public final class FluidDomainState implements FluidStateAccess {
 		if (chemicalRegistry == null && !this.chemicalMassTransferPending.isEmpty())
 			throw new IllegalArgumentException("Inactive chemistry contains pending mass transfer");
 		RegionChemistry.MassTransferPending previousPending = null;
+		var diffusionPhases=new java.util.HashMap<String,String>();
+		if(chemicalRegistry!=null)for(var diffusion:mmm.chemistry.AqueousDiffusion.rules(chemicalRegistry))diffusionPhases.put(diffusion.id(),diffusion.phaseId());
 		for (var pending : this.chemicalMassTransferPending) {
 			if (previousPending != null && previousPending.compareTo(pending) >= 0)
 				throw new IllegalArgumentException("Pending mass transfer identities are not canonical");
 			previousPending = pending;
 			if (pending.cell() >= cells || pending.material() >= this.palette.size())
 				throw new IllegalArgumentException("Pending mass transfer is outside the domain or material palette");
-			var rule = chemicalRegistry.gasLiquidMassTransfers().stream().filter(value -> value.id().equals(pending.definitionId()))
-					.findFirst().orElseThrow(() -> new IllegalArgumentException("Pending mass transfer definition is unknown"));
-			if (!chemicalRegistry.phase(chemicalRegistry.phaseHandle(rule.liquidPhaseId())).materialId()
+			String phase=chemicalRegistry.gasLiquidMassTransfers().stream().filter(value->value.id().equals(pending.definitionId())).map(mmm.chemistry.GasLiquidMassTransferDefinition::liquidPhaseId).findFirst().orElse(null);
+			if(phase==null)phase=chemicalRegistry.reactions().stream().filter(value->value.id().equals(pending.definitionId())).map(mmm.chemistry.ChemicalReaction::phaseId).findFirst().orElse(null);
+			if(phase==null && granularRegistry!=null)phase=granularRegistry.reactions().stream().filter(value->value.id().equals(pending.definitionId())).map(mmm.granular.SolidLiquidReaction::liquidPhaseId).findFirst().orElse(null);
+			if(phase==null && thermalRegistry!=null){
+				var transition=thermalRegistry.transitions().stream().filter(value->value.id().equals(pending.definitionId()) && value.interfaceRequirement()==mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS).findFirst().orElse(null);
+				if(transition!=null){String carrier=thermalRegistry.material(thermalRegistry.materialHandle(transition.lowerEnergyMaterialId())).carrierId();
+					phase=chemicalRegistry.phases().stream().filter(value->value.materialId().equals(carrier)).map(mmm.chemistry.ChemicalPhaseDefinition::id).findFirst().orElse(null);}
+			}
+			if(phase==null)phase=diffusionPhases.get(pending.definitionId());
+			if(phase==null)throw new IllegalArgumentException("Pending reaction definition is unknown");
+			if (!chemicalRegistry.phase(chemicalRegistry.phaseHandle(phase)).materialId()
 					.equals(this.palette.get(pending.material()).id()))
 				throw new IllegalArgumentException("Pending mass transfer material differs from its liquid phase");
 		}
@@ -152,7 +150,12 @@ public final class FluidDomainState implements FluidStateAccess {
 		if (granular != null && materialDefinitions == null) throw new IllegalArgumentException("Granular properties are missing");
 		this.gasRegistry = Objects.requireNonNull(gasRegistry); this.gas = gas;
 		if (gas != null && !gas.registryFingerprint.equals(gasRegistry.fingerprint())) throw new IllegalArgumentException("Gas registry identity mismatch");
+		if (gas != null && gas.spatial != null && (gas.spatial.sizeX()!=sizeX || gas.spatial.sizeY()!=sizeY || gas.spatial.sizeZ()!=sizeZ
+				|| !gas.spatial.chemicalRegistryFingerprint().equals(chemicalRegistry==null?"":chemicalRegistry.fingerprint())))
+			throw new IllegalArgumentException("Spatial gas shape or chemical identity differs");
 		this.thermalRegistry = thermalRegistry; this.thermalOwner = thermalOwner;
+		if(gas!=null&&gas.spatial!=null&&thermalOwner!=null&&thermalOwner.copyGasNodeEnergy().length!=0)
+			throw new IllegalArgumentException("Spatial gas energy belongs to the local gas state");
 		this.maximumThermalTransportSubsteps = maximumThermalTransportSubsteps; this.pendingPhaseMotion = pendingPhaseMotion;
 		this.thermalBoundaryTemperaturesK = thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
 		this.condensedPhasePressure = condensedPhasePressure;
@@ -187,31 +190,28 @@ public final class FluidDomainState implements FluidStateAccess {
 	public boolean precipitationEnabled() { return precipitationEnabled; }
 	public GasRegistry gasRegistry() { return gasRegistry; }
 	public boolean hasGas() { return gas!=null; }
-	public GasStateSnapshot gas() { return gas==null?null:gas.snapshot(sizeX,sizeY,sizeZ,chemicalRegistry==null?"":chemicalRegistry.fingerprint()); }
+	public GasStateSnapshot gas() { return gas==null?null:gas.persisted; }
+	public mmm.fluid.air.SpatialGasState spatialGas() { return gas==null?null:gas.spatial; }
 	public ThermalRegistry thermalRegistry() { return thermalRegistry; } public ThermalOwnerSnapshot thermalOwner() { return thermalOwner; }
 	public int maximumThermalTransportSubsteps() { return maximumThermalTransportSubsteps; }
 	public PendingPhaseMotionState pendingPhaseMotion() { return pendingPhaseMotion; }
 	public double[] copyThermalBoundaryTemperaturesK() { return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone(); }
-	/** Physical export is evaluated at the boundary from this complete immutable state. */
-	public CondensedPhasePressureField exportCondensedPhasePressure() {
-		if(condensedPhasePressure==null||!condensedPhasePressure.isRuntimeResidual())return condensedPhasePressure;
-		return FluidDomainStateMapper.restore(this).pressureSystem.captureLiquidPressure();
-	}
+	public CondensedPhasePressureField exportCondensedPhasePressure(){return condensedPhasePressure;}
 	CondensedPhasePressureField pressureContinuation() { return condensedPhasePressure; }
 	public MaterialRegistry materialDefinitions() { return materialDefinitions; }
 
 	/** Disposable sampling exports for diagnostics; backend and persistence read liquid()/momentum(). */
 	public FlipParticleState particles() {
 		if (carrierKind() != CarrierKind.PURE) return null;
-		var cached = debugParticles; if (cached == null) debugParticles = cached = FluidDomainStateMapper.restore(this).exportParticleState(); return cached;
+		var cached = debugParticles; if (cached == null) debugParticles = cached = FluidDomainStateMapper.samplingState(this).exportParticleState(); return cached;
 	}
 	public FlipMaterialParticleState materials() {
 		if (carrierKind() != CarrierKind.MATERIAL) return null;
-		var cached = debugMaterials; if (cached == null) debugMaterials = cached = FluidDomainStateMapper.restore(this).exportMaterialParticleState(); return cached;
+		var cached = debugMaterials; if (cached == null) debugMaterials = cached = FluidDomainStateMapper.samplingState(this).exportMaterialParticleState(); return cached;
 	}
 	public FlipChemicalParticleState chemicals() {
 		if (carrierKind() != CarrierKind.CHEMICAL) return null;
-		var cached = debugChemicals; if (cached == null) debugChemicals = cached = FluidDomainStateMapper.restore(this).exportChemicalParticleState(); return cached;
+		var cached = debugChemicals; if (cached == null) debugChemicals = cached = FluidDomainStateMapper.samplingState(this).exportChemicalParticleState(); return cached;
 	}
 	public FlipThermalParticleState thermal() {
 		if (thermalOwner == null) return null;
@@ -220,7 +220,7 @@ public final class FluidDomainState implements FluidStateAccess {
 			double[] energies = liquid.physicalStocks().stream().mapToDouble(LiquidCellInventory.Stock::internalEnergy).toArray();
 			debugThermal = cached = new FlipThermalParticleState(sizeX,sizeY,sizeZ,config.cellSize(),energies.length,
 					thermalOwner.registryFingerprint(),thermalOwner.insertionTemperatureK(),energies,thermalOwner.copyActiveParcelEnergy(),
-					thermalOwner.copyDepositEnergy(),thermalOwner.coherentGroups(),thermalOwner.copyGasNodeEnergy(),thermalOwner.audit());
+					thermalOwner.copyDepositEnergy(),thermalOwner.coherentGroups(),spatialGas() == null ? thermalOwner.copyGasNodeEnergy() : spatialGas().internalEnergy(),thermalOwner.audit());
 		}
 		return cached;
 	}

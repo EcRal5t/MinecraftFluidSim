@@ -34,7 +34,8 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private enum Header {
         SIZE_X, SIZE_Y, SIZE_Z, CELL_COUNT, FACE_COUNT, CELLS, FACES, WALL_GEOMETRY, TEMPERATURE, ACTIVITY,
         NO_SLIP, MATERIAL_COUNT, CONTACT_FACE_OFFSETS, CONTACT_BODY_HANDLES, CONTACT_AREA_OVER_DISTANCE,
-        CONTACT_VELOCITIES, CONTACT_CAPACITY, BODY_COUNT, ACTIVITY_CELLS
+        CONTACT_VELOCITIES, CONTACT_CAPACITY, BODY_COUNT, ACTIVITY_CELLS,
+        AQUEOUS_MATERIAL, WATER_SPECIES, SODIUM_SPECIES, CHLORIDE_SPECIES, SALT_SPECIES
     }
     private static final int STOCK_FIELDS = 24, WORK_FIELDS = 48, COLOUR_OFFSETS = 80, HEADER_WORDS = 112;
     private static String shaderLayout() {
@@ -45,6 +46,12 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             definitions.append("#define H_").append(header.name()).append(' ').append(header.ordinal()).append('\n');
         definitions.append("#define STOCK_FIELDS ").append(STOCK_FIELDS).append('\n');
         definitions.append("#define WORK_FIELDS ").append(WORK_FIELDS).append('\n');
+        definitions.append("#define NACL_VISCOSITY_A ").append(mmm.chemistry.AqueousMixtureProperties.VISCOSITY_A).append("LF\n");
+        definitions.append("#define NACL_VISCOSITY_B ").append(mmm.chemistry.AqueousMixtureProperties.VISCOSITY_B).append("LF\n");
+        definitions.append("#define NACL_MAX_MOLALITY ").append(mmm.chemistry.AqueousMixtureProperties.MAX_SALT_MOLALITY).append("LF\n");
+        definitions.append("#define NACL_REFERENCE_TEMPERATURE ").append(mmm.chemistry.AqueousMixtureProperties.REFERENCE_TEMPERATURE_K).append("LF\n");
+        definitions.append("#define H_ETHANOL_SPECIES 111\n");
+        definitions.append("#define ETHANOL_VISCOSITY ").append(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_VISCOSITY_PA_S).append("LF\n");
         definitions.append("#define COLOUR_OFFSETS ").append(COLOUR_OFFSETS).append('\n');
         for (var field : VulkanLiquidStateLayout.Field.values())
             definitions.append("#define STOCK_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
@@ -52,8 +59,16 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             definitions.append("#define FIELD_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
         return definitions.toString();
     }
-    record Tables(int[] offsets,double[] segments) { }
+    record Tables(int[] offsets,double[] segments,int aqueousMaterial,int waterSpecies,int sodiumSpecies,int chlorideSpecies,int saltSpecies,int ethanolSpecies) {
+        Tables(int[] offsets,double[] segments){this(offsets,segments,-1,-1,-1,-1,-1,-1);}
+        Tables(int[] offsets,double[] segments,int aqueousMaterial,int waterSpecies,int sodiumSpecies,int chlorideSpecies,int saltSpecies){
+            this(offsets,segments,aqueousMaterial,waterSpecies,sodiumSpecies,chlorideSpecies,saltSpecies,-1);
+        }
+    }
     static Tables tables(FluidMaterialRegistry fluids,MaterialRegistry materials) {
+        return tables(fluids,materials,null);
+    }
+    static Tables tables(FluidMaterialRegistry fluids,MaterialRegistry materials,mmm.chemistry.ChemicalRegistry chemistry) {
         int[] offsets=new int[fluids.materials().size()+1];var values=new ArrayList<Double>();
         for(int material=0;material<fluids.materials().size();material++) {
             var entry=materials.entry(fluids.material(material).id());
@@ -61,7 +76,12 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             for(var s:entry.viscosity()){values.add(s.minimumTemperatureK());values.add(s.maximumTemperatureK());values.add(s.dynamicViscosityPascalSecondsAtMinimum());values.add(s.dynamicViscosityPascalSecondsAtMaximum());}
             offsets[material+1]=values.size()/4;
         }
-        return new Tables(offsets,values.stream().mapToDouble(Double::doubleValue).toArray());
+        var ids=chemistry==null?List.<String>of():chemistry.species().stream().map(mmm.chemistry.ChemicalSpecies::id).toList();
+        int aqueous=-1;for(int i=0;i<fluids.materials().size();i++)if(fluids.material(i).id().equals("mmm:water"))aqueous=i;
+        return new Tables(offsets,values.stream().mapToDouble(Double::doubleValue).toArray(),aqueous,
+                ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.H2O),ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS),
+                ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS),ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.NACL),
+                ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL));
     }
     /** Face CSR stores geometry area/distance in metres; body velocity is a three-component SI vector.
      * The contact geometry producer includes only tangential wet area and uses stable body order. */
@@ -69,7 +89,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
                               VulkanLiquidStateLayout.Column bodyHandles,VulkanLiquidStateLayout.Column areaOverDistance,
                               VulkanLiquidStateLayout.Column velocities) { }
     enum Field {
-        MU(8), CARRIER(4), EXTRAPOLATED(4), WALL_CONDUCTANCE(8), STRESS_HEAT(8), WALL_HEAT(8), CONTACT_FACE_HEAT(8),
+        MU(8), EXTRAPOLATED(4), WALL_CONDUCTANCE(8), STRESS_HEAT(8), WALL_HEAT(8), CONTACT_FACE_HEAT(8),
         CONTACT_FACE_WORK(8), SOURCE_CELL_HEAT(8), SOURCE_CELL_WORK(8), SOURCE_FACE_VELOCITY(8), SOURCE_FACE_K(8),
         FINAL_FACE_K(8), CELL_FIXED_IMPULSE(8), WALL_FACE_IMPULSE(8), CONTACT_IMPULSE(8), CONTACT_WORK(8),
         MATERIAL_OFFSETS(4), VISCOSITY_SEGMENTS(8), STRAIN_COUNTS(4), STRAIN_DISPATCH(4),
@@ -85,17 +105,17 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         private final boolean noSlip;private final long endOffset;
         private final int[] colourOffsets=new int[19];
         Layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
-               VulkanLiquidStateLayout.Column walls,int cellTemperatureWord,int faceActivityWord,Tables tables,
+               VulkanLiquidStateLayout.Column walls,int carrierTemperatureWord,int faceActivityWord,Tables tables,
                PrescribedContacts contacts,boolean noSlip,long scratchBase,long alignment) {
-            this(source,cells,faces,walls,cellTemperatureWord,faceActivityWord,-1,tables,contacts,noSlip,scratchBase,alignment);
+            this(source,cells,faces,walls,carrierTemperatureWord,faceActivityWord,-1,tables,contacts,noSlip,scratchBase,alignment);
         }
         Layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
-               VulkanLiquidStateLayout.Column walls,int cellTemperatureWord,int faceActivityWord,int cellActivityWord,Tables tables,
+               VulkanLiquidStateLayout.Column walls,int carrierTemperatureWord,int faceActivityWord,int cellActivityWord,Tables tables,
                PrescribedContacts contacts,boolean noSlip,long scratchBase,long alignment) {
             this.source=source;this.tables=tables;this.contacts=contacts;this.noSlip=noSlip;
-            cellsWord=word(cells);facesWord=word(faces);wallsWord=word(walls);temperatureWord=cellTemperatureWord;activityWord=faceActivityWord;activityCellsWord=cellActivityWord;
+            cellsWord=word(cells);facesWord=word(faces);wallsWord=word(walls);temperatureWord=carrierTemperatureWord;activityWord=faceActivityWord;activityCellsWord=cellActivityWord;
             this.faces=faces.count()/4;
-            if(scratchBase<source.bytes()||alignment<8||(alignment&(alignment-1))!=0||cells.count()!=4*source.cellCount()||cellTemperatureWord<0)
+            if(scratchBase<source.bytes()||alignment<8||(alignment&(alignment-1))!=0||cells.count()!=4*source.cellCount()||carrierTemperatureWord<0)
                 throw new IllegalArgumentException("Viscous fields differ from resident liquid");
             for(int colour=0;colour<18;colour++)colourOffsets[colour+1]=Math.addExact(colourOffsets[colour],colourCells(source,colour));
             long[] cursor={scratchBase};header=VulkanLiquidViscosity.column(cursor,HEADER_WORDS,4,alignment);int n=source.cellCount();
@@ -125,7 +145,9 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             data[Header.SIZE_X.ordinal()]=source.sizeX();data[Header.SIZE_Y.ordinal()]=source.sizeY();data[Header.SIZE_Z.ordinal()]=source.sizeZ();data[Header.CELL_COUNT.ordinal()]=source.cellCount();data[Header.FACE_COUNT.ordinal()]=faces;
             data[Header.CELLS.ordinal()]=cellsWord;data[Header.FACES.ordinal()]=facesWord;data[Header.WALL_GEOMETRY.ordinal()]=wallsWord;data[Header.TEMPERATURE.ordinal()]=temperatureWord;data[Header.ACTIVITY.ordinal()]=activityWord;data[Header.NO_SLIP.ordinal()]=noSlip?1:0;
             data[Header.ACTIVITY_CELLS.ordinal()]=activityCellsWord;
-            data[Header.MATERIAL_COUNT.ordinal()]=tables.offsets().length-1;
+            data[Header.AQUEOUS_MATERIAL.ordinal()]=tables.aqueousMaterial();data[Header.WATER_SPECIES.ordinal()]=tables.waterSpecies();
+            data[Header.SODIUM_SPECIES.ordinal()]=tables.sodiumSpecies();data[Header.CHLORIDE_SPECIES.ordinal()]=tables.chlorideSpecies();data[Header.SALT_SPECIES.ordinal()]=tables.saltSpecies();
+            data[111]=tables.ethanolSpecies();data[Header.MATERIAL_COUNT.ordinal()]=tables.offsets().length-1;
             data[Header.CONTACT_FACE_OFFSETS.ordinal()]=contacts==null?-1:word(contacts.faceOffsets());data[Header.CONTACT_BODY_HANDLES.ordinal()]=contacts==null?0:word(contacts.bodyHandles());
             data[Header.CONTACT_AREA_OVER_DISTANCE.ordinal()]=contacts==null?0:word(contacts.areaOverDistance());data[Header.CONTACT_VELOCITIES.ordinal()]=contacts==null?0:word(contacts.velocities());
             data[Header.CONTACT_CAPACITY.ordinal()]=contacts==null?0:contacts.capacity();data[Header.BODY_COUNT.ordinal()]=contacts==null?0:contacts.bodies();

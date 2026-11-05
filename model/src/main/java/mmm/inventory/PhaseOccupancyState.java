@@ -2,7 +2,7 @@ package mmm.inventory;
 
 /** Persistent liquid occupation of the fixed eight microboxes, in whole-cell normalized volume. */
 public final class PhaseOccupancyState {
-    /** Geometry allowance for the sixteen-step coarse PLIC inversion; inventory remains exact. */
+    /** Whole-cell geometric volume resolution; inventory remains exact. */
     public static final double VOLUME_RESOLUTION = 4e-5;
     private final double[] liquid;
     public PhaseOccupancyState(double[] normalizedLiquidMicroVolumes){

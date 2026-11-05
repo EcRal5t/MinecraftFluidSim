@@ -87,7 +87,7 @@ final class MinecraftContainerTransferOperations {
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "容器余量小于 solver 可表示体积");
 		}
-		SignedDyadic energyBefore = domain.hasThermalState() ? domain.exactInternalEnergy() : null;
+		SignedDyadic energyBefore = domain.hasThermalState() ? domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy()) : null;
 		FluidDomainContracts.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
@@ -98,7 +98,7 @@ final class MinecraftContainerTransferOperations {
 		Double thermalEnergy = null;
 		if (domain.hasThermalState()) {
 			double baseEnergy = baseThermal == null ? 0.0 : baseThermal.internalEnergy();
-			double finalEnergy = mergedExtractionEnergy(baseEnergy, energyBefore.subtract(domain.exactInternalEnergy()));
+			double finalEnergy = mergedExtractionEnergy(baseEnergy, energyBefore.subtract(domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy())));
 			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), finalEnergy);
 			thermalEnergy = SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(baseEnergy)).toDouble();
 			domain.settleExternalContainerExtraction(extracted.internalEnergy(), thermalEnergy);
@@ -237,6 +237,7 @@ final class MinecraftContainerTransferOperations {
 				new ItemStack(MmmItems.MATERIAL_BUCKET), "容器余量小于 solver 可表示体积");
 		ChemicalContents[] plannedContents = new ChemicalContents[1];
 		long[] plannedNanos = new long[1];
+		String[] rejected = new String[1];
 		FluidDomainContracts.ExactChemicalTransfer extracted = domain.tryExtractExactChemical(
 				cell[0], cell[1], cell[2], requested, maxRadius, ledger -> {
 					try {
@@ -244,11 +245,13 @@ final class MinecraftContainerTransferOperations {
 						plannedContents[0] = ChemicalContents.fromLedger(ledger, registry, plannedNanos[0]);
 						return true;
 					} catch (IllegalArgumentException | ArithmeticException invalidBucket) {
+						rejected[0] = invalidBucket.getMessage();
 						return false;
 					}
 				});
 		if (!extracted.transferred() || extracted.ledger().isEmpty()) return new TransferOutcome(false, false,
-				new ItemStack(MmmItems.MATERIAL_BUCKET), "准星处没有足够或可由当前容器表示的化学流体");
+				new ItemStack(MmmItems.MATERIAL_BUCKET), "准星处没有足够或可由当前容器表示的化学流体"
+						+ (rejected[0] == null ? "" : "：" + rejected[0]));
 		long taken = plannedNanos[0];
 		ChemicalContents contents = plannedContents[0];
 		Double thermalEnergy = domain.hasThermalState() ? extracted.internalEnergy() : null;
@@ -584,9 +587,9 @@ final class MinecraftContainerTransferOperations {
 		if (!(availableCellVolume > 0.0)) return 0L;
 		long availableNanos = cellVolumeToNanos(domain.unitScale(), availableCellVolume);
 		long request = Math.min(capacityNanos, availableNanos);
-		float requestCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), request);
-		while (requestCellVolume > availableCellVolume) requestCellVolume = Math.nextDown(requestCellVolume);
-		request = requestCellVolume <= 0.0F ? 0L : cellVolumeToNanos(domain.unitScale(), requestCellVolume);
+		// The transaction stores nanos and reconstructs the float volume during execution.
+		// Check that reconstructed value against inventory, retaining any smaller residue in the region.
+		while (request > 0L && nanosToCellVolumeAtMost(domain.unitScale(), request) > availableCellVolume) request--;
 		// A material mixture must assign at least one nanovolume quantum to every possible
 		// component. Below that bound the independent per-material volume ledger cannot be encoded.
 		if (materialHandle < 0 && domain.hasMaterialState()

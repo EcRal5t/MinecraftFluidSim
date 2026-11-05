@@ -82,6 +82,7 @@ final class CreativeSourceCatalog {
 		String name = descriptor.templateStableId().substring("mmm:source/reagent/".length());
 		String species = switch (name) {
 			case "water" -> BuiltinChemicalDefinitions.H2O;
+			case "ethanol" -> BuiltinChemicalDefinitions.ETHANOL;
 			case "hcl" -> BuiltinChemicalDefinitions.HCL;
 			case "naoh" -> BuiltinChemicalDefinitions.NAOH;
 			case "nacl" -> BuiltinChemicalDefinitions.NACL;
@@ -93,12 +94,13 @@ final class CreativeSourceCatalog {
 		var registry = world.chemicalRegistry();
 		TreeMap<String, Long> amounts = new TreeMap<>();
 		if (species.equals(BuiltinChemicalDefinitions.H2O)) amounts.put(species, 55_555_555_556L);
+		else if (species.equals(BuiltinChemicalDefinitions.ETHANOL)) amounts.put(species, 17_152_173_913L);
 		else {
 			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
 			amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
 		}
 		FluidMaterial carrier = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
-		double mass = carrier.referenceDensity();
+		double mass = species.equals(BuiltinChemicalDefinitions.ETHANOL) ? BuiltinChemicalDefinitions.ETHANOL_REFERENCE_DENSITY_KG_M3 : carrier.referenceDensity();
 		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
 				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));

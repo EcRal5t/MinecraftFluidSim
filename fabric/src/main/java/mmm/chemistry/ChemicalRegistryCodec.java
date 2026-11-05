@@ -80,6 +80,8 @@ public final class ChemicalRegistryCodec {
 			CompoundTag tag = new CompoundTag();
 			tag.putString("Id", definition.id()); tag.putInt("Charge", definition.charge());
 			tag.putString("MolarMassKgPerMol", definition.molarMassKgPerMol().canonical()); tag.putInt("Color", definition.baseArgb());
+			tag.putLong("Diffusivity", Double.doubleToRawLongBits(definition.diffusivityM2PerS() == null ? Double.NaN : definition.diffusivityM2PerS()));
+			tag.putLong("EffectiveVolume", Double.doubleToRawLongBits(definition.effectiveVolumeM3PerMol() == null ? Double.NaN : definition.effectiveVolumeM3PerMol()));
 			tag.put("Composition", encodeIntegerMap(definition.composition())); species.add(tag);
 		}
 		root.put("Species", species);
@@ -99,7 +101,12 @@ public final class ChemicalRegistryCodec {
 			tag.putString("Id", definition.id()); tag.putString("Kind", definition.kind().name());
 			tag.putString("Phase", definition.phaseId()); tag.put("Reactants", encodeIntegerMap(definition.reactants()));
 			tag.put("Products", encodeIntegerMap(definition.products()));
-			tag.putString("VolumeDeltaM3PerExtent", definition.volumeDeltaCubicMetersPerExtent().canonical()); reactions.add(tag);
+			tag.putString("VolumeDeltaM3PerExtent", definition.volumeDeltaCubicMetersPerExtent().canonical());
+			var k = definition.kinetics();
+			tag.putLongArray("Kinetics", new long[]{Double.doubleToRawLongBits(k.forwardRate()), Double.doubleToRawLongBits(k.reverseRate()),
+					Double.doubleToRawLongBits(k.forwardActivationJMol()), Double.doubleToRawLongBits(k.reverseActivationJMol()),
+					Double.doubleToRawLongBits(k.referenceTemperatureK())});
+			reactions.add(tag);
 		}
 		root.put("Reactions", reactions);
 		ListTag transfers = new ListTag();
@@ -150,10 +157,10 @@ public final class ChemicalRegistryCodec {
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compound(list, i, "species");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Charge", Tag.TAG_INT, "MolarMassKgPerMol", Tag.TAG_STRING,
-					"Color", Tag.TAG_INT, "Composition", Tag.TAG_LIST));
+					"Color", Tag.TAG_INT, "Composition", Tag.TAG_LIST, "Diffusivity", Tag.TAG_LONG, "EffectiveVolume", Tag.TAG_LONG));
 			result.add(new ChemicalSpecies(tag.getStringOr("Id", ""), decodeIntegerMap(tag.getListOrEmpty("Composition")),
 					tag.getIntOr("Charge", Integer.MIN_VALUE), ExactRational.parse(tag.getStringOr("MolarMassKgPerMol", "")),
-					tag.getIntOr("Color", 0)));
+					tag.getIntOr("Color", 0), nullableDouble(tag.getLongOr("Diffusivity", 0)), nullableDouble(tag.getLongOr("EffectiveVolume", 0))));
 		}
 		return result;
 	}
@@ -184,13 +191,20 @@ public final class ChemicalRegistryCodec {
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compound(list, i, "reaction");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Kind", Tag.TAG_STRING, "Phase", Tag.TAG_STRING,
-					"Reactants", Tag.TAG_LIST, "Products", Tag.TAG_LIST, "VolumeDeltaM3PerExtent", Tag.TAG_STRING));
+					"Reactants", Tag.TAG_LIST, "Products", Tag.TAG_LIST, "VolumeDeltaM3PerExtent", Tag.TAG_STRING, "Kinetics", Tag.TAG_LONG_ARRAY));
 			result.add(new ChemicalReaction(tag.getStringOr("Id", ""),
 					ChemicalReaction.Kind.valueOf(tag.getStringOr("Kind", "")), tag.getStringOr("Phase", ""),
 					decodeIntegerMap(tag.getListOrEmpty("Reactants")), decodeIntegerMap(tag.getListOrEmpty("Products")),
-					ExactRational.parse(tag.getStringOr("VolumeDeltaM3PerExtent", ""))));
+					ExactRational.parse(tag.getStringOr("VolumeDeltaM3PerExtent", "")), decodeKinetics(tag)));
 		}
 		return result;
+	}
+
+	private static ChemicalReaction.Kinetics decodeKinetics(CompoundTag tag) throws IOException {
+		long[] k = tag.getLongArray("Kinetics").orElseThrow();
+		if (k.length != 5) throw new IOException("Reaction kinetic constants are incomplete");
+		return new ChemicalReaction.Kinetics(Double.longBitsToDouble(k[0]), Double.longBitsToDouble(k[1]),
+				Double.longBitsToDouble(k[2]), Double.longBitsToDouble(k[3]), Double.longBitsToDouble(k[4]));
 	}
 
 	private static ListTag encodeIntegerMap(Map<String, Integer> map) {
@@ -225,6 +239,8 @@ public final class ChemicalRegistryCodec {
 		if (!(tag instanceof CompoundTag compound)) throw new IOException("Invalid " + context + " entry");
 		return compound;
 	}
+	private static Double nullableDouble(long bits) { double value=Double.longBitsToDouble(bits);return Double.isNaN(value)?null:value; }
+
 	private static void requireAll(CompoundTag tag, Map<String, Byte> fields) throws IOException {
 		StrictNbtFields.requireExact(tag, fields, "chemical registry");
 	}

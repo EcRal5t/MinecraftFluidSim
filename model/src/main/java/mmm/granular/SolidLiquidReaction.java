@@ -17,8 +17,21 @@ public record SolidLiquidReaction(
 	long solidExtentPerBatch,
 	long solidVolumeSvqPerBatch,
 	long accessibleSurfaceSvqPerCellStep,
-		boolean reversible
+		boolean reversible,
+		Solubility solubility
 ) {
+	/** Linear solvent-mole ratio over its declared temperature interval. */
+	public record Solubility(String solventSpeciesId,double referenceTemperatureK,double ratio,double slopePerK,double minimumK,double maximumK,double diffusivityM2PerS) {
+		public Solubility {
+			GranularIds.requireId(solventSpeciesId,"solvent species id");
+			if(!(Double.isFinite(referenceTemperatureK)&&Double.isFinite(ratio)&&Double.isFinite(slopePerK)&&Double.isFinite(minimumK)&&Double.isFinite(maximumK)&&Double.isFinite(diffusivityM2PerS)
+					&& minimumK>0 && minimumK<=referenceTemperatureK && referenceTemperatureK<=maximumK && ratio>0 && diffusivityM2PerS>0))throw new IllegalArgumentException("Invalid solubility curve");
+		}
+	}
+	public SolidLiquidReaction(String id,String liquidPhaseId,Map<String,Integer> aqueousStoichiometry,String solidMaterialId,
+			Map<String,Integer> solidComposition,ExactRational saturation,long extent,long volume,long surface,boolean reversible){
+		this(id,liquidPhaseId,aqueousStoichiometry,solidMaterialId,solidComposition,saturation,extent,volume,surface,reversible,null);
+	}
 	public SolidLiquidReaction {
 		GranularIds.requireId(id, "solid-liquid reaction id");
 		GranularIds.requireId(liquidPhaseId, "solid-liquid phase id");

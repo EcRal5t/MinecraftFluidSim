@@ -26,18 +26,15 @@ final class VulkanPressureKernel implements AutoCloseable {
         FINISH_UPDATE,
         FINALIZE_CONTROL,
         CHECK_SUCCESS,
-        ORIGINAL_MAXIMUM,
-        FINISH_ORIGINAL_MAXIMUM
+        CHECK_MECHANICAL
     }
 
-    private enum Control { ITERATION, RESIDUAL_RMS, SUCCESS, RUN, RESIDUAL_DOT_PRECONDITIONED, STEP_LENGTH, RESTART, REFRESH, CONSTRAINT_TRIALS, DIRECTION_SCALE, TOLERANCE, MAX_PRESSURE, PHASE, ACTIVE_SET_UPDATES, SOLVE_ROW_COUNT, RESIDUAL_REFRESHES }
+    private enum Control { ITERATION, RESIDUAL_RMS, SUCCESS, RUN, RESIDUAL_DOT_PRECONDITIONED, STEP_LENGTH, RESTART, REFRESH, DIRECTION_SCALE, TOLERANCE, MAX_PRESSURE, RESIDUAL_REFRESHES }
     /** Counts are sampled before the final certification refresh; initialization is included. */
-    record Progress(int iterations,double residualRms,int constraintTrials,int activeSetUpdates,int residualRefreshes) {
+    record Progress(int iterations,double residualRms,int residualRefreshes) {
         static Progress read(java.nio.ByteBuffer control) {
             return new Progress((int)control.getDouble(Double.BYTES * Control.ITERATION.ordinal()),
                     control.getDouble(Double.BYTES * Control.RESIDUAL_RMS.ordinal()),
-                    (int)control.getDouble(Double.BYTES * Control.CONSTRAINT_TRIALS.ordinal()),
-                    (int)control.getDouble(Double.BYTES * Control.ACTIVE_SET_UPDATES.ordinal()),
                     (int)control.getDouble(Double.BYTES * Control.RESIDUAL_REFRESHES.ordinal()));
         }
     }
@@ -46,61 +43,24 @@ final class VulkanPressureKernel implements AutoCloseable {
         int liquidCount();
         int matrixFreeFromRow();
         void recordProduct(VkCommandBuffer command, boolean direction);
-        default void recordProductIndirect(VkCommandBuffer command,boolean direction,Dispatch dispatch){recordProduct(command,direction);}
-        default boolean hasPreconditioner(){return false;}
-        default void recordPreconditioner(VkCommandBuffer command){ }
-        default Object preconditionerKey(){return null;}
-        default ParallelRows parallelRows(){return null;}
-        default FlipKernelBindings.BufferRange productDispatch(){return null;}
-        /** Restore physical unknowns and rows before the original-system completion check. */
-        default boolean recordRecoverOriginal(VkCommandBuffer command){return false;}
-    }
-    /** Compact physical row keys and the device-resident VkDispatchIndirectCommand for parallel stages. */
-    record ParallelRows(FlipKernelBindings.BufferRange rows,GpuBuffer buffer,long offset) { }
-    /** Conditional compute streams publish packed dispatches in the pore-flow control column. */
-    record Dispatch(GpuBuffer buffer,long controlOffset){
-        void record(VkCommandBuffer command,int slot){try(var stack=stackPush()){
-            barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-            vkCmdDispatchIndirect(command,buffer.handle(),controlOffset+128L+16L*slot);
-        }}
-    }
-    record GasOperator(VulkanGasPressure kernel, VulkanGasPressure.Layout layout) implements PressureOperator {
-        @Override public int liquidCount() { return layout.liquidCount(); }
-        @Override public int matrixFreeFromRow() { return layout.liquidCount(); }
-        @Override public ParallelRows parallelRows() { return kernel.parallelRows(layout); }
-        @Override public FlipKernelBindings.BufferRange productDispatch(){return kernel.productDispatch(layout);}
-        @Override public boolean recordRecoverOriginal(VkCommandBuffer command){kernel.recordRecoverOriginal(command,layout);return true;}
-        @Override public void recordProduct(VkCommandBuffer command, boolean direction) {
-            kernel.recordProduct(command, layout, direction);
-        }
     }
     private final FlipKernelBindings bindings;
     private final FlipGpuResources dispatchResources;
     private final GpuBuffer stageDispatch;
     private final int singleWorkgroupRows;
-    private List<FlipKernelBindings.BufferRange> baseRanges;
-    private ParallelRows parallelRows;
 
     VulkanPressureKernel(VulkanDeviceContext context, int singleWorkgroupRows) {
         this.singleWorkgroupRows = singleWorkgroupRows;
         dispatchResources = new FlipGpuResources(context);
         try {
             stageDispatch = dispatchResources.addDeviceStorage(16L * 10);
-            bindings = new FlipKernelBindings(context, 14, shader(), 32);
+            bindings = new FlipKernelBindings(context, 11, shader(), 32);
         } catch (RuntimeException | Error failure) { dispatchResources.close(); throw failure; }
     }
 
     void rebind(FlipGpuResources resources) { rebindRanges(java.util.stream.IntStream.range(0,resources.size()).mapToObj(i->new FlipKernelBindings.BufferRange(resources.buffer(i))).toList()); }
     void rebindRanges(List<FlipKernelBindings.BufferRange> buffers) {
-        var ranges=new java.util.ArrayList<>(buffers);ranges.add(new FlipKernelBindings.BufferRange(stageDispatch));ranges.add(new FlipKernelBindings.BufferRange(stageDispatch));
-        baseRanges=List.copyOf(ranges);parallelRows=null;bindings.rebindRanges(baseRanges);
-    }
-    private void selectRows(PressureOperator operator){
-        parallelRows=operator==null?null:operator.parallelRows();
-        var ranges=new java.util.ArrayList<>(baseRanges);
-        if(parallelRows!=null)ranges.set(3,parallelRows.rows());
-        var products=operator==null?null:operator.productDispatch();
-        if(products!=null)ranges.set(13,products);
+        var ranges=new java.util.ArrayList<>(buffers);ranges.add(new FlipKernelBindings.BufferRange(stageDispatch));
         bindings.rebindRanges(ranges);
     }
 
@@ -116,7 +76,7 @@ final class VulkanPressureKernel implements AutoCloseable {
     void record(VkCommandBuffer command, int size, int count, int maximumIterations,
                 VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         if (gas == null && multigrid == null && size <= singleWorkgroupRows) {
-            selectRows(null);bind(command);
+            bind(command);
             stage(command, size, count, maximumIterations, -1, 1, false, null);
             return;
         }
@@ -133,13 +93,12 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
-        selectRows(gas);
-        if(multigrid!=null&&(gas==null||!gas.hasPreconditioner()))multigrid.beginTimings(command);
+        if(multigrid!=null)multigrid.beginTimings(command);
         bind(command);
         int groups = groups(size, multigrid);
         for (int stage = Stage.INITIALIZE_ROWS.ordinal(); stage <= Stage.FINISH_REFRESH.ordinal(); stage++)
             stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
-        if(multigrid!=null&&(gas==null||!gas.hasPreconditioner())){multigrid.recordBuild(command,hierarchy);bind(command);}
+        if(multigrid!=null){multigrid.recordBuild(command,hierarchy);bind(command);}
         precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy, gas);
     }
 
@@ -172,18 +131,23 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
-        boolean recovered=gas!=null&&gas.recordRecoverOriginal(command);
-        selectRows(gas);
         bind(command);
         int groups = groups(size, multigrid);
-        if(recovered){
-            stage(command,size,count,maximumIterations,Stage.ORIGINAL_MAXIMUM.ordinal(),groups,multigrid!=null,gas);
-            stage(command,size,count,maximumIterations,Stage.FINISH_ORIGINAL_MAXIMUM.ordinal(),groups,multigrid!=null,gas);
-        }
         stage(command, size, count, maximumIterations, Stage.FINALIZE_CONTROL.ordinal(), groups, multigrid != null, gas);
         stage(command, size, count, maximumIterations, Stage.REFRESH_RESIDUAL.ordinal(), groups, multigrid != null, gas);
         stage(command, size, count, maximumIterations, Stage.FINISH_REFRESH.ordinal(), groups, multigrid != null, gas);
         stage(command, size, count, maximumIterations, Stage.CHECK_SUCCESS.ordinal(), groups, multigrid != null, gas);
+    }
+
+    /** Publish a bounded finite mechanical iterate and its true residual. */
+    void recordFinishMechanical(VkCommandBuffer command,int size,int count,int maximumIterations,
+                                VulkanPressureMultigrid multigrid,VulkanPressureMultigrid.Layout hierarchy,PressureOperator operator){
+        bind(command);
+        int groups=groups(size,multigrid);
+        stage(command,size,count,maximumIterations,Stage.FINALIZE_CONTROL.ordinal(),groups,multigrid!=null,operator);
+        stage(command,size,count,maximumIterations,Stage.REFRESH_RESIDUAL.ordinal(),groups,multigrid!=null,operator);
+        stage(command,size,count,maximumIterations,Stage.FINISH_REFRESH.ordinal(),groups,multigrid!=null,operator);
+        stage(command,size,count,maximumIterations,Stage.CHECK_MECHANICAL.ordinal(),groups,multigrid!=null,operator);
     }
 
     private int groups(int size, VulkanPressureMultigrid multigrid) {
@@ -196,9 +160,7 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     private void precondition(VkCommandBuffer command, int size, int count, int maximumIterations, int groups,
                               VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
-        if(gas!=null&&gas.hasPreconditioner()){
-            gas.recordPreconditioner(command);bind(command);
-        }else if (multigrid != null) {
+        if (multigrid != null) {
             multigrid.recordApply(command, hierarchy);
             bind(command);
         }
@@ -207,15 +169,16 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external, PressureOperator gas) {
-        if (gas != null && (stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal())) {
+        if (gas != null && gas.matrixFreeFromRow()<size
+                && (stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal())) {
             gas.recordProduct(command, stage == Stage.DIRECTION_PRODUCT.ordinal());
             bind(command);
         }
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(count, size, maximumIterations, stage, groups,(gas!=null&&gas.hasPreconditioner()?2:external?1:0)|(parallelRows!=null?4:0)|(gas!=null&&gas.productDispatch()!=null?8:0), gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
-            boolean parallel = stage == Stage.INITIALIZE_ROWS.ordinal() || stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.PRECONDITION.ordinal() || stage == Stage.UPDATE_DIRECTION.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal() || stage == Stage.UPDATE_SOLUTION.ordinal() || stage==Stage.ORIGINAL_MAXIMUM.ordinal();
-            if(parallel&&stage!=Stage.INITIALIZE_ROWS.ordinal()&&stage!=Stage.ORIGINAL_MAXIMUM.ordinal()){
+                    stack.ints(count, size, maximumIterations, stage, groups,external?1:0, gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
+            boolean parallel = stage == Stage.INITIALIZE_ROWS.ordinal() || stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.PRECONDITION.ordinal() || stage == Stage.UPDATE_DIRECTION.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal() || stage == Stage.UPDATE_SOLUTION.ordinal() || stage==Stage.CHECK_MECHANICAL.ordinal();
+            if(parallel&&stage!=Stage.INITIALIZE_ROWS.ordinal()&&stage!=Stage.CHECK_MECHANICAL.ordinal()){
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(command,stageDispatch.handle(),16L*stage);
             }else vkCmdDispatch(command, parallel ? groups : 1, 1, 1);

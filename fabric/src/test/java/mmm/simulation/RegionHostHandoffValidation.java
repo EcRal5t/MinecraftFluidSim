@@ -11,8 +11,45 @@ import net.minecraft.world.level.Level;
 final class RegionHostHandoffValidation {
     static void validate() throws Exception {
         finiteDeviceReloadUsesCheckpoint();
+        ordinaryWallContactsSpanBothSides();
+        processSettingsSurviveRestartAndStop();
         hostEditsRespectCurrentActivity();
         fullyLoadedPlannerGroupsRemainIndependent();
+    }
+
+    private static void processSettingsSurviveRestartAndStop() throws Exception {
+        var root=java.nio.file.Files.createTempDirectory("mmm-process-settings-");
+        var region=UUID.randomUUID();var player=UUID.randomUUID();
+        var first=new MinecraftProcessOperations(root,null,null,null,null);
+        var feed=new MinecraftProcessOperations.Feed(player,12);
+        var drive=new MinecraftProcessOperations.Drive(20,220,1,2,3,.5,1,123L);
+        first.setFeed(region,feed);first.setDrive(region,drive);
+        var restored=new MinecraftProcessOperations(root,null,null,null,null);
+        require(feed.equals(restored.feed(region)),"Feed settings did not survive restart");
+        require(drive.equals(restored.drive(region)),"Drive settings did not survive restart");
+        restored.clear(region);
+        var stopped=new MinecraftProcessOperations(root,null,null,null,null);
+        require(stopped.feed(region)==null && stopped.drive(region)==null,"Stopped process restarted after reload");
+    }
+
+    private static void ordinaryWallContactsSpanBothSides() throws Exception {
+        var registry=FullCapabilityTestFixture.load().thermal();
+        var host=new HostFluidState(6,6,6,new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        for(int z=2;z<4;z++)for(int y=2;y<4;y++)for(int x=2;x<4;x++)host.setSolid(x,y,z,true);
+        var dimensions=net.minecraft.resources.ResourceKey.<Level>createRegistryKey(net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","wall_dimensions"));
+        var dimension=net.minecraft.resources.ResourceKey.create(dimensions,net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","wall_dimension"));
+        var region=new FluidRegion(UUID.randomUUID(),dimension,BlockPos.ZERO,host);
+        var pos=new BlockPos(1,1,1);var definition=registry.finiteDevice("mmm:ordinary_stone_wall");
+        double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(definition.thermalMaterialId()),
+                definition.bodyMassKilograms(),java.util.Map.of(),definition.initialTemperatureK());
+        var body=new FiniteThermalBodyState(0,registry.fingerprint(),definition.thermalMaterialId(),definition.bodyMassUnits(),energy);
+        var wall=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,pos.asLong()+"@minecraft:stone",definition.id(),body);
+        var ports=OrdinaryThermalWalls.ports(region,wall,registry);
+        require(ports.size()==24,"Ordinary wall lost exposed contact cells");
+        for(int face=0;face<6;face++){
+            final int expected=face;
+            require(ports.stream().filter(port->port.direction()==expected).count()==4,"Ordinary wall missing contact on face "+face);
+        }
     }
 
     private static void finiteDeviceReloadUsesCheckpoint() throws Exception {

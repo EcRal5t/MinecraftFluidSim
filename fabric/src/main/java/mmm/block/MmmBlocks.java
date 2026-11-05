@@ -24,6 +24,7 @@ public final class MmmBlocks {
 	public static final Block FLUID_CONTROLLER = register("fluid_controller", FluidControllerBlock::new);
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
 	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
+	public static final Block MECHANICAL_DRIVER = register("mechanical_driver", MechanicalDriverBlock::new);
 	public static final BlockEntityType<FiniteHeatExchangerBlockEntity> FINITE_HEAT_EXCHANGER_ENTITY = Registry.register(
 			BuiltInRegistries.BLOCK_ENTITY_TYPE, MmmMod.id("finite_heat_exchanger"),
 			new BlockEntityType<>(FiniteHeatExchangerBlockEntity::new, Set.of(FINITE_HEAT_EXCHANGER)));
@@ -40,7 +41,7 @@ public final class MmmBlocks {
 	}
 
 	public static boolean isBoundary(BlockState state) {
-		return state.is(FLUID_BOUNDARY) || state.is(FLUID_PORT) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER);
+		return state.is(FLUID_BOUNDARY) || state.is(FLUID_PORT) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER) || state.is(MECHANICAL_DRIVER);
 	}
 
 	private static Block register(String path, Function<BlockBehaviour.Properties, Block> factory) {

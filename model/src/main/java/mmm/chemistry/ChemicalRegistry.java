@@ -4,19 +4,15 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 /** Immutable, canonically ordered chemical definition registry. */
 public final class ChemicalRegistry {
@@ -25,7 +21,6 @@ public final class ChemicalRegistry {
 	private final long[] speciesMassUnitsPerQuantum;
 	private final List<ChemicalPhaseDefinition> phases;
 	private final List<ChemicalReaction> reactions;
-	private final List<ChemicalReaction> reactionOrder;
 	private final List<GasLiquidMassTransferDefinition> gasLiquidMassTransfers;
 	private final Map<String, Integer> speciesHandles;
 	private final Map<String, Integer> phaseHandles;
@@ -64,7 +59,6 @@ public final class ChemicalRegistry {
 		this.phaseByMaterial = validatePhases();
 		validateCompositionBasisBudget();
 		validateReactions();
-		this.reactionOrder = topologicalReactionOrder();
 		if (gasLiquidMassTransfers == null) throw new IllegalArgumentException("Gas/liquid mass transfer definitions are missing");
 		this.gasLiquidMassTransfers = gasLiquidMassTransfers.isEmpty() ? List.of()
 				: canonicalUnique(gasLiquidMassTransfers, ChemicalLimits.MAX_GAS_LIQUID_MASS_TRANSFERS,
@@ -77,7 +71,6 @@ public final class ChemicalRegistry {
 	public List<ChemicalSpecies> species() { return species; }
 	public List<ChemicalPhaseDefinition> phases() { return phases; }
 	public List<ChemicalReaction> reactions() { return reactions; }
-	public List<ChemicalReaction> reactionOrder() { return reactionOrder; }
 	public List<GasLiquidMassTransferDefinition> gasLiquidMassTransfers() { return gasLiquidMassTransfers; }
 	public ChemicalSpecies species(int handle) { return species.get(handle); }
 	public long speciesMassUnits(int handle,long quanta){return Math.multiplyExact(speciesMassUnitsPerQuantum[handle],quanta);}
@@ -134,48 +127,13 @@ public final class ChemicalRegistry {
 	}
 
 	private void validateReactions() {
-		Map<String, String> instantaneousConsumer = new HashMap<>();
-		Map<String, String> dissociationConsumer = new HashMap<>();
 		for (ChemicalReaction reaction : reactions) {
 			ChemicalPhaseDefinition phase = phases.get(phaseHandle(reaction.phaseId()));
-			if (!Collections.disjoint(reaction.reactants().keySet(), reaction.products().keySet())) {
-				throw new IllegalArgumentException("Chemical reaction has direct non-terminating feedback: " + reaction.id());
-			}
 			for (String id : union(reaction.reactants().keySet(), reaction.products().keySet())) {
-				if (!speciesHandles.containsKey(id)) throw new IllegalArgumentException(
-						"Reaction " + reaction.id() + " references unknown species " + id);
-				if (!phase.allowedSpecies().contains(id)) throw new IllegalArgumentException(
-						"Reaction " + reaction.id() + " uses species outside phase " + id);
+				if (!speciesHandles.containsKey(id) || !phase.allowedSpecies().contains(id))
+					throw new IllegalArgumentException("Reaction uses species outside its phase: " + reaction.id() + ": " + id);
 			}
 			validateConservation(reaction);
-			if (reaction.kind() == ChemicalReaction.Kind.INSTANTANEOUS) {
-				for (String reactant : reaction.reactants().keySet()) {
-					String key = reaction.phaseId() + '\0' + reactant;
-					String previous = instantaneousConsumer.putIfAbsent(key, reaction.id());
-					if (previous != null) throw new IllegalArgumentException(
-							"Competing instantaneous consumers for " + reactant + ": " + previous + ", " + reaction.id());
-				}
-			} else {
-				String reactant = reaction.reactants().keySet().iterator().next();
-				String key = reaction.phaseId() + '\0' + reactant;
-				String previous = dissociationConsumer.putIfAbsent(key, reaction.id());
-				if (previous != null) throw new IllegalArgumentException(
-						"Duplicate complete dissociation for " + reactant);
-			}
-		}
-		for (Map.Entry<String, String> consumer : instantaneousConsumer.entrySet()) {
-			String dissociation = dissociationConsumer.get(consumer.getKey());
-			if (dissociation != null) throw new IllegalArgumentException(
-					"Species has competing dissociation/instantaneous consumers: "
-							+ dissociation + ", " + consumer.getValue());
-		}
-		for (ChemicalReaction reaction : reactions) if (reaction.kind() == ChemicalReaction.Kind.INSTANTANEOUS) {
-			for (String product : reaction.products().keySet()) {
-				String dissociation = dissociationConsumer.get(reaction.phaseId() + '\0' + product);
-				if (dissociation != null) throw new IllegalArgumentException(
-						"Instantaneous reaction feeds the completed dissociation stratum: "
-								+ reaction.id() + " -> " + dissociation);
-			}
 		}
 	}
 
@@ -220,45 +178,6 @@ public final class ChemicalRegistry {
 		return result;
 	}
 
-	private List<ChemicalReaction> topologicalReactionOrder() {
-		ArrayList<ChemicalReaction> order = new ArrayList<>(reactions.size());
-		order.addAll(topologicalReactionOrder(ChemicalReaction.Kind.COMPLETE_DISSOCIATION));
-		order.addAll(topologicalReactionOrder(ChemicalReaction.Kind.INSTANTANEOUS));
-		return List.copyOf(order);
-	}
-
-	private List<ChemicalReaction> topologicalReactionOrder(ChemicalReaction.Kind kind) {
-		int count = reactions.size();
-		List<Set<Integer>> outgoing = new ArrayList<>(count);
-		int[] indegree = new int[count];
-		for (int i = 0; i < count; i++) outgoing.add(new TreeSet<>());
-		for (int before = 0; before < count; before++) {
-			if (reactions.get(before).kind() != kind) continue;
-			for (int after = 0; after < count; after++) {
-				if (before == after || reactions.get(after).kind() != kind
-						|| !reactions.get(before).phaseId().equals(reactions.get(after).phaseId())) continue;
-				if (!Collections.disjoint(reactions.get(before).products().keySet(),
-						reactions.get(after).reactants().keySet()) && outgoing.get(before).add(after)) {
-					indegree[after]++;
-				}
-			}
-		}
-		PriorityQueue<Integer> ready = new PriorityQueue<>(Comparator.comparing(i -> reactions.get(i).id()));
-		int expected = 0;
-		for (int i = 0; i < count; i++) if (reactions.get(i).kind() == kind) {
-			expected++;
-			if (indegree[i] == 0) ready.add(i);
-		}
-		List<ChemicalReaction> order = new ArrayList<>(expected);
-		while (!ready.isEmpty()) {
-			int next = ready.remove();
-			order.add(reactions.get(next));
-			for (int target : outgoing.get(next)) if (--indegree[target] == 0) ready.add(target);
-		}
-		if (order.size() != expected) throw new IllegalArgumentException("Chemical reaction graph is non-terminating");
-		return List.copyOf(order);
-	}
-
 	private void validateGasLiquidMassTransfers() {
 		Set<String> pairs = new HashSet<>();
 		for (var transfer : gasLiquidMassTransfers) {
@@ -276,7 +195,9 @@ public final class ChemicalRegistry {
 		for (ChemicalSpecies definition : species) {
 			out.append("S|").append(definition.id()).append('|').append(definition.charge()).append('|')
 					.append(definition.molarMassKgPerMol().canonical()).append('|')
-					.append(Integer.toUnsignedString(definition.baseArgb())).append('|');
+					.append(Integer.toUnsignedString(definition.baseArgb())).append('|')
+					.append(definition.diffusivityM2PerS() == null ? "" : Double.toHexString(definition.diffusivityM2PerS())).append('|')
+					.append(definition.effectiveVolumeM3PerMol() == null ? "" : Double.toHexString(definition.effectiveVolumeM3PerMol())).append('|');
 			appendMap(out, definition.composition());
 		}
 		for (ChemicalPhaseDefinition definition : phases) {
@@ -290,7 +211,12 @@ public final class ChemicalRegistry {
 			appendInlineMap(out, definition.reactants());
 			out.append('|');
 			appendInlineMap(out, definition.products());
-			out.append('|').append(definition.volumeDeltaCubicMetersPerExtent().canonical()).append('\n');
+			out.append('|').append(definition.volumeDeltaCubicMetersPerExtent().canonical());
+			var k = definition.kinetics();
+			for (double value : new double[]{k.forwardRate(), k.reverseRate(), k.forwardActivationJMol(),
+					k.reverseActivationJMol(), k.referenceTemperatureK()})
+				out.append('|').append(Long.toUnsignedString(Double.doubleToRawLongBits(value)));
+			out.append('\n');
 		}
 		for (var definition : gasLiquidMassTransfers) {
 			out.append("G|").append(definition.id()).append('|').append(definition.speciesId()).append('|')

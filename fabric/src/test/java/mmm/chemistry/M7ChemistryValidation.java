@@ -382,51 +382,19 @@ public final class M7ChemistryValidation {
 				"test:phase", Map.of("test:h", 1), Map.of("test:heavy_h", 1), ExactRational.ZERO);
 		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(badMass)),
 				"mass-unbalanced reaction accepted");
-		ChemicalReaction self = new ChemicalReaction("test:self", ChemicalReaction.Kind.INSTANTANEOUS,
-				"test:phase", Map.of("test:h", 1), Map.of("test:h", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(self)),
-				"direct non-terminating reaction accepted");
-		ChemicalReaction consumesA = new ChemicalReaction("test:consume_a", ChemicalReaction.Kind.INSTANTANEOUS,
-				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO);
-		ChemicalReaction consumesB = new ChemicalReaction("test:consume_b", ChemicalReaction.Kind.INSTANTANEOUS,
+		var forward = new ChemicalReaction("test:forward", ChemicalReaction.Kind.FINITE_RATE,
+				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO,
+				new ChemicalReaction.Kinetics(2, 1, 1000, 500, 298.15));
+		var competitor = new ChemicalReaction("test:competitor", ChemicalReaction.Kind.INSTANTANEOUS,
 				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(all, List.of(phase),
-				List.of(consumesA, consumesB)), "competing instantaneous consumers accepted");
+		var cycle = new ChemicalReaction("test:cycle", ChemicalReaction.Kind.FINITE_RATE,
+				"test:phase", Map.of("test:h_alias", 1), Map.of("test:h", 1), ExactRational.ZERO,
+				new ChemicalReaction.Kinetics(1, 0, 0, 0, 298.15));
+		var competing = new ChemicalRegistry(all, List.of(phase), List.of(forward, competitor, cycle));
+		check(competing.reactions().size() == 3, "Conservative competing/reversible network was not retained");
 		expectFailure(() -> new ChemicalReaction("test:volume", ChemicalReaction.Kind.INSTANTANEOUS,
 				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ONE),
 				"nonzero reaction volume change accepted");
-		ChemicalReaction a = new ChemicalReaction("test:a", ChemicalReaction.Kind.COMPLETE_DISSOCIATION,
-				"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO);
-		ChemicalReaction b = new ChemicalReaction("test:b", ChemicalReaction.Kind.COMPLETE_DISSOCIATION,
-				"test:phase", Map.of("test:h_alias", 1), Map.of("test:h", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(all, List.of(phase), List.of(a, b)),
-				"dissociation cycle accepted");
-
-		ChemicalReaction crossDissociation = new ChemicalReaction("test:cross_dissociation",
-				ChemicalReaction.Kind.COMPLETE_DISSOCIATION, "test:phase",
-				Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO);
-		ChemicalReaction crossInstantaneous = new ChemicalReaction("test:cross_instantaneous",
-				ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
-				Map.of("test:h", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(all, List.of(phase),
-				List.of(crossDissociation, crossInstantaneous)),
-				"cross-stratum competing consumers were accepted");
-
-		ChemicalReaction feedsDissociation = new ChemicalReaction("test:feeds_dissociation",
-				ChemicalReaction.Kind.COMPLETE_DISSOCIATION, "test:phase",
-				Map.of("test:h_alias", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO);
-		expectFailure(() -> new ChemicalRegistry(all, List.of(phase),
-				List.of(consumesA, feedsDissociation)),
-				"instantaneous product feeding the completed dissociation stratum was accepted");
-
-		ChemicalRegistry stratified = new ChemicalRegistry(all, List.of(phase), List.of(
-				new ChemicalReaction("test:z_dissociation", ChemicalReaction.Kind.COMPLETE_DISSOCIATION,
-						"test:phase", Map.of("test:h", 1), Map.of("test:h_alias", 1), ExactRational.ZERO),
-				new ChemicalReaction("test:a_instantaneous", ChemicalReaction.Kind.INSTANTANEOUS,
-						"test:phase", Map.of("test:h_alias", 1), Map.of("test:h_alias2", 1), ExactRational.ZERO)));
-		check(stratified.reactionOrder().get(0).kind() == ChemicalReaction.Kind.COMPLETE_DISSOCIATION
-				&& stratified.reactionOrder().get(1).kind() == ChemicalReaction.Kind.INSTANTANEOUS,
-				"reaction order did not keep complete dissociation ahead of instantaneous reactions");
 	}
 
 	private static ChemicalMixtureRecord record(Map<String, Long> amounts) {

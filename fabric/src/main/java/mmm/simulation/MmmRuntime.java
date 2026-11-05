@@ -34,6 +34,7 @@ public final class MmmRuntime {
 	private final WorldStartupCoordinator.Result startup;
 	private final mmm.api.transfer.MmmTransferApi transfers;
 	private final mmm.fluid.FluidSolverBackend solverBackend;
+	private final MinecraftProcessOperations processes;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -60,7 +61,8 @@ public final class MmmRuntime {
 			CommittedEventHub committedEvents,
 			WorldStartupCoordinator.Result startup,
 			mmm.api.transfer.MmmTransferApi transfers,
-			mmm.fluid.FluidSolverBackend solverBackend
+			mmm.fluid.FluidSolverBackend solverBackend,
+			MinecraftProcessOperations processes
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
@@ -86,8 +88,10 @@ public final class MmmRuntime {
 		this.startup = Objects.requireNonNull(startup, "World startup result");
 		this.transfers = Objects.requireNonNull(transfers);
 		this.solverBackend = Objects.requireNonNull(solverBackend);
+		this.processes = Objects.requireNonNull(processes);
 	}
 
+	public MinecraftProcessOperations processes() { return processes; }
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
 	public MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 	public MinecraftRegionActivation regionActivation() { return regionActivation; }
@@ -113,6 +117,7 @@ public final class MmmRuntime {
 	public void tick(MinecraftServer server) {
 		finiteHeatExchangers.recoverIndexed();
 		farmlandMoisture.recoverIndexed();
+		processes.tick(server);
 		simulationLoop.tick(server);
 	}
 

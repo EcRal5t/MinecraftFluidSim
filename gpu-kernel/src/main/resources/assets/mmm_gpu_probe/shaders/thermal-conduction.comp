@@ -32,7 +32,8 @@ dvec2 twoSum(double a,double b){precise double s=a+b,v=s-a,error=(a-(s-v))+(b-v)
 dvec2 add(dvec2 a,double b){dvec2 x=twoSum(a.x,b);return twoSum(x.x,x.y+a.y);}
 double cp(int row,int segment){
     dvec2 sum=dvec2(0.0);for(int t=readInt(FIELD_TERM_OFFSETS,row);t<readInt(FIELD_TERM_OFFSETS,row+1);t++)
-        sum=add(sum,readDouble(FIELD_TERM_MASS,t)*readDouble(FIELD_MATERIAL_CP,readInt(FIELD_TERM_MATERIAL,t)*headerWord(H_SEGMENT_COUNT)+segment));return sum.x+sum.y;
+        {double mass=readDouble(FIELD_TERM_MASS,t),ethanol=readDouble(FIELD_TERM_ETHANOL_MASS,t),pureCp=readDouble(FIELD_MATERIAL_CP,readInt(FIELD_TERM_MATERIAL,t)*headerWord(H_SEGMENT_COUNT)+segment);
+        sum=add(sum,(mass-ethanol)*pureCp+ethanol*ETHANOL_CP);}return sum.x+sum.y;
 }
 int segmentAt(double temperature){int low=0,high=headerWord(H_SEGMENT_COUNT)-1;while(low<high){int middle=(low+high)/2;
     if(temperature>=readDouble(FIELD_KNOTS,middle))low=middle+1;else high=middle;}return low;}
@@ -133,7 +134,8 @@ dvec4 prepareOwner(int row){
     dvec2 sum=dvec2(0.0);
     for(int term=firstTerm;term<termEnd;term++){int material=readInt(FIELD_TERM_MATERIAL,term);double mass=readDouble(FIELD_TERM_MASS,term);
         if(material<0||material>=headerWord(H_MATERIAL_COUNT)||!(mass>0.0)||!finite(mass)){invalid();continue;}
-        sum=add(sum,mass*readDouble(FIELD_MATERIAL_MIN_CP,material));}
+        double ethanol=readDouble(FIELD_TERM_ETHANOL_MASS,term);
+        sum=add(sum,(mass-ethanol)*readDouble(FIELD_MATERIAL_MIN_CP,material)+ethanol*ETHANOL_CP);}
     double minimumHeatCapacity=sum.x+sum.y;if(!(minimumHeatCapacity>0.0)||!finite(minimumHeatCapacity))invalid();
     dvec2 conductanceSum=dvec2(0.0);
     if(readInt(FIELD_DEGREE_COUNTS,row)>128)conductanceSum=tileSum(row);
@@ -189,11 +191,11 @@ void fastIsolated(int fastIndex){if(fastIndex>=fastCount())return;int owner=read
  temperature+=energy/(cp(owner,segment)+diagonal);writeDouble(FIELD_TEMPERATURE,owner,temperature);writeDouble(FIELD_TRIAL_T,owner,temperature);
 }
 dvec4 fastLinearize(int fastIndex,bool trialValue){if(fastIndex>=fastCount())return dvec4(0.0);int owner=readInt(FIELD_IMEX_OWNERS,fastIndex),fastOwners=fastCount();double residual=fastResidual(owner,trialValue?FIELD_TRIAL_T:FIELD_TEMPERATURE),error=residual/readDouble(FIELD_MIN_CP,owner);
- if(!trialValue){writeInt(FIELD_STARTS,fastIndex,fastIndex);if(fastIndex==0)writeInt(FIELD_STARTS,fastOwners,fastOwners);writeInt(FIELD_COLUMNS,fastIndex,fastIndex);writeInt(FIELD_ROWS,fastIndex,fastIndex);writeInt(FIELD_META,fastIndex,0);writeDouble(FIELD_PROBLEM,fastOwners+fastIndex,0.0);writeDouble(FIELD_PROBLEM,2*fastOwners+fastIndex,0.0);writeDouble(FIELD_VALUES,fastIndex,(capacity(owner,readDouble(FIELD_TEMPERATURE,owner))+p.dt*readDouble(FIELD_DEGREE,owner))/readDouble(FIELD_MIN_CP,owner));writeDouble(FIELD_PROBLEM,fastIndex,-residual/readDouble(FIELD_ROOT_CP,owner));}
+ if(!trialValue){writeInt(FIELD_STARTS,fastIndex,fastIndex);if(fastIndex==0)writeInt(FIELD_STARTS,fastOwners,fastOwners);writeInt(FIELD_COLUMNS,fastIndex,fastIndex);writeInt(FIELD_ROWS,fastIndex,fastIndex);writeDouble(FIELD_PROBLEM,fastOwners+fastIndex,0.0);writeDouble(FIELD_VALUES,fastIndex,(capacity(owner,readDouble(FIELD_TEMPERATURE,owner))+p.dt*readDouble(FIELD_DEGREE,owner))/readDouble(FIELD_MIN_CP,owner));writeDouble(FIELD_PROBLEM,fastIndex,-residual/readDouble(FIELD_ROOT_CP,owner));}
  return dvec4(error*error,abs(error),0.0,0.0);
 }
 void fastResidualFinish(int lane){dvec4 v=dvec4(0.0);for(int block=lane;block<(fastCount()+127)/128;block+=128){dvec4 b=loadPartial(FIELD_PARTIALS,block);v.x+=b.x;v.y=max(v.y,b.y);}v=reduce(v,1);if(lane!=0)return;double norm=sqrt(v.x/max(1.0,double(fastCount())));
- if(p.step==0){writeDouble(FIELD_SUMMARY,3,norm);writeDouble(FIELD_SUMMARY,5,v.y);writeDouble(FIELD_PROBLEM,3*fastCount(),tolerance()*sqrt(readDouble(FIELD_SUMMARY,2)/max(1.0,double(fastCount()))));writeInt(FIELD_MODE,0,v.y<=tolerance()?10:9);}
+ if(p.step==0){writeDouble(FIELD_SUMMARY,3,norm);writeDouble(FIELD_SUMMARY,5,v.y);writeDouble(FIELD_PROBLEM,2*fastCount(),tolerance()*sqrt(readDouble(FIELD_SUMMARY,2)/max(1.0,double(fastCount()))));writeInt(FIELD_MODE,0,v.y<=tolerance()?10:9);}
  else{bool accepted=v.y<=tolerance()||norm<readDouble(FIELD_SUMMARY,3);writeInt(FIELD_ACCEPTED,0,accepted?1:0);if(accepted){writeDouble(FIELD_SUMMARY,3,norm);writeDouble(FIELD_SUMMARY,5,v.y);if(v.y<=tolerance())writeInt(FIELD_MODE,0,10);}}
 }
 void fastProduct(int fastIndex){if(fastIndex>=fastCount()||readDouble(FIELD_CONTROL,p.step==1?3:7)==0.0)return;int owner=readInt(FIELD_IMEX_OWNERS,fastIndex),fastOwners=fastCount();double pressureValue=p.step==1?readDouble(FIELD_WORK,fastOwners+fastIndex):readDouble(FIELD_PRESSURE,fastIndex);writeDouble(FIELD_WORK,2*fastOwners+fastIndex,readDouble(FIELD_VALUES,fastIndex)*pressureValue-fastSum(owner)/readDouble(FIELD_ROOT_CP,owner));}

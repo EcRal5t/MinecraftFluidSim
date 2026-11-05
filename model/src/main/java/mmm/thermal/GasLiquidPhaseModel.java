@@ -163,7 +163,8 @@ public final class GasLiquidPhaseModel {
 		}
 		double mass = transition.massKgPerBatch().toDouble();
 		double referenceTemperature = referenceTemperature(transition);
-		gasRegistry.component(gas.carrierId());
+		if (!gasRegistry.component(gas.carrierId()).allowsSpecies(transition.speciesId()))
+			throw new IllegalArgumentException("Gas phase does not contain transition species " + transition.speciesId());
 		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_CUBIC_METER;
 		double standardGasVolume = gasVolume * GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
 		double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_CUBIC_METER;

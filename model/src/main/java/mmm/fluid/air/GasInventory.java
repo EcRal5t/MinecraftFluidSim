@@ -1,6 +1,6 @@
 package mmm.fluid.air;
 
-import mmm.chemistry.ExactRational;
+import mmm.chemistry.ChemicalRegistry;
 import mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
@@ -94,7 +94,7 @@ public final class GasInventory {
 	}
 
 	/** Splits an exact total-nanos portion from this mixture without creating or deleting any integer column. */
-	public Split splitTotal(long firstNanos) {
+	public Split splitTotal(long firstNanos, GasRegistry registry, ChemicalRegistry chemistry) {
 		if (firstNanos < 0L || firstNanos > standardVolumeNanos) {
 			throw new IllegalArgumentException("Gas split volume is outside the inventory");
 		}
@@ -106,150 +106,42 @@ public final class GasInventory {
 		for (int index = 0; index < components.size(); index++) {
 			GasComponentAmount component = components.get(index);
 			GasComponentAmount[] parts = splitComponent(component,
-					new long[] { selected[index], component.standardVolumeNanos() - selected[index] });
+					new long[] { selected[index], component.standardVolumeNanos() - selected[index] }, registry, chemistry);
 			if (parts[0] != null) first.add(parts[0]);
 			if (parts[1] != null) second.add(parts[1]);
 		}
 		return new Split(new GasInventory(first), new GasInventory(second));
 	}
 
-	/** Shared systematic rounding keeps all integer columns conservative and trace gas mobile. */
-	public List<GasInventory> partitionTransport(long[] weights) { return partitionTransport(weights, 0); }
-	public List<GasInventory> partitionTransport(long[] weights, long sourcePosition) {
-		if (weights == null || weights.length < 2 || weights[0] <= 0)
-			throw new IllegalArgumentException("Gas transport needs a positive retained donor share");
-		var columns = new ArrayList<ArrayList<GasComponentAmount>>();
-		for (int i = 0; i < weights.length; i++) columns.add(new ArrayList<>());
-		long key = mixPosition(standardVolumeNanos ^ Long.rotateLeft(sourcePosition, 17));
-		for (var component : components) {
-			long[] nanos = systematicShares(component.standardVolumeNanos(), weights, key);
-			// A finite donor keeps its last representable component quantum.
-			if (nanos[0] == 0) { int pivot = 1; for (int i = 2; i < nanos.length; i++) if (nanos[i] > nanos[pivot]) pivot = i; nanos[0]++; nanos[pivot]--; }
-			for (int i = 1; i < nanos.length; i++) if (nanos[i] > 0
-					&& mmm.units.Mass.portion(component.massUnits(), nanos[i], component.standardVolumeNanos()) == 0) { nanos[0] += nanos[i]; nanos[i] = 0; }
-			long[] mass = systematicShares(component.massUnits(), nanos, key);
-			for (int i = 0; i < mass.length; i++) if (nanos[i] > 0 && mass[i] == 0) {
-				int pivot = 0; for (int j = 1; j < mass.length; j++) if (mass[j] > mass[pivot]) pivot = j;
-				mass[pivot]--; mass[i]++;
-			}
-			long[] residual = systematicShares(component.massResidualUnits(), nanos, key);
-			long[][] species = new long[component.species().size()][];
-			for (int i = 0; i < species.length; i++) species[i] = systematicShares(component.species().get(i).amountQuanta(), nanos, key);
-			for (int child = 0; child < nanos.length; child++) if (nanos[child] > 0) {
-				var amounts = new ArrayList<GasComponentAmount.SpeciesAmount>();
-				for (int i = 0; i < species.length; i++) if (species[i][child] > 0)
-					amounts.add(new GasComponentAmount.SpeciesAmount(component.species().get(i).speciesId(), species[i][child]));
-				columns.get(child).add(new GasComponentAmount(component.componentId(), nanos[child], mass[child], amounts, residual[child]));
-			}
-		}
-		return columns.stream().map(GasInventory::new).toList();
-	}
-	/** One shared offset gives unbiased integer rounding; the final cumulative endpoint is exact. */
-	private static long[] systematicShares(long total, long[] weights, long phase) {
-		BigInteger sum = BigInteger.ZERO; for (long weight : weights) {
-			if (weight < 0) throw new IllegalArgumentException("Negative gas share"); sum = sum.add(BigInteger.valueOf(weight));
-		}
-		if (sum.signum() <= 0) throw new IllegalArgumentException("Empty gas partition weights");
-		BigInteger magnitude = BigInteger.valueOf(total).abs(), cumulative = BigInteger.ZERO;
-		BigInteger offset = sum.multiply(BigInteger.valueOf(phase >>> 11)).shiftRight(53);
-		long[] result = new long[weights.length]; BigInteger previous = BigInteger.ZERO;
-		for (int i = 0; i < weights.length; i++) {
-			cumulative = cumulative.add(BigInteger.valueOf(weights[i]));
-			var endpoint = magnitude.multiply(cumulative).add(offset).divide(sum);
-			var value = endpoint.subtract(previous); result[i] = (total < 0 ? value.negate() : value).longValueExact(); previous = endpoint;
-		}
-		return result;
-	}
-	private static long mixPosition(long position) {
-		position = (position ^ (position >>> 30)) * 0xbf58476d1ce4e5b9L;
-		position = (position ^ (position >>> 27)) * 0x94d049bb133111ebL;
-		return position ^ (position >>> 31);
-	}
-
 	/** Selects an exact nanos portion of one stable component, leaving every other component untouched. */
-	public Split splitComponent(String componentId, long selectedNanos) {
+	public Split splitComponent(String componentId, long selectedNanos, GasRegistry registry, ChemicalRegistry chemistry) {
 		GasComponentAmount selected = component(componentId);
 		if (selected == null || selectedNanos < 0L || selectedNanos > selected.standardVolumeNanos()) {
 			throw new IllegalArgumentException("Gas component split is outside the inventory");
 		}
 		if (selectedNanos == 0L) return new Split(EMPTY, this);
 		GasComponentAmount[] portions = splitComponent(selected,
-				new long[] {selectedNanos, selected.standardVolumeNanos() - selectedNanos});
+				new long[] {selectedNanos, selected.standardVolumeNanos() - selectedNanos}, registry, chemistry);
 		ArrayList<GasComponentAmount> remainder = new ArrayList<>(components.size());
 		for (GasComponentAmount component : components) {
 			if (!component.componentId().equals(componentId)) remainder.add(component);
 			else if (portions[1] != null) remainder.add(portions[1]);
 		}
-		return new Split(new GasInventory(List.of(portions[0])), new GasInventory(remainder));
-	}
-
-	/**
-	 * Selects one component with explicitly planned mass and residual columns. Nanos and species
-	 * remain integer-conservative; any floating subtraction remainder stays in the gas remainder.
-	 * This is the phase-boundary form used when a historical grouped nanos rounding is not exactly
-	 * proportional to the transition's mass quantum.
-	 */
-	public Split splitComponent(
-			String componentId, long selectedNanos, long selectedMass, long selectedMassResidual
-	) {
-		GasComponentAmount selected = component(componentId);
-		if (selected == null || selectedNanos <= 0L || selectedMass <= 0) {
-			throw new IllegalArgumentException("Gas component phase columns are invalid");
-		}
-		Split proportional = splitComponent(componentId, selectedNanos);
-		GasComponentAmount first = proportional.first().components().getFirst();
-		if (selectedNanos == selected.standardVolumeNanos()) {
-			if (selectedMass != selected.massUnits()
-					|| selectedMassResidual != selected.massResidualUnits()) {
-				throw new RepresentationException("A complete gas component take must preserve all columns");
-			}
-			return proportional;
-		}
-		long remainingMass = Math.subtractExact(selected.massUnits(), selectedMass);
-		long remainingResidual = Math.subtractExact(selected.massResidualUnits(), selectedMassResidual);
-		if (remainingMass <= 0) {
-			throw new RepresentationException("Gas component phase remainder cannot store the requested mass/residual");
-		}
-		GasComponentAmount exactFirst = new GasComponentAmount(componentId, first.standardVolumeNanos(),
-				selectedMass, first.species(), selectedMassResidual);
-		GasComponentAmount proportionalRemainder = proportional.second().component(componentId);
-		GasComponentAmount exactRemainder = new GasComponentAmount(componentId,
-				proportionalRemainder.standardVolumeNanos(), remainingMass,
-				proportionalRemainder.species(), remainingResidual);
-		ArrayList<GasComponentAmount> remainder = new ArrayList<>(proportional.second().components().size());
-		for (GasComponentAmount component : proportional.second().components()) {
-			remainder.add(component.componentId().equals(componentId) ? exactRemainder : component);
-		}
-		return new Split(new GasInventory(List.of(exactFirst)), new GasInventory(remainder));
-	}
-
-	/** Partitions every component by non-negative topology weights. */
-	public List<GasInventory> partition(long[] weights) {
-		if (weights == null || weights.length == 0) throw new IllegalArgumentException("Gas partition needs children");
-		for (long weight : weights) {
-			if (weight < 0L) throw new IllegalArgumentException("Gas partition weight cannot be negative");
-		}
-		List<BigInteger> exactWeights = Arrays.stream(weights).mapToObj(BigInteger::valueOf).toList();
-		return partition(weights.length, total -> largestRemainder(total, exactWeights));
-	}
-
-	/** Topology geometry supplies proportions; integer allocation preserves the complete inventory. */
-	public List<GasInventory> partition(List<ExactRational> weights) {
-		return partition(GasPartitionWeights.ofRationals(weights));
+		return new Split(portions[0] == null ? EMPTY : new GasInventory(List.of(portions[0])), new GasInventory(remainder));
 	}
 
 	/** The same immutable geometric measures serve integer stock and physical control volume. */
-	public List<GasInventory> partition(GasPartitionWeights weights) {
+	public List<GasInventory> partition(GasPartitionWeights weights, GasRegistry registry, ChemicalRegistry chemistry) {
 		if (weights == null) throw new IllegalArgumentException("Gas partition weights are missing");
-		return partition(weights.childCount(), weights::allocateNanos);
+		return partition(weights.childCount(), weights::allocateNanos, registry, chemistry);
 	}
 
-	private List<GasInventory> partition(int childCount, LongFunction<long[]> allocation) {
+	private List<GasInventory> partition(int childCount, LongFunction<long[]> allocation, GasRegistry registry, ChemicalRegistry chemistry) {
 		ArrayList<ArrayList<GasComponentAmount>> children = new ArrayList<>(childCount);
 		for (int child = 0; child < childCount; child++) children.add(new ArrayList<>());
 		for (GasComponentAmount component : components) {
 			long[] shares = allocation.apply(component.standardVolumeNanos());
-			GasComponentAmount[] parts = splitComponent(component, shares);
+			GasComponentAmount[] parts = splitComponent(component, shares, registry, chemistry);
 			for (int child = 0; child < parts.length; child++) if (parts[child] != null) children.get(child).add(parts[child]);
 		}
 		ArrayList<GasInventory> result = new ArrayList<>(childCount);
@@ -294,45 +186,54 @@ public final class GasInventory {
 				residual);
 	}
 
-	private static GasComponentAmount[] splitComponent(GasComponentAmount source, long[] nanos) {
-		long sum = 0L;
-		for (long value : nanos) {
-			if (value < 0L) throw new IllegalArgumentException("Gas component split volume cannot be negative");
-			sum = Math.addExact(sum, value);
-		}
-		if (sum != source.standardVolumeNanos()) throw new IllegalArgumentException("Gas component split does not close");
-		long[][] speciesShares = new long[source.species().size()][];
-		List<BigInteger> weights = Arrays.stream(nanos).mapToObj(BigInteger::valueOf).toList();
-		for (int species = 0; species < source.species().size(); species++) {
-			speciesShares[species] = largestRemainder(source.species().get(species).amountQuanta(), weights);
-		}
-		GasComponentAmount[] result = new GasComponentAmount[nanos.length];
-		long assignedMass = 0, assignedResidual = 0;
-		int pivot = 0;
-		for (int child = 1; child < nanos.length; child++) if (nanos[child] > nanos[pivot]) pivot = child;
-		// The largest share retains all integer division remainders.
-		for (int ordinal = 0; ordinal < nanos.length; ordinal++) {
-			int child = ordinal == nanos.length - 1 ? pivot : ordinal < pivot ? ordinal : ordinal + 1;
-			if (nanos[child] == 0L) continue;
-			long mass, residual;
-			if (child == pivot) {
-				mass = Math.subtractExact(source.massUnits(), assignedMass);
-				residual = Math.subtractExact(source.massResidualUnits(), assignedResidual);
-			} else {
-				mass = mmm.units.Mass.portion(source.massUnits(), nanos[child], source.standardVolumeNanos());
-				residual = mmm.units.Mass.portion(source.massResidualUnits(), nanos[child], source.standardVolumeNanos());
-				assignedMass = Math.addExact(assignedMass, mass);
-				assignedResidual = Math.addExact(assignedResidual, residual);
+	private static GasComponentAmount[] splitComponent(GasComponentAmount source, long[] requested, GasRegistry registry, ChemicalRegistry chemistry) {
+		long[] nanos=requested.clone();long sum=0;
+		for(long value:nanos){if(value<0)throw new IllegalArgumentException("Gas component split volume cannot be negative");sum=Math.addExact(sum,value);}
+		if(sum!=source.standardVolumeNanos())throw new IllegalArgumentException("Gas component split does not close");
+		for(;;){
+			int pivot=0;for(int child=1;child<nanos.length;child++)if(nanos[child]>nanos[pivot])pivot=child;
+			List<BigInteger> weights=Arrays.stream(nanos).mapToObj(BigInteger::valueOf).toList();
+			long[][] speciesShares=new long[source.species().size()][];
+			for(int species=0;species<source.species().size();species++)
+				speciesShares[species]=largestRemainder(source.species().get(species).amountQuanta(),weights);
+			long[] residual=new long[nanos.length],mass=new long[nanos.length];long assigned=0;
+			for(int child=0;child<nanos.length;child++)if(child!=pivot&&nanos[child]>0){
+				residual[child]=mmm.units.Mass.portion(source.massResidualUnits(),nanos[child],source.standardVolumeNanos());
+				assigned=Math.addExact(assigned,residual[child]);
 			}
-			if (mass <= 0)
-				throw new RepresentationException("Positive gas share cannot store its mass/residual columns");
-			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
-			for (int entry = 0; entry < source.species().size(); entry++) if (speciesShares[entry][child] > 0L) {
-				species.add(new GasComponentAmount.SpeciesAmount(source.species().get(entry).speciesId(), speciesShares[entry][child]));
+			residual[pivot]=Math.subtractExact(source.massResidualUnits(),assigned);
+			for(int child=0;child<nanos.length;child++)if(nanos[child]>0){
+				mass[child]=residual[child];
+				for(int species=0;species<speciesShares.length;species++)if(speciesShares[species][child]>0)
+					mass[child]=Math.addExact(mass[child],Math.multiplyExact(speciesShares[species][child],
+							massPerQuantum(registry,chemistry,source.componentId(),source.species().get(species).speciesId())));
 			}
-			result[child] = new GasComponentAmount(source.componentId(), nanos[child], mass, species, residual);
+			boolean retry=false;
+			for(int child=0;child<nanos.length;child++)if(child!=pivot&&nanos[child]>0&&mass[child]<=0){
+				nanos[pivot]=Math.addExact(nanos[pivot],nanos[child]);nanos[child]=0;retry=true;
+			}
+			if(retry)continue;
+			if(mass[pivot]<=0){
+				int target=-1;for(int child=0;child<nanos.length;child++)if(child!=pivot&&mass[child]>0&&(target<0||mass[child]>mass[target]))target=child;
+				if(target<0)throw new RepresentationException("Gas component cannot store its mass/residual columns");
+				nanos[target]=Math.addExact(nanos[target],nanos[pivot]);nanos[pivot]=0;continue;
+			}
+			GasComponentAmount[] result=new GasComponentAmount[nanos.length];
+			for(int child=0;child<nanos.length;child++)if(nanos[child]>0){
+				var species=new ArrayList<GasComponentAmount.SpeciesAmount>();
+				for(int entry=0;entry<speciesShares.length;entry++)if(speciesShares[entry][child]>0)
+					species.add(new GasComponentAmount.SpeciesAmount(source.species().get(entry).speciesId(),speciesShares[entry][child]));
+				result[child]=new GasComponentAmount(source.componentId(),nanos[child],mass[child],species,residual[child]);
+			}
+			return result;
 		}
-		return result;
+	}
+
+	private static long massPerQuantum(GasRegistry registry, ChemicalRegistry chemistry, String component, String species) {
+		if (chemistry != null) return chemistry.speciesMassUnits(chemistry.speciesHandle(species), 1);
+		for (var definition : registry.component(component).defaultSpeciesConcentrations())
+			if (definition.speciesId().equals(species)) return definition.massUnitsPerQuantum();
+		throw new IllegalArgumentException("Gas species mass needs its chemical registry: " + species);
 	}
 
 	public record Split(GasInventory first, GasInventory second) { }

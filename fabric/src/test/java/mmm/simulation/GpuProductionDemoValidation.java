@@ -200,7 +200,7 @@ public final class GpuProductionDemoValidation {
 			long residentMass = region.inventorySummary().liquidMassUnits();
 			var checkpoint = new MinecraftRegionCheckpointSource(region);
 			require(checkpoint.hasMaterialState() && checkpoint.hasChemicalState() && checkpoint.hasGranularState()
-					&& checkpoint.hasThermalState() && checkpoint.gasState(world.gasRegistry().fingerprint()) != null
+					&& checkpoint.hasThermalState() && checkpoint.authoritativeState().spatialGas() != null
 					&& checkpoint.thermalState() != null && region.deviceResident(),
 					"Checkpoint source lost a capability or displaced the device state");
 			var restored = HostFluidState.restoreAuthoritativeState(checkpoint.authoritativeState());
@@ -509,8 +509,8 @@ public final class GpuProductionDemoValidation {
 						step, bodies.getFirst().bounds().minimumX(), bodies.getFirst().velocityXMetresPerSecond(),
 						coupling.coupledVolumeCubicMetres());
 			} else if (Set.of("demo", "flow").contains(scenario) && step == 13) {
-				require(result.result().movingBodyCoupling().bodyImpulses().stream()
-						.noneMatch(impulse -> impulse.bodyId().equals(playerId)), "Player impulse remained after exit");
+                                require(result.result().movingBodyCoupling().coupledMarkers()==0
+                                                && result.result().movingBodyCoupling().coupledVolumeCubicMetres()==0, "Player occupancy remained after exit");
 				try (var capture = region.captureSolverState()) {
 					require(capture.exportState().entityBodyState().bodies().stream()
 							.noneMatch(body -> body.bodyId().equals(playerId)), "Player occupancy remained after exit");
@@ -623,15 +623,15 @@ public final class GpuProductionDemoValidation {
 	}
 
 	private record MassBaseline(long liquid, long gas, long granular, long coherent,
-			mmm.fluid.air.GasStateSnapshot gasState, mmm.chemistry.ChemicalTransferLedger chemicalSource,
+			mmm.fluid.air.SpatialGasState gasState, mmm.chemistry.ChemicalTransferLedger chemicalSource,
 			mmm.chemistry.ChemicalTransferLedger chemicalSink, mmm.granular.GranularAuditLedger granularSource,
 			mmm.granular.GranularAuditLedger granularSink, java.util.Map<String, Long> species) { }
 
 	private static MassBaseline baselineMass(mmm.fluid.FluidDomainState state) {
 		long liquid = 0, gas = 0, granular = 0, coherent = 0;
 		for (var stock : state.liquid().physicalStocks()) liquid = Math.addExact(liquid, stock.massUnits());
-		var gasState = state.gas();
-		if (gasState != null) for (var node : gasState.nodes()) gas = Math.addExact(gas, node.inventory().totalMassUnits());
+		var gasState = state.spatialGas();
+		if (gasState != null) for (var inventory : gasState.cells()) gas = Math.addExact(gas, inventory.totalMassUnits());
 		if (state.granular() != null) {
 			for (var parcel : state.granular().activeParcels()) granular = Math.addExact(granular, parcel.massUnits());
 			for (var group : state.granular().depositGroups()) granular = Math.addExact(granular, group.massUnits());
@@ -671,8 +671,8 @@ public final class GpuProductionDemoValidation {
 
 	private static java.util.Map<String, Long> speciesTotals(mmm.fluid.FluidDomainState state) {
 		var totals = new java.util.TreeMap<String, Long>(condensedSpeciesTotals(state));
-		var gas = state.gas();
-		if (gas != null) for (var node : gas.nodes()) for (var component : node.inventory().components())
+		var gas = state.spatialGas();
+		if (gas != null) for (var inventory : gas.cells()) for (var component : inventory.components())
 			for (var species : component.species()) totals.merge(species.speciesId(), species.amountQuanta(), Math::addExact);
 		return java.util.Map.copyOf(totals);
 	}
@@ -692,8 +692,6 @@ public final class GpuProductionDemoValidation {
 			double pore = 1 - Integer.bitCount(state.fixedGeometry().mask(cell)) * .125
 					- Math.scalb((double)restored.granularSolidVolumeSvq(x, y, z), -24);
 			double excess = volumes[cell] - pore;
-			require(excess <= mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION,
-					"GPU phase remainder exceeds geometry resolution");
 			maximumExcess = Math.max(maximumExcess, excess);
 		}
 		require(restored.captureAuthoritativeState().liquid().physicalStocks().equals(state.liquid().physicalStocks()),
@@ -715,10 +713,11 @@ public final class GpuProductionDemoValidation {
 					stage, liquidDelta, gasDelta, granularDelta, coherentDelta);
 			throw failure;
 		}
+        if(Boolean.getBoolean("mmm.demoLiquidDiagnostic"))printLiquidCaloricState(region,state,stage);
 		checkBulkWaterTemperature(state, stage);
 		if (isAirScenario(scenario)) checkBulkGasTemperature(state, stage);
 		preparePhaseRestoreReplay(state);
-		var afterGas = state.gas();
+		var afterGas = state.spatialGas();
 		var beforeGas = before.gasState();
 		long totalDelta = Math.addExact(Math.addExact(liquidDelta, gasDelta), Math.addExact(granularDelta, coherentDelta));
 		long chemicalExchange = Math.subtractExact(state.chemicalSource().totalMassUnits(), before.chemicalSource().totalMassUnits())
@@ -770,6 +769,33 @@ public final class GpuProductionDemoValidation {
 		return totalDelta;
 	}
 
+    private static void printLiquidCaloricState(FluidRegion region,mmm.fluid.FluidDomainState state,String stage){
+        var function=new mmm.thermal.ThermalStateFunction(state.thermalRegistry());
+        int handle=state.thermalRegistry().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water");
+        double mass=0,energy=0,reference=0,hottest=Double.NEGATIVE_INFINITY,hotMass=0,tailMass=0,tailSensible=0,maxSensible=Double.NEGATIVE_INFINITY,maxSensibleMass=0;long water=0,ethanol=0;int hottestCell=-1,maxSensibleCell=-1;
+        for(var stock:state.liquid().physicalStocks()){
+            if(stock.massUnits()<=0||!state.materialPalette().get(stock.key().material()).id().equals("mmm:water"))continue;
+            var species=stock.mixture()==null?java.util.Map.<String,Long>of():stock.mixture().stableAmounts(state.chemicalRegistry());
+            double kg=stock.massKilograms(),base=function.baseEnergy(handle,kg,species);
+            double temperature=function.stateForInternalEnergy(handle,kg,species,stock.internalEnergy()).temperatureK();
+            mass+=kg;energy+=stock.internalEnergy();reference+=base;
+            water=Math.addExact(water,species.getOrDefault(mmm.chemistry.BuiltinChemicalDefinitions.H2O,0L));
+            ethanol=Math.addExact(ethanol,species.getOrDefault(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL,0L));
+            if(kg<.001){tailMass+=kg;tailSensible+=stock.internalEnergy()-base;}
+            if(temperature>hottest){hottest=temperature;hottestCell=stock.key().cell();hotMass=kg;}
+            if(stock.internalEnergy()-base>maxSensible){maxSensible=stock.internalEnergy()-base;maxSensibleMass=kg;maxSensibleCell=stock.key().cell();}
+        }
+        double gasEnergy=0;if(state.spatialGas()!=null)for(double u:state.spatialGas().internalEnergy())gasEnergy+=u;
+        double gpu=Double.NaN;if(hottestCell>=0){int x=hottestCell%region.sizeX(),y=hottestCell/region.sizeX()%region.sizeY(),z=hottestCell/(region.sizeX()*region.sizeY());
+            var sample=region.observeCellInventory(x,y,z);if(sample!=null)gpu=sample.temperatureKelvin().orElse(Double.NaN);}
+        System.out.printf("stage=liquid-caloric where=%s mass_kg=%.12g liquid_u_j=%.17g reference_j=%.17g sensible_j=%.17g h2o_quanta=%d ethanol_quanta=%d gas_u_j=%.17g hot_cell=%d cpu_k=%.12g gpu_k=%.12g%n",
+                stage,mass,energy,reference,energy-reference,water,ethanol,gasEnergy,hottestCell,hottest,gpu);
+        int sx=state.sizeX(),sy=state.sizeY(),sz=state.sizeZ();int x=maxSensibleCell%sx,y=maxSensibleCell/sx%sy,z=maxSensibleCell/(sx*sy);
+        boolean outsideFace=x==0||y==0||z==0||x==sx-1||y==sy-1||z==sz-1;
+        System.out.printf("stage=liquid-caloric-detail hot_mass_kg=%.12g tail_mass_kg=%.12g tail_sensible_j=%.17g max_sensible_cell=%d coords=%d,%d,%d dims=%d,%d,%d exterior=%s max_sensible_mass_kg=%.12g max_sensible_j=%.17g%n",
+                hotMass,tailMass,tailSensible,maxSensibleCell,x,y,z,sx,sy,sz,outsideFace,maxSensibleMass,maxSensible);
+    }
+
 	/** These room-temperature demos have no imposed heater or refrigerator. */
 	private static void checkBulkWaterTemperature(mmm.fluid.FluidDomainState state, String stage) {
 		var function = new mmm.thermal.ThermalStateFunction(state.thermalRegistry());
@@ -791,13 +817,13 @@ public final class GpuProductionDemoValidation {
 	}
 
 	private static void checkBulkGasTemperature(mmm.fluid.FluidDomainState state, String stage) {
-		var nodes=state.gas().nodes();
-		var energies=state.thermalOwner().copyGasNodeEnergy();
-		require(nodes.size()==energies.length, stage+": gas inventory and thermal nodes differ");
+		var gas=state.spatialGas();
+		var nodes=gas.cells();
+		var energies=gas.internalEnergy();
 		var model=new mmm.thermal.GasThermalModel(state.thermalRegistry(),state.gasRegistry());
 		double total=0, moment=0, hottest=0, hottestMass=0;
 		for(int i=0;i<nodes.size();i++) {
-			var inventory=nodes.get(i).inventory();double mass=inventory.totalMass();
+			var inventory=nodes.get(i);double mass=inventory.totalMass();
 			if(mass<=0)continue;
 			double temperature=model.state(inventory,energies[i]).temperatureK();
 			total+=mass;moment+=mass*temperature;

@@ -74,24 +74,8 @@ final class GasFaceIntersection {
         if(secondFraction>0)cut(polygon,secondPhase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart);
         return polygon.area(width);
     }
-    /** Real dry openings retain their topology; unresolved liquid films permit gas bypass. */
     private static double faceLiquidFraction(FlipPressurePhaseGeometry phase,int cell,int micro){
-        double fraction=phase.liquidFractionExact(cell,micro);
-        if(fraction==0)return 0;
-        int support=CellRemapMicroTopology.support(phase.collisionMask(cell),micro);
-        double capacity=.125*Integer.bitCount(support);
-        var plane=phase.offsetBracket(cell,micro);
-        double liquid=plane==null?fraction*capacity:plane.targetVolume();
-        if(liquid>0&&liquid<capacity){
-            double scale;
-            if(phase.hasComponentPlanes(cell))scale=phase.componentPoreScale(cell,micro,1);
-            else{
-                double open=.125*Integer.bitCount(~phase.collisionMask(cell)&255);
-                scale=open>0?phase.poreVolume(cell).toDouble()/open:0;
-            }
-            if(scale>0&&liquid<=capacity*FluidSolverConfig.UNRESOLVED_LAYER_FRACTION)return 0;
-        }
-        return fraction;
+        return phase.liquidFractionExact(cell,micro);
     }
     private static double dryRectangle(FlipPressurePhaseGeometry phase,int cell,int micro,int axis,
             double coordinate,double x,double y,double width){

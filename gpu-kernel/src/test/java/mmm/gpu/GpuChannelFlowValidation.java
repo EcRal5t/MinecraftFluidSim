@@ -65,7 +65,7 @@ public final class GpuChannelFlowValidation {
                 FixedGeometrySnapshot.fromMasks(sx,sy,sz,masks),new long[n],definitions,null,null,null)) {
             var audit=ThermalAuditLedger.initialized(SignedDyadic.sum(Arrays.stream(energy).mapToDouble(Double::longBitsToDouble).toArray()));
             for(int step=0;step<steps;step++)try(var source=region.captureState();
-                    var prepared=region.prepareMechanical(source,parameters,512);var successor=prepared.captureState()){
+                    var prepared=region.prepareMechanical(source,parameters);var successor=prepared.captureState()){
                 audit=successor.thermalPosting().apply(audit);
                 if(!audit.acceptsInventory(successor.exactThermalInventory()))
                     throw new AssertionError("Channel thermal inventory differs from its energy audit at step "+step);

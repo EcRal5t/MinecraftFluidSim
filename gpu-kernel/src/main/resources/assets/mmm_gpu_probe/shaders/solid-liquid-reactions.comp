@@ -16,12 +16,14 @@ layout(push_constant) uniform Params {
     int header;
     int stage;
     int count;
+    int padding;
+    double duration;
 }
 p;
 bool activeCell(int cell);
 bool activeFace(int face);
 // HOST_LAYOUT
-const uint ERROR_INVALID_STATE = 33554432u;
+const uint ERROR_INVALID_STATE = 536870912u;
 const double MASS_UNIT_KG = 1e-10;
 const int STAGE_INITIALIZE = 0;
 const int STAGE_IMPORT_ROWS = 1;
@@ -34,6 +36,7 @@ const int STAGE_PHASE_FACE = 8;
 const int STAGE_POST_MECHANICAL = 9;
 const int STAGE_SNAPSHOT_SOLID = 10;
 const int STAGE_PHASE_STATUS = 11;
+const int STAGE_IMPORT_PENDING = 12;
 
 const int64_t LIMIT = int64_t(0x7fffffffffffffffUL);
 int headerWord(int i) {
@@ -139,10 +142,20 @@ double specificCold(int kind, int row) {
 double reference(int kind, int row, int s) {
     return readDouble(caloricHeaderWord(kind, CAL_SPECIES_REFERENCE) + 2 * (material(kind, row) * caloricHeaderWord(kind, CAL_SPECIES_STRIDE) + s));
 }
+double ethanolMass(int kind,int row) {
+    int sp=caloricHeaderWord(0,CAL_ETHANOL_SPECIES);
+    if(kind!=0 || material(kind,row)!=caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL) || sp<0)return 0.0LF;
+    return caloricEthanolMass(double(mass(kind,row))*MASS_UNIT_KG,double(species(kind,row,sp)));
+}
 double cold(int kind, int row) {
     if (mass(kind, row) == 0l)
         return 0.0LF;
-    double result = double(mass(kind, row)) * MASS_UNIT_KG * specificCold(kind, row);
+    double result=double(mass(kind,row))*MASS_UNIT_KG*specificCold(kind,row),ethanol=ethanolMass(kind,row);
+    if(ethanol>0.0LF){
+        int m=material(kind,row);double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
+        double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
+        result+=ethanol*((minimum-refT)*CAL_ETHANOL_CP-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
+    }
     for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
         int64_t speciesAmount = species(kind, row, s);
         if (speciesAmount != 0l)
@@ -155,7 +168,7 @@ double capacity(int kind, int row, double t) {
         last = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
     while (at < last && t >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
-    return double(mass(kind, row)) * MASS_UNIT_KG * readDouble(caloricHeaderWord(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
+    return caloricCapacity(double(mass(kind,row))*MASS_UNIT_KG,ethanolMass(kind,row),readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at));
 }
 double sensible(int kind, int row, double t) {
     int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
@@ -168,7 +181,9 @@ double sensible(int kind, int row, double t) {
             lower = upper;
         }
     }
-    return double(mass(kind, row)) * MASS_UNIT_KG * result;
+    double kg=double(mass(kind,row))*MASS_UNIT_KG,ethanol=ethanolMass(kind,row);
+    double minimum=readDouble(headerWord(kind==0?H_LIQUID_CALORIC:H_SOLID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
+    return (kg-ethanol)*result+ethanol*CAL_ETHANOL_CP*(t-minimum);
 }
 // DYADIC_LIBRARY
 uint dyadicWord(int bank, int at) {
@@ -201,6 +216,7 @@ bool volumeFits(int row, int64_t delta) {
     return m.status == DYADIC_POSITIVE || m.status == DYADIC_ZERO;
 }
 void initialize(int id) {
+    if(id<headerWord(H_CELL_COUNT)*headerWord(H_MATERIAL_COUNT)*definitionWord(4))words[workField(FIELD_PENDING_SLOTS)+id]=uint(-1);
     if (id < headerWord(H_CELL_COUNT)) {
         words[workField(FIELD_HEAD) + id] = uint(-1);
         words[workField(FIELD_PROPOSAL_HEAD) + id] = uint(-1);
@@ -225,6 +241,24 @@ void initialize(int id) {
     if (id == 0)
         for (int i = 0; i < 12; i++)
             words[workField(FIELD_CONTROL) + i] = 0u;
+}
+void importPending(int id){
+    if(id>=int(words[progress(PROGRESS_PENDING_COUNT)]))return;
+    int cell=int(words[progress(PROGRESS_PENDING_CELL)+id]),rule=int(words[progress(PROGRESS_PENDING_RULE)+id]),material=int(words[progress(PROGRESS_PENDING_MATERIAL)+id]);
+    if(cell<0||cell>=headerWord(H_CELL_COUNT)||material<0||material>=headerWord(H_MATERIAL_COUNT)||rule<0||rule>=definitionWord(4))return;
+    if(definitionWord(definitionWord(5)+2*rule)!=1)return;
+    words[workField(FIELD_PENDING_SLOTS)+(cell*headerWord(H_MATERIAL_COUNT)+material)*definitionWord(4)+rule]=uint(id);
+}
+int pendingSlot(int cell,int rule,int material,int support){
+    int at=workField(FIELD_PENDING_SLOTS)+(cell*headerWord(H_MATERIAL_COUNT)+material)*definitionWord(4)+rule,slot=int(words[at]);
+    if(slot>=0){words[progress(PROGRESS_PENDING_MATERIAL)+slot]=uint(material);words[progress(PROGRESS_PENDING_SUPPORT)+slot]=uint(support);return slot;}
+    uint next=atomicAdd(words[progress(PROGRESS_PENDING_COUNT)],1u);
+    if(next>=uint(headerWord(H_PENDING_CAPACITY))){reportInvalid();return -1;}
+    slot=int(next);words[at]=next;
+    words[progress(PROGRESS_PENDING_CELL)+slot]=uint(cell);words[progress(PROGRESS_PENDING_RULE)+slot]=uint(rule);
+    words[progress(PROGRESS_PENDING_MATERIAL)+slot]=uint(material);words[progress(PROGRESS_PENDING_SUPPORT)+slot]=uint(support);
+    writeDouble(progress(PROGRESS_PENDING_SECONDS)+2*slot,0.0LF);writeDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*slot,0.0LF);
+    return slot;
 }
 void importRows(int row) {
     if (row < headerWord(H_SOLID_CAPACITY)) {
@@ -310,8 +344,14 @@ double transferCold(int first, int end, int solid, int rule, int64_t batches, bo
             if (same(first, row)) {
                 int64_t next = prefix + (precip ? species(0, row, s) : mass(0, row)),
                         part = portion(q, next, weight) - portion(q, prefix, weight);
-                if (part > 0l)
-                    result -= double(part) * reference(0, row, s);
+                if (part > 0l) {
+                    result -= double(part)*reference(0,row,s);
+                    if(s==caloricHeaderWord(0,CAL_ETHANOL_SPECIES) && material(0,row)==caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL)){
+                        int m=material(0,row);double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
+                        double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
+                        result-=double(part)*1e-6LF*.046LF*((minimum-refT)*CAL_ETHANOL_CP-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
+                    }
+                }
                 prefix = next;
             }
     }
@@ -431,8 +471,11 @@ void cell(int c) {
     int64_t oldMass = 0l;
     for (int row = begin; row < end; row++)
         oldMass = add(oldMass, readInt64(liquidField(LIQUID_MASS_UNITS) + 2 * row));
-    writeInt64(workField(FIELD_CELL_OLD_MASS) + 2 * c, oldMass);
-    writeInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c, oldMass);
+    int64_t gasMass = 0l;
+    for (int component = 0; component < headerWord(H_GAS_COMPONENTS); component++)
+        gasMass = add(gasMass, readInt64(headerWord(H_GAS_MASS) + 2 * (c * headerWord(H_GAS_COMPONENTS) + component)));
+    writeInt64(workField(FIELD_CELL_OLD_MASS) + 2 * c, add(oldMass, gasMass));
+    writeInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c, add(oldMass, gasMass));
     double pe = potential(c, double(oldMass) * MASS_UNIT_KG);
     writeDouble(workField(FIELD_CELL_OLD_PE) + 2 * c, pe);
     writeDouble(workField(FIELD_CELL_NEW_PE) + 2 * c, pe);
@@ -489,6 +532,16 @@ void cell(int c) {
             }
             double size = readDouble(p.header + H_CELL_SIZE),
                    capacity = rational(definitionWord(rule + 9)) * volume * size * size * size * 1e6LF;
+            int solvent=definitionWord(rule+15);
+            if(solvent<0)continue;
+            if(solvent>=0){
+                int definition=headerWord(H_DEFINITIONS)+rule;
+                double temperature=readDouble(caloricHeaderWord(0,CAL_CELL_TEMPERATURES)+2*c);
+                if(temperature<readDouble(definition+22)||temperature>readDouble(definition+24))continue;
+                int64_t water=0l;for(int row=first;row<end;row++)if(same(first,row))water=add(water,species(0,row,solvent));
+                double ratio=readDouble(definition+18)+readDouble(definition+20)*(temperature-readDouble(definition+16));
+                capacity=double(water)*max(0.0LF,ratio)/double(definitionWord(terms+1));
+            }
             int64_t saturation = capacity >= double(LIMIT) ? LIMIT : max(0l, int64_t(floor(capacity))),
                     desired = aqueous - saturation;
             bool precip = desired > 0l;
@@ -500,7 +553,38 @@ void cell(int c) {
             int64_t batchExtent = readInt64(headerWord(H_DEFINITIONS) + rule + 3),
                     batchVolume = readInt64(headerWord(H_DEFINITIONS) + rule + 5),
                     batchMass = readInt64(headerWord(H_DEFINITIONS) + definitionWord(rule + 14));
-            int64_t batches = min(abs(desired) / batchExtent, readInt64(headerWord(H_DEFINITIONS) + rule + 7) / batchVolume);
+            // Spherical primary grains share one physical surface, independent of representative parcel count.
+            double diameter=readDouble(workField(FIELD_MATERIAL_DIAMETER)+2*sm),solidVolume=0.0LF;
+            for(int grain=int(words[workField(FIELD_HEAD)+c]);grain>=0;grain=int(words[workField(FIELD_NEXT)+grain]))
+                if(int(words[granularField(GRANULAR_MATERIAL)+grain])==sm)
+                    solidVolume+=double(max(0l,readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ)+2*grain)))*(1.0LF/16777216.0LF)*size*size*size;
+            double area=diameter>0.0LF?6.0LF*solidVolume/diameter:0.0LF;
+            area*=clamp(volume,0.0LF,1.0LF);
+            if(precip && area==0.0LF)area=size*size*clamp(volume,0.0LF,1.0LF);
+            if(!(area>0.0LF && diameter>0.0LF && p.duration>0.0LF))continue;
+            int slot=pendingSlot(c,directory,int(words[liquidField(LIQUID_MATERIALS)+first]),int(words[liquidField(LIQUID_SUPPORT_MASKS)+first]));
+            if(slot<0)return;
+            // Molecular diffusion through a grain-scale film.
+            double diffusivity=readDouble(headerWord(H_DEFINITIONS)+rule+26);
+            double rateStep=2.0LF*diffusivity*area*p.duration/(diameter*volume*size*size*size);
+            double transferFraction=rateStep<1e-4LF?rateStep*(1.0LF-rateStep*.5LF+rateStep*rateStep/6.0LF):1.0LF-double(exp(float(-rateStep)));
+            double wanted=double(desired)*transferFraction+readDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*slot)*1e6LF;
+            if(wanted*double(desired)<=0.0LF){writeDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*slot,wanted*1e-6LF);continue;}
+            double pendingAmount=min(abs(wanted),double(abs(desired)));
+            double requestedBatches=floor(pendingAmount/double(batchExtent));
+            writeDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*slot,(wanted<0.0LF?-pendingAmount:pendingAmount)*1e-6LF);
+            int cursor=int(words[workField(FIELD_HEAD)+c]); bool precipDone=false;
+            while(pendingAmount>=double(batchExtent)) {
+                if(precip){if(precipDone)break;precipDone=true;}
+                else {
+                    while(cursor>=0 && (int(words[granularField(GRANULAR_MATERIAL)+cursor])!=sm ||
+                        readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ)+2*cursor)<=0l))
+                        cursor=int(words[workField(FIELD_NEXT)+cursor]);
+                    if(cursor<0)break;
+                    solid=cursor;cursor=int(words[workField(FIELD_NEXT)+cursor]);
+                }
+                requestedBatches=floor(pendingAmount/double(batchExtent));
+                int64_t batches=min(abs(desired)/batchExtent,int64_t(min(double(LIMIT),requestedBatches)));
             if (precip) {
                 batches = min(batches, min((totalMass - 1l) / batchMass, (oldMass - withdrawnMass) / batchMass));
                 double svq = volume / ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT));
@@ -555,6 +639,8 @@ void cell(int c) {
                 continue;
             }
             double physicalWork = potentialWork(c, solid, rule, batches, precip);
+            pendingAmount-=double(batches*batchExtent);
+            writeDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*slot,(wanted<0.0LF?-1.0LF:1.0LF)*pendingAmount*1e-6LF);
             if (solid < 0) {
                 solid = newDeposit(c, sm);
                 if (solid < 0)
@@ -625,27 +711,11 @@ void cell(int c) {
             else
                 writeInt64(workField(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid,
                           readInt64(workField(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid) + movedMass);
-            words[progress(PROGRESS_CELL) + proposal] = uint(c);
-            words[progress(PROGRESS_MATERIAL) + proposal] = uint(sm);
-            words[progress(PROGRESS_SUPPORT) + proposal] = words[liquidField(LIQUID_SUPPORT_MASKS) + first];
-            words[progress(PROGRESS_PHASE) + proposal] = uint(phase);
-            words[progress(PROGRESS_RULE) + proposal] = uint(directory);
             words[progress(PROGRESS_SOURCE_KIND) + proposal] = uint(precip                           ? 0
                                                                     : solid < headerWord(H_PARTICLE_CAPACITY) ? 2
                                                                                                      : 3);
             words[progress(PROGRESS_SOURCE_ROW) + proposal] = uint(precip ? first : solid);
-            words[progress(PROGRESS_TARGET_KIND) + proposal] = uint(precip ? 3 : 0);
-            words[progress(PROGRESS_TARGET_ROW) + proposal] = uint(precip ? solid : first);
-            writeInt64(progress(PROGRESS_REQUESTED_EXTENT) + 2 * proposal, precip ? extent : -extent);
-            writeInt64(progress(PROGRESS_ACCEPTED_EXTENT) + 2 * proposal, precip ? extent : -extent);
             writeInt64(progress(PROGRESS_MASS_DELTA) + 2 * proposal, precip ? movedMass : -movedMass);
-            writeInt64(progress(PROGRESS_SOURCE_VOLUME_DELTA_SVQ) + 2 * proposal, -movedVolume);
-            writeInt64(progress(PROGRESS_TARGET_VOLUME_DELTA_SVQ) + 2 * proposal, movedVolume);
-            words[progress(PROGRESS_STATUS) + proposal] = 3u;
-            writeDouble(progress(PROGRESS_CARRIED_ENERGY) + 2 * proposal, carried);
-            writeDouble(progress(PROGRESS_MECHANICAL_ENERGY) + 2 * proposal, physicalWork);
-            writeDouble(progress(PROGRESS_ENERGY_CHANGE) + 4 * proposal, 0.0LF);
-            writeDouble(progress(PROGRESS_ENERGY_CHANGE) + 4 * proposal + 2, 0.0LF);
             totalEnergy += physicalWork;
             writeDouble(workField(FIELD_POTENTIAL_WORK) + 2 * c, readDouble(workField(FIELD_POTENTIAL_WORK) + 2 * c) + physicalWork);
             atomicAdd(words[workField(FIELD_CONTROL) + 6], uint(batches));
@@ -653,12 +723,14 @@ void cell(int c) {
             words[progress(PROGRESS_DIRTY_CELLS) + c] = 1u;
             words[progress(PROGRESS_PHASE_MOTION_CELLS) + c] = 1u;
             atomicOr(words[progress(PROGRESS_PHASE_PENDING_SUMMARY)], 1u);
+            if(!precip) totalMass=add(totalMass,movedMass);
+            }
         }
     }
     int64_t finalMass = 0l;
     for (int row = begin; row < end; row++)
         finalMass = add(finalMass, mass(0, row));
-    writeInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c, finalMass);
+    writeInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c, add(finalMass, gasMass));
     writeDouble(workField(FIELD_CELL_NEW_PE) + 2 * c, potential(c, double(finalMass) * MASS_UNIT_KG));
     if (!changed)
         return;
@@ -742,12 +814,16 @@ double oldMass(int c) {
 double newMass(int c) {
     return c < 0 ? 0.0LF : double(readInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c)) * MASS_UNIT_KG;
 }
+double ambientFaceMass(int id, int a, int b) {
+    return (a < 0 || b < 0) && headerWord(H_FACE_GEOMETRY) >= 0 && readDouble(headerWord(H_FACE_GEOMETRY) + 8 * id + 4) > 0.0LF
+        ? double(readInt64(p.header + H_AMBIENT_MASS)) * MASS_UNIT_KG : 0.0LF;
+}
 double faceVelocity(int id, int axis, int a, int b) {
-    double faceMass = .5LF * (oldMass(a) + oldMass(b));
+    double faceMass = .5LF * (oldMass(a) + oldMass(b) + ambientFaceMass(id, a, b));
     return faceMass > 0.0 ? readDouble(liquidField(16 + axis) + 2 * (id - faceBase(axis))) / faceMass : 0.0LF;
 }
 bool openFace(int id, int a, int b) {
-    return a >= 0 && b >= 0 && (headerWord(H_FACE_GEOMETRY) < 0 || readDouble(headerWord(H_FACE_GEOMETRY) + 8 * id + 4) > 0.0);
+    return headerWord(H_FACE_GEOMETRY) < 0 ? a >= 0 && b >= 0 : readDouble(headerWord(H_FACE_GEOMETRY) + 8 * id + 4) > 0.0;
 }
 double incomingVelocity(int proposal, int axis) {
     int kind = int(words[progress(PROGRESS_SOURCE_KIND) + proposal]),
@@ -769,7 +845,8 @@ void phaseFace(int id) {
     }
     int cells[2] = int[2](a, b);
     double removed[2] = double[2](0.0LF, 0.0LF), incomingP = 0.0;
-    double beforeMass = .5LF * (oldMass(a) + oldMass(b)), afterMass = .5LF * (newMass(a) + newMass(b)),
+    double ambient = ambientFaceMass(id, a, b);
+    double beforeMass = .5LF * (oldMass(a) + oldMass(b) + ambient), afterMass = .5LF * (newMass(a) + newMass(b) + ambient),
            before = faceVelocity(id, axis, a, b);
     for (int side = 0; side < 2; side++)
         if (cells[side] >= 0)
@@ -795,7 +872,7 @@ void phaseFace(int id) {
         double heat = 0.0;
         if (c >= 0) {
             double kept = max(0.0LF, .5LF * oldMass(c) - removed[side]), difference = before - velocity;
-            heat = .5LF * kept * difference * difference + .5LF * removed[side] * before * before;
+            heat = .5LF * (kept + .5LF * ambient) * difference * difference + .5LF * removed[side] * before * before;
             for (int q = int(words[workField(FIELD_PROPOSAL_HEAD) + c]); q >= 0; q = int(words[workField(FIELD_PROPOSAL_NEXT) + q])) {
                 int64_t change = readInt64(progress(PROGRESS_MASS_DELTA) + 2 * q);
                 if (change < 0l) {
@@ -909,7 +986,9 @@ void main() {
     }
     if (errors != 0u)
         return;
-    if (p.stage == STAGE_IMPORT_ROWS)
+    if (p.stage == STAGE_IMPORT_PENDING)
+        importPending(id);
+    else if (p.stage == STAGE_IMPORT_ROWS)
         importRows(id);
     else if (p.stage == STAGE_REACT_CELL)
         cell(id);

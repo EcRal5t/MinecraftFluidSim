@@ -151,6 +151,7 @@ final class MmmCommandHandlers {
 
 		String species = switch (requested) {
 			case "water" -> BuiltinChemicalDefinitions.H2O;
+			case "ethanol" -> BuiltinChemicalDefinitions.ETHANOL;
 			case "hcl" -> BuiltinChemicalDefinitions.HCL;
 			case "naoh" -> BuiltinChemicalDefinitions.NAOH;
 			case "nacl" -> BuiltinChemicalDefinitions.NACL;
@@ -164,11 +165,13 @@ final class MmmCommandHandlers {
 		java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
 		if (species.equals(BuiltinChemicalDefinitions.H2O)) {
 			amounts.put(species, 55_555_555_556L);
+		} else if (species.equals(BuiltinChemicalDefinitions.ETHANOL)) {
+			amounts.put(species, 17_152_173_913L);
 		} else {
 			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
 			amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
 		}
-		double mass = 1_000.0;
+		double mass = species.equals(BuiltinChemicalDefinitions.ETHANOL) ? BuiltinChemicalDefinitions.ETHANOL_REFERENCE_DENSITY_KG_M3 : 1_000.0;
 		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
 				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
@@ -368,6 +371,27 @@ final class MmmCommandHandlers {
 		SelectionResult result = MmmRuntimeRegistry.require(source.getServer()).regionAdministration().select(prefix);
 		if (!result.succeeded()) return fail(source, result.failure());
 		return succeed(source, "已选择区域 " + result.regionId() + "；区域保持原有暂停/运行状态", 1);
+	}
+
+
+	private static int processReply(CommandSourceStack source,String message) {
+		return message.startsWith("已") || message.startsWith("持续投料已启动") || message.startsWith("工艺：") || message.startsWith("格 ")
+				? succeed(source,message,1) : fail(source,message);
+	}
+	static int processStatus(CommandSourceStack source) throws CommandSyntaxException {
+		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().status(source.getPlayerOrException()));
+	}
+	static int processFeed(CommandSourceStack source,int interval) throws CommandSyntaxException {
+		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().startFeed(source.getPlayerOrException(), interval));
+	}
+	static int processDrive(CommandSourceStack source,int seconds) throws CommandSyntaxException {
+		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().startDrive(source.getPlayerOrException(), seconds));
+	}
+	static int processStop(CommandSourceStack source) throws CommandSyntaxException {
+		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().stop(source.getPlayerOrException()));
+	}
+	static int processSample(CommandSourceStack source) throws CommandSyntaxException {
+		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().sample(source.getPlayerOrException()));
 	}
 
 	static int checkpointRegion(CommandSourceStack source) {

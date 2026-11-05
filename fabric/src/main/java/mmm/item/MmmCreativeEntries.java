@@ -32,7 +32,7 @@ public final class MmmCreativeEntries {
 		entries.accept(MmmItems.MATERIAL_BUCKET);
 		for (String id : java.util.List.of(
 				"mmm:source/material/water", "mmm:source/material/oil", "mmm:source/material/mercury",
-				"mmm:source/material/water_oil", "mmm:source/reagent/water", "mmm:source/reagent/hcl",
+				"mmm:source/material/water_oil", "mmm:source/reagent/water", "mmm:source/reagent/ethanol", "mmm:source/reagent/hcl",
 				"mmm:source/reagent/naoh", "mmm:source/reagent/nacl", "mmm:source/reagent/nano3",
 				"mmm:source/reagent/kcl", "mmm:source/reagent/kno3")) {
 			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(
@@ -43,11 +43,12 @@ public final class MmmCreativeEntries {
 				"mmm:source/granular/fine_sand", "mmm:source/granular/light_beads")) {
 			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(id, SolidVolume.SVQ_PER_CUBIC_METER, null)));
 		}
-		for (String gas : java.util.List.of("nitrogen", "oxygen", "co2", "water_vapor", "air")) {
+		for (String gas : java.util.List.of("nitrogen", "oxygen", "co2", "water_vapor", "ethanol_vapor", "air")) {
 			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(
 					"mmm:source/gas/" + gas, mmm.transfer.CreativeGasSource.AMOUNT_NANOS, 293.15)));
 		}
 		entries.accept(MmmBlocks.THERMAL_RESERVOIR);
 		entries.accept(MmmBlocks.FINITE_HEAT_EXCHANGER);
+		entries.accept(MmmBlocks.MECHANICAL_DRIVER);
 	}
 }

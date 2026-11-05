@@ -17,7 +17,7 @@ final class VulkanRegionDisplay implements AutoCloseable {
         COHERENT_MEMBERS(23), COHERENT_TEMPERATURE(24), COHERENT_CAPACITY(25), COHERENT_VOLUME(26),
         GRAIN_OFFSETS(30), GRAIN_ENTRIES(31), PARTICLE_CAPACITY(32), GRAIN_VOLUME(33),
         GRAIN_SUPPORT(34), GRAIN_TEMPERATURE(35), GRAIN_CAPACITY(36), GAS_COUNTS(40),
-        GAS_KEYS(41), GAS_THERMAL(42), GAS_CAPACITY(43), CHEMICAL_OUTPUT(50),
+        GAS_THERMAL(42), GAS_CAPACITY(43), CHEMICAL_OUTPUT(50),
         PH_OUTPUT(51), THERMAL_OUTPUT(52), GAS_OUTPUT(53), MATERIAL_TABLE(54);
         final int word; Header(int word) { this.word = word; }
     }
@@ -47,7 +47,7 @@ final class VulkanRegionDisplay implements AutoCloseable {
         h[Header.LIQUID_TEMPERATURE.word]=heat?word(in.liquidThermal().cellTemperatures()):-1;h[Header.LIQUID_CAPACITY.word]=heat?word(in.liquidThermal().cellHeatCapacities()):0;h[Header.COHERENT_OFFSETS.word]=-1;h[Header.GRAIN_OFFSETS.word]=-1;h[Header.GAS_COUNTS.word]=-1;
         if(heat&&in.coherent()!=null){var g=in.coherentGeometry();h[Header.COHERENT_OFFSETS.word]=word(g.offsets());h[Header.COHERENT_MEMBERS.word]=word(g.members());h[Header.COHERENT_TEMPERATURE.word]=word(in.coherentThermal().temperatures());h[Header.COHERENT_CAPACITY.word]=word(in.coherentThermal().heatCapacities());h[Header.COHERENT_VOLUME.word]=in.coherent().word(VulkanCoherentStateLayout.Field.OCCUPIED_VOLUME_SVQ);}
         if(heat&&in.granular()!=null){var g=in.granularGeometry();h[Header.GRAIN_OFFSETS.word]=g.word(VulkanGranularGeometry.Field.OFFSETS);h[Header.GRAIN_ENTRIES.word]=g.word(VulkanGranularGeometry.Field.ENTRIES);h[Header.PARTICLE_CAPACITY.word]=in.granular().particleCapacity();h[Header.GRAIN_VOLUME.word]=in.granular().word(VulkanGranularStateLayout.Field.SOLID_VOLUME_SVQ);h[Header.GRAIN_SUPPORT.word]=in.granular().word(VulkanGranularStateLayout.Field.SUPPORT_QUOTAS);h[Header.GRAIN_TEMPERATURE.word]=word(in.granularThermal().temperatures());h[Header.GRAIN_CAPACITY.word]=word(in.granularThermal().heatCapacities());}
-        if(nodes>0){h[Header.GAS_COUNTS.word]=word(in.gas().column(VulkanGasStateLayout.Field.COUNTS));h[Header.GAS_KEYS.word]=word(in.gas().column(VulkanGasStateLayout.Field.TOPOLOGY_KEYS));h[Header.GAS_THERMAL.word]=word(in.gasThermal().states());h[Header.GAS_CAPACITY.word]=nodes;}
+        if(nodes>0){h[Header.GAS_COUNTS.word]=word(in.gas().column(VulkanGasStateLayout.Field.COUNTS));h[Header.GAS_THERMAL.word]=word(in.gasThermal().states());h[Header.GAS_CAPACITY.word]=nodes;}
         h[Header.CHEMICAL_OUTPUT.word]=chemicalAt;h[Header.PH_OUTPUT.word]=phAt;h[Header.THERMAL_OUTPUT.word]=thermalAt;h[Header.GAS_OUTPUT.word]=gasAt;h[Header.MATERIAL_TABLE.word]=table;
         var header=ByteBuffer.allocateDirect(4*(128+materials)).order(ByteOrder.LITTLE_ENDIAN);for(int v:h)header.putInt(v);
         for(int m=0;m<materials;m++){int value=codec.fluids().phaseHandle(m);if(chemical!=null&&mmm.chemistry.ChemicalReactionEngine.supportsPh(chemical.phase(chemical.phaseHandleForMaterial(codec.fluids().material(m).id()))))value|=65536;header.putInt(value);}header.flip();

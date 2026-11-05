@@ -109,10 +109,17 @@ public final class ThermalStateFunction {
 		this.registry = registry;
 	}
 
+	public ThermalMaterialDefinition materialForComposition(int handle,double mass,Map<String,Long> species) {
+		return mmm.chemistry.AqueousMixtureProperties.thermalMaterial(registry.material(handle),mass,species);
+	}
+	public ThermalMaterialDefinition materialForComposition(int handle,double mass,ChemicalMixtureRecord mixture,ChemicalRegistry chemistry) {
+		return materialForComposition(handle,mass,mixture==null||chemistry==null?Map.of():mixture.stableAmounts(chemistry));
+	}
+
 	public double internalEnergyAtTemperature(
 			int materialHandle, double massKg, Map<String, Long> speciesQuanta, double temperatureK
 	) {
-		ThermalMaterialDefinition material = registry.material(materialHandle);
+		ThermalMaterialDefinition material = materialForComposition(materialHandle, massKg, speciesQuanta);
 		double energy = ThermalCaloricInversion.energyAt(material, massKg, baseEnergy(materialHandle, massKg, speciesQuanta), temperatureK);
 		if (!Double.isFinite(energy)) throw new EnergyRepresentationException();
 		return energy;
@@ -122,7 +129,7 @@ public final class ThermalStateFunction {
 			int materialHandle, double massKg, ChemicalMixtureRecord mixture,
 			ChemicalRegistry chemicalRegistry, double temperatureK
 	) {
-		ThermalMaterialDefinition material = registry.material(materialHandle);
+		ThermalMaterialDefinition material = materialForComposition(materialHandle, massKg, mixture, chemicalRegistry);
 		double energy = ThermalCaloricInversion.energyAt(material, massKg, baseEnergy(materialHandle, massKg, mixture, chemicalRegistry), temperatureK);
 		if (!Double.isFinite(energy)) throw new EnergyRepresentationException();
 		return energy;
@@ -132,7 +139,7 @@ public final class ThermalStateFunction {
 			int materialHandle, double massKg, Map<String, Long> speciesQuanta, double internalEnergy
 	) {
 		requireMassEnergy(massKg, internalEnergy);
-		return ThermalCaloricInversion.owner(registry.material(materialHandle), massKg, internalEnergy,
+		return ThermalCaloricInversion.owner(materialForComposition(materialHandle, massKg, speciesQuanta), massKg, internalEnergy,
 				baseEnergy(materialHandle, massKg, speciesQuanta));
 	}
 
@@ -141,7 +148,7 @@ public final class ThermalStateFunction {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Thermal LTE inventory is missing");
 		SignedDyadic energy = SignedDyadic.ZERO;
 		for (InventoryPortion portion : portions) {
-			ThermalMaterialDefinition material = registry.material(portion.materialHandle());
+			ThermalMaterialDefinition material = materialForComposition(portion.materialHandle(),portion.massKg(),portion.speciesQuanta());
 			energy = energy.add(SignedDyadic.of(baseEnergy(portion.materialHandle(), portion.massKg(), portion.speciesQuanta())))
 					.add(ThermalContactExchange.exactEnergyChangeBetween(material, portion.massKg(),
 							material.referenceTemperatureK(), temperatureK));
@@ -176,7 +183,7 @@ public final class ThermalStateFunction {
 			caloric=new ThermalCaloricInversion.Prepared(new ThermalCaloricInversion.Inventory() {
 				public int first(){return 0;}
 				public int next(int item){return item+1<portions.size()?item+1:-1;}
-				public ThermalMaterialDefinition material(int item){return registry.material(portions.get(item).materialHandle());}
+				public ThermalMaterialDefinition material(int item){var p=portions.get(item);return materialForComposition(p.materialHandle(),p.massKg(),p.speciesQuanta());}
 				public double mass(int item){return portions.get(item).massKg();}
 			});
 		}

@@ -5,7 +5,6 @@ import mmm.inventory.LiquidCellInventory;
 import mmm.application.checkpoint.RegionCheckpointSource;
 import mmm.model.region.*;
 import mmm.fluid.*;
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.chemistry.*;
 import mmm.granular.*;
 import mmm.thermal.*;
@@ -30,8 +29,9 @@ public final class RegionCheckpointAssembler {
 			throw new IOException("Region state requires integral solver cells per Minecraft block");
 		RegionStateLayout layout = state.thermalOwner()!=null ? RegionStateLayout.THERMAL : state.granular()!=null ? RegionStateLayout.GRANULAR
 				: state.chemicalRegistry()!=null ? RegionStateLayout.CHEMICAL : state.materialPalette().isEmpty() ? RegionStateLayout.PURE : RegionStateLayout.MATERIAL;
-		var granular = state.granular(); var thermal = state.thermalOwner(); var gas = state.gas();
-		byte[] collision=state.copyCollisionMasks(); int[] membership=gas==null?null:gas.pieceNodeOrdinal();
+		var granular = state.granular(); var thermal = state.thermalOwner(); var spatialGas=state.spatialGas();
+		if(state.hasGas() && spatialGas==null)throw new IOException("Gas checkpoint requires local spatial inventory");
+		byte[] collision=state.copyCollisionMasks();
 		double[] phaseVolumes=state.phaseOccupancy().copyLiquidMicroVolumes();
 		var facesBySection = new HashMap<RegionSectionState.SectionKey,List<RegionSectionState.FaceMomentum>>();
 		double[][] momenta={state.momentum().copyX(),state.momentum().copyY(),state.momentum().copyZ()};
@@ -51,17 +51,19 @@ public final class RegionCheckpointAssembler {
 			var key=new RegionSectionState.SectionKey(secX,secY,secZ);
 			int x0=Math.max(0,(16*secX-geometry.origin().x())*cellsPerBlock),y0=Math.max(0,(16*secY-geometry.origin().y())*cellsPerBlock),z0=Math.max(0,(16*secZ-geometry.origin().z())*cellsPerBlock);
 			int sx=Math.min(nx,((secX+1)*16-geometry.origin().x())*cellsPerBlock)-x0,sy=Math.min(ny,((secY+1)*16-geometry.origin().y())*cellsPerBlock)-y0,sz=Math.min(nz,((secZ+1)*16-geometry.origin().z())*cellsPerBlock)-z0;
-			var stocks=new ArrayList<LiquidCellInventory.Stock>(); byte[] mask=new byte[sx*sy*sz]; int[] gasSlice=gas==null?null:new int[8*mask.length];
+			var stocks=new ArrayList<LiquidCellInventory.Stock>(); byte[] mask=new byte[sx*sy*sz];
+			var localGas=new ArrayList<GasRegionStateCodec.SpatialEntry>();
 			double[] phaseSlice=new double[8*mask.length];
 			int local=0; for(int z=z0;z<z0+sz;z++)for(int y=y0;y<y0+sy;y++)for(int x=x0;x<x0+sx;x++) {
 				int cell=x+nx*(y+ny*z); stocks.addAll(state.liquid().rows().get(cell)); mask[local]=collision[cell];
 				System.arraycopy(phaseVolumes,8*cell,phaseSlice,8*local,8);
-				if(gas!=null)System.arraycopy(membership,8*cell,gasSlice,8*local,8); local++;
+				if(spatialGas!=null&&!spatialGas.cells().get(cell).isEmpty())localGas.add(new GasRegionStateCodec.SpatialEntry(local,spatialGas.cells().get(cell),spatialGas.energyAt(cell)));
+				local++;
 			}
 			stocks.sort(Comparator.comparing(LiquidCellInventory.Stock::key));
 			var extensions=new ArrayList<RegionExtension>();
 			extensions.add(new RegionExtension(PhaseOccupancyCodec.SECTION_EXTENSION,new PhaseOccupancyCodec().encode(phaseSlice)));
-			if(gas!=null)extensions.add(new RegionExtension(GasRegionStateCodec.SECTION_EXTENSION,new GasRegionStateCodec().encodeSection(new GasRegionStateCodec.SectionData(gasSlice))));
+			if(spatialGas!=null)extensions.add(new RegionExtension(GasRegionStateCodec.SECTION_EXTENSION,new GasRegionStateCodec().encodeSpatialSection(localGas)));
 			var active=new ArrayList<GranularRegionStateCodec.ActiveEntry>(); var deposits=new ArrayList<GranularStateSnapshot.DepositGroup>();
 			var activeBits=new ArrayList<Long>(); var depositBits=new ArrayList<Long>(); var coherent=new ArrayList<ThermalRegionStateCodec.CoherentEntry>();
 			if(granular!=null) {
@@ -88,22 +90,30 @@ public final class RegionCheckpointAssembler {
 		var extensions=new ArrayList<RegionExtension>();
 		extensions.add(new RegionExtension(SolverRuntimeCodec.MANIFEST_EXTENSION,new SolverRuntimeCodec().encode(state)));
 		if(state.chemicalRegistry()!=null)extensions.add(new RegionExtension("mmm:chemical_audit",ChemicalAuditLedgerCodec.encode(state.chemicalSource(),state.chemicalSink())));
-		if(gas!=null)extensions.add(new RegionExtension(GasRegionStateCodec.MANIFEST_EXTENSION,new GasRegionStateCodec().encodeManifest(gasManifest(gas,sections,state.chemicalRegistry()!=null))));
+		if(spatialGas!=null){
+			var total=mmm.fluid.air.GasRegionAudit.aggregate(spatialGas.cells());
+			if(!mmm.fluid.air.GasRegionAudit.closed(total,spatialGas.externalSource().add(spatialGas.phaseSource()),spatialGas.escapedSink().add(spatialGas.phaseSink())))throw new IOException("Spatial gas audit does not close");
+			int cap=GasRegionStateCodec.CAP_GAS|(sections.getFirst().layout().hasMaterials()?GasRegionStateCodec.CAP_MATERIALS:0)|(state.chemicalRegistry()==null?0:GasRegionStateCodec.CAP_CHEMISTRY);
+			var data=new GasRegionStateCodec.SpatialManifest(cap,spatialGas.registryFingerprint(),spatialGas.chemicalRegistryFingerprint(),total,
+					spatialGas.externalSource(),spatialGas.escapedSink(),spatialGas.phaseSource(),spatialGas.phaseSink(),SignedDyadic.sum(spatialGas.internalEnergy()));
+			extensions.add(new RegionExtension(GasRegionStateCodec.MANIFEST_EXTENSION,new GasRegionStateCodec().encodeSpatialManifest(data)));
+		}
 		if(granular!=null)extensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,new GranularRegionStateCodec().encodeManifest(granularManifest(granular,sections,state.chemicalRegistry()!=null))));
 		if(thermal!=null) {
+			if(spatialGas==null)throw new IOException("Thermal checkpoint requires local gas inventory");
 			SignedDyadic liquidU=SignedDyadic.ZERO;for(var stock:state.liquid().stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));
 			SignedDyadic coherentU=SignedDyadic.ZERO;for(var group:thermal.coherentGroups())coherentU=coherentU.add(SignedDyadic.of(group.internalEnergy()));
-			var gasU=thermal.copyGasNodeEnergy();
+			var gasU=spatialGas.internalEnergy();
 			var actualU=SignedDyadic.sum(liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU));
 			int cap=ThermalRegionStateCodec.CAP_MATERIALS|ThermalRegionStateCodec.CAP_GAS|ThermalRegionStateCodec.CAP_THERMAL
 					|(state.chemicalRegistry()==null?0:ThermalRegionStateCodec.CAP_CHEMISTRY)|(granular==null?0:ThermalRegionStateCodec.CAP_GRANULAR);
 			var data=new ThermalRegionStateCodec.ManifestData(cap,thermal.registryFingerprint(),thermal.insertionTemperatureK(),state.liquid().size(),activeU.length,depositU.length,
-					thermal.coherentGroups().size(),gasU.length,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),actualU,thermal.audit(),thermalLedgers,bits(gasU));
+					thermal.coherentGroups().size(),0,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),actualU,thermal.audit(),thermalLedgers,new long[0]);
 			extensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,new ThermalRegionStateCodec().encodeManifest(data)));
 			extensions.add(new RegionExtension(ThermalBuoyancyCodec.MANIFEST_EXTENSION,new ThermalBuoyancyCodec().encodeCurrent()));
 			if(!state.pendingPhaseMotion().isEmpty())extensions.add(new RegionExtension(PendingPhaseMotionCodec.MANIFEST_EXTENSION,new PendingPhaseMotionCodec().encode(state.pendingPhaseMotion())));
 			var devices=source.finiteThermalDevices(thermal.registryFingerprint());
-			if(!devices.devices().isEmpty())extensions.add(new RegionExtension(FiniteThermalDeviceCodec.MANIFEST_EXTENSION,new FiniteThermalDeviceCodec().encode(devices)));
+			extensions.add(new RegionExtension(FiniteThermalDeviceCodec.MANIFEST_EXTENSION,new FiniteThermalDeviceCodec().encode(devices)));
 		}
 		var palette=state.materialPalette(); var counts=new int[palette.size()]; var volume=new SignedDyadic[palette.size()];var mass=new long[palette.size()];Arrays.fill(volume,SignedDyadic.ZERO);
 		SignedDyadic totalVolume=SignedDyadic.ZERO;long totalMass=0,residual=0; var chemistry=state.chemicalRegistry();long[] species=chemistry==null?new long[0]:new long[chemistry.species().size()];
@@ -117,7 +127,6 @@ public final class RegionCheckpointAssembler {
 		return new RegionCheckpoint(withChecksum(unsigned),sections);
 	}
 	static RegionSectionState withChecksum(RegionSectionState s) { return new RegionSectionState(s.layout(),s.regionId(),s.dimensionId(),s.checkpointGeneration(),s.sectionX(),s.sectionY(),s.sectionZ(),s.localStartX(),s.localStartY(),s.localStartZ(),s.sizeX(),s.sizeY(),s.sizeZ(),s.liquidStocks(),s.faceMomentum(),s.solidMask(),s.extensions(),RegionStateIntegrity.sectionChecksum(s)); }
-	private static long[] bits(double[] values) {long[] bits=new long[values.length];for(int i=0;i<bits.length;i++)bits[i]=Double.doubleToRawLongBits(values[i]);return bits;}
 	private static SignedDyadic energyBits(long[] bits) {var sum=SignedDyadic.ZERO;for(long value:bits)sum=sum.add(SignedDyadic.of(Double.longBitsToDouble(value)));return sum;}
 	static RegionSectionState.SectionKey sectionOfCell(RegionGeometry geometry,int cell) {return sectionKey(geometry,(cell%geometry.sizeX()+.5F)*geometry.solverConfig().cellSize(),(cell/geometry.sizeX()%geometry.sizeY()+.5F)*geometry.solverConfig().cellSize(),(cell/(geometry.sizeX()*geometry.sizeY())+.5F)*geometry.solverConfig().cellSize());}
 	static RegionSectionState.SectionKey sectionKey(RegionGeometry g,float x,float y,float z) {
@@ -134,32 +143,6 @@ public final class RegionCheckpointAssembler {
 				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
 				manifest.chemicalResidualLedgerUnits(), checksum);
-	}
-
-	private static GasRegionStateCodec.ManifestData gasManifest(
-			GasStateSnapshot snapshot, List<RegionSectionState> sections, boolean chemicalState
-	) throws IOException {
-		GasRegionStateCodec codec = new GasRegionStateCodec();
-		ArrayList<GasRegionStateCodec.SectionLedger> ledgers = new ArrayList<>(sections.size());
-		for (RegionSectionState section : sections) {
-			GasRegionStateCodec.SectionData data = codec.decodeSection(
-					requiredExtension(section.extensions(), GasRegionStateCodec.SECTION_EXTENSION).payload(),
-					Math.multiplyExact(Math.multiplyExact(section.sizeX(), section.sizeY()), section.sizeZ()),
-					snapshot.nodes().size());
-			int sealed = 0;
-			for (int value : data.pieceNodeOrdinal()) if (value > 0) sealed++;
-			ledgers.add(new GasRegionStateCodec.SectionLedger(section.key(), sealed));
-		}
-		int capabilities = GasRegionStateCodec.CAP_GAS | (sections.getFirst().layout().hasMaterials() ? GasRegionStateCodec.CAP_MATERIALS : 0)
-				| (chemicalState ? GasRegionStateCodec.CAP_CHEMISTRY : 0);
-		if (chemicalState != !snapshot.chemicalRegistryFingerprint().isEmpty()) {
-			throw new IOException("Gas snapshot chemical identity disagrees with liquid generation");
-		}
-		return new GasRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
-				snapshot.chemicalRegistryFingerprint(), snapshot.nodes().stream()
-				.map(node -> new GasRegionStateCodec.NodeData(node.topologyKey(), node.inventory())).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink(),
-				List.copyOf(ledgers));
 	}
 
 	private static GranularRegionStateCodec.ManifestData granularManifest(

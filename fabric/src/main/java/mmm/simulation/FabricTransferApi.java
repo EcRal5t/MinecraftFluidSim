@@ -101,15 +101,12 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(!region.controllerManaged() || !region.solverLoaded() || region.availabilityFailure()!=null || availability.hasPending(region.id())
 					|| region.hasPendingPhaseMotionWork(region.activityForBodies(region.entityBodyState().bodies()))) return result(TransferStatus.UNAVAILABLE,"Region is unloaded, locked, or has pending mechanical work");
 			if(!actor.binding().address().dimensionId().equals(request.dimensionId())) return result(TransferStatus.INVALID_REQUEST,"Actor and region dimensions differ");
-			if(!portMatches(actor,region,request)) return result(TransferStatus.INVALID_REQUEST,
+			var target=portTarget(actor,region,request);
+			if(target==null) return result(TransferStatus.INVALID_REQUEST,
 					"Dispenser must face the outward side of a fluid port and target its adjacent interior");
-			BlockPos position=BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres());
-			if(region.footprint()==null || !region.footprint().containsInterior(position)) return result(TransferStatus.NO_REGION,"Point is outside the region interior");
-			double h=region.solverConfig().cellSize();
-			int[] cell={(int)Math.floor((request.worldXMetres()-region.origin().getX())/h),(int)Math.floor((request.worldYMetres()-region.origin().getY())/h),(int)Math.floor((request.worldZMetres()-region.origin().getZ())/h)};
-			if(!region.groupAvailable((cell[2]*region.sizeY()+cell[1])*region.sizeX()+cell[0]))
-				return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
-			var resolution=MinecraftContainerTransferPlan.resolve(transactions,world,region,cell,actor.item().copy(),false);
+			int[] cell=target.cell();
+			if(cell==null) return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
+			var resolution=MinecraftContainerTransferPlan.resolve(transactions,world,region,cell,actor.item().copy(),false,6);
 			if(!resolution.resolved()) return result(TransferStatus.NOT_TRANSFERRED,resolution.diagnostic());
 			var operation=resolution.plan();
 			boolean insert=request.direction()==TransferRequest.Direction.INSERT;
@@ -149,15 +146,9 @@ final class FabricTransferApi implements MmmTransferApi {
 				return result(TransferStatus.UNAVAILABLE,"Region is currently unavailable");
 			if(region.checkpointGeneration()!=prepared.view().regionCheckpointGeneration() || region.solverGeneration()!=prepared.solverGeneration())
 				return result(TransferStatus.STALE_PLAN,"Region changed after planning");
-			double cellSize=region.solverConfig().cellSize();
-			int x=(int)Math.floor((request.worldXMetres()-region.origin().getX())/cellSize);
-			int y=(int)Math.floor((request.worldYMetres()-region.origin().getY())/cellSize);
-			int z=(int)Math.floor((request.worldZMetres()-region.origin().getZ())/cellSize);
-			if(x<0||x>=region.sizeX()||y<0||y>=region.sizeY()||z<0||z>=region.sizeZ()
-					||!region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x))
-				return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
-			if(!portMatches(actor,region,request)) return result(TransferStatus.STALE_PLAN,
-					"Dispenser or directed fluid port changed after planning");
+			var target=portTarget(actor,region,request);
+			if(target==null) return result(TransferStatus.STALE_PLAN,"Dispenser or directed fluid port changed after planning");
+			if(target.cell()==null) return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
 			var durableActor=(ContainerTransferActor.Dispenser)prepared.settlement().actor();
 			if(recovery.hasPending(region.id(),durableActor)) return result(TransferStatus.PENDING,"Region or actor has a pending transaction");
 			new MinecraftContainerActorAdapter().persistAfterItem(server,durableActor);
@@ -212,17 +203,17 @@ final class FabricTransferApi implements MmmTransferApi {
 		if(address==null) throw new IllegalStateException("Transfer actor provider is unavailable");
 		return address;
 	}
-	private boolean portMatches(Actor actor,FluidRegion region,TransferRequest request) {
+	private FluidWorldTargetResolver.TransferTarget portTarget(Actor actor,FluidRegion region,TransferRequest request) {
 		var address=actor.binding().address();
 		var source=new BlockPos(address.blockX(),address.blockY(),address.blockZ());
 		var state=actor.level().getBlockState(source);
-		if(!state.hasProperty(net.minecraft.world.level.block.DispenserBlock.FACING))return false;
+		if(!state.hasProperty(net.minecraft.world.level.block.DispenserBlock.FACING))return null;
 		var facing=state.getValue(net.minecraft.world.level.block.DispenserBlock.FACING);
 		var port=source.relative(facing);
-		if(!actor.level().hasChunkAt(port)||!actor.level().getBlockState(port).is(mmm.block.MmmBlocks.FLUID_PORT))return false;
+		if(!actor.level().hasChunkAt(port)||!actor.level().getBlockState(port).is(mmm.block.MmmBlocks.FLUID_PORT))return null;
 		var target=targets.transferTargetAtBlock(actor.level(),port,facing);
-		return target!=null&&target.region()==region&&targets.cellAtBlock(actor.level(),region,target.interiorBlock())!=null&&target.interiorBlock().equals(
-				BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres()));
+		return target!=null&&target.region()==region&&target.interiorBlock().equals(
+				BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres()))?target:null;
 	}
 
 	private Actor actor(ActorRef ref) throws IOException {

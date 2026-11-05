@@ -158,24 +158,23 @@ final class DomainCollision {
 		}
 		plan.liquid.inventory.requireCurrent();
 		if(plan.granular!=null)requireGranularCollisionCurrent(plan.granular);
-		if (plan.liquid.gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(plan.liquid.gas);
+		if (plan.liquid.localGas != null) plan.liquid.localGas.requireCurrent(domain);
 		if (domain.thermalState != null) {
 			var audit = domain.thermalState.auditLedger().withExternalSinkEnergy(
 					plan.granular == null ? SignedDyadic.ZERO : plan.granular.removedEnergy());
-			var gas = plan.liquid.gas == null ? null : plan.liquid.gas.thermalPlan();
-			if (gas != null) audit = audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
-					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
+			if(plan.liquid.localGas!=null)audit=plan.liquid.localGas.applyAudit(audit);
 			audit.withExternalSinkEnergy(plan.liquid.removedEnergy).withMechanicalWork(plan.liquid.inventory.mechanicalHeat())
 					.withRoundoff(plan.liquid.energyRoundoff).expectedInventory();
 		}
 		domain.cellMacStage.publishMaterialChange(plan.liquid.inventory,
-                ()->domain.cellMacStage.commitMomentum(plan.liquid.momentum),plan.liquid.gas,null,()->{
+                ()->domain.cellMacStage.commitMomentum(plan.liquid.momentum),()->{
 		if (plan.granular != null) try {
 			commitGranularCollision(plan.granular);
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be committed", failure);
 		}
 		domain.geometry.cutCells.restoreSnapshot(plan.liquid.fixedGeometry);
+		if(plan.liquid.localGas!=null)plan.liquid.localGas.commit(domain);
 		for (var edit : plan.edits) {
 			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
 			domain.pressureSystem.clearLiquidPressure(cell);
@@ -186,6 +185,7 @@ final class DomainCollision {
 		if (domain.thermalState != null) {
 			domain.thermalState.recordExternalSink(plan.liquid.removedEnergy);
 			domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger().withMechanicalWork(plan.liquid.inventory.mechanicalHeat()));
+			if(plan.liquid.localGas!=null)domain.thermalState.restoreAuditLedger(plan.liquid.localGas.applyAudit(domain.thermalState.auditLedger()));
 			domain.thermalState.recordRoundoff(plan.liquid.energyRoundoff);
 		}
 		plan.consumed = true;
@@ -414,12 +414,18 @@ final class DomainCollision {
 		candidate.planAdditions(List.of(new LiquidCellInventory.Stock(nextKey, stock.volume(), mass, null, stock.internalEnergy()))).commit();
 		var edits = new ArrayList<LiquidCellInventory.Edit>();
 		edits.add(new LiquidCellInventory.Edit(key, null)); edits.add(new LiquidCellInventory.Edit(nextKey, candidate.stock(nextKey)));
-		var plan = domain.liquidCells.planEdits(edits); var momentum = domain.cellMacStage.prepareExternalMomentum(plan);
-		plan = plan.withMechanicalHeat(momentum.heatByCell());
-		domain.cellMacStage.publishMaterialChange(plan,()->domain.cellMacStage.commitMomentum(momentum),null,null,()->{});
-		if (domain.thermalState != null) domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
-				.withMechanicalWork(plan.mechanicalHeat())
-				.withRoundoff(plan.energyChange().subtract(plan.mechanicalHeat())));
+		var liquid=domain.liquidCells.planEdits(edits);
+		var edit=HostMixtureEdit.prepare(domain,liquid,domain.occupiedSolidSvq(),null,liquid.changedCells());
+		if(edit.gas()!=null)edit.gas().requireCurrent(domain);
+		domain.cellMacStage.publishMaterialChange(edit.inventory(),()->domain.cellMacStage.commitMomentum(edit.momentum()),()->{
+			if(edit.gas()!=null)edit.gas().commit(domain);
+		});
+		if(domain.thermalState!=null){
+			var audit=domain.thermalState.auditLedger().withMechanicalWork(edit.inventory().mechanicalHeat())
+					.withRoundoff(edit.inventory().energyChange().subtract(edit.inventory().mechanicalHeat()));
+			if(edit.gas()!=null)audit=edit.gas().applyAudit(audit);
+			domain.thermalState.restoreAuditLedger(audit);
+		}
 	}
 	public void bindMaterialRegistry(FluidMaterialRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");

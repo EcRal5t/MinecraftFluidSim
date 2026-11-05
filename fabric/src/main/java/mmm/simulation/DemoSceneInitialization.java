@@ -14,5 +14,6 @@ public final class DemoSceneInitialization {
 				for (int x = subdivisions; x < 3 * subdivisions; x++)
 					if (!domain.isSolid(x, y, z)) volumes[(z * domain.sizeY() + y) * domain.sizeX() + x] = 1.0F;
 		domain.setVolumes(volumes);
+		domain.resetAmbientGas();
 	}
 }

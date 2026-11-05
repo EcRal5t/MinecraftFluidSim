@@ -25,8 +25,8 @@ final class FiniteThermalDeviceCodec {
 	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encode(FiniteThermalDeviceInventory inventory) throws IOException {
-		if (inventory == null || inventory.devices().isEmpty()) {
-			throw new IllegalArgumentException("Empty finite thermal device inventory is represented by extension absence");
+		if (inventory == null) {
+			throw new IllegalArgumentException("Finite thermal device inventory is missing");
 		}
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		try (DataOutputStream output = new DataOutputStream(bytes)) {
@@ -66,7 +66,7 @@ final class FiniteThermalDeviceCodec {
 			if (!mmm.units.Mass.ENCODING.equals(input.readUTF())) throw new IOException("Unsupported device mass encoding");
 			String fingerprint = input.readUTF();
 			int count = input.readInt();
-			if (count <= 0 || count > ThermalLimits.MAX_FINITE_DEVICES_PER_REGION) {
+			if (count < 0 || count > ThermalLimits.MAX_FINITE_DEVICES_PER_REGION) {
 				throw new IOException("Finite thermal device count is invalid");
 			}
 			FiniteThermalDeviceAudit audit = readAudit(input);

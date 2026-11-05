@@ -99,7 +99,7 @@ public final class GranularRegistry {
 					.append(reaction.solidExtentPerBatch()).append('|')
 					.append(reaction.solidVolumeSvqPerBatch()).append('|')
 					.append(reaction.accessibleSurfaceSvqPerCellStep()).append('|')
-					.append(reaction.reversible()).append('\n');
+					.append(reaction.reversible()).append('|').append(reaction.solubility()).append('\n');
 		}
 		return out.toString().getBytes(StandardCharsets.UTF_8);
 	}
@@ -108,6 +108,8 @@ public final class GranularRegistry {
 		Map<String, String> consumers = new java.util.HashMap<>();
 		for (SolidLiquidReaction reaction : reactions) {
 			ChemicalPhaseDefinition phase = chemicalRegistry.phase(chemicalRegistry.phaseHandle(reaction.liquidPhaseId()));
+			if(reaction.solubility()!=null && !phase.allowedSpecies().contains(reaction.solubility().solventSpeciesId()))
+				throw new IllegalArgumentException("Solubility solvent is outside phase "+reaction.id());
 			ParticulateMaterial solid = material(materialHandle(reaction.solidMaterialId()));
 			if (!solid.reactive()) throw new IllegalArgumentException(
 					"Solid-liquid reaction targets inert material " + reaction.solidMaterialId());

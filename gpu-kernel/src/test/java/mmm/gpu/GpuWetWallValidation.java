@@ -11,7 +11,7 @@ import mmm.units.Mass;
 public final class GpuWetWallValidation {
     private GpuWetWallValidation() { }
     private record Result(double bottomArea, double topArea, double sideArea, double bottomRatio,
-                          double conductance, double heat, double initialK, double finalK) { }
+                          double conductance, double heat, double initialK, double finalK, double viscosity) { }
 
     public static void main(String[] args) {
         int device = args.length > 0 ? Integer.parseInt(args[0]) : 0;
@@ -26,6 +26,7 @@ public final class GpuWetWallValidation {
             Result still = run(context, geometryKernel, viscosityKernel, -1, .5, 1, 0);
             Result viscous = run(context, geometryKernel, viscosityKernel, -1, .5, 2, 1);
             Result larger = run(context, geometryKernel, viscosityKernel, -1, 1, 1, 1);
+            Result saline = run(context, geometryKernel, viscosityKernel, -1, .5, 1, 1, true);
             near(full.bottomArea, 1, 1e-5, "full bottom area");
             near(full.topArea, 1, 1e-5, "full top area");
             near(half.bottomArea, 1, 1e-5, "partial bottom area");
@@ -37,14 +38,17 @@ public final class GpuWetWallValidation {
             near(thin.bottomArea, 1, 1e-5, "thin film bottom area");
             near(thin.topArea, 0, 1e-5, "thin film dry upper wall");
             near(thin.heat, thin.initialK - thin.finalK, 1e-8, "thin film energy settlement");
-            if (!(compact.bottomArea > 0 && compact.bottomArea < 1))
-                throw new AssertionError("Compact liquid must wet part of the lower wall");
+            near(compact.bottomArea, 1, 1e-5, "compact film bottom area");
             near(compact.topArea, 0, 1e-5, "compact liquid dry upper wall");
             near(compact.heat, compact.initialK - compact.finalK, 1e-8, "compact liquid energy settlement");
             if (!(film.bottomRatio > half.bottomRatio && half.bottomRatio > full.bottomRatio))
                 throw new AssertionError("Thin-film wall conductance must reflect its reduced depth");
             near(still.heat, 0, 1e-12, "stationary heat");
             near(viscous.conductance, 2 * half.conductance, 1e-9, "viscosity response");
+            double saltMoles=Math.round(1000*.5*.5*.5*.5*10000)*1e-6;
+            double molarity=saltMoles/(.5*.5*.5*.5*1000);
+            near(saline.viscosity, 1 + mmm.chemistry.AqueousMixtureProperties.VISCOSITY_A*Math.sqrt(molarity)
+                    + mmm.chemistry.AqueousMixtureProperties.VISCOSITY_B*molarity, 1e-10, "dilute salt viscosity");
             near(larger.conductance, 2 * half.conductance, 1e-9, "geometric length response");
             if (!(half.heat > 0 && half.finalK < half.initialK))
                 throw new AssertionError("Wall shear must dissipate moving liquid energy");
@@ -55,6 +59,10 @@ public final class GpuWetWallValidation {
 
     private static Result run(VulkanDeviceContext context, VulkanLiquidGeometry geometryKernel,
                               VulkanLiquidViscosity viscosityKernel, int exponent, double h, double mu, double speed) {
+        return run(context,geometryKernel,viscosityKernel,exponent,h,mu,speed,false);
+    }
+    private static Result run(VulkanDeviceContext context, VulkanLiquidGeometry geometryKernel,
+                              VulkanLiquidViscosity viscosityKernel, int exponent, double h, double mu, double speed, boolean saline) {
         int sx = 3, sy = 2, sz = 2, n = sx * sy * sz;
         double volume = Math.scalb(1.0, exponent), mass = 1000 * volume * h * h * h;
         int[] offsets = new int[n + 1], materials = new int[n], supports = new int[n], signs = new int[n],
@@ -66,30 +74,41 @@ public final class GpuWetWallValidation {
             energy[c] = Double.doubleToRawLongBits(mass * 4200 * 293.15);
         }
         offsets[n] = n; volumeOffsets[n] = n;
+        int[] mixture=new int[n], speciesOffsets=new int[n+1], speciesHandles=new int[saline?3*n:0];
+        long[] speciesAmounts=new long[speciesHandles.length], residual=new long[n];
+        if(saline) for(int c=0;c<n;c++) {
+            mixture[c]=1;speciesOffsets[c]=3*c;
+            speciesHandles[3*c]=0;speciesHandles[3*c+1]=1;speciesHandles[3*c+2]=2;
+            speciesAmounts[3*c+1]=speciesAmounts[3*c+2]=Math.round(mass*10000);
+            speciesAmounts[3*c]=(masses[c]-580*speciesAmounts[3*c+1])/180;
+            residual[c]=masses[c]-180*speciesAmounts[3*c]-580*speciesAmounts[3*c+1];
+        }
+        if(saline)speciesOffsets[n]=3*n;
         var inventory = new DeviceLiquidInventory(offsets, materials, supports,
                 new DeviceDyadicArray(volumeOffsets, signs, exponents, limbs), masses, energy,
-                new int[n], new int[n + 1], new int[0], new long[0], new long[n]);
+                mixture, speciesOffsets, speciesHandles, speciesAmounts, residual);
         double[] xMomentum = new double[(sx + 1) * sy * sz];
         for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 1; x < sx; x++)
             xMomentum[(z * sy + y) * (sx + 1) + x] = mass * speed;
         var momentum = new MacMomentumState(sx, sy, sz, xMomentum, new double[sx * (sy + 1) * sz], new double[sx * sy * (sz + 1)]);
         long alignment = Math.max(8, context.storageOffsetAlignment());
         var liquid = VulkanLiquidStateLayout.forState(inventory, momentum, alignment);
-        var geometry = GpuGasGeometryBenchmark.geometry(liquid, alignment);
+        var geometry = GpuGasFixture.geometry(liquid, alignment);
         long temperatureOffset = (geometry.endOffset() + alignment - 1) & -alignment;
         var temperature = new VulkanLiquidStateLayout.Column(temperatureOffset, n, 8);
         var viscous = new VulkanLiquidViscosity.Layout(liquid, geometry.cells(), geometry.faces(), geometry.walls(),
                 Math.toIntExact(temperature.offset() / 4), -1,
-                new VulkanLiquidViscosity.Tables(new int[]{0, 1}, new double[]{273, 1000, mu, mu}),
+                saline?new VulkanLiquidViscosity.Tables(new int[]{0,1},new double[]{273,1000,mu,mu},0,0,1,2,3)
+                        :new VulkanLiquidViscosity.Tables(new int[]{0, 1}, new double[]{273, 1000, mu, mu}),
                 null, true, temperature.offset() + temperature.bindingBytes(), alignment);
         var initial = ByteBuffer.allocate(Math.toIntExact(viscous.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
         liquid.importState(initial, inventory, momentum); viscous.initializeHeaderAndTables(initial);
-        for (int c = 0; c < n; c++) initial.putDouble(Math.toIntExact(temperature.offset() + 8L * c), 293.15);
+        for (int c = 0; c < n; c++) initial.putDouble(Math.toIntExact(temperature.offset() + 8L * c), saline?298.15:293.15);
         try (var storage = new VulkanRegionStorage(context, viscous.endOffset(), 1024 * 1024)) {
             storage.initialize(initial, 0);
             try (var capture = storage.capture(); var candidate = storage.prepare(capture)) {
                 var feedback = candidate.beginBatch((cmd, input, output, errors, staging, stack) -> {
-                    geometryKernel.rebindRanges(GpuGasGeometryBenchmark.geometryRanges(liquid, geometry, output, errors));
+                    geometryKernel.rebindRanges(GpuGasFixture.geometryRanges(liquid, geometry, output, errors));
                     geometryKernel.record(cmd, sx, sy, sz);
                     viscosityKernel.rebindRanges(new FlipKernelBindings.BufferRange(input), new FlipKernelBindings.BufferRange(output), new FlipKernelBindings.BufferRange(errors));
                     viscosityKernel.record(cmd, viscous, h, .05);
@@ -100,6 +119,7 @@ public final class GpuWetWallValidation {
                 ByteBuffer walls = read(candidate, geometry.walls());
                 ByteBuffer planes = read(candidate, geometry.planes());
                 ByteBuffer conductance = read(candidate, viscous.column(VulkanLiquidViscosity.Field.WALL_CONDUCTANCE));
+                ByteBuffer viscosity = read(candidate, viscous.column(VulkanLiquidViscosity.Field.MU));
                 ByteBuffer heat = read(candidate, viscous.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT));
                 ByteBuffer before = read(candidate, viscous.column(VulkanLiquidViscosity.Field.SOURCE_FACE_K));
                 ByteBuffer after = read(candidate, viscous.column(VulkanLiquidViscosity.Field.FINAL_FACE_K));
@@ -111,7 +131,7 @@ public final class GpuWetWallValidation {
                 double totalHeat = sum(heat), initialK = sum(before), finalK = sum(after);
                 return new Result(walls.getDouble(8 * (12 * lower + 4)), walls.getDouble(8 * (12 * upper + 6)),
                         walls.getDouble(8 * (12 * lower + 8)), walls.getDouble(8 * (12 * lower + 5)),
-                        conductance.getDouble(8 * (3 * lower)), totalHeat, initialK, finalK);
+                        conductance.getDouble(8 * (3 * lower)), totalHeat, initialK, finalK, viscosity.getDouble(8*lower));
             }
         }
     }

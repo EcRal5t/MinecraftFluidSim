@@ -85,6 +85,10 @@ final class ThermalBoundaryResolver {
 		return temperatures;
 	}
 
+	boolean hasExplicitDefinition(BlockState state) {
+		return state.is(MmmBlocks.THERMAL_RESERVOIR) || matchingDefinition(state) != null;
+	}
+
 	private double surfaceTemperature(ServerLevel level, BlockPos position) {
 		BlockState state = level.getBlockState(position);
 		if (state.is(MmmBlocks.THERMAL_RESERVOIR)) {

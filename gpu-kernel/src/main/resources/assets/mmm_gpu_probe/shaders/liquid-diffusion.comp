@@ -1,0 +1,198 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=0,std430) buffer LongArena { int64_t longs[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; int parity; } p;
+// HOST_LAYOUT
+// PHASE_ROWS_LIBRARY
+const uint ERROR_DIFFUSION=134217728u;
+const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
+int h(int n){return int(words[p.header+n]);}
+int f(int n){return h(WORK_FIELDS+n);}
+double rd(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
+void wr(int at,double v){if(isnan(v)||isinf(v))atomicOr(errors,ERROR_DIFFUSION);uvec2 b=unpackDouble2x32(v);words[at]=b.x;words[at+1]=b.y;}
+int64_t ri(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
+void wi(int at,int64_t v){words[at]=uint(v);words[at+1]=uint(uint64_t(v)>>32);}
+ivec3 shape(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}
+ivec3 xyz(int c){ivec3 s=shape();return ivec3(c%s.x,c/s.x%s.y,c/(s.x*s.y));}
+int cell(ivec3 q){ivec3 s=shape();return any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s))?-1:(q.z*s.y+q.y)*s.x+q.x;}
+ivec3 unit(int a){ivec3 q=ivec3(0);q[a]=1;return q;}
+int faceBase(int axis){ivec3 s=shape();return axis==0?0:(s.x+1)*s.y*s.z+(axis==2?s.x*(s.y+1)*s.z:0);}
+int face(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return faceBase(axis)+(q.z*s.y+q.y)*s.x+q.x;}
+int cellFace(int c,int axis,int side){ivec3 q=xyz(c);q[axis]+=side;return face(q,axis);}
+void faceCells(int id,out int axis,out int a,out int b){axis=id<faceBase(1)?0:id<faceBase(2)?1:2;int n=id-faceBase(axis);ivec3 s=shape()+unit(axis),q=ivec3(n%s.x,n/s.x%s.y,n/(s.x*s.y));a=cell(q-unit(axis));b=cell(q);}
+bool activeCell(int c){return h(H_ACTIVE_CELLS)<0||words[h(H_ACTIVE_CELLS)+c]!=0u;}
+bool activeFace(int id){return h(H_ACTIVE_FACES)<0||words[h(H_ACTIVE_FACES)+id]!=0u;}
+double cvelocity(int c,int axis){return .5LF*(rd(h(H_GEOMETRY)+8*cellFace(c,axis,0)+2)+rd(h(H_GEOMETRY)+8*cellFace(c,axis,1)+2));}
+double materialReference(int m){int cal=h(H_CALORIC);return rd(int(words[cal+CAL_MATERIAL_REFERENCE])+2*m);}
+double speciesReference(int m,int s){int cal=h(H_CALORIC);int base=int(words[cal+CAL_SPECIES_REFERENCE]),stride=int(words[cal+CAL_SPECIES_STRIDE]);return s<stride?rd(base+2*(m*stride+s)):0.0LF;}
+double sensible(int row,int m){double ref=double(phaseRowMass(h(H_ROWS),row))*1e-10LF*materialReference(m);for(int s=0;s<h(H_SPECIES);s++){int64_t amount=phaseRowSpecies(h(H_ROWS),row,s);if(amount!=0l)ref+=double(amount)*speciesReference(m,s);}return phaseRowEnergy(h(H_ROWS),row)-ref;}
+double carried(int row,int m,int s1,int s2,int n1,int n2,int64_t q,int64_t units){
+ if(q==0l)return 0.0LF;
+ int cal=h(H_CALORIC),first=int(words[int(words[cal+CAL_SEGMENT_OFFSETS])+m]),last=int(words[int(words[cal+CAL_SEGMENT_OFFSETS])+m+1])-1;
+ double mass=double(phaseRowMass(h(H_ROWS),row))*1e-10LF,remaining=sensible(row,m);
+ int ethanolSpecies=int(words[cal+CAL_ETHANOL_SPECIES]);double ethanol=0.0;
+ if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)ethanol=caloricEthanolMass(mass,double(phaseRowSpecies(h(H_ROWS),row,ethanolSpecies)));
+ double capacity=0.0LF,t=caloricStateTemperature(cal,m,mass,ethanol,remaining,capacity);
+ double refT=rd(int(words[cal+CAL_REFERENCE_TEMPERATURE])+2*m),lo=min(refT,t),hi=max(refT,t),waterSensible=0.0;
+ for(int i=first;i<=last&&lo<hi;i++){double upper=i==last?hi:min(hi,rd(int(words[cal+CAL_SEGMENT_UPPER])+2*i));if(upper>lo){waterSensible+=(upper-lo)*rd(int(words[cal+CAL_SEGMENT_CAPACITY])+2*i);lo=upper;}}
+ if(t<refT)waterSensible=-waterSensible;
+ double moved=double(units)*1e-10LF,movedEthanol=0.0;
+ if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)
+  movedEthanol=caloricEthanolMass(moved,double(q)*double((s1==ethanolSpecies?n1:0)+(s2==ethanolSpecies?n2:0)));
+ return moved*materialReference(m)+(moved-movedEthanol)*waterSensible+movedEthanol*CAL_ETHANOL_CP*(t-refT)
+   +double(q)*double(n1)*speciesReference(m,s1)+(s2>=0?double(q)*double(n2)*speciesReference(m,s2):0.0LF);
+}
+int pendingIndex(int anchor,int r){return f(FIELD_PENDING_INDEX)+anchor*h(H_RULES)+r;}
+void initialize(int id){
+ if(id<h(H_CELLS)*h(H_RULES))words[f(FIELD_PENDING_INDEX)+id]=0xffffffffu;
+ if(id<h(H_CELLS)){wr(f(FIELD_MASS_CHANGE)+2*id,0);wr(f(FIELD_PE_CHANGE)+2*id,0);wr(f(FIELD_HEAT_DEPOSIT)+2*id,0);words[f(FIELD_EMPTY_TARGET)+id]=0xffffffffu;for(int a=0;a<3;a++)wr(f(FIELD_MOMENTUM_CHANGE)+2*(3*id+a),0);}
+ if(id<h(H_FACES)){wr(f(FIELD_OLD_K)+2*id,0);wr(f(FIELD_NEW_K)+2*id,0);wr(f(FIELD_FACE_P)+2*id,0);wr(f(FIELD_FACE_HEAT)+4*id,0);wr(f(FIELD_FACE_HEAT)+4*id+2,0);}
+}
+void indexPending(int id){
+ if(id>=int(words[h(H_PENDING_COUNT)]))return;
+ int anchor=int(words[h(H_PENDING_CELL)+id]),ordinal=int(words[h(H_PENDING_RULE)+id]);
+ if(anchor<0||anchor>=h(H_CELLS)||words[h(H_PENDING_SUPPORT)+id]!=1u)return;
+ for(int r=0;r<h(H_RULES);r++){int rule=f(FIELD_RULES)+20*r;if(int(words[rule+6])==ordinal&&int(words[h(H_PENDING_MATERIAL)+id])==int(words[rule])){words[pendingIndex(anchor,r)]=uint(id);return;}}
+}
+int reservePending(int anchor,int r,int material,int ordinal){
+ int at=pendingIndex(anchor,r),slot=int(words[at]);if(slot>=0)return slot;
+ uint n=atomicAdd(words[h(H_PENDING_COUNT)],1u);
+ if(n>=uint(h(H_PENDING_CAPACITY))){atomicOr(errors,ERROR_DIFFUSION);return -1;}
+ slot=int(n);words[at]=n;words[h(H_PENDING_CELL)+slot]=uint(anchor);words[h(H_PENDING_MATERIAL)+slot]=uint(material);
+ words[h(H_PENDING_SUPPORT)+slot]=1u;words[h(H_PENDING_RULE)+slot]=uint(ordinal);
+ wr(h(H_PENDING_SECONDS)+2*slot,.5LF);wr(h(H_PENDING_RESIDUAL)+2*slot,0);return slot;
+}
+void applyFace(int a){
+ int axis=p.parity/2,parity=p.parity&1;ivec3 q=xyz(a);if((q[axis]&1)!=parity||q[axis]+1>=shape()[axis]||!activeCell(a))return;
+ int b=cell(q+unit(axis)),edge=cellFace(a,axis,1);if(!activeCell(b)||!activeFace(edge))return;
+ double hsize=rd(p.header+H_CELL_SIZE),wet=rd(h(H_GEOMETRY)+8*edge+6),dt=rd(p.header+H_DURATION);
+ if(!(wet>0.0LF&&dt>0.0LF&&hsize>0.0LF))return;
+ for(int r=0;r<h(H_RULES);r++){
+  int rule=f(FIELD_RULES)+20*r;if(int(words[rule+5])!=axis)continue;
+  int material=int(words[rule]),s1=int(words[rule+1]),s2=int(words[rule+2]),n1=int(words[rule+3]),n2=int(words[rule+4]);
+  int ra=findPhaseRow(h(H_ROWS),a,material,1),rb=findPhaseRow(h(H_ROWS),b,material,1);if(ra<0||rb<0)continue;
+  int slot=int(words[pendingIndex(a,r)]);
+  int64_t a1=phaseRowSpecies(h(H_ROWS),ra,s1),b1=phaseRowSpecies(h(H_ROWS),rb,s1);
+  if(a1==0l&&b1==0l&&slot<0)continue;
+  double va=phaseRowVolume(h(H_ROWS),ra)*hsize*hsize*hsize,vb=phaseRowVolume(h(H_ROWS),rb)*hsize*hsize*hsize;
+  if(!(va>0.0LF&&vb>0.0LF))continue;
+  int64_t a2=s2<0?MAX_LONG:phaseRowSpecies(h(H_ROWS),ra,s2),b2=s2<0?MAX_LONG:phaseRowSpecies(h(H_ROWS),rb,s2);
+  double ca=min(double(a1)/double(n1),s2<0?1e300LF:double(a2)/double(n2))/va;
+  double cb=min(double(b1)/double(n1),s2<0?1e300LF:double(b2)/double(n2))/vb;
+  double delta=ca-cb,proposed=rd(rule+14)*wet*hsize*dt*delta;
+  double equilibrium=delta/(1.0LF/va+1.0LF/vb);proposed=clamp(proposed,-abs(equilibrium),abs(equilibrium));
+  double carry=slot<0?0.0LF:rd(h(H_PENDING_RESIDUAL)+2*slot)*1e6LF;
+  double waterCarry=slot<0?0.0LF:2.0LF*rd(h(H_PENDING_SECONDS)+2*slot)-1.0LF;
+  double exact=proposed+carry;if((isnan(exact)||isinf(exact)))continue;
+  int dir=exact>0?1:exact<0?-1:0;int64_t target=int64_t(min(floor(abs(exact)),double(MAX_LONG)/1024.0LF));
+  int donor=dir>0?ra:rb,recipient=dir>0?rb:ra;
+  int64_t available1=phaseRowSpecies(h(H_ROWS),donor,s1)/int64_t(n1);
+  int64_t available2=s2<0?MAX_LONG:phaseRowSpecies(h(H_ROWS),donor,s2)/int64_t(n2);
+  int64_t m1=ri(rule+8),m2=ri(rule+10),mw=ri(rule+12);
+  if(mw<=0l){atomicOr(errors,ERROR_DIFFUSION);continue;}
+  int water=h(H_WATER);int64_t waterAvailable=min(phaseRowSpecies(h(H_ROWS),recipient,water),phaseRowMass(h(H_ROWS),recipient)/mw);
+  double ratio=rd(rule+16),availableExtent=max(0.0LF,floor((double(waterAvailable)+.999999LF-abs(waterCarry))/ratio));
+  int64_t accepted=min(target,min(available1,min(available2,int64_t(min(availableExtent,double(MAX_LONG)/1024.0LF)))));
+  int64_t massPer=int64_t(n1)*m1+int64_t(n2)*m2;
+  if(massPer<=0l||mw<=0l){atomicOr(errors,ERROR_DIFFUSION);continue;}
+  accepted=min(accepted,phaseRowMass(h(H_ROWS),donor)/massPer);
+  double waterExact=double(dir)*double(accepted)*ratio+waterCarry;
+  int64_t signedWater=int64_t(trunc(waterExact));
+  if(abs(signedWater)>waterAvailable){atomicOr(errors,ERROR_DIFFUSION);continue;}
+  double nextWater=waterExact-double(signedWater),nextResidual=accepted==target?(exact-double(dir)*double(target))*1e-6LF:0.0LF;
+  if(slot<0&&(nextResidual!=0.0LF||nextWater!=0.0LF))slot=reservePending(a,r,material,int(words[rule+6]));
+  if(slot>=0){wr(h(H_PENDING_SECONDS)+2*slot,.5LF+.5LF*nextWater);wr(h(H_PENDING_RESIDUAL)+2*slot,nextResidual);}
+  if(accepted==0l||dir==0)continue;
+  int64_t soluteUnits=accepted*massPer,waterUnits=abs(signedWater)*mw;
+  int waterDonor=signedWater>=0?rb:ra,waterRecipient=signedWater>=0?ra:rb;
+  if(soluteUnits>phaseRowMass(h(H_ROWS),donor)||waterUnits>phaseRowMass(h(H_ROWS),waterDonor)
+      ||phaseRowMass(h(H_ROWS),recipient)-(waterDonor==recipient?waterUnits:0l)>MAX_LONG-soluteUnits
+      ||phaseRowMass(h(H_ROWS),waterRecipient)-(donor==waterRecipient?soluteUnits:0l)>MAX_LONG-waterUnits
+      ||phaseRowSpecies(h(H_ROWS),recipient,s1)>MAX_LONG-accepted*int64_t(n1)
+      ||(s2>=0&&phaseRowSpecies(h(H_ROWS),recipient,s2)>MAX_LONG-accepted*int64_t(n2))
+      ||phaseRowSpecies(h(H_ROWS),waterRecipient,water)>MAX_LONG-abs(signedWater)) {atomicOr(errors,ERROR_DIFFUSION);continue;}
+  double soluteU=soluteUnits==phaseRowMass(h(H_ROWS),donor) && waterUnits==0l
+      ?phaseRowEnergy(h(H_ROWS),donor):carried(donor,material,s1,s2,n1,n2,accepted,soluteUnits);
+  double waterU=carried(waterDonor,material,water,-1,1,0,abs(signedWater),waterUnits);
+  writePhaseRowSpecies(h(H_ROWS),donor,s1,phaseRowSpecies(h(H_ROWS),donor,s1)-accepted*int64_t(n1));
+  writePhaseRowSpecies(h(H_ROWS),recipient,s1,phaseRowSpecies(h(H_ROWS),recipient,s1)+accepted*int64_t(n1));
+  if(s2>=0){writePhaseRowSpecies(h(H_ROWS),donor,s2,phaseRowSpecies(h(H_ROWS),donor,s2)-accepted*int64_t(n2));writePhaseRowSpecies(h(H_ROWS),recipient,s2,phaseRowSpecies(h(H_ROWS),recipient,s2)+accepted*int64_t(n2));}
+  writePhaseRowSpecies(h(H_ROWS),waterDonor,water,phaseRowSpecies(h(H_ROWS),waterDonor,water)-abs(signedWater));
+  writePhaseRowSpecies(h(H_ROWS),waterRecipient,water,phaseRowSpecies(h(H_ROWS),waterRecipient,water)+abs(signedWater));
+  wi(phaseRowField(h(H_ROWS),LP_FIELD_MASS)+2*donor,phaseRowMass(h(H_ROWS),donor)-soluteUnits);
+  wi(phaseRowField(h(H_ROWS),LP_FIELD_MASS)+2*waterDonor,phaseRowMass(h(H_ROWS),waterDonor)-waterUnits);
+  wi(phaseRowField(h(H_ROWS),LP_FIELD_MASS)+2*recipient,phaseRowMass(h(H_ROWS),recipient)+soluteUnits);
+  wi(phaseRowField(h(H_ROWS),LP_FIELD_MASS)+2*waterRecipient,phaseRowMass(h(H_ROWS),waterRecipient)+waterUnits);
+  wr(phaseRowField(h(H_ROWS),LP_FIELD_ENERGY)+2*donor,phaseRowEnergy(h(H_ROWS),donor)-soluteU);
+  wr(phaseRowField(h(H_ROWS),LP_FIELD_ENERGY)+2*recipient,phaseRowEnergy(h(H_ROWS),recipient)+soluteU);
+  wr(phaseRowField(h(H_ROWS),LP_FIELD_ENERGY)+2*waterDonor,phaseRowEnergy(h(H_ROWS),waterDonor)-waterU);
+  wr(phaseRowField(h(H_ROWS),LP_FIELD_ENERGY)+2*waterRecipient,phaseRowEnergy(h(H_ROWS),waterRecipient)+waterU);
+  if(phaseRowMass(h(H_ROWS),ra)==0l)words[f(FIELD_EMPTY_TARGET)+a]=uint(b);
+  if(phaseRowMass(h(H_ROWS),rb)==0l)words[f(FIELD_EMPTY_TARGET)+b]=uint(a);
+  double soluteKg=double(soluteUnits)*1e-10LF,waterKg=double(waterUnits)*1e-10LF;
+  double massAB=double(dir)*soluteKg-double(signedWater>=0?1:-1)*waterKg;
+  wr(f(FIELD_MASS_CHANGE)+2*a,rd(f(FIELD_MASS_CHANGE)+2*a)-massAB);wr(f(FIELD_MASS_CHANGE)+2*b,rd(f(FIELD_MASS_CHANGE)+2*b)+massAB);
+  for(int component=0;component<3;component++){
+   double vA=cvelocity(a,component),vB=cvelocity(b,component);
+   double impulse=double(dir)*soluteKg*(dir>0?vA:vB)-double(signedWater>=0?1:-1)*waterKg*(signedWater>=0?vB:vA);
+   int da=f(FIELD_MOMENTUM_CHANGE)+2*(3*a+component),db=f(FIELD_MOMENTUM_CHANGE)+2*(3*b+component);
+   wr(da,rd(da)-impulse);wr(db,rd(db)+impulse);
+  }
+  if(axis==1){double pe=massAB*rd(p.header+H_GRAVITY)*hsize*.5LF;wr(f(FIELD_PE_CHANGE)+2*a,rd(f(FIELD_PE_CHANGE)+2*a)+pe);wr(f(FIELD_PE_CHANGE)+2*b,rd(f(FIELD_PE_CHANGE)+2*b)+pe);}
+ }
+}
+bool heatCarrier(int cell,int material){
+ if(cell<0)return false;
+ int row=findPhaseRow(h(H_ROWS),cell,material,1);
+ return row>=0&&(phaseRowMass(h(H_ROWS),row)>0l||int(words[f(FIELD_EMPTY_TARGET)+cell])>=0);
+}
+void momentum(int id){
+ int axis,a,b;faceCells(id,axis,a,b);int source=phaseStockField(h(H_ROWS),LP_STOCK_MOMENTUM_X+axis)+2*(id-faceBase(axis));double before=rd(source);
+ double old=rd(h(H_GEOMETRY)+8*id),delta=.5LF*((a<0?0.0LF:rd(f(FIELD_MASS_CHANGE)+2*a))+(b<0?0.0LF:rd(f(FIELD_MASS_CHANGE)+2*b)));
+ double impulse=.5LF*((a<0?0.0LF:rd(f(FIELD_MOMENTUM_CHANGE)+2*(3*a+axis)))+(b<0?0.0LF:rd(f(FIELD_MOMENTUM_CHANGE)+2*(3*b+axis))));
+ double after=before+impulse,now=old+delta;if(old<0.0LF||now<0.0LF||(old==0.0LF&&before!=0.0LF)||(now==0.0LF&&after!=0.0LF)){atomicOr(errors,ERROR_DIFFUSION);return;}
+ double oldK=old>0.0LF?.5LF*before*before/old:0.0LF,newK=now>0.0LF?.5LF*after*after/now:0.0LF;
+ wr(f(FIELD_OLD_K)+2*id,oldK);wr(f(FIELD_NEW_K)+2*id,newK);wr(f(FIELD_FACE_P)+2*id,after);
+ int material=int(words[f(FIELD_RULES)]);bool aWet=heatCarrier(a,material),bWet=heatCarrier(b,material);
+ double heat=oldK-newK;wr(f(FIELD_FACE_HEAT)+4*id,aWet?(bWet?heat*.5LF:heat):0);wr(f(FIELD_FACE_HEAT)+4*id+2,bWet?(aWet?heat*.5LF:heat):0);
+}
+void addHeat(int cell,double value){
+ int address=(f(FIELD_HEAT_DEPOSIT)+2*cell)/2;
+ int64_t observed=atomicAdd(longs[address],int64_t(0));
+ for(;;){
+  uint64_t bits=uint64_t(observed);
+  double prior=packDouble2x32(uvec2(uint(bits),uint(bits>>32))),next=prior+value;
+  if(isnan(next)||isinf(next)){atomicOr(errors,ERROR_DIFFUSION);return;}
+  uvec2 pair=unpackDouble2x32(next);int64_t desired=int64_t(uint64_t(pair.x)|(uint64_t(pair.y)<<32));
+  int64_t actual=atomicCompSwap(longs[address],observed,desired);
+  if(actual==observed)return;
+  observed=actual;
+ }
+}
+void heat(int c){
+ int material=int(words[f(FIELD_RULES)]),row=findPhaseRow(h(H_ROWS),c,material,1);if(row<0)return;
+ double value=-rd(f(FIELD_PE_CHANGE)+2*c);for(int a=0;a<3;a++){value+=rd(f(FIELD_FACE_HEAT)+4*cellFace(c,a,0)+2);value+=rd(f(FIELD_FACE_HEAT)+4*cellFace(c,a,1));}
+ if(value==0.0LF)return;
+ int destination=c,steps=0;
+ while(phaseRowMass(h(H_ROWS),row)==0l){
+  destination=int(words[f(FIELD_EMPTY_TARGET)+destination]);
+  if(destination<0||destination>=h(H_CELLS)||++steps>h(H_CELLS)){atomicOr(errors,ERROR_DIFFUSION);return;}
+  row=findPhaseRow(h(H_ROWS),destination,material,1);
+  if(row<0){atomicOr(errors,ERROR_DIFFUSION);return;}
+ }
+ addHeat(destination,value);
+}
+void applyHeat(int c){
+ int material=int(words[f(FIELD_RULES)]),row=findPhaseRow(h(H_ROWS),c,material,1);
+ if(row<0||phaseRowMass(h(H_ROWS),row)==0l)return;
+ double value=rd(f(FIELD_HEAT_DEPOSIT)+2*c);
+ wr(phaseRowField(h(H_ROWS),LP_FIELD_ENERGY)+2*row,phaseRowEnergy(h(H_ROWS),row)+value);
+}
+void publish(int id){int axis,a,b;faceCells(id,axis,a,b);wr(phaseStockField(h(H_ROWS),LP_STOCK_MOMENTUM_X+axis)+2*(id-faceBase(axis)),rd(f(FIELD_FACE_P)+2*id));}
+void main(){uint id=gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x;if(id>=uint(p.count))return;
+ if(p.stage==0)initialize(int(id));else if(p.stage==1)indexPending(int(id));else if(p.stage==2)applyFace(int(id));else if(p.stage==3)momentum(int(id));else if(p.stage==4)heat(int(id));else if(p.stage==5)publish(int(id));else if(p.stage==6)applyHeat(int(id));}

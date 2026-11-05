@@ -21,6 +21,7 @@ public final class CreativeGasSource {
 			case "mmm:source/gas/oxygen" -> BuiltinGasDefinitions.OXYGEN;
 			case "mmm:source/gas/co2" -> BuiltinGasDefinitions.CO2;
 			case "mmm:source/gas/water_vapor" -> BuiltinGasDefinitions.WATER_VAPOR;
+			case "mmm:source/gas/ethanol_vapor" -> BuiltinGasDefinitions.ETHANOL_VAPOR;
 			case "mmm:source/gas/air" -> null;
 			default -> throw new IllegalArgumentException("Unknown creative gas template");
 		};

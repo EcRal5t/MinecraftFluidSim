@@ -114,6 +114,8 @@ public final class GranularRegistryCodec {
 			tag.putLong("ExtentBatch", reaction.solidExtentPerBatch());
 			tag.putLong("SolidSvqBatch", reaction.solidVolumeSvqPerBatch());
 			tag.putLong("SurfaceSvq", reaction.accessibleSurfaceSvqPerCellStep());
+			if(reaction.solubility()!=null){var s=reaction.solubility();tag.putString("Solvent",s.solventSpeciesId());tag.putLong("SolubilityReference",bits(s.referenceTemperatureK()));
+				tag.putLong("SolubilityRatio",bits(s.ratio()));tag.putLong("SolubilitySlope",bits(s.slopePerK()));tag.putLong("SolubilityMin",bits(s.minimumK()));tag.putLong("SolubilityMax",bits(s.maximumK()));tag.putLong("Diffusivity",bits(s.diffusivityM2PerS()));}
 			tag.putBoolean("Reversible", reaction.reversible()); reactions.add(tag);
 		}
 		root.put("Reactions", reactions);
@@ -166,18 +168,24 @@ public final class GranularRegistryCodec {
 		List<SolidLiquidReaction> result = new ArrayList<>(list.size());
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "solid-liquid reaction");
-			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Phase", Tag.TAG_STRING),
+			var fields=new java.util.HashMap<String,Byte>(Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Phase", Tag.TAG_STRING),
 					Map.entry("Aqueous", Tag.TAG_LIST), Map.entry("SolidMaterial", Tag.TAG_STRING),
 					Map.entry("Solid", Tag.TAG_LIST), Map.entry("Capacity", Tag.TAG_STRING),
 					Map.entry("ExtentBatch", Tag.TAG_LONG), Map.entry("SolidSvqBatch", Tag.TAG_LONG),
 					Map.entry("SurfaceSvq", Tag.TAG_LONG),
 					Map.entry("Reversible", Tag.TAG_BYTE)));
+			if(tag.contains("Solvent"))fields.putAll(Map.of("Solvent",Tag.TAG_STRING,"SolubilityReference",Tag.TAG_LONG,"SolubilityRatio",Tag.TAG_LONG,"SolubilitySlope",Tag.TAG_LONG,"SolubilityMin",Tag.TAG_LONG,"SolubilityMax",Tag.TAG_LONG,"Diffusivity",Tag.TAG_LONG));
+			requireAll(tag,fields);
+			SolidLiquidReaction.Solubility solubility=null;
+			if(tag.contains("Solvent")){
+				solubility=new SolidLiquidReaction.Solubility(tag.getStringOr("Solvent",""),Double.longBitsToDouble(tag.getLongOr("SolubilityReference",0)),Double.longBitsToDouble(tag.getLongOr("SolubilityRatio",0)),Double.longBitsToDouble(tag.getLongOr("SolubilitySlope",0)),Double.longBitsToDouble(tag.getLongOr("SolubilityMin",0)),Double.longBitsToDouble(tag.getLongOr("SolubilityMax",0)),Double.longBitsToDouble(tag.getLongOr("Diffusivity",0)));
+			}
 			result.add(new SolidLiquidReaction(tag.getStringOr("Id", ""), tag.getStringOr("Phase", ""),
 					decodeSide(tag.getListOrEmpty("Aqueous")), tag.getStringOr("SolidMaterial", ""),
 					decodeSide(tag.getListOrEmpty("Solid")), ExactRational.parse(tag.getStringOr("Capacity", "")),
 					tag.getLongOr("ExtentBatch", -1L), tag.getLongOr("SolidSvqBatch", -1L),
 					tag.getLongOr("SurfaceSvq", -1L),
-					tag.getBooleanOr("Reversible", false)));
+					tag.getBooleanOr("Reversible", false),solubility));
 		}
 		return List.copyOf(result);
 	}

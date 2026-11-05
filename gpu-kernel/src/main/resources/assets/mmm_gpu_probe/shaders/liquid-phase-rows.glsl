@@ -1,7 +1,7 @@
 #ifndef MMM_PHASE_ROWS
 #define MMM_PHASE_ROWS
 // HOST_LAYOUT
-const uint PHASE_ROWS_ERROR_INVALID_ROW = 33554432u;
+const uint PHASE_ROWS_ERROR_INVALID_ROW = 2147483648u;
 int phaseRowHeader(int header, int i) {
     return int(words[header + i]);
 }

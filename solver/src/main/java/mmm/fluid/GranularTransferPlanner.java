@@ -70,7 +70,7 @@ final class GranularTransferPlanner {
 			if (candidate != null) position = candidate;
 		}
 		if (position == null) return FluidDomainContracts.GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
-		if (!domain.domainCollision.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
+		if (domain.gasState.spatial==null && !domain.domainCollision.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomainContracts.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
@@ -84,16 +84,14 @@ final class GranularTransferPlanner {
 		catch (GranularLiquidDisplacement.CapacityUnavailable unavailable) {
 			return FluidDomainContracts.GranularInsertion.rejected(unavailable.getMessage());
 		}
-		var gas = displacement == null ? prepareInsertionGas(plannedSolid)
-				: displacement.gasTopology;
-		requireInsertionSuccessor(gas, domain.thermalState == null ? null : new double[]{thermalEnergy}, displacement);
+				requireInsertionSuccessor( domain.thermalState == null ? null : new double[]{thermalEnergy}, displacement);
 		Runnable publishSolid = () -> {
 			granular.parcels.add(parcel);
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(new double[]{thermalEnergy});
 			domain.domainPhaseInventory.markGranularExternalChange(cell);
 		};
 		if (displacement != null) GranularLiquidDisplacement.publish(domain, displacement, publishSolid);
-		else { publishSolid.run(); if (gas != null) domain.gasTopologyCoordinator.commit(gas); }
+		else publishSolid.run();
 
 		return new FluidDomainContracts.GranularInsertion(true, solidVolumeSvq, massUnits, null);
 	}
@@ -123,7 +121,7 @@ final class GranularTransferPlanner {
 		} catch (ArithmeticException overflow) {
 			return FluidDomainContracts.GranularInsertion.rejected("Granular mass capacity exceeded");
 		}
-		if (!domain.domainCollision.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
+		if (domain.gasState.spatial==null && !domain.domainCollision.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomainContracts.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		ArrayList<GranularParcelDraft> drafts = new ArrayList<>(); int reactiveDrafts = 0;
@@ -226,7 +224,7 @@ final class GranularTransferPlanner {
 		int[] compositionByDraft = new int[drafts.size()];
 		ArrayList<Integer> createdCompositions = new ArrayList<>(reactiveDrafts);
 		double[] thermalInsertions = null;
-		GasTopologyCoordinator.GasTopologyPlan gas;
+		
 		GranularLiquidDisplacement.Prepared displacement;
 		try {
 			for (int index = 0; index < drafts.size(); index++) {
@@ -243,8 +241,7 @@ final class GranularTransferPlanner {
 						: domain.thermalState.planExternalActiveInsertions(originalCount, drafts.size(), context, carriedEnergy);
 			}
 			displacement = GranularLiquidDisplacement.prepareInsertion(domain, previousSolid, plannedSolid);
-			gas = displacement == null ? prepareInsertionGas(plannedSolid) : displacement.gasTopology;
-			requireInsertionSuccessor(gas, thermalInsertions, displacement);
+			requireInsertionSuccessor( thermalInsertions, displacement);
 		} catch (RuntimeException failure) {
 			for (int index = createdCompositions.size() - 1; index >= 0; index--) {
 				int handle = createdCompositions.get(index);
@@ -273,7 +270,7 @@ final class GranularTransferPlanner {
 			granular.externalSource = sourceAfter;
 		};
 		if (displacement != null) GranularLiquidDisplacement.publish(domain, displacement, publishSolid);
-		else { publishSolid.run(); if (gas != null) domain.gasTopologyCoordinator.commit(gas); }
+		else publishSolid.run();
 
 		return new FluidDomainContracts.GranularInsertion(true, insertedSvq, insertedMass, null);
 	}
@@ -297,25 +294,15 @@ final class GranularTransferPlanner {
 		return selected;
 	}
 
-	private GasTopologyCoordinator.GasTopologyPlan prepareInsertionGas(long[] solid) {
-		var gas = domain.gasState.frame == null ? null
-				: domain.gasTopologyCoordinator.planAfterCarrierEdit(domain.liquidCells, solid);
-		return gas;
-	}
-
-	private void requireInsertionSuccessor(GasTopologyCoordinator.GasTopologyPlan gas, double[] energies, GranularLiquidDisplacement.Prepared displacement) {
-		if (displacement != null) displacement.inventory.requireCurrent();
-		if (energies != null) {
-			var after = domain.thermalState.auditLedger().withExternalSourceEnergy(SignedDyadic.sum(energies));
-			if (displacement != null) after = after.withMechanicalWork(displacement.inventory.mechanicalHeat())
-					.withRoundoff(displacement.energyRoundoff);
-			var thermal = gas == null ? null : gas.thermalPlan();
-			if (thermal != null) after = after.withExternalSourceEnergy(thermal.sourceEnergy()).withExternalSinkEnergy(thermal.sinkEnergy())
-					.withMechanicalWork(thermal.mechanicalWork()).withRoundoff(thermal.roundoff());
-			after.expectedInventory();
-		}
-		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
-	}
+    private void requireInsertionSuccessor(double[] energies,GranularLiquidDisplacement.Prepared displacement){
+        if(displacement!=null){displacement.inventory.requireCurrent();if(displacement.localGas!=null)displacement.localGas.requireCurrent(domain);}
+        if(energies!=null){
+            var audit=domain.thermalState.auditLedger().withExternalSourceEnergy(SignedDyadic.sum(energies));
+            if(displacement!=null){audit=audit.withMechanicalWork(displacement.inventory.mechanicalHeat()).withRoundoff(displacement.energyRoundoff);
+                if(displacement.localGas!=null)audit=displacement.localGas.applyAudit(audit);}
+            audit.expectedInventory();
+        }
+    }
 
 	/** Number of nearby cells needed to release the local inventory at its material-defined loose packing. */
 	private int releaseCellCount(List<FluidDomainContracts.CellCandidate> insertionCells, GranularTransferLedger ledger) {
@@ -467,9 +454,7 @@ final class GranularTransferPlanner {
 			thermalAfter = thermalAfter.withExternalSinkEnergy(settlement).withRoundoff(settlement);
 			thermalAfter.expectedInventory();
 		}
-		GasTopologyCoordinator.GasTopologyPlan gas = null;
-		if (remainingParcels.isEmpty()) gas = prepareExtractionGas(futureSolid, thermalAfter);
-		else {
+		if (!remainingParcels.isEmpty()) {
 			// A request ends at its first partial take; all other selected active carriers are removed whole.
 			if (remainingParcels.size() != 1) throw new IllegalStateException("Granular extraction has multiple partial active carriers");
 			var entry = remainingParcels.entrySet().iterator().next(); int ordinal = entry.getKey();
@@ -477,7 +462,7 @@ final class GranularTransferPlanner {
 			var kernel = new GranularKernel(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 			kernel.capture(next.x(), next.y(), next.z(), next.solidVolumeSvq());
 			java.util.function.IntToLongFunction available = cell -> domain.domainInventoryGeometry.granularGeometricOpenSvq(cell)
-					- mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]) - futureSolid[cell];
+					- (domain.gasState.spatial==null?mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]):0) - futureSolid[cell];
 			int[] nonIncreasing = GranularIntegerAllocation.admissibleMasks(kernel,
 					cell -> Math.min(available.applyAsLong(cell), domain.granularCoupling.parcelShareAtCell(
 							DomainInventoryGeometry.parcelPosition(source), source.solidVolumeSvq(), cell)));
@@ -489,9 +474,8 @@ final class GranularTransferPlanner {
 					if (tried[mask]) continue;
 					tried[mask] = true; var candidate = next.withCeilMask(mask);
 					if (!domain.granularCoupling.tryPlanParcel(futureSolid, DomainInventoryGeometry.parcelPosition(candidate), candidate.solidVolumeSvq(),
-							cell -> domain.domainInventoryGeometry.granularGeometricOpenSvq(cell) - mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]))) continue;
+							cell -> domain.domainInventoryGeometry.granularGeometricOpenSvq(cell) - (domain.gasState.spatial==null?mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]):0))) continue;
 					try {
-						gas = prepareExtractionGas(futureSolid, thermalAfter);
 						remainingParcels.put(ordinal, candidate); selected = true; break;
 					} catch (GasTopologyBlockedException | IllegalArgumentException | ArithmeticException unavailable) {
 						lastFailure = unavailable;
@@ -505,7 +489,9 @@ final class GranularTransferPlanner {
 				return FluidDomainContracts.GranularExtraction.rejected("Remaining granular choices have no certified successor at the current liquid inventory");
 			}
 		}
-		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
+        var displacement=GranularLiquidDisplacement.prepareExternal(domain,domain.occupiedSolidSvq(),futureSolid);
+        if(displacement!=null){displacement.inventory.requireCurrent();if(displacement.localGas!=null)displacement.localGas.requireCurrent(domain);}
+
 		for (GranularRemoval removal : removals) if (removal.deposit()) {
 			granular.deposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
 			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
@@ -532,20 +518,9 @@ final class GranularTransferPlanner {
 		for (GranularRemoval removal : removals) if (!changedCells[removal.cell()]) {
 			domain.domainPhaseInventory.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
 		}
-		if (gas != null) domain.gasTopologyCoordinator.commit(gas);
+		if(displacement!=null)GranularLiquidDisplacement.publish(domain,displacement,()->{});
 		granular.escapedSink = sinkAfter;
 		return new FluidDomainContracts.GranularExtraction(true, transfer, removedEnergy, null);
-	}
-
-	private GasTopologyCoordinator.GasTopologyPlan prepareExtractionGas(long[] futureSolid, ThermalAuditLedger afterTake) {
-		if (domain.gasState.frame == null) return null;
-		var gas = domain.gasTopologyCoordinator.planAfterCarrierEdit(domain.liquidCells, futureSolid);
-		if (gas.thermalPlan() != null) {
-			var remap = gas.thermalPlan();
-			afterTake.withExternalSourceEnergy(remap.sourceEnergy()).withExternalSinkEnergy(remap.sinkEnergy())
-					.withMechanicalWork(remap.mechanicalWork()).withRoundoff(remap.roundoff()).expectedInventory();
-		}
-		return gas;
 	}
 
 	private SolidCompositionRecord splitSolidComposition(

@@ -45,8 +45,18 @@ final class GpuControllerFixture {
 
     static GpuControllerFixture create(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
             FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
+        return create(startup, world, manager, operations, false);
+    }
+
+    static GpuControllerFixture createDistillation(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
+            FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
+        return create(startup, world, manager, operations, true);
+    }
+
+    private static GpuControllerFixture create(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
+            FluidRegionManager manager, FluidRegionOperations operations, boolean distillation) throws IOException {
         initializeItems();
-        var layout = ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
+        var layout = distillation ? distillationLayout() : ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
         Set<Long> shell = new HashSet<>();
         layout.shell().forEach(position -> shell.add(position.asLong()));
         var worldView = new FluidBoundaryScanner.ScanWorld() {
@@ -58,14 +68,17 @@ final class GpuControllerFixture {
         if (!scan.succeeded()) throw new IllegalStateException("controller scan: " + scan.failure());
         var dimension = ResourceKey.create(Registries.DIMENSION, Identifier.fromNamespaceAndPath("mmm", "gpu_controller"));
         var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false,
-                () -> null, candidate -> world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep()),
+                () -> null, candidate -> {
+                    if (distillation) installDistillationWalls(candidate);
+                    world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep());
+                },
                 operations::checkpoint);
         if (result.failure() != null) throw new IllegalStateException("controller creation: " + result.failure());
         FluidRegion region = result.region();
         var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension, layout.port(),
                 layout.portOutward(), layout.portOutward().getOpposite());
         if (target == null) throw new IllegalStateException("controller port did not resolve its interior");
-        int[] cell = FluidWorldTargetResolver.cellAtInteriorBlock(region, target.interiorBlock());
+        int[] cell = target.cell();
         if (cell == null) throw new IllegalStateException("controller port interior cell is unavailable");
         var journal = new ContainerJournalFileStore(startup.worldRoot());
         var actor = new Actor(startup.worldRoot().resolve("controller-fixture-actor.txt"), operations, manager, world);
@@ -73,6 +86,28 @@ final class GpuControllerFixture {
         var transactions = new MinecraftContainerTransactionAdapter(manager, operations, recovery,
                 world.profile().profileFingerprint(), world.thermalRegistryFingerprint());
         return new GpuControllerFixture(region, cell, transactions, recovery, journal, actor, world);
+    }
+
+    private static ControllerDemoLayout distillationLayout() {
+        var minimum = new BlockPos(14, 64, 20);
+        var occupied = new java.util.ArrayList<BlockPos>();
+        var shell = new java.util.ArrayList<BlockPos>();
+        for (int z = 0; z < 5; z++) for (int y = 0; y < 5; y++) for (int x = 0; x < 5; x++) {
+            var pos = minimum.offset(x, y, z); occupied.add(pos);
+            if (x == 0 || x == 4 || y == 0 || y == 4 || z == 0 || z == 4) shell.add(pos);
+        }
+        return new ControllerDemoLayout(minimum, minimum.offset(2, 1, 0), minimum.offset(1, 0, 1),
+                Direction.DOWN, List.copyOf(occupied), List.copyOf(shell));
+    }
+
+    private static void installDistillationWalls(FluidRegion region) {
+        var host = region.editableHost();
+        // A hot pool and a one-cell gas passage connect to a separately supported cold film.
+        for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
+            boolean hotPool = x < 2 && y < 4 && z < 2;
+            boolean gasPassage = y == 4 && z == 1;
+            if (!hotPool && !gasPassage) host.setSolid(x, y, z, true);
+        }
     }
 
     /** The offline Java launcher performs vanilla bootstrap without Fabric's registry setup. */
@@ -177,19 +212,54 @@ final class GpuControllerFixture {
             throw new IllegalStateException("scooped water did not retain its temperature");
     }
 
-    private void transfer(ItemStack before) throws IOException {
+    void scoopMixture() throws IOException {
+        transfer(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET), true);
+        if (ContainerItemStacks.thermalContents(actor.current) == null)
+            throw new IllegalStateException("scooped mixture did not retain its temperature");
+    }
+
+    void scoopMixtureAt(int[] cell) throws IOException {
+        transfer(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET), true, cell, 0);
+        if (ContainerItemStacks.thermalContents(actor.current) == null)
+            throw new IllegalStateException("scooped mixture did not retain its temperature");
+    }
+
+    void transfer(ItemStack before) throws IOException {
         transfer(before, false);
     }
 
+    void transferAt(ItemStack before, int[] cell) throws IOException {
+        transfer(before, false, cell);
+    }
+
+    void ventGas() throws IOException {
+        region.setPaused(true);
+        var candidate = region.beginHostEdit();
+        var removed = candidate.commitOperatorVentSealedGas(candidate.planOperatorVentSealedGas());
+        var staged = actor.operations.stageLifecycleCheckpoint(region, candidate, Math.addExact(region.checkpointGeneration(), 1));
+        long generation = actor.operations.commitStagedLifecycleCheckpoint(staged);
+        region.adoptLifecycleCandidateDomain(candidate, generation, true);
+        System.out.println("distillation_vent nanos=" + removed.removed().standardVolumeNanos()
+                + " internal_j=" + removed.internalEnergy().toDouble());
+    }
+
     private void transfer(ItemStack before, boolean creative) throws IOException {
+        transfer(before, creative, portCell);
+    }
+
+    private void transfer(ItemStack before, boolean creative, int[] cell) throws IOException {
+        transfer(before, creative, cell, 6);
+    }
+
+    private void transfer(ItemStack before, boolean creative, int[] cell, int materialScoopRadius) throws IOException {
         var domain = region.hostSnapshot();
         System.out.printf("stage=controller-container-input kind=%s cell=%d,%d,%d pending_phase=%s near_water=%.9g eligible_water=%.9g total_liquid=%.9g%n",
-                before.getItem(), portCell[0], portCell[1], portCell[2], domain.hasPendingPhaseMotionWork(),
-                domain.exactVolumeNear(portCell[0], portCell[1], portCell[2], 6, 0),
-                domain.containerExtractableVolumeNear(portCell[0], portCell[1], portCell[2], 6, 0), domain.totalVolumeExact());
+                before.getItem(), cell[0], cell[1], cell[2], domain.hasPendingPhaseMotionWork(),
+                domain.exactVolumeNear(cell[0], cell[1], cell[2], 6, 0),
+                domain.containerExtractableVolumeNear(cell[0], cell[1], cell[2], 6, 0), domain.totalVolumeExact());
         actor.current = before.copy();
         actor.persist();
-        var resolution = MinecraftContainerTransferPlan.resolve(transactions, world, region, portCell, before, creative);
+        var resolution = MinecraftContainerTransferPlan.resolve(transactions, world, region, cell, before, creative, materialScoopRadius);
         if (!resolution.resolved()) throw new IllegalStateException("controller container plan: " + resolution.diagnostic());
         var result = resolution.plan().executeManagedForRegion(actor.identity, before);
         if (result.outcome() == null || !result.outcome().transferred())
@@ -208,6 +278,26 @@ final class GpuControllerFixture {
             throw new IllegalStateException("controller container WAL did not converge: " + actor.failure);
         if (!actor.read().equals(ContainerItemMapper.fingerprint(actor.current)))
             throw new IllegalStateException("controller actor after-item was not durably stored");
+    }
+
+    /** Exercise the same creative gas transaction and durable actor handoff as the player adapter. */
+    long gasTransfer(int cell,String component,boolean extract) throws IOException {
+        String name=component.substring(component.indexOf(':')+1);
+        var descriptor=new mmm.transfer.CreativeSourceDescriptor("mmm:source/gas/"+name,mmm.transfer.CreativeGasSource.AMOUNT_NANOS,293.15);
+        var gas=CreativeSourceCatalog.gas(world,descriptor);
+        ItemStack stack=mmm.item.CreativeSourceItem.stack(descriptor);actor.current=stack.copy();actor.persist();
+        var result=transactions.executeForRegion(region,actor.identity,stack,stack,
+                extract?ContainerTransferJournal.Operation.EXTRACT:ContainerTransferJournal.Operation.INSERT,
+                ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS,gas.standardVolumeNanos(),0,
+                (candidate,requested,ignored)->{
+                    var edit=candidate.editableHost().editGas(cell+1,gas.componentId(),requested,gas.temperatureK(),extract);
+                    long moved=edit.moved().standardVolumeNanos();
+                    return new MinecraftContainerTransferOperations.TransferOutcome(moved>0,!extract,stack.copy(),"",moved,edit.internalEnergy().toDouble());
+                },(value,before)->before.copy(),null);
+        if(result.outcome()==null||!result.outcome().transferred())throw new IllegalStateException("Gas container transaction failed: "+(result.outcome()==null?"missing outcome":result.outcome().message()));
+        actor.current=result.outcome().stack().copy();transactions.completeCommitted(result.transactionId());
+        if(recovery.hasPending(region.id()))throw new IllegalStateException("Gas container transaction remains pending");
+        return result.outcome().resourceAmount();
     }
 
     static final class Actor implements ContainerRecoveryCoordinator.RecoveryPort {

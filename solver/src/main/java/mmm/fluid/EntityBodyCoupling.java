@@ -241,11 +241,7 @@ final class EntityBodyCoupling {
     }
     var displacement = GranularLiquidDisplacement.prepareExternal(domain, previous, next);
     if (displacement != null)
-      domain.cellMacStage.publishTransport(
-          displacement.energy,
-          displacement.momentum,
-          displacement.gasTopology,
-          next,
+      GranularLiquidDisplacement.publish(domain, displacement,
           () -> {
             domain.entityBodies = target;
             restoreGeometry(nextGeometry);

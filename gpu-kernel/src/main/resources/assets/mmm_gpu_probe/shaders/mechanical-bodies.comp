@@ -46,11 +46,11 @@ void joinFace(int index){
     ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
     if(pos[axis]==0||pos[axis]==ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z))[axis])return;
     int at=headerValue(H_PROJECTED_FACES)+8*index;
-    if(value(at)<=0.0||value(at+4)<=0.0||value(at+6)<=0.0)return;
+    if(value(at)<=0.0||value(at+4)<=0.0)return;
     ivec3 previous=pos;previous[axis]--;joinComponents(cellIndex(previous),cellIndex(pos));
 }
 void joinCell(int index){
-    if(headerValue(H_GAS_CELL_NODES)>=0){int gas=int(words[headerValue(H_GAS_CELL_NODES)+index]);if(gas>gasCount()||gasCount()>headerValue(H_GAS_CAPACITY)){atomicOr(errors,ERROR_MECHANICAL_BODY);return;}if(gas>0)joinComponents(index,headerValue(H_CELLS)+gas-1);}
+    if(headerValue(H_GAS_COUNTS)>=0){if(gasCount()>headerValue(H_GAS_CAPACITY)||gasCount()!=headerValue(H_CELLS)){atomicOr(errors,ERROR_MECHANICAL_BODY);return;}joinComponents(index,headerValue(H_CELLS)+index);}
     ivec3 pos=ivec3(index%headerValue(H_SIZE_X),index/headerValue(H_SIZE_X)%headerValue(H_SIZE_Y),index/(headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)));
     int first=int(sourceWords[headerValue(H_SOURCE_CELL_OFFSETS)+index]),last=int(sourceWords[headerValue(H_SOURCE_CELL_OFFSETS)+index+1]);
     for(int side=0;side<6;side++){

@@ -68,7 +68,7 @@ public final class MmmCommands {
 								.then(Commands.argument("kind", StringArgumentType.word())
 										.suggests((context, builder) -> {
 											for (String value : List.of("hcl", "naoh", "nacl", "nano3", "kcl", "kno3",
-													"water")) builder.suggest(value);
+													"water", "ethanol")) builder.suggest(value);
 											return builder.buildFuture();
 										})
 										.executes(context -> audit(context, () -> giveReagent(
@@ -92,6 +92,15 @@ public final class MmmCommands {
 												context.getSource(), StringArgumentType.getString(context, "mode"))))))
 						.then(Commands.literal("capture").executes(context -> audit(context, () -> capture(context.getSource(), false))))
 						.then(Commands.literal("takeover").executes(context -> audit(context, () -> capture(context.getSource(), true))))
+						.then(Commands.literal("process")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> processStatus(context.getSource())))
+								.then(Commands.literal("feed").then(Commands.argument("interval", IntegerArgumentType.integer(1, 1200))
+										.executes(context -> audit(context, () -> processFeed(context.getSource(), IntegerArgumentType.getInteger(context, "interval"))))))
+								.then(Commands.literal("drive").then(Commands.argument("seconds", IntegerArgumentType.integer(1, 3600))
+										.executes(context -> audit(context, () -> processDrive(context.getSource(), IntegerArgumentType.getInteger(context, "seconds"))))))
+								.then(Commands.literal("stop").executes(context -> audit(context, () -> processStop(context.getSource()))))
+								.then(Commands.literal("sample").executes(context -> audit(context, () -> processSample(context.getSource())))))
 						.then(Commands.literal("pour")
 								.executes(context -> audit(context, () -> editWater(context.getSource(), 1, true)))
 								.then(Commands.argument("buckets", IntegerArgumentType.integer(1, 16))

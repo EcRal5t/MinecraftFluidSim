@@ -604,6 +604,7 @@ public final class FluidRegion {
 	}
 
 	boolean devicePortsDirty() { return devicePortsDirty; }
+	void markDevicePortsDirty() { devicePortsDirty = true; }
 
 	void replaceDevicePorts(List<mmm.fluid.FluidStateAccess.DevicePort> ports, List<int[]> connections) {
 		boolean changed = !finiteThermalPorts.equals(ports) || activityConnections.size() != connections.size();
@@ -648,6 +649,18 @@ public final class FluidRegion {
 		devicePortsDirty = true;
 	}
 
+
+
+	void replaceOrdinaryWallInventory(FiniteThermalDeviceInventory inventory, ThermalRegistry registry) {
+		inventory.requireCompatible(registry);
+		var identities = new java.util.HashSet<String>();
+		for (var device : inventory.devices()) identities.add(device.providerId()+"\0"+device.objectId());
+		var ports = finiteThermalPorts.stream().filter(port -> identities.contains(port.providerId()+"\0"+port.objectId())).toList();
+		commitHostEdit(solverGeneration, beginHostEdit(), inventory, ports);
+		finiteThermalPorts = ports;
+		devicePortsDirty = true;
+		wakeForActivity();
+	}
 
 	FluidRegion finiteDeviceCandidate(FiniteThermalDeviceInventory inventory, ThermalRegistry registry) {
 		inventory.requireCompatible(registry);

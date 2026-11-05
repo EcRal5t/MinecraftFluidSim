@@ -62,7 +62,8 @@ final class VulkanLiquidMomentum implements AutoCloseable {
         SOURCE_OFFSETS(62),
         SOURCE_MASKS(63),
         ACTIVITY_CELLS(64),
-        ACTIVITY_FACES(65);
+        ACTIVITY_FACES(65),
+        GAS_OLD_MASS(66), GAS_NEW_MASS(67), GAS_PRIMAL_MASS(68), GAS_ENERGY(69), AMBIENT_MASS(70);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -85,7 +86,19 @@ final class VulkanLiquidMomentum implements AutoCloseable {
                   VulkanLiquidStateLayout.Column nextRoots, VulkanLiquidStateLayout.Column groupMass,
                   VulkanLiquidStateLayout.Column groupMomentum, VulkanLiquidStateLayout.Column wallImpulse,
                   VulkanLiquidStateLayout.Column cellHeat, VulkanLiquidStateLayout.Column heatPostingRemainders,
-                  VulkanLiquidStateLayout.Column heatAllocationRemainders, long endOffset) {
+                  VulkanLiquidStateLayout.Column heatAllocationRemainders, VulkanLocalGasTransport.ProductionLayout gasTransport, long ambientMassUnits, long endOffset) {
+        Layout withGasTransport(VulkanLocalGasTransport.ProductionLayout gas){
+            if(gas.cells!=output.cellCount()||gas.faces!=faces())throw new IllegalArgumentException("Gas and liquid momentum dimensions differ");
+            return new Layout(source,output,routes,projectedFacesWordOffset,targetFacesWordOffset,flagsWordOffset,activityCellsWordOffset,activityFacesWordOffset,
+                header,cellMasses,cellVolumes,primalFlux,dualMass,transportedMomentum,faceHeat,roots,nextRoots,groupMass,groupMomentum,wallImpulse,cellHeat,
+                heatPostingRemainders,heatAllocationRemainders,gas,ambientMassUnits,endOffset);
+        }
+        Layout withAmbientMass(long massUnits){
+            if(massUnits<0)throw new IllegalArgumentException("Invalid ambient mass");
+            return new Layout(source,output,routes,projectedFacesWordOffset,targetFacesWordOffset,flagsWordOffset,activityCellsWordOffset,activityFacesWordOffset,
+                header,cellMasses,cellVolumes,primalFlux,dualMass,transportedMomentum,faceHeat,roots,nextRoots,groupMass,groupMomentum,wallImpulse,cellHeat,
+                heatPostingRemainders,heatAllocationRemainders,gasTransport,massUnits,endOffset);
+        }
         int faces() { return primalFlux.count(); }
         int headerWordOffset() { return word(header); }
         void initializeHeader(ByteBuffer destination) {
@@ -93,7 +106,7 @@ final class VulkanLiquidMomentum implements AutoCloseable {
         }
         ByteBuffer headerBytes() { return headerBytes(source); }
         ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
-            int[] values=new int[66];
+            int[] values=new int[72];
             values[Header.SIZE_X.word]=output.sizeX();values[Header.SIZE_Y.word]=output.sizeY();values[Header.SIZE_Z.word]=output.sizeZ();
             values[Header.CELL_COUNT.word]=output.cellCount();values[Header.FACE_COUNT.word]=faces();
             values[Header.PROJECTED_FACES.word]=projectedFacesWordOffset;values[Header.TARGET_FACES.word]=targetFacesWordOffset;values[Header.FLAGS.word]=flagsWordOffset;
@@ -109,9 +122,14 @@ final class VulkanLiquidMomentum implements AutoCloseable {
             values[Header.STOCK_CAPACITY.word]=output.stockCapacity();
             values[Header.SOURCE_OFFSETS.word]=word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS));values[Header.SOURCE_MASKS.word]=word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS));
             values[Header.ACTIVITY_CELLS.word]=activityCellsWordOffset;values[Header.ACTIVITY_FACES.word]=activityFacesWordOffset;
+            values[Header.GAS_OLD_MASS.word]=gasTransport==null?-1:gasTransport.word(VulkanLocalGasTransport.Field.OLD_MASS);
+            values[Header.GAS_NEW_MASS.word]=gasTransport==null?-1:gasTransport.word(VulkanLocalGasTransport.Field.NEW_MASS);
+            values[Header.GAS_PRIMAL_MASS.word]=gasTransport==null?-1:gasTransport.word(VulkanLocalGasTransport.Field.PRIMAL_MASS);
+            values[Header.GAS_ENERGY.word]=gasTransport==null?-1:Math.toIntExact(gasTransport.source.column(VulkanGasStateLayout.Field.INTERNAL_ENERGY).offset()/4);
             var target=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             for(int i=0;i<values.length;i++)target.putInt(Math.toIntExact(0+4L*i),values[i]);
 
+            target.putLong(4*Header.AMBIENT_MASS.word,ambientMassUnits);
             return target;
         }
     }
@@ -133,7 +151,7 @@ final class VulkanLiquidMomentum implements AutoCloseable {
                 VulkanLiquidStateLayout.Field.MOMENTUM_Y,VulkanLiquidStateLayout.Field.MOMENTUM_Z})
             faces=Math.addExact(faces,output.column(field).count());
         long[] cursor={scratchBase};
-        var header=column(cursor,66,4,alignment);
+        var header=column(cursor,72,4,alignment);
         var masses=column(cursor,Math.multiplyExact(cells,2),8,alignment);
         var volumes=column(cursor,cells,8,alignment);
         var flux=column(cursor,faces,8,alignment);
@@ -147,10 +165,10 @@ final class VulkanLiquidMomentum implements AutoCloseable {
         var impulse=column(cursor,faces,8,alignment);
         var cellHeat=column(cursor,cells,8,alignment);
         var postingRemainders=column(cursor,Math.multiplyExact(output.stockCapacity(),2),8,alignment);
-        var allocationRemainders=column(cursor,Math.multiplyExact(cells,3),8,alignment);
+        var allocationRemainders=column(cursor,Math.multiplyExact(cells,5),8,alignment);
         return new Layout(source,output,routes,projectedFacesWordOffset,targetFacesWordOffset,flagsWordOffset,activityCellsWordOffset,activityFacesWordOffset,
                 header,masses,volumes,flux,dual,momentum,heat,roots,next,groupMass,groupMomentum,impulse,cellHeat,
-                postingRemainders,allocationRemainders,align(cursor[0],alignment));
+                postingRemainders,allocationRemainders,null,0,align(cursor[0],alignment));
     }
 
     private final FlipKernelBindings bindings;

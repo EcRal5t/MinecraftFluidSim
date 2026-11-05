@@ -56,7 +56,7 @@ final class VulkanCellObservation implements AutoCloseable {
         GAS_VOLUME,
         GAS_MASS,
         GAS_COMPONENT,
-        RESERVED,
+        GAS_MIXTURE,
         GRAIN_MATERIAL_COUNT,
         COHERENT_MATERIAL_COUNT,
         GAS_COMPONENT_COUNT,
@@ -174,6 +174,7 @@ final class VulkanCellObservation implements AutoCloseable {
             h[Header.GAS_MASS.ordinal()] = word(gas.column(VulkanGasStateLayout.Field.MASS_UNITS));
             h[Header.GAS_COMPONENT.ordinal()] = word(gas.column(VulkanGasStateLayout.Field.COMPONENT_HANDLES));
         }
+        h[Header.GAS_MIXTURE.ordinal()] = in.mixture()==null?-1:in.mixture().statesWord();
         h[Header.GRAIN_MATERIAL_COUNT.ordinal()] = grains;
         h[Header.COHERENT_MATERIAL_COUNT.ordinal()] = phases;
         h[Header.GAS_COMPONENT_COUNT.ordinal()] = gases;

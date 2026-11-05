@@ -44,7 +44,8 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
         ROW_COUNT(119),
         FACE_COUNT(120),
         ACTIVITY_CELLS(121),
-        ACTIVITY_FACES(122);
+        ACTIVITY_FACES(122),
+        PRESSURE_STRIDE(123), GAS_MASS(124), GAS_COMPONENTS(125), AMBIENT_MASS(126), FACE_GEOMETRY(128);
         final int word;
         Header(int word) {
             this.word = word;
@@ -70,7 +71,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
 
     record Inputs(VulkanLiquidStateLayout liquid, VulkanCoherentStateLayout coherent,
         VulkanLiquidThermodynamics.Layout liquidCaloric, VulkanLiquidThermodynamics.Layout coherentCaloric,
-        VulkanReactionDefinitions.Layout definitions, VulkanReactionProgressLayout progress, int pressureWord,
+        VulkanReactionDefinitions.Layout definitions, VulkanReactionProgressLayout progress, int pressureWord, int pressureStride,
         int fixedMasksWord, int occupiedAllSvqWord, double cellSize, double gravity) {}
     static final class CapacityGrowth extends IllegalStateException {
         final int liquidSpecies, liquidLimbs, coherentGroups, coherentSpecies;
@@ -120,6 +121,8 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
     }
     static final class Layout {
         int activityCellsWord = -1, activityFacesWord = -1;
+        VulkanGasStateLayout gas; long ambientMassUnits; int faceGeometryWord = -1;
+        void configureGas(VulkanGasStateLayout gas, long ambientMassUnits, int faceGeometryWord) { this.gas = gas; this.ambientMassUnits = ambientMassUnits; this.faceGeometryWord = faceGeometryWord; }
         final Inputs input;
         final VulkanLiquidPhaseRows.Layout phaseRows;
         final int coherentMaterials, rows, species, faces;
@@ -240,6 +243,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             h[Header.LIQUID_CALORIC.word] = Math.toIntExact(input.liquidCaloric().header().offset() / 4);
             h[Header.COHERENT_CALORIC.word] = Math.toIntExact(input.coherentCaloric().header().offset() / 4);
             h[Header.PRESSURE.word] = input.pressureWord();
+            h[Header.PRESSURE_STRIDE.word] = input.pressureStride();
             h[Header.FIXED_MASKS.word] = input.fixedMasksWord();
             h[Header.OCCUPIED_SVQ.word] = input.occupiedAllSvqWord();
             h[Header.PHASE_MOTION_CELLS.word] =
@@ -254,8 +258,12 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             h[Header.FACE_COUNT.word] = faces;
             h[Header.ACTIVITY_CELLS.word] = activityCellsWord;
             h[Header.ACTIVITY_FACES.word] = activityFacesWord;
+            h[Header.GAS_MASS.word] = gas == null ? -1 : Math.toIntExact(gas.column(VulkanGasStateLayout.Field.MASS_UNITS).offset() / 4);
+            h[Header.GAS_COMPONENTS.word] = gas == null ? 0 : gas.definitions().componentIds().size();
+            h[Header.FACE_GEOMETRY.word] = faceGeometryWord;
             for (int i = 0; i < h.length; i++)
                 result.putInt(4 * i, h[i]);
+            result.putLong(4 * Header.AMBIENT_MASS.word, ambientMassUnits);
             result.putDouble(4 * Header.CELL_SIZE.word, input.cellSize())
                 .putDouble(4 * Header.GRAVITY.word, input.gravity());
             return result;
@@ -309,6 +317,17 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
     }
     int completedOperations() {
         return completedOperations;
+    }
+    void recordActivity(VkCommandBuffer command,Layout l,GpuBuffer output,GpuBuffer errors) {
+        rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+        try(var stack=stackPush()) {
+            VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+            vkCmdFillBuffer(command,output.handle(),l.column(Field.CONTROL).offset(),4,0);
+            VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
+        }
+        stage(command,l,10,l.input.liquid().stockCapacity(),0);
     }
     void recordPrepare(VkCommandBuffer command, Layout l, int maximum) {
         liquidRows.recordImport(command, l.phaseRows);

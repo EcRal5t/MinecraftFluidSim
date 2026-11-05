@@ -14,6 +14,8 @@ import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
+import org.lwjgl.vulkan.VkSpecializationInfo;
+import org.lwjgl.vulkan.VkSpecializationMapEntry;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
 import java.nio.ByteBuffer;
@@ -51,10 +53,18 @@ final class FlipKernelBindings implements AutoCloseable {
 
 	/** Compiles once; explicit buffers are bound before recording each completed submission. */
 	FlipKernelBindings(VulkanDeviceContext context, int bindingCount, String source, int pushBytes) {
+		this(context, bindingCount, source, pushBytes, null);
+	}
+
+	FlipKernelBindings(VulkanDeviceContext context, int bindingCount, String source, int pushBytes, int specialization) {
+		this(context, bindingCount, source, pushBytes, Integer.valueOf(specialization));
+	}
+
+	private FlipKernelBindings(VulkanDeviceContext context, int bindingCount, String source, int pushBytes, Integer specialization) {
 		this.context = context;
 		this.bindingCount = bindingCount;
 		try {
-			create(source, pushBytes);
+			create(source, pushBytes, specialization);
 		} catch (RuntimeException | LinkageError exception) {
 			try { close(); }
 			catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
@@ -70,7 +80,7 @@ final class FlipKernelBindings implements AutoCloseable {
 				stack.longs(descriptorSet), null);
 	}
 
-	private void create(String source, int pushBytes) {
+	private void create(String source, int pushBytes, Integer specialization) {
 		try (MemoryStack stack = stackPush()) {
 			VkDescriptorSetLayoutBinding.Buffer bindings =
 					VkDescriptorSetLayoutBinding.calloc(bindingCount, stack);
@@ -107,6 +117,13 @@ final class FlipKernelBindings implements AutoCloseable {
 
 			VkPipelineShaderStageCreateInfo stage = VkPipelineShaderStageCreateInfo.calloc(stack).sType$Default()
 					.stage(VK_SHADER_STAGE_COMPUTE_BIT).module(shaderModule).pName(stack.UTF8("main"));
+			if (specialization != null) {
+				var entries = VkSpecializationMapEntry.calloc(1, stack);
+				entries.get(0).constantID(0).offset(0).size(Integer.BYTES);
+				var data = stack.malloc(Integer.BYTES).order(java.nio.ByteOrder.nativeOrder());
+				data.putInt(0, specialization);
+				stage.pSpecializationInfo(VkSpecializationInfo.calloc(stack).pMapEntries(entries).pData(data));
+			}
 			VkComputePipelineCreateInfo.Buffer pipelineInfo = VkComputePipelineCreateInfo.calloc(1, stack);
 			pipelineInfo.get(0).sType$Default().stage(stage).layout(pipelineLayout);
 			LongBuffer pipelinePointer = stack.mallocLong(1);

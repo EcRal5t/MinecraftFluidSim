@@ -124,6 +124,8 @@ public final class ThermalRegistryCodec {
 		for (ThermalPhaseTransition transition : registry.transitions()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", transition.id());
 			tag.putString("Lower", transition.lowerEnergyMaterialId()); tag.putString("Upper", transition.upperEnergyMaterialId());
+			tag.putString("Species", transition.speciesId() == null ? "" : transition.speciesId());
+			tag.putLong("TransferVelocity", bits(transition.transferVelocityMPerS() == null ? Double.NaN : transition.transferVelocityMPerS()));
 			tag.putLong("LowerSvq", transition.lowerVolumeSvqPerBatch()); tag.putLong("UpperSvq", transition.upperVolumeSvqPerBatch());
 			tag.putString("MassKg", transition.massKgPerBatch().canonical());
 			tag.putString("Interface", transition.interfaceRequirement().name());
@@ -217,7 +219,7 @@ public final class ThermalRegistryCodec {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "transition");
 			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Lower", Tag.TAG_STRING),
-					Map.entry("Upper", Tag.TAG_STRING),
+					Map.entry("Upper", Tag.TAG_STRING), Map.entry("Species", Tag.TAG_STRING), Map.entry("TransferVelocity", Tag.TAG_LONG),
 					Map.entry("LowerSvq", Tag.TAG_LONG), Map.entry("UpperSvq", Tag.TAG_LONG),
 					Map.entry("MassKg", Tag.TAG_STRING), Map.entry("Interface", Tag.TAG_STRING),
 					Map.entry("EquilibriumCurve", Tag.TAG_LIST)));
@@ -233,7 +235,8 @@ public final class ThermalRegistryCodec {
 						value(value, "PressureBits"), value(value, "TemperatureBits")));
 			}
 			result.add(new ThermalPhaseTransition(tag.getStringOr("Id", ""), tag.getStringOr("Lower", ""),
-					tag.getStringOr("Upper", ""), tag.getLongOr("LowerSvq", -1L),
+					tag.getStringOr("Upper", ""), tag.getStringOr("Species", "").isEmpty() ? null : tag.getStringOr("Species", ""),
+					Double.isNaN(value(tag,"TransferVelocity")) ? null : value(tag,"TransferVelocity"), tag.getLongOr("LowerSvq", -1L),
 					tag.getLongOr("UpperSvq", -1L), ExactRational.parse(tag.getStringOr("MassKg", "")),
 					ThermalPhaseTransition.InterfaceRequirement.valueOf(tag.getStringOr("Interface", "")),
 					curve));

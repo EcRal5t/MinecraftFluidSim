@@ -237,7 +237,7 @@ void writeQuantities(int stock) {
         int64_t amounts[ROUTE_COUNT];
         distribute(total, fractions, owner, amounts);
         double reference = readDouble(1, h(H_SPECIES_REFERENCE) + 2 * (material * h(H_SPECIES_STRIDE) + handle));
-        sourceReference += double(total) * reference;
+        if (total != 0l) sourceReference += double(total) * reference;
         uint mask = candidateWords[route(ROUTE_SOURCE_MASKS) + stock];
         for (int dir = 0; dir < ROUTE_COUNT; dir++)
             if ((mask & (1u << dir)) == 0u)

@@ -2,295 +2,102 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 layout(local_size_x = 128) in;
-layout(binding = 0, std430) buffer Arena {
-    uint words[];
-};
-layout(binding = 1, std430) buffer Errors {
-    uint errors;
-};
-layout(push_constant) uniform Params {
-    int header;
-    int stage;
-}
-p;
+layout(binding = 0, std430) buffer Arena { uint words[]; };
+layout(binding = 1, std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; } p;
 // HOST_LAYOUT
 
 const uint SUBCELL_MASK = 255u;
 const int SOLID_QUANTA_PER_SUBCELL_SHIFT = 21;
-const int SOLID_QUANTA_PER_CELL_SHIFT = 24;
 const int FACE_RECORD_WORDS = 8;
 const int FACE_AREA_WORD = 4;
 const int FLUX_RECORD_WORDS = 4;
 const int FLUX_LIQUID_WORD = 2;
-const int GAS_STATE_WORDS = 18;
-const int GAS_STATE_PRESSURE_WORD = 2;
-const int GAS_STATE_GAMMA_WORD = 10;
-const uint ERROR_CAPACITY_INPUT = 4096u;
-const uint ERROR_GAS_GROUP_COUNT = 64u;
-int headerWord(int index) {
-    return int(words[p.header + index]);
-}
-int64_t integerAt(int at) {
-    return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32));
-}
+const uint ERROR_INVALID_ROUTE = 32u;
+const uint ERROR_ZERO_PORE = 4096u;
+int h(int index) { return int(words[p.header + index]); }
+int64_t integerAt(int at) { return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32)); }
 void putInteger(int at, int64_t value) {
     words[at] = uint(value);
     words[at + 1] = uint(uint64_t(value) >> 32);
 }
-double numberAt(int at) {
-    return packDouble2x32(uvec2(words[at], words[at + 1]));
+double numberAt(int at) { return packDouble2x32(uvec2(words[at], words[at + 1])); }
+bool finiteNumber(double value) { return !isnan(value) && !isinf(value); }
+double referenceVolume(int cell) {
+    int begin = int(words[h(H_TOTAL_OFFSETS) + cell]), end = int(words[h(H_TOTAL_OFFSETS) + cell + 1]);
+    if (begin == end) return 0.0;
+    double head = double(words[h(H_TOTAL_LIMBS) + end - 1]);
+    if (end - begin > 1) head += double(words[h(H_TOTAL_LIMBS) + end - 2]) * 2.3283064365386962890625e-10LF;
+    return ldexp(head, int(words[h(H_TOTAL_EXPONENTS) + cell]) + 32 * (end - begin - 1));
 }
-double cellVolume(int cell) {
-    int begin = int(words[headerWord(H_TOTAL_OFFSETS) + cell]), end = int(words[headerWord(H_TOTAL_OFFSETS) + cell + 1]);
-    if (begin == end)
-        return 0.0;
-    double head = double(words[headerWord(H_TOTAL_LIMBS) + end - 1]);
-    if (end - begin > 1)
-        head += double(words[headerWord(H_TOTAL_LIMBS) + end - 2]) * 2.3283064365386962890625e-10LF;
-    return ldexp(head, int(words[headerWord(H_TOTAL_EXPONENTS) + cell]) + 32 * (end - begin - 1));
+int64_t poreQuanta(int cell) {
+    return (int64_t(bitCount((~words[h(H_MASKS) + cell]) & SUBCELL_MASK)) << SOLID_QUANTA_PER_SUBCELL_SHIFT)
+        - integerAt(h(H_OCCUPIED) + 2 * cell);
 }
 int faceIndex(ivec3 pos, int axis, bool positive) {
-    ivec3 dims = ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
+    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
     dims[axis]++;
-    if (positive)
-        pos[axis]++;
-    int base = axis == 0 ? 0 : (headerWord(H_SIZE_X) + 1) * headerWord(H_SIZE_Y) * headerWord(H_SIZE_Z);
-    if (axis == 2)
-        base += headerWord(H_SIZE_X) * (headerWord(H_SIZE_Y) + 1) * headerWord(H_SIZE_Z);
+    if (positive) pos[axis]++;
+    int base = axis == 0 ? 0 : (h(H_SIZE_X) + 1) * h(H_SIZE_Y) * h(H_SIZE_Z);
+    if (axis == 2) base += h(H_SIZE_X) * (h(H_SIZE_Y) + 1) * h(H_SIZE_Z);
     return base + (pos.z * dims.y + pos.y) * dims.x + pos.x;
 }
-void cellInputs() {
+void main() {
     int cell = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
-    if (cell >= headerWord(H_CELL_COUNT) || errors != 0u)
-        return;
-    if (cell < headerWord(H_GAS_GROUP_COUNT))
-        putInteger(headerWord(H_GROUP_CAPACITY) + 2 * cell, int64_t(0));
-    int64_t liquidQuanta = integerAt(headerWord(H_QUANTIZED) + 2 * cell);
-    int64_t occupiedSolidQuanta = integerAt(headerWord(H_OCCUPIED) + 2 * cell);
-    int64_t poreSolidQuanta = (int64_t(bitCount((~words[headerWord(H_MASKS) + cell]) & SUBCELL_MASK)) << SOLID_QUANTA_PER_SUBCELL_SHIFT) - occupiedSolidQuanta;
-    bool hasFractionalVolumeTail = words[headerWord(H_TOTAL_SIGNS) + cell] != 0u && int(words[headerWord(H_TOTAL_EXPONENTS) + cell]) < headerWord(H_QUANTUM_EXPONENT);
-    int64_t upperLiquidQuanta = poreSolidQuanta << (-SOLID_QUANTA_PER_CELL_SHIFT - headerWord(H_QUANTUM_EXPONENT));
-    if (liquidQuanta < int64_t(0) || poreSolidQuanta < int64_t(0) || (p.stage != STAGE_DISPLACEMENT_INPUTS && upperLiquidQuanta < liquidQuanta)) {
-        atomicOr(errors, ERROR_CAPACITY_INPUT);
+    if (cell >= h(H_CELL_COUNT) || errors != 0u) return;
+    int64_t supply = integerAt(h(H_QUANTIZED) + 2 * cell), pore = poreQuanta(cell);
+    double volume = referenceVolume(cell), ratio = numberAt(h(H_PHYSICAL_PER_REFERENCE) + 2 * h(H_PHYSICAL_SCALE_STRIDE) * cell);
+    if (supply < 0l || pore < 0l || !finiteNumber(volume) || volume < 0.0 ||
+        (supply > 0l && (!(ratio > 0.0) || !finiteNumber(ratio) || !(volume > 0.0)))) {
+        atomicOr(errors, ERROR_INVALID_ROUTE);
         return;
     }
-    ivec3 pos = ivec3(cell % headerWord(H_SIZE_X), cell / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y), cell / (headerWord(H_SIZE_X) * headerWord(H_SIZE_Y)));
-    double desiredLiquidOutflow[6];
-    double totalDesiredLiquidOutflow = 0.0, incomingGasVolume = 0.0;
-    uint openNeighborMask = 0u;
+    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    ivec3 pos = ivec3(cell % dims.x, cell / dims.x % dims.y, cell / (dims.x * dims.y));
+    bool cellEnabled = h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
+    double desired[6], total = 0.0;
     for (int side = 0; side < 6; side++) {
         int axis = side / 2;
         bool positive = (side & 1) != 0;
         int face = faceIndex(pos, axis, positive);
-        double area = numberAt(headerWord(H_FACES) + FACE_RECORD_WORDS * face + FACE_AREA_WORD), totalFlux = numberAt(headerWord(H_FLUXES) + FLUX_RECORD_WORDS * face),
-               liquidFlux = numberAt(headerWord(H_FLUXES) + FLUX_RECORD_WORDS * face + FLUX_LIQUID_WORD);
-        if (isnan(area) || isinf(area) || isnan(totalFlux) || isinf(totalFlux) || isnan(liquidFlux) || isinf(liquidFlux)) {
-            atomicOr(errors, ERROR_CAPACITY_INPUT);
-            return;
+        double area = numberAt(h(H_FACES) + FACE_RECORD_WORDS * face + FACE_AREA_WORD);
+        double flux = numberAt(h(H_FLUXES) + FLUX_RECORD_WORDS * face + FLUX_LIQUID_WORD);
+        if (!finiteNumber(area) || !finiteNumber(flux)) { atomicOr(errors, ERROR_INVALID_ROUTE); return; }
+        bool internal = positive ? pos[axis] + 1 < dims[axis] : pos[axis] > 0;
+        int stride = axis == 0 ? 1 : axis == 1 ? dims.x : dims.x * dims.y;
+        int peer = cell + (positive ? stride : -stride);
+        bool connected = cellEnabled && internal && area > 0.0 &&
+            (h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u);
+        if (connected) {
+            int64_t peerPore = poreQuanta(peer);
+            if (peerPore < 0l) { atomicOr(errors, ERROR_INVALID_ROUTE); return; }
+            connected = peerPore > 0l && (h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + peer] != 0u);
         }
-        bool internal = positive ? pos[axis] + 1 < ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z))[axis] : pos[axis] > 0;
-        bool connected = internal && area > 0.0 && (headerWord(H_ACTIVITY_FACES) < 0 || words[headerWord(H_ACTIVITY_FACES) + face] != 0u);
-        if (connected)
-            openNeighborMask |= 1u << side;
-        double direction = positive ? 1.0 : -1.0;
-        desiredLiquidOutflow[side] = connected ? max(0.0, direction * liquidFlux) : 0.0;
-        totalDesiredLiquidOutflow += desiredLiquidOutflow[side];
-        if (connected)
-            incomingGasVolume += max(0.0, -direction * (totalFlux - liquidFlux));
+        desired[side] = connected && supply > 0l ? max(0.0, (positive ? 1.0 : -1.0) * flux) / ratio : 0.0;
+        total += desired[side];
     }
-    double quantaPerNormalizedVolume = ldexp(1.0, -headerWord(H_QUANTUM_EXPONENT));
-    double liquidVolume = cellVolume(cell);
-    double outflowScale = totalDesiredLiquidOutflow > 0.0 && liquidVolume > 0.0 ? min(1.0, liquidVolume / totalDesiredLiquidOutflow) * double(liquidQuanta) / (liquidVolume * quantaPerNormalizedVolume) : 0.0;
-    // Round the total preferred transport once, then allocate its integer quanta
-    // by largest remainder. Independent floors strand a one-quantum stock even
-    // when a face preference is arbitrarily close to transferring it in full.
-    int64_t targetOutflowQuanta = int64_t(min(double(liquidQuanta), floor(totalDesiredLiquidOutflow * quantaPerNormalizedVolume * outflowScale + 0.5)));
-    int64_t faceOutflowQuanta[6];
-    double fractionalRemainders[6];
-    int64_t allocatedOutflowQuanta = 0l;
+    if (!finiteNumber(total)) { atomicOr(errors, ERROR_INVALID_ROUTE); return; }
+    double scale = total > 0.0 && volume > 0.0 ? (pore==0l?double(supply)/total:min(1.0, volume / total) * double(supply) / volume) : 0.0;
+    int64_t target = pore==0l && total>0.0 ? supply : min(supply, int64_t(min(double(supply), floor(total * scale + 0.5))));
+    int64_t amounts[6], allocated = 0l;
+    double remainders[6];
     for (int side = 0; side < 6; side++) {
-        double preferredFaceQuanta = desiredLiquidOutflow[side] * quantaPerNormalizedVolume * outflowScale;
-        faceOutflowQuanta[side] = int64_t(min(double(targetOutflowQuanta - allocatedOutflowQuanta), floor(preferredFaceQuanta)));
-        fractionalRemainders[side] = preferredFaceQuanta - floor(preferredFaceQuanta);
-        allocatedOutflowQuanta += faceOutflowQuanta[side];
+        double preference = desired[side] * scale;
+        amounts[side] = min(target - allocated, int64_t(floor(preference)));
+        remainders[side] = desired[side] > 0.0 ? preference - floor(preference) : -1.0;
+        allocated += amounts[side];
     }
-    for (int part = 0; part < 6 && allocatedOutflowQuanta < targetOutflowQuanta; part++) {
-        int bestSide = -1;
+    for (int part = 0; part < 6 && allocated < target; part++) {
+        int best = -1;
         for (int side = 0; side < 6; side++)
-            if (fractionalRemainders[side] >= 0.0 && (bestSide < 0 || fractionalRemainders[side] > fractionalRemainders[bestSide]))
-                bestSide = side;
-        if (bestSide < 0)
-            break;
-        faceOutflowQuanta[bestSide]++;
-        fractionalRemainders[bestSide] = -1.0;
-        allocatedOutflowQuanta++;
+            if (remainders[side] >= 0.0 && (best < 0 || remainders[side] > remainders[best])) best = side;
+        if (best < 0) break;
+        amounts[best]++;
+        remainders[best] = -1.0;
+        allocated++;
     }
-    for (int side = 0; side < 6; side++)
-        putInteger(headerWord(H_CAPACITY_PREFERRED) + 2 * (7 * cell + side + 1), faceOutflowQuanta[side]);
-    putInteger(headerWord(H_CAPACITY_PREFERRED) + 14 * cell, liquidQuanta - allocatedOutflowQuanta);
-    // Exact full cells need actual incoming dry-space transport before creating new dry volume.
-    bool isFull = !hasFractionalVolumeTail && liquidQuanta >= upperLiquidQuanta;
-    int64_t filledLiquidQuanta = min(liquidQuanta, upperLiquidQuanta);
-    int64_t lowerLiquidQuanta =
-        isFull && p.stage != STAGE_DISPLACEMENT_INPUTS ? filledLiquidQuanta - int64_t(min(double(filledLiquidQuanta), floor(incomingGasVolume * quantaPerNormalizedVolume))) : int64_t(0);
-    if (headerWord(H_ACTIVITY_CELLS) >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cell] == 0u) {
-        lowerLiquidQuanta = liquidQuanta;
-        upperLiquidQuanta = liquidQuanta;
-        openNeighborMask = 0u;
-    }
-    putInteger(headerWord(H_CAPACITY_K) + 2 * cell, liquidQuanta);
-    putInteger(headerWord(H_CAPACITY_LOWER) + 2 * cell, lowerLiquidQuanta);
-    putInteger(headerWord(H_CAPACITY_UPPER) + 2 * cell, upperLiquidQuanta);
-    int gasNode = headerWord(H_GAS_GROUP_COUNT) > 0 ? int(words[headerWord(H_GAS_CELL_NODES) + cell]) : 0;
-    if (gasNode > headerWord(H_GAS_GROUP_COUNT)) {
-        atomicOr(errors, ERROR_GAS_GROUP_COUNT);
-        return;
-    }
-    words[headerWord(H_CAPACITY_GROUP_ID) + cell] = uint(gasNode > 0 ? gasNode - 1 : -1);
-    words[headerWord(H_CAPACITY_OPEN_NEIGHBORS) + cell] = openNeighborMask;
-}
-
-// Same adiabatic relation as the gas pressure model, evaluated in binary64.
-double logarithm(double x) {
-    int e;
-    double m = frexp(x, e);
-    if (m < 0.7071067811865475244LF) {
-        m *= 2.0;
-        e--;
-    }
-    double z = (m - 1.0) / (m + 1.0), z2 = z * z, power = z, result = z;
-    for (int k = 3; k <= 25; k += 2) {
-        power *= z2;
-        result += power / double(k);
-    }
-    return 2.0 * result + double(e) * 0.6931471805599453094LF;
-}
-double exponential(double x) {
-    int e = int(round(x / 0.6931471805599453094LF));
-    double r = x - double(e) * 0.6931471805599453094LF, term = 1.0, result = 1.0;
-    for (int k = 1; k <= 18; k++) {
-        term *= r / double(k);
-        result += term;
-    }
-    return ldexp(result, e);
-}
-double retainedGasVolume(int node) {
-    double gasVolume = numberAt(headerWord(H_GAS_VOLUMES) + 2 * node), gasPressure = numberAt(headerWord(H_GAS_STATES) + GAS_STATE_WORDS * node + GAS_STATE_PRESSURE_WORD),
-           adiabaticIndex = numberAt(headerWord(H_GAS_STATES) + GAS_STATE_WORDS * node + GAS_STATE_GAMMA_WORD);
-    if (int(words[headerWord(H_GAS_MECHANICAL_MODE) + node]) == 0)
-        return gasVolume;
-    double predictedPressure = numberAt(headerWord(H_GAS_PRESSURE) + 2 * node);
-    if (!(gasVolume > 0.0 && gasPressure > 0.0 && adiabaticIndex > 0.0 && predictedPressure >= 0.0) || isnan(predictedPressure) || isinf(predictedPressure)) {
-        atomicOr(errors, ERROR_CAPACITY_INPUT);
-        return 0.0;
-    }
-    if (predictedPressure <= gasPressure)
-        return gasVolume;
-    return gasVolume * exponential((logarithm(gasPressure) - logarithm(predictedPressure)) / adiabaticIndex);
-}
-
-const int64_t MAX_TOTAL = int64_t(0x3fffffffffffffffUL);
-int64_t addUpper(int64_t a, int64_t b) {
-    return a > MAX_TOTAL - b ? MAX_TOTAL : a + b;
-}
-int64_t addSource(int64_t a, int64_t b) {
-    if (b < int64_t(0) || a > MAX_TOTAL - b) {
-        atomicOr(errors, ERROR_CAPACITY_INPUT);
-        return a;
-    }
-    return a + b;
-}
-shared uint stopped;
-shared int64_t groupPoreCapacityQuanta[128];
-shared int64_t groupLiquidSourceQuanta[128];
-shared uint groupHasFractionalVolumeTail[128];
-shared uint groupHasInactiveCell[128];
-void groupInputs() {
-    int group = int(gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u), lane = int(gl_LocalInvocationID.x);
-    if (group >= headerWord(H_GAS_GROUP_COUNT) || group >= int(words[headerWord(H_GAS_COUNTS)]))
-        return;
-    int first = int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + group + 1]),
-        end = int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + group + 2]);
-    int64_t poreCapacityQuanta = int64_t(0), liquidSourceQuanta = int64_t(0);
-    uint hasFractionalVolumeTail = 0u, hasInactiveCell = 0u;
-    for (int member = first + lane; member < end; member += 128) {
-        int cell = int(words[headerWord(H_GAS_COMPONENT_MEMBERS) + member]);
-        poreCapacityQuanta = addUpper(poreCapacityQuanta, integerAt(headerWord(H_CAPACITY_UPPER) + 2 * cell));
-        liquidSourceQuanta = addSource(liquidSourceQuanta, integerAt(headerWord(H_CAPACITY_K) + 2 * cell));
-        if (words[headerWord(H_TOTAL_SIGNS) + cell] != 0u && int(words[headerWord(H_TOTAL_EXPONENTS) + cell]) < headerWord(H_QUANTUM_EXPONENT))
-            hasFractionalVolumeTail = 1u;
-        if (headerWord(H_ACTIVITY_CELLS) >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cell] == 0u) hasInactiveCell = 1u;
-    }
-    groupPoreCapacityQuanta[lane] = poreCapacityQuanta;
-    groupLiquidSourceQuanta[lane] = liquidSourceQuanta;
-    groupHasFractionalVolumeTail[lane] = hasFractionalVolumeTail;
-    groupHasInactiveCell[lane] = hasInactiveCell;
-    barrier();
-    for (int stride = 64; stride > 0; stride /= 2) {
-        if (lane < stride) {
-            groupPoreCapacityQuanta[lane] = addUpper(groupPoreCapacityQuanta[lane], groupPoreCapacityQuanta[lane + stride]);
-            groupLiquidSourceQuanta[lane] = addSource(groupLiquidSourceQuanta[lane], groupLiquidSourceQuanta[lane + stride]);
-            groupHasFractionalVolumeTail[lane] |= groupHasFractionalVolumeTail[lane + stride];
-            groupHasInactiveCell[lane] |= groupHasInactiveCell[lane + stride];
-        }
-        barrier();
-    }
-    if (lane == 0) {
-        bool hasGasInventory = false;
-        if (group < int(words[headerWord(H_GAS_COUNTS)]))
-            for (int component = int(words[headerWord(H_GAS_ROW_COMPONENT_OFFSETS) + group]);
-                 component < int(words[headerWord(H_GAS_ROW_COMPONENT_OFFSETS) + group + 1]); component++)
-                if (integerAt(headerWord(H_GAS_STANDARD_VOLUME) + 2 * component) > int64_t(0))
-                    hasGasInventory = true;
-        int64_t reservedGasQuanta = 0l;
-        if (hasGasInventory && groupHasInactiveCell[0] == 0u && groupPoreCapacityQuanta[0] < MAX_TOTAL) {
-            double normalizedGasVolume = retainedGasVolume(group) / numberAt(p.header + H_CELL_VOLUME);
-            double gasVolumeQuanta = ceil(ldexp(normalizedGasVolume, -headerWord(H_QUANTUM_EXPONENT)));
-            if (isnan(gasVolumeQuanta) || isinf(gasVolumeQuanta) || gasVolumeQuanta < 0.0) {
-                atomicOr(errors, ERROR_CAPACITY_INPUT);
-                return;
-            }
-            reservedGasQuanta = min(groupPoreCapacityQuanta[0], int64_t(min(double(MAX_TOTAL), gasVolumeQuanta)));
-            // Target solid occupation already prescribes a change in chamber volume.
-            // Retaining this group's liquid defines its future dry-space reference;
-            // pressure may permit further compression. An approximate pressure solve
-            // cannot reserve old gas space that the prescribed geometry has removed.
-            // Cell upper bounds still route liquid out of newly occupied cells, and
-            // groups whose source exceeds their future pore volume must export it.
-            int64_t futureDryReference = max(0l, groupPoreCapacityQuanta[0] - groupLiquidSourceQuanta[0]);
-            reservedGasQuanta = min(reservedGasQuanta, futureDryReference);
-            if (reservedGasQuanta == 0l && groupHasFractionalVolumeTail[0] == 0u)
-                reservedGasQuanta = 1l;
-        }
-        int64_t liquidCapacityQuanta = groupPoreCapacityQuanta[0] - reservedGasQuanta;
-        if (liquidCapacityQuanta < int64_t(0)) {
-            atomicOr(errors, ERROR_CAPACITY_INPUT);
-            return;
-        }
-        putInteger(headerWord(H_GROUP_CAPACITY) + 2 * group, liquidCapacityQuanta);
-    }
-}
-void main() {
-    if (p.stage == STAGE_PREPARE_GROUP_DISPATCH) {
-        if (gl_GlobalInvocationID.x == 0u) {
-            uint nodes = words[headerWord(H_GAS_COUNTS)];
-            if (nodes > uint(headerWord(H_GAS_GROUP_COUNT)))
-                atomicOr(errors, ERROR_GAS_GROUP_COUNT);
-            uint activeNodes = errors == 0u ? nodes : 0u;
-            words[headerWord(H_GROUP_DISPATCH)] = min(activeNodes, 65535u);
-            words[headerWord(H_GROUP_DISPATCH) + 1] = max(1u, (activeNodes + 65534u) / 65535u);
-            words[headerWord(H_GROUP_DISPATCH) + 2] = 1u;
-        }
-        return;
-    }
-    if (p.stage == STAGE_CELL_INPUTS || p.stage == STAGE_DISPLACEMENT_INPUTS) {
-        if (errors == 0u)
-            cellInputs();
-        return;
-    }
-    if (gl_LocalInvocationID.x == 0u)
-        stopped = errors;
-    barrier();
-    if (stopped == 0u)
-        groupInputs();
+    // No liquid can remain in a cell whose future open volume is zero.
+    if (pore == 0l && supply > allocated) { atomicOr(errors, ERROR_ZERO_PORE); return; }
+    for (int side = 0; side < 6; side++) putInteger(h(H_ACCEPTED) + 2 * (7 * cell + side + 1), amounts[side]);
+    putInteger(h(H_ACCEPTED) + 14 * cell, supply - allocated);
 }

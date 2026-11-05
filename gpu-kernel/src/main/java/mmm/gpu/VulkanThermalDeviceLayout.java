@@ -15,6 +15,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import static org.lwjgl.vulkan.VK10.vkCmdCopyBuffer;
 
@@ -56,12 +58,18 @@ final class VulkanThermalDeviceLayout {
     record ExchangeOutputs(VulkanLiquidStateLayout.Column deviceChanges,VulkanLiquidStateLayout.Column fluidExchange,VulkanLiquidStateLayout.Column roundoff){}
     private final int cells,devices,ports;
     private final Definitions definitions;
+    private final Map<DeviceKey,Integer> identityIndices;
+    private record DeviceKey(String provider,String object){}
     private final long baseOffset,endOffset,alignment;
     private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
     VulkanThermalDeviceLayout(int cells,int deviceCapacity,int portCapacity,Definitions definitions,long base,long alignment){
         if(cells<1||deviceCapacity<definitions.identities().size()||portCapacity<0||base<0||alignment<8||(alignment&(alignment-1))!=0)
             throw new IllegalArgumentException("Invalid finite thermal device layout");
-        this.cells=cells;devices=deviceCapacity;ports=portCapacity;this.definitions=definitions;this.alignment=alignment;baseOffset=align(base);long cursor=baseOffset;
+        this.cells=cells;devices=deviceCapacity;ports=portCapacity;this.definitions=definitions;this.alignment=alignment;
+        var indices=new HashMap<DeviceKey,Integer>();
+        for(int i=0;i<definitions.identities().size();i++){var id=definitions.identities().get(i);
+            if(indices.put(new DeviceKey(id.providerId(),id.objectId()),i)!=null)throw new IllegalArgumentException("Duplicate finite thermal identity");}
+        identityIndices=Map.copyOf(indices);baseOffset=align(base);long cursor=baseOffset;
         for(var f:Field.values()){
             int count=switch(f){case COUNTS->2;case SPECIES_OFFSETS->devices+1;case SPECIES_HANDLES,SPECIES_AMOUNTS->0;
                 case PORT_DEVICE,PORT_CELL,PORT_DIRECTION,PORT_WALL_THICKNESS,PORT_WALL_K,PORT_FILM_THICKNESS->ports;
@@ -157,7 +165,7 @@ final class VulkanThermalDeviceLayout {
                     org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,org.lwjgl.vulkan.VK10.VK_ACCESS_SHADER_READ_BIT|org.lwjgl.vulkan.VK10.VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
     }
-    private int identity(String provider,String object){for(int i=0;i<definitions.identities().size();i++){var id=definitions.identities().get(i);if(id.providerId().equals(provider)&&id.objectId().equals(object))return i;}return -1;}
+    private int identity(String provider,String object){return identityIndices.getOrDefault(new DeviceKey(provider,object),-1);}
     private SignedDyadic readAudit(ByteBuffer b,Audit value){return readDyadic(b,relative(audit(value).offset()));}
     private static void writeDyadic(ByteBuffer b,int address,SignedDyadic value){
         var magnitude=value.significand().abs();int limbs=(magnitude.bitLength()+31)/32;if(limbs>DYADIC_WORDS-4)throw new IllegalArgumentException("Finite device audit exceeds resident dyadic width");

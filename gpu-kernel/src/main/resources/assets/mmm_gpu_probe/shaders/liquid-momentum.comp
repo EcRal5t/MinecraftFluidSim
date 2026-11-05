@@ -127,7 +127,7 @@ double projectedVelocity(int faceId) {
     return getDouble(headerWord(H_PROJECTED_FACES) + 8 * faceId + 2);
 }
 bool openFace(int faceId, ivec3 coordinates, int axis) {
-    return coordinates[axis] > 0 && coordinates[axis] < gridSize()[axis] && getDouble(headerWord(H_TARGET_FACES) + 8 * faceId + 4) > 0;
+    return getDouble(headerWord(H_TARGET_FACES) + 8 * faceId + 4) > 0;
 }
 void cellTotals(int cellId) {
     int64_t sourceMass = int64_t(0), targetMass = int64_t(0);
@@ -138,6 +138,10 @@ void cellTotals(int cellId) {
     for (int stock = int(words[targetField(STOCK_CELL_OFFSETS) + cellId]); stock < int(words[targetField(STOCK_CELL_OFFSETS) + cellId + 1]); stock++) {
         targetMass = addPositive(targetMass, getLong(targetField(STOCK_MASS_UNITS) + 2 * stock));
         volume += getDouble(targetField(STOCK_NUMERIC_VOLUMES) + 2 * stock);
+    }
+    if(headerWord(H_GAS_OLD_MASS)>=0){
+        sourceMass=addPositive(sourceMass,getLong(headerWord(H_GAS_OLD_MASS)+2*cellId));
+        targetMass=addPositive(targetMass,getLong(headerWord(H_GAS_NEW_MASS)+2*cellId));
     }
     putLong(headerWord(H_CELL_MASSES) + 4 * cellId, sourceMass);
     putLong(headerWord(H_CELL_MASSES) + 4 * cellId + 2, targetMass);
@@ -157,7 +161,9 @@ void faceFlux(int faceId) {
              stock < int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + upperCell + 1]); stock++)
             reverseMass = addPositive(reverseMass, routeMass(stock, 1 + 2 * axis));
     }
-    putLong(headerWord(H_PRIMAL_FLUX) + 2 * faceId, forwardMass - reverseMass);
+    int64_t flux=forwardMass-reverseMass;
+    if(headerWord(H_GAS_PRIMAL_MASS)>=0)flux=addSigned(flux,getLong(headerWord(H_GAS_PRIMAL_MASS)+2*faceId));
+    putLong(headerWord(H_PRIMAL_FLUX) + 2 * faceId, flux);
 }
 void transport(int faceId) {
     int component;
@@ -166,13 +172,19 @@ void transport(int faceId) {
     ivec3 faceGridSize = gridSize() + axisUnitVector(component);
     int lowerCell = cellIndex(coordinates - axisUnitVector(component)), upperCell = cellIndex(coordinates);
     int64_t sourceMass = addPositive(cellMassUnits(lowerCell, false), cellMassUnits(upperCell, false)), targetMass = addPositive(cellMassUnits(lowerCell, true), cellMassUnits(upperCell, true));
+    bool hasAmbient = (lowerCell < 0 || upperCell < 0) && getDouble(headerWord(H_PROJECTED_FACES) + 8 * faceId + 4) > 0.0;
+    if (hasAmbient) {
+        int64_t ambient = getLong(p.header + H_AMBIENT_MASS);
+        sourceMass = addPositive(sourceMass, ambient);
+        targetMass = addPositive(targetMass, ambient);
+    }
     putLong(headerWord(H_DUAL_MASS) + 2 * faceId, targetMass);
     putDouble(headerWord(H_FACE_HEAT) + 2 * faceId, 0.0);
     if ((faceFlags(faceId) & 1) == 0) {
         putDouble(headerWord(H_TRANSPORTED_MOMENTUM) + 2 * faceId, sourceDouble(sourceField(STOCK_MOMENTUM_X + component) + 2 * (faceId - faceAxisOffset(component))));
         return;
     }
-    int64_t outgoingMass = int64_t(0), incomingMass = int64_t(0);
+    int64_t outgoingMass = int64_t(0), incomingMass = int64_t(0), externalIncoming = int64_t(0);
     double incomingMomentum = 0;
     int neighborFaces[6];
     int64_t incomingAmounts[6];
@@ -182,8 +194,16 @@ void transport(int faceId) {
             ivec3 neighborCoordinates = coordinates + axisUnitVector(axis) * (side == 0 ? -1 : 1);
             neighborFaces[neighborSlot] = faceIndex(neighborCoordinates, component);
             incomingAmounts[neighborSlot] = int64_t(0);
-            if (!coordinatesInside(neighborCoordinates, faceGridSize))
+            if (!coordinatesInside(neighborCoordinates, faceGridSize)) {
+                int64_t outsideFlux = interfaceFlux(side == 0 ? neighborCoordinates : coordinates, axis, component);
+                if (axis == component) outsideFlux = addSigned(outsideFlux, outsideFlux);
+                int64_t intoDomain = side == 0 ? outsideFlux : -outsideFlux;
+                if (intoDomain > int64_t(0)) {
+                    externalIncoming = addPositive(externalIncoming, intoDomain);
+                    incomingMass = addPositive(incomingMass, intoDomain);
+                } else if (intoDomain < int64_t(0)) outgoingMass = addPositive(outgoingMass, -intoDomain);
                 continue;
+            }
             int64_t signedFlux = interfaceFlux(side == 0 ? neighborCoordinates : coordinates, axis, component);
             int64_t outflow = side == 0 ? -signedFlux : signedFlux;
             if (outflow > int64_t(0))
@@ -195,22 +215,27 @@ void transport(int faceId) {
                 incomingMomentum += double(incomingAmount) * projectedVelocity(neighborFaces[neighborSlot]);
             }
         }
-    if (outgoingMass > sourceMass) {
+    // Mix actual incoming momentum with the previous dual mass before removing outgoing mass.
+    int64_t available = addPositive(sourceMass, incomingMass);
+    if (outgoingMass > available) {
         atomicOr(errors, ERROR_INVALID_MOMENTUM);
         return;
     }
-    int64_t remaining = sourceMass - outgoingMass;
-    if (addPositive(remaining, incomingMass) != targetMass) {
+    int64_t remaining = available - outgoingMass;
+    if (remaining != targetMass) {
         atomicOr(errors, ERROR_INVALID_MOMENTUM);
         return;
     }
-    double oldVelocity = projectedVelocity(faceId), momentum = double(remaining) * oldVelocity + incomingMomentum;
+    double retainedFraction = available > int64_t(0) ? double(remaining) / double(available) : 0.0;
+    double retainedOld = double(sourceMass) * retainedFraction;
+    double retainedAmbient = double(externalIncoming) * retainedFraction;
+    double oldVelocity = projectedVelocity(faceId), momentum = retainedOld * oldVelocity + incomingMomentum * retainedFraction;
     double velocity = targetMass > int64_t(0) ? momentum / double(targetMass) : 0, difference = oldVelocity - velocity;
-    double heat = 2.5e-11 * double(remaining) * difference * difference;
+    double heat = 2.5e-11 * (retainedOld * difference * difference + retainedAmbient * velocity * velocity);
     for (int neighborSlot = 0; neighborSlot < 6; neighborSlot++)
         if (incomingAmounts[neighborSlot] > int64_t(0)) {
             difference = projectedVelocity(neighborFaces[neighborSlot]) - velocity;
-            heat += 2.5e-11 * double(incomingAmounts[neighborSlot]) * difference * difference;
+            heat += 2.5e-11 * double(incomingAmounts[neighborSlot]) * retainedFraction * difference * difference;
         }
     putDouble(headerWord(H_TRANSPORTED_MOMENTUM) + 2 * faceId, momentum * 5e-11);
     putDouble(headerWord(H_FACE_HEAT) + 2 * faceId, heat);
@@ -342,8 +367,8 @@ void postCellHeat(int cellId) {
     int firstStock = int(words[targetField(STOCK_CELL_OFFSETS) + cellId]), stockEnd = int(words[targetField(STOCK_CELL_OFFSETS) + cellId + 1]), remainderStock = -1;
     int64_t largestMass = int64_t(0), totalMass = cellMassUnits(cellId, true);
     double heat = getDouble(headerWord(H_CELL_HEAT) + 2 * cellId);
-    for (int i = 0; i < 3; i++)
-        putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 6 * cellId + 2 * i, 0.0);
+    for (int i = 0; i < 5; i++)
+        putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 10 * cellId + 2 * i, 0.0);
     if (headerWord(H_ACTIVITY_CELLS) >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cellId] == 0u)
         return;
     for (int stock = firstStock; stock < stockEnd; stock++) {
@@ -356,6 +381,15 @@ void postCellHeat(int cellId) {
             putDouble(headerWord(H_HEAT_POSTING_REMAINDERS) + 4 * stock, -getDouble(targetField(STOCK_ENERGY_BITS) + 2 * stock));
             putDouble(targetField(STOCK_ENERGY_BITS) + 2 * stock, 0.0);
         }
+    }
+    int64_t gasMass=headerWord(H_GAS_NEW_MASS)<0?int64_t(0):getLong(headerWord(H_GAS_NEW_MASS)+2*cellId);
+    if(gasMass>int64_t(0)){
+        double gasShare=remainderStock<0?heat:heat*(double(gasMass)/double(totalMass));
+        double after,gasError,liquidHeat,splitError;int gasEnergy=headerWord(H_GAS_ENERGY)+2*cellId;
+        heatTwoSum(getDouble(gasEnergy),gasShare,after,gasError);putDouble(gasEnergy,after);
+        heatTwoSum(heat,-gasShare,liquidHeat,splitError);heat=liquidHeat;totalMass-=gasMass;
+        putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS)+10*cellId+6,-gasError);
+        putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS)+10*cellId+8,-splitError);
     }
     if (remainderStock < 0) {
         if (heat != 0.0)
@@ -384,9 +418,9 @@ void postCellHeat(int cellId) {
     postStockHeat(remainderStock, ownerShare);
     // Across arbitrary stock counts, these three terms plus the per-stock terms sum exactly to
     // sum(final U) - sum(previous U) - cellHeat. cellHeat itself remains the mechanical heat ledger.
-    putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 6 * cellId, closure);
-    putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 6 * cellId + 2, closureRemainder);
-    putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 6 * cellId + 4, -ownerRemainder);
+    putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 10 * cellId, closure);
+    putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 10 * cellId + 2, closureRemainder);
+    putDouble(headerWord(H_HEAT_ALLOCATION_REMAINDERS) + 10 * cellId + 4, -ownerRemainder);
 }
 void main() {
     int id = int(gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * 65535u * 128u);

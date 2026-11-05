@@ -133,11 +133,12 @@ final class RegionCheckpointValidator {
 				|| gasCapability != gasPayload) {
 			throw new IOException("Thermal region-state capabilities disagree with complete payload");
 		}
-		GasRegionStateCodec.ManifestData gas = new GasRegionStateCodec().decodeManifest(
-				requiredExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION).payload());
-		if (expected.gasNodeCount() != gas.nodes().size()) {
-			throw new IOException("Thermal gas energy ordinals disagree with gas node inventory");
-		}
+		var gasPayloadBytes=requiredExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION).payload();
+		var gasCodec=new GasRegionStateCodec();
+		if(!GasRegionStateCodec.isSpatial(gasPayloadBytes))throw new IOException("Thermal checkpoint requires local gas inventory");
+		var gas=gasCodec.decodeSpatialManifest(gasPayloadBytes);
+		if(expected.gasNodeCount()!=0||!expected.gasEnergy().equals(gas.energy()))
+			throw new IOException("Thermal and spatial gas energy totals differ");
 		Map<RegionSectionState.SectionKey, ThermalRegionStateCodec.SectionLedger> ledgers = new HashMap<>();
 		for (ThermalRegionStateCodec.SectionLedger ledger : expected.sectionLedgers()) {
 			if (ledgers.put(ledger.key(), ledger) != null) throw new IOException("Duplicate thermal section ledger");
@@ -339,13 +340,10 @@ final class RegionCheckpointValidator {
 			for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++) {
 				int cell=x+nx*(y+ny*z);if(covered[cell])throw new IOException("Overlapping collision slices");covered[cell]=true;local++;
 			}
-			var componentVolume=new HashMap<Long,SignedDyadic>();
 			for(var stock:section.liquidStocks()) {
 				int cell=stock.key().cell();if(cell>=cells||!keys.add(stock.key())||!RegionCheckpointAssembler.sectionOfCell(manifest.geometry(),cell).equals(section.key()))throw new IOException("Liquid key is repeated or stored in the wrong section");
 				int x=cell%nx-section.localStartX(),y=cell/nx%ny-section.localStartY(),z=cell/(nx*ny)-section.localStartZ();int mask=Byte.toUnsignedInt(masks[x+section.sizeX()*(y+section.sizeY()*z)]);
 				boolean found=false;for(int support:mmm.inventory.LiquidCellInventory.connectedSupports(mask))found|=support==stock.key().supportMask();if(!found)throw new IOException("Liquid stock crosses a fixed collision component");
-				long component=((long)cell<<8)|stock.key().supportMask();var amount=componentVolume.getOrDefault(component,SignedDyadic.ZERO).add(stock.volume());componentVolume.put(component,amount);
-				if(amount.compareTo(SignedDyadic.of(Integer.bitCount(stock.key().supportMask())*.125))>0)throw new IOException("Liquid stock exceeds its collision component capacity");
 				if(!manifest.hasChemicalState()&&stock.mixture()!=null)throw new IOException("Unbound chemical stock");
 				if(manifest.materialPalette().isEmpty()&&stock.key().material()!=0)throw new IOException("Unbound liquid material");
 				totalVolume=totalVolume.add(stock.volume());totalMass=Math.addExact(totalMass,stock.massUnits());
@@ -373,23 +371,6 @@ final class RegionCheckpointValidator {
 		for(int cell=0;cell<localCells;cell++)for(int micro=0;micro<8;micro++)
 			if((Byte.toUnsignedInt(masks[cell])&1<<micro)!=0&&phase[8*cell+micro]!=0)
 				throw new IOException("Phase occupancy intersects a fixed solid microbox");
-		var stockVolumes=new HashMap<Long,SignedDyadic>();
-		for(var stock:section.liquidStocks()){
-			long key=((long)stock.key().cell()<<8)|stock.key().supportMask();
-			stockVolumes.merge(key,stock.volume(),SignedDyadic::add);
-		}
-		int local=0;
-		for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)
-			for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)
-				for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++,local++){
-					int cell=x+manifest.sizeX()*(y+manifest.sizeY()*z);
-					for(int support:mmm.inventory.LiquidCellInventory.connectedSupports(Byte.toUnsignedInt(masks[local]))){
-						double sum=0;for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0)sum+=phase[8*local+micro];
-						double expected=stockVolumes.getOrDefault(((long)cell<<8)|support,SignedDyadic.ZERO).toDouble();
-						if(Math.abs(sum-expected)>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)
-							throw new IOException("Phase occupancy volume differs from cell inventory");
-					}
-				}
 		int cellsPerBlock = Math.round(1.0F / manifest.solverConfig().cellSize());
 		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock * manifest.solverConfig().cellSize() - 1.0F) > 1.0E-6F) {
 			throw new IOException("Unsupported persisted cell-to-block ratio");

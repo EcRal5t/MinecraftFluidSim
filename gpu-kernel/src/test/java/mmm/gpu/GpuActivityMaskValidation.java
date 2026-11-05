@@ -95,10 +95,12 @@ public final class GpuActivityMaskValidation {
         if(expected[0]==0)throw new AssertionError("Fixture must retain a granular parcel in the mechanical control");
         if(!Arrays.equals(expected,capture.granularCounters()))
             throw new AssertionError("Granular counters differ from the mechanical candidate control");
-        var pairs=(java.nio.ByteBuffer)read.invoke(capture,layout.transport.aperture.flow.requiredPairsOffset(),4L);
-        if(pairs.getInt(0)<=0)throw new AssertionError("Fixture must have a finite gas aperture");
-        if(capture.gasFlowActive()!=(pairs.getInt(0)>0))
-            throw new AssertionError("Gas flow observation differs from the mechanical candidate control");
+        var mass=layout.transport.gas.transport.column(VulkanLocalGasTransport.Field.PRIMAL_MASS);
+        var values=(java.nio.ByteBuffer)read.invoke(capture,mass.offset(),mass.bytes());
+        boolean active=false;
+        for(int i=0;i<mass.count();i++)if(values.getLong(8*i)!=0)active=true;
+        if(capture.gasFlowActive()!=active)
+            throw new AssertionError("Gas flow observation differs from the local transported mass");
     }
     private static void checkActivity(ResidentFluidState state,boolean[] world) {
         var available=state.activityGraph().available(world);

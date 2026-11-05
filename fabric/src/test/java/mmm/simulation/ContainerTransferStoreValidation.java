@@ -92,6 +92,7 @@ public final class ContainerTransferStoreValidation {
 			run("chemical insertion preserves complete integer mass and residual columns", ContainerTransferStoreValidation::testChemicalInsertionMassConservation);
 			run("existing partial bucket rounds actual extracted energy only at final item", ContainerTransferStoreValidation::testExistingBucketThermalSettlement);
 			run("partial outlet requests only available marker volume", ContainerTransferStoreValidation::testPartialOutlet);
+            run("small chemical sample retains exact inventory", ContainerTransferStoreValidation::testSmallChemicalSample);
 			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
 			run("committed private target replaces an in-process base solver",
 					ContainerTransferStoreValidation::testCommittedTargetAdoption);
@@ -847,7 +848,7 @@ public final class ContainerTransferStoreValidation {
 		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", 293.15, 0.0, 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
-		var registry = new ThermalRegistry(List.of(definition));
+		var registry = mmm.fluid.ThermalValidationSupport.thermalRegistry(List.of(definition));
 		var state = new ThermalStateFunction(registry);
 		var domain = new HostFluidState(3, 3, 3, config);
 		domain.bindThermal(registry, liquids, 300.0);
@@ -875,7 +876,7 @@ public final class ContainerTransferStoreValidation {
 		domain.settleExternalContainerInsertion(split.selectedEnergy(), debit);
 		var after = domain.thermalAudit();
 		SignedDyadic correction = SignedDyadic.of(debit).subtract(SignedDyadic.of(split.selectedEnergy()));
-		check(after.externalSource().equals(SignedDyadic.of(debit))
+		check(after.externalSource().subtract(before.externalSource()).equals(correction)
 				&& after.roundoffResidual().subtract(before.roundoffResidual()).equals(correction.negate()),
 				"item debit/received energy difference was not assigned to thermal roundoff");
 		check(domain.exactInternalEnergy().equals(actualEnergy) && after.expectedInventory().equals(actualEnergy),
@@ -919,7 +920,7 @@ public final class ContainerTransferStoreValidation {
 		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", 293.15, 0.0, 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
-		var registry = new ThermalRegistry(List.of(definition));
+		var registry = mmm.fluid.ThermalValidationSupport.thermalRegistry(List.of(definition));
 		for (double sign : new double[] {-1.0, 1.0}) {
 			var source = new HostFluidState(3, 3, 3, config);
 			source.setVolume(1, 1, 1, 0.125F);
@@ -933,12 +934,13 @@ public final class ContainerTransferStoreValidation {
 			SignedDyadic exact = SignedDyadic.sum(energy);
 			domain.restoreThermalParticleState(new FlipThermalParticleState(3, 3, 3, 0.5F, domain.particleCount(),
 					registry.fingerprint(), 300.0, energy, ThermalAuditLedger.initialized(exact)), registry);
-			var auditBefore = domain.thermalAudit();
 			var snapshotBefore = domain.exportThermalParticleState();
 			SignedDyadic before = domain.exactInternalEnergy();
-			check(before.equals(exact) && domain.thermalAudit().equals(auditBefore)
+			var auditBefore = domain.thermalAudit();
+			check(before.subtract(domain.exactGasInternalEnergy()).equals(exact) && domain.thermalAudit().equals(auditBefore)
 					&& java.util.Arrays.equals(snapshotBefore.copyInternalEnergy(), domain.exportThermalParticleState().copyInternalEnergy()),
-					"exact inventory observation changed raw thermal state");
+					"exact inventory observation changed raw thermal state: total=" + before + ", gas=" + domain.exactGasInternalEnergy() + ", liquid=" + exact + ", audit=" + domain.thermalAudit() + ", prior=" + auditBefore);
+			var gasBefore = domain.exactGasInternalEnergy();
 			var extracted = domain.tryExtractExactVolume(1, 1, 1, 0.25F, 1, 0);
 			check(extracted.transferred() && extracted.internalEnergy() == sign * 16_384.0,
 					"regression no longer exercises the rounded transfer receipt");
@@ -946,18 +948,43 @@ public final class ContainerTransferStoreValidation {
 			var state = new ThermalStateFunction(registry);
 			state.stateForInternalEnergy(0, 500.0, java.util.Map.of(), base);
 			double finalEnergy = MinecraftContainerTransferOperations.mergedExtractionEnergy(base,
-					before.subtract(domain.exactInternalEnergy()));
+					before.subtract(gasBefore).subtract(domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy())));
 			check(finalEnergy == sign * Math.scalb(1.0, -40), "existing bucket lost a representable final energy through intermediate rounding");
 			var item = ThermalContents.forPureWater(registry.fingerprint(), 531_250_000L, finalEnergy);
 			check(item.internalEnergy() == finalEnergy, "final item failed to retain raw energy");
 			double coupled = SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(base)).toDouble();
 			domain.settleExternalContainerExtraction(extracted.internalEnergy(), coupled);
 			check(domain.thermalAudit().externalSink().equals(SignedDyadic.of(coupled))
-					&& domain.thermalAudit().roundoffResidual().equals(SignedDyadic.of(coupled).subtract(exact))
+					&& domain.thermalAudit().roundoffResidual().equals(auditBefore.roundoffResidual().add(SignedDyadic.of(coupled).subtract(exact)))
 					&& domain.thermalAudit().expectedInventory().equals(domain.exactInternalEnergy())
-					&& before.add(SignedDyadic.of(base)).equals(domain.exactInternalEnergy().add(SignedDyadic.of(finalEnergy))),
+					&& before.subtract(gasBefore).add(SignedDyadic.of(base)).equals(domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy()).add(SignedDyadic.of(finalEnergy))),
 					"final bucket/coupled receipt/region audit do not describe the same transfer");
 		}
+	}
+
+	private static void testSmallChemicalSample() {
+		try {
+			var definitions = FullCapabilityTestFixture.load();
+			var domain = new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .05F, 48, 1e-4F, .002F));
+			FullCapabilityTestFixture.bindEmptyMaterialState(domain, definitions.liquids());
+			domain.setVolume(1, 1, 1, 7.983301677e-7F);
+			FullCapabilityTestFixture.bindFull(domain, definitions, 293.15, 8);
+			var before = domain.exportLiquidCellState().stocks().getFirst();
+			long nanos = MinecraftContainerTransferOperations.extractableNanos(domain, new int[]{1,1,1},
+					ContainerFluidLedger.NANOS_PER_BLOCK, 0, -1);
+			check(nanos == 99, "sample preview must retain the fractional nanovolume");
+			var taken = domain.tryExtractExactChemical(1, 1, 1,
+					MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), nanos), 0,
+					ledger -> { ChemicalContents.fromLedger(ledger, BuiltinChemicalDefinitions.REGISTRY, nanos); return true; });
+			check(taken.transferred(), "representable chemical sample was refused");
+			var remainder = domain.exportLiquidCellState().stocks().getFirst();
+			var group = taken.ledger().groups().getFirst();
+			check(before.massUnits() == remainder.massUnits() + group.massUnits(), "sample lost integer mass");
+			check(before.mixture().totalQuanta() == remainder.mixture().totalQuanta()
+					+ group.speciesQuanta().values().stream().mapToLong(Long::longValue).sum(), "sample lost species");
+			check(Math.abs(before.internalEnergy() - remainder.internalEnergy() - taken.internalEnergy()) < 1e-7,
+					"sample lost liquid internal energy");
+		} catch (Exception failure) { throw new AssertionError("Small chemical sample fixture failed", failure); }
 	}
 
 	private static void testPartialOutlet() {
@@ -1037,7 +1064,7 @@ public final class ContainerTransferStoreValidation {
 					particles.copySolidMask(), java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(m)).toArray(), materials));
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, footprint);
 			base.sealDomainBoundary();
-			base.bootstrapGasState("");
+			base.captureAuthoritativeState();
 			base.synchronizeGasTopologyForPersistence();
 			check(base.gasBoundary().topologyInitialized() && base.gasBoundary().auditClosed()
 					&& base.gasBoundary().sealedInventoryNanos() > 0,

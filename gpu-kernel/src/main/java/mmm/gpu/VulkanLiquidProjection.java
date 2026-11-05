@@ -10,7 +10,7 @@ import static mmm.gpu.VulkanRegionStorage.barrier;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Liquid face prediction, device CSR assembly and pressure response over resident geometry. */
+/** Common face gravity prediction and the regular-grid pressure preconditioner. */
 final class VulkanLiquidProjection implements AutoCloseable {
     record Parameters(float cellSize, float duration, float gravity, float tolerance, int iterations) {
         Parameters {
@@ -22,42 +22,22 @@ final class VulkanLiquidProjection implements AutoCloseable {
 
     private final FlipKernelBindings bindings;
     VulkanLiquidProjection(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, 12, shader(), 32);
+        bindings = new FlipKernelBindings(context, 12, shader(), 36);
     }
     void rebindRanges(List<FlipKernelBindings.BufferRange> buffers) { bindings.rebindRanges(buffers); }
 
-    void prepare(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters) {
-        stage(command, sx, sy, sz, parameters, 0);
-        stage(command, sx, sy, sz, parameters, 1);
+    /** Coupled incidence applies the reference-pressure force itself. */
+    void prepareCoupled(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters,int pressureRows) {
+        stage(command, sx, sy, sz, parameters, 3,pressureRows);
+        stage(command, sx, sy, sz, parameters, 1,pressureRows);
     }
-    void project(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters) {
-        stage(command, sx, sy, sz, parameters, 2);
-    }
-
-    void prepare(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters,
-                 VulkanGasPressure gas, VulkanGasPressure.Layout layout) {
-        prepare(command,sx,sy,sz,parameters,gas,layout,null);
-    }
-    void prepare(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters,
-                 VulkanGasPressure gas, VulkanGasPressure.Layout layout,Runnable afterRows) {
-        if (gas == null) { prepare(command, sx, sy, sz, parameters);if(afterRows!=null)afterRows.run();return; }
-        gas.recordCaptureFaces(command, layout, parameters);
-        stage(command, sx, sy, sz, parameters, 0);
-        gas.recordPrepare(command, layout, parameters,afterRows);
-    }
-    void project(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters,
-                 VulkanGasPressure gas, VulkanGasPressure.Layout layout) {
-        if (gas == null) project(command, sx, sy, sz, parameters);
-        else gas.recordProject(command, layout, parameters);
-    }
-
-    private void stage(VkCommandBuffer command, int sx, int sy, int sz, Parameters p, int stage) {
+    private void stage(VkCommandBuffer command, int sx, int sy, int sz, Parameters p, int stage,int pressureRows) {
         int count = stage == 1 ? sx * sy * sz : (sx + 1) * sy * sz + sx * (sy + 1) * sz + sx * sy * (sz + 1);
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
-            var constants = stack.malloc(32);
+            var constants = stack.malloc(36);
             constants.putInt(sx).putInt(sy).putInt(sz).putInt(stage)
-                    .putFloat(p.cellSize()).putFloat(p.duration()).putFloat(p.gravity()).putFloat(p.tolerance()).flip();
+                    .putFloat(p.cellSize()).putFloat(p.duration()).putFloat(p.gravity()).putFloat(p.tolerance()).putInt(pressureRows).flip();
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, constants);
             vkCmdDispatch(command, (count + 127) / 128, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,

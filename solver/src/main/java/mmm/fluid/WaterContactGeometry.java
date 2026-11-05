@@ -13,7 +13,7 @@ final class WaterContactGeometry {
 	static List<FluidDomainContracts.WaterContact> capture(HostFluidState domain, List<FluidDomainContracts.WaterContactFace> faces) {
 		if (faces == null) throw new IllegalArgumentException("Water contact faces are missing");
 		domain.domainFlowFields.preparePhysicalState();
-		var frame = domain.gasState.frame;
+		var phase = domain.pressureSystem.phaseGeometry();
 		var areas = new TreeMap<LiquidCellInventory.Key, Double>();
 		double h = domain.config.cellSize();
 		int[] sizes = {domain.sizeX, domain.sizeY, domain.sizeZ};
@@ -36,15 +36,15 @@ final class WaterContactGeometry {
 				if (row.isEmpty()) continue;
 				var layersBySupport = new java.util.HashMap<Integer, List<GasLiquidContactGeometry.Layer>>();
 				for (int micro = 0; micro < 8; micro++) {
-					if ((micro >> axis & 1) != normalMicro || (frame.geometry().collisionMask(cell) & 1 << micro) != 0) continue;
-					var plane = frame.phase().componentPlane(cell, micro);
+					if ((micro >> axis & 1) != normalMicro || (domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) continue;
+					var plane = phase.componentPlane(cell, micro);
 					if (plane == null || !(plane.fraction() > 0)) continue;
 					var layers = layersBySupport.get(plane.support());
 					if (layers == null) {
 						var stocks = new ArrayList<LiquidCellInventory.Stock>();
 						for (var stock : row) if (stock.key().supportMask() == plane.support()) stocks.add(stock);
 						boolean water = stocks.stream().anyMatch(stock -> isWater(domain, stock.key().material()));
-						layers = water ? GasLiquidContactGeometry.layers(domain, frame, cell, plane.support(), stocks)
+						layers = water ? GasLiquidContactGeometry.layers(domain, phase, cell, plane.support(), stocks)
 								.stream().filter(layer -> isWater(domain, layer.stock().key().material())).toList() : List.of();
 						layersBySupport.put(plane.support(), layers);
 					}

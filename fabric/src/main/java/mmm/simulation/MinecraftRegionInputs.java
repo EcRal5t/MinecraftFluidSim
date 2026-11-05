@@ -27,11 +27,15 @@ final class MinecraftRegionInputs {
 	private final MotionHistory motion = new MotionHistory();
 	private final Map<UUID, List<Interaction>> pendingResponses = new HashMap<>();
 	private final ThermalBoundaryResolver thermalBoundaries;
+	private final OrdinaryThermalWalls ordinaryWalls;
+	private java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> prescribedBodies = (region,tick) -> List.of();
+	void prescribedBodies(java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> source) { prescribedBodies=java.util.Objects.requireNonNull(source); }
 
 	MinecraftRegionInputs(ThermalRegistry thermalRegistry, int cellsPerBlock) {
 		if (cellsPerBlock <= 0) throw new IllegalArgumentException("cells per block must be positive");
 		this.cellsPerBlock = cellsPerBlock;
 		this.thermalBoundaries = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
+		this.ordinaryWalls = thermalRegistry == null ? null : new OrdinaryThermalWalls(thermalRegistry, thermalBoundaries);
 	}
 
 	boolean boundariesDue(long tick) { return tick % COLLISION_REFRESH_INTERVAL_TICKS == 0L; }
@@ -45,6 +49,7 @@ final class MinecraftRegionInputs {
 		}
 		region.markCollisionRefreshed();
 		if (collisions.changedCells() > 0) {
+			region.markDevicePortsDirty();
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 		}
@@ -52,7 +57,9 @@ final class MinecraftRegionInputs {
 	}
 
 	boolean refreshThermalBoundary(ServerLevel level, FluidRegion region) {
-		return thermalBoundaries != null && thermalBoundaries.refresh(level, region, cellsPerBlock);
+		if (thermalBoundaries == null) return false;
+		boolean walls = ordinaryWalls.refresh(level, region, cellsPerBlock);
+		return thermalBoundaries.refresh(level, region, cellsPerBlock) || walls;
 	}
 
 	TickInputs captureTick(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled) {
@@ -61,7 +68,8 @@ final class MinecraftRegionInputs {
 		List<BodyMotion> motions = new ArrayList<>();
 		for (var observation : observations) if (canAffect(observation.entity()))
 			motions.add(new BodyMotion(observation.entity().getUUID(), observation.bounds(), 0, observation.displacement()));
-		var requestedBodies = bodyObservations(motions);
+		List<MovingBodyFluidCoupling.Request> requestedBodies = new ArrayList<>(bodyObservations(motions));
+		requestedBodies.addAll(prescribedBodies.apply(region, tick));
 		boolean[] activeCells = region.activityForBodies(requestedBodies);
 		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
 		checkBodyBudget(requestedBodies);

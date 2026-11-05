@@ -34,7 +34,7 @@ final class VulkanLiquidReactions implements AutoCloseable {
         SPECIES_CAPACITY(15),
         TOTAL_QUANTA(40),
         INITIAL_ENERGIES(41),
-        ACTIVITY_CELLS(42);
+        ACTIVITY_CELLS(42), PROGRESS(43), PENDING_INDEX(44), FINITE_RULE_COUNT(45);
         final int word;
         Header(int word) {
             this.word = word;
@@ -47,7 +47,7 @@ final class VulkanLiquidReactions implements AutoCloseable {
         return result.toString();
     }
 
-    static final int READY = 2, NEED_CAPACITY = 1, ERROR = 1 << 25;
+    static final int READY = 2, NEED_CAPACITY = 1;
     record Layout(VulkanLiquidStateLayout liquid, VulkanReactionDefinitions.Layout definitions,
         VulkanLiquidThermodynamics.Layout caloric, VulkanReactionProgressLayout progress, int[] phases,
         VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column phaseTable,
@@ -55,8 +55,8 @@ final class VulkanLiquidReactions implements AutoCloseable {
         VulkanLiquidStateLayout.Column rowOffsets, VulkanLiquidStateLayout.Column handles,
         VulkanLiquidStateLayout.Column amounts, VulkanLiquidStateLayout.Column residuals,
         VulkanLiquidStateLayout.Column energies, VulkanLiquidStateLayout.Column initialEnergies,
-        VulkanLiquidStateLayout.Column totalQuanta, VulkanLiquidStateLayout.Column scan, long endOffset,
-        int activityCellsWord) {
+        VulkanLiquidStateLayout.Column totalQuanta, VulkanLiquidStateLayout.Column scan,
+        VulkanLiquidStateLayout.Column pendingIndex, int finiteRuleCount, long endOffset, int activityCellsWord) {
         int word(VulkanLiquidStateLayout.Column c) {
             return Math.toIntExact(c.offset() / 4);
         }
@@ -85,6 +85,9 @@ final class VulkanLiquidReactions implements AutoCloseable {
             h[Header.TOTAL_QUANTA.word] = word(totalQuanta);
             h[Header.INITIAL_ENERGIES.word] = word(initialEnergies);
             h[Header.ACTIVITY_CELLS.word] = activityCellsWord;
+            h[Header.PROGRESS.word] = progress.word(VulkanReactionProgressLayout.Field.HEADER);
+            h[Header.PENDING_INDEX.word] = word(pendingIndex);
+            h[Header.FINITE_RULE_COUNT.word] = finiteRuleCount;
             for (var f : VulkanLiquidStateLayout.Field.values())
                 h[16 + f.ordinal()] = Math.toIntExact(liquid.column(f).offset() / 4);
             for (int i = 0; i < h.length; i++)
@@ -138,15 +141,20 @@ final class VulkanLiquidReactions implements AutoCloseable {
         var energy = column(c, liquid.stockCapacity(), 8, alignment);
         var initialEnergy = column(c, liquid.stockCapacity(), 8, alignment);
         var total = column(c, 1, 8, alignment);
+        int finiteRuleCount=Math.toIntExact(chemical.reactions().stream()
+            .filter(rule->rule.kind()==mmm.chemistry.ChemicalReaction.Kind.FINITE_RATE).count());
+        var pendingIndex=column(c,Math.multiplyExact(liquid.stockCapacity(),finiteRuleCount),4,alignment);
         var scan =
             column(c, Math.toIntExact(VulkanPrefixScan.workspaceBytes(liquid.stockCapacity()) / 4), 4, alignment);
         return new Layout(liquid, definitions, caloric, progress, phases, header, phase, dense, counts, offsets,
-            handles, amounts, residual, energy, initialEnergy, total, scan, align(c[0], alignment), activityCellsWord);
+            handles, amounts, residual, energy, initialEnergy, total, scan, pendingIndex, finiteRuleCount,
+            align(c[0], alignment), activityCellsWord);
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
-    VulkanLiquidReactions(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, 3, shader(), 12);
+    private FlipKernelBindings.BufferRange activityArena;
+    VulkanLiquidReactions(VulkanDeviceContext context, ChemicalRegistry chemistry) {
+        bindings = new FlipKernelBindings(context, 3, shader(chemistry.species().size(), chemistry.reactions().size()), 32);
         try {
             scan = new VulkanPrefixScan(context);
         } catch (RuntimeException | LinkageError failure) {
@@ -155,29 +163,54 @@ final class VulkanLiquidReactions implements AutoCloseable {
         }
     }
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
+        activityArena=arena;
         bindings.rebindRanges(List.of(arena, errors, arena));
         scan.rebindRanges(arena, arena, arena, errors);
     }
-    void recordPrepare(VkCommandBuffer command, Layout l) {
+    void recordPrepare(VkCommandBuffer command, Layout l) { recordPrepare(command, l, 0.05, 1.0); }
+    void recordPrepare(VkCommandBuffer command, Layout l, double duration, double cellSize) {
         stage(command, l, 6, 1);
         stage(command, l, 0, l.liquid.stockCapacity());
-        stage(command, l, 1, l.liquid.cellCount());
+        if (l.finiteRuleCount() > 0) {
+            stage(command, l, 7, l.pendingIndex().count());
+            stage(command, l, 8, l.progress().pendingCapacity());
+        }
+        stage(command, l, 1, l.liquid.cellCount(), duration, cellSize * cellSize * cellSize);
         stage(command, l, 2, l.liquid.stockCapacity());
         scan.record(command, l.liquid.stockCapacity(), l.word(l.rowCounts), l.word(l.rowOffsets), l.word(l.scan));
         stage(command, l, 3, 1);
         stage(command, l, 4, l.liquid.stockCapacity());
     }
+    /** The activity result is a transient word in the existing progress control. */
+    void recordActivity(VkCommandBuffer command, Layout l, boolean solid, int solidCountsWord) {
+        if (!solid) {
+            try (var stack = stackPush()) {
+                VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, stack);
+                vkCmdFillBuffer(command, activityArena.buffer().handle(),
+                    activityArena.offset() + l.progress().column(VulkanReactionProgressLayout.Field.CONTROL).offset() + 28, 4, 0);
+                VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
+            }
+        }
+        stage(command, l, solid ? 10 : 9, l.liquid.stockCapacity(), 0, 1, solidCountsWord);
+    }
     /** CONTROL uses the shared progress schema; index 2 reports required species capacity. */
     void recordPublish(VkCommandBuffer command, Layout l) {
         stage(command, l, 5, Math.max(l.liquid.stockCapacity() + 1, l.liquid.speciesCapacity()));
     }
-    private void stage(VkCommandBuffer command, Layout l, int stage, int count) {
+    private void stage(VkCommandBuffer command, Layout l, int stage, int count) { stage(command, l, stage, count, 0, 1); }
+    private void stage(VkCommandBuffer command, Layout l, int stage, int count, double duration, double volume) {
+        stage(command,l,stage,count,duration,volume,0);
+    }
+    private void stage(VkCommandBuffer command, Layout l, int stage, int count, double duration, double volume, int extra) {
         if (count == 0)
             return;
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                stack.ints(l.word(l.header), stage, count));
+                stack.calloc(32).putInt(0,l.word(l.header)).putInt(4,stage).putInt(8,count).putInt(12,extra).putDouble(16,duration).putDouble(24,volume));
             int groups = (count + 127) / 128;
             vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
@@ -194,14 +227,15 @@ final class VulkanLiquidReactions implements AutoCloseable {
     }
     private static String shaderLayout() {
         return VulkanLiquidThermodynamics.shaderLayout() + headerDefines() + "#define STOCK_FIELDS 16\n"
-            + VulkanShaderLayout.fields("STOCK_", VulkanLiquidStateLayout.Field.values());
+            + VulkanShaderLayout.fields("STOCK_", VulkanLiquidStateLayout.Field.values())
+            + VulkanShaderLayout.fields("PROGRESS_", VulkanReactionProgressLayout.Field.values());
     }
-    private static String shader() {
+    private static String shader(int species, int rules) {
         try (var in = VulkanLiquidReactions.class.getResourceAsStream(
                  "/assets/mmm_gpu_probe/shaders/liquid-reactions.comp")) {
             if (in == null)
                 throw new IllegalStateException("Liquid reaction shader missing");
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout());
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout()+"\n#define SPECIES_WORKSPACE "+Math.max(1,species)+"\n#define REACTION_WORKSPACE "+Math.max(1,rules)+"\n");
         } catch (IOException failure) {
             throw new IllegalStateException("Liquid reaction shader unavailable", failure);
         }

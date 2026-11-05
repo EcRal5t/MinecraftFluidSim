@@ -10,6 +10,7 @@ import mmm.fluid.air.AirNetwork;
  */
 final class GasDomainState {
 	AirNetwork network = new AirNetwork();
+	mmm.fluid.air.SpatialGasState spatial;
 	boolean sealedDomainBoundary;
 	GasRuntimeGeometry frame;
 	boolean pressureActive;

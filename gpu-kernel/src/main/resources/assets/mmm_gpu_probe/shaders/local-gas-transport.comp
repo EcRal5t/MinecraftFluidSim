@@ -1,0 +1,330 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=0,std430) buffer LongArena { int64_t longs[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Push { int header; int stage; int count; uint valueLow; uint valueHigh; } p;
+// HOST_LAYOUT
+// LOCAL_GAS_GRID
+const uint ERROR_LOCAL_GAS_TRANSPORT=8388608u;
+const int H_SOURCE_EOS=3;
+const uint64_t SCALE=uint64_t(0x10000000000000UL),LIMIT=uint64_t(0x7fffffffffffffffUL);
+int headerWord(int i){return int(words[p.header+i]);}
+int sourceEosWord(int i){return int(words[headerWord(3)+i]);}
+int field(int i){return headerWord(64+i);}
+int gasField(int i){return headerWord(16+i);}
+uint64_t quantity(int at){return uint64_t(words[at])|(uint64_t(words[at+1])<<32);}
+int64_t signedQuantity(int at){return int64_t(quantity(at));}
+void putQuantity(int at,uint64_t x){words[at]=uint(x);words[at+1]=uint(x>>32);}
+double readDouble(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
+void putDouble(int at,double x){uvec2 bits=unpackDouble2x32(x);words[at]=bits.x;words[at+1]=bits.y;}
+bool isFinite(double x){return !isnan(x)&&!isinf(x);}
+void reportInvalid(){atomicOr(errors,ERROR_LOCAL_GAS_TRANSPORT);}
+uint64_t plus(uint64_t a,uint64_t b){if(b>LIMIT-a){reportInvalid();return a;}return a+b;}
+int64_t signedPlus(int64_t a,int64_t b){int64_t maxValue=int64_t(LIMIT),minValue=-maxValue-int64_t(1);if((b>int64_t(0)&&a>maxValue-b)||(b<int64_t(0)&&a<minValue-b)){reportInvalid();return a;}return a+b;}
+// GAS_INTEGER_QUANTITIES
+// GAS_CALORIC_MATERIAL
+void exactAdd(double a,double b,out double sum,out double remainder){
+    precise double next=a+b,virtualValue=next-a;
+    precise double error=(a-(next-virtualValue))+(b-virtualValue);
+    sum=next;remainder=error;
+}
+int routePart(int cell,int side){return localGasRouteIndex(cell,0,side,headerWord(0),1);}
+int componentPart(int cell,int component,int side){return localGasRouteIndex(cell,component,side,headerWord(0),headerWord(1));}
+int speciesPart(int cell,int species,int side){return localGasRouteIndex(cell,species,side,headerWord(0),headerWord(2));}
+uint64_t ambientData(int i){return quantity(field(F_AMBIENT_DATA)+2*i);}
+uint64_t ambientComponent(uint64_t n,int component){
+    int count=headerWord(6);
+    for(int i=0;i<count;i++)if(int(ambientData(i))==component)
+        return portion(n,ambientData(count+i),quantity(p.header+8));
+    return uint64_t(0);
+}
+int ambientIndex(int component){for(int i=0;i<headerWord(6);i++)if(int(ambientData(i))==component)return i;return -1;}
+uint64_t ambientSpecies(uint64_t n,int component,int handle){
+    int count=headerWord(6),sc=headerWord(7),a=ambientIndex(component);if(a<0)return uint64_t(0);
+    int first=int(ambientData(4*count+a)),last=int(ambientData(4*count+a+1)),base=5*count+1;
+    for(int j=first;j<last;j++)if(int(ambientData(base+j))==handle)
+        return portion(n,ambientData(base+sc+j),ambientData(base+2*sc+j));
+    return uint64_t(0);
+}
+uint64_t ambientMass(uint64_t n,int component){int count=headerWord(6),a=ambientIndex(component);return a<0?uint64_t(0):portion(n,ambientData(2*count+a),ambientData(3*count+a));}
+int64_t ambientResidual(uint64_t n,int component,uint64_t mass){
+    int count=headerWord(6),sc=headerWord(7),a=ambientIndex(component);if(a<0)return int64_t(0);
+    int first=int(ambientData(4*count+a)),last=int(ambientData(4*count+a+1)),base=5*count+1;int64_t result=int64_t(mass);
+    for(int j=first;j<last;j++)result-=int64_t(portion(n,ambientData(base+sc+j),ambientData(base+2*sc+j))*ambientData(base+3*sc+j));
+    return result;
+}
+void split(int cell){
+    int cells=headerWord(0),components=headerWord(1),stride=headerWord(2);
+    double dt=packDouble2x32(uvec2(p.valueLow,p.valueHigh)),volume=readDouble(headerWord(48)+2*(7*cell+2)),temperature=readDouble(sourceEosWord(GAS_H_STATES)+18*cell);
+    putDouble(field(F_OLD_VOLUME)+2*cell,volume);
+    ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));
+    double outflow[6],energy[6],totalOut=0.0;uint64_t weights[6],moved[6];
+    for(int side=0;side<6;side++){
+        int face=localGasFace(cell,side,size),other=localGasNeighbor(cell,side,size);
+        double velocity=readDouble(headerWord(51)+2*face*headerWord(59));
+        double h=readDouble(p.header+12),open=readDouble(headerWord(52)+2*(headerWord(59)*face+2));
+        double area=open*h*h;
+        bool routeEnabled=(other>=0 || headerWord(5)==0) && ((headerWord(54)<0 || (words[headerWord(54)+cell]!=0u && (other<0 || words[headerWord(54)+other]!=0u))) &&
+             (headerWord(55)<0 || words[headerWord(55)+face]!=0u));
+        double outward=((side&1)==0?-velocity:velocity);
+        double total=readDouble(headerWord(56)+4*face),liquid=readDouble(headerWord(56)+4*face+2);
+        double gasSweep=other>=0?max(0.0LF,abs(total)-abs(liquid))*h*h*h:max(0.0LF,outward)*area*dt;
+        outflow[side]=routeEnabled && outward>0.0LF?gasSweep:0.0LF;
+        double inStandard=routeEnabled && other<0?min(max(0.0LF,-outward)*dt,h)*area*1e9LF*293.15LF/readDouble(p.header+10):0.0LF;
+        if(!isFinite(inStandard)||inStandard>double(LIMIT)){reportInvalid();return;}
+        putQuantity(field(F_INFLOW_NANOS)+2*routePart(cell,side),uint64_t(floor(inStandard)));
+        if(!isFinite(outflow[side])||area<0.0){reportInvalid();return;}
+        totalOut+=outflow[side];energy[side]=0.0;moved[side]=uint64_t(0);
+    }
+    if(!isFinite(volume)||volume<0.0){reportInvalid();return;}
+    if(totalOut>volume&&totalOut>0.0)for(int side=0;side<6;side++)outflow[side]*=volume/totalOut;
+    bool closing=readDouble(sourceEosWord(GAS_H_STATES)+18*cell+4)>0.0LF&&headerWord(57)>=0&&headerWord(58)>=0&&
+        (int64_t(bitCount((~words[headerWord(57)+cell])&255u))<<21)==signedQuantity(headerWord(58)+2*cell);
+    int finalRoute=-1;if(closing&&volume>0.0LF)for(int side=0;side<6;side++)if(outflow[side]>0.0LF)finalRoute=side;
+    if(closing&&volume>0.0LF&&finalRoute<0){reportInvalid();return;}
+    uint64_t remainingWeight=SCALE;
+    for(int side=0;side<6;side++){
+        uint64_t weight=side==finalRoute?remainingWeight:(volume>0.0?uint64_t(floor(outflow[side]/volume*double(SCALE))):uint64_t(0));
+        weights[side]=min(weight,remainingWeight);remainingWeight-=weights[side];
+    }
+    uint64_t total=uint64_t(0),totalMass=uint64_t(0);
+    for(int component=0;component<components;component++){
+        int original=cell*components+component;
+        uint64_t nanos=quantity(gasField(G_STANDARD_VOLUME_NANOS)+2*original),mass=quantity(gasField(G_MASS_UNITS)+2*original);
+        int64_t remainingResidual=signedQuantity(gasField(G_MASS_RESIDUAL_UNITS)+2*original);
+        total=plus(total,nanos);totalMass=plus(totalMass,mass);
+        uint64_t remainingN=nanos,remainingM=mass;
+        int first=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+original]),last=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+original+1]);
+        for(int side=0;side<6;side++){
+            uint64_t partN=side==finalRoute?remainingN:min(remainingN,portion(nanos,weights[side],SCALE));
+            int64_t partResidual=remainingN==uint64_t(0)?int64_t(0):signedPortion(remainingResidual,partN,remainingN),partMass=partResidual;
+            for(int entry=first;entry<last;entry++){
+                uint64_t remaining=quantity(gasField(G_SPECIES_AMOUNTS)+2*entry);
+                for(int previous=0;previous<side;previous++)remaining-=quantity(field(F_SPECIES)+2*speciesPart(cell,entry-cell*stride,previous));
+                uint64_t part=remainingN==uint64_t(0)?uint64_t(0):portion(remaining,partN,remainingN);
+                int handle=int(words[gasField(G_SPECIES_HANDLES)+entry]);
+                if(handle<0||handle>=sourceEosWord(GAS_H_SPECIES_STRIDE)){reportInvalid();return;}
+                uint64_t unit=quantity(field(F_SPECIES_MASS)+2*handle);
+                if(unit==uint64_t(0)||(part>uint64_t(0)&&part>LIMIT/unit)){reportInvalid();return;}
+                partMass=signedPlus(partMass,int64_t(part*unit));
+                putQuantity(field(F_SPECIES)+2*speciesPart(cell,entry-cell*stride,side),part);
+            }
+            bool accepted=partN>uint64_t(0)&&partMass>int64_t(0)&&uint64_t(partMass)<=remainingM&&
+                          (uint64_t(partMass)<remainingM||partN==remainingN);
+            if(!accepted){
+                partN=uint64_t(0);partMass=int64_t(0);partResidual=int64_t(0);
+                for(int entry=first;entry<last;entry++)putQuantity(field(F_SPECIES)+2*speciesPart(cell,entry-cell*stride,side),uint64_t(0));
+            }else{
+                double specific,capacity;material(component,temperature,specific,capacity);
+                energy[side]+=double(partMass)*1e-10LF*specific;
+                for(int entry=first;entry<last;entry++){
+                    uint64_t part=quantity(field(F_SPECIES)+2*speciesPart(cell,entry-cell*stride,side));if(part==uint64_t(0))continue;
+                    int handle=int(words[gasField(G_SPECIES_HANDLES)+entry]);
+                    energy[side]+=double(part)*readDouble(sourceEosWord(GAS_H_SPECIES_REFERENCE)+2*(component*sourceEosWord(GAS_H_SPECIES_STRIDE)+handle));
+                }
+            }
+            int at=componentPart(cell,component,side);
+            putQuantity(field(F_NANOS)+2*at,partN);putQuantity(field(F_MASS)+2*at,uint64_t(partMass));
+            putQuantity(field(F_RESIDUAL)+2*at,uint64_t(partResidual));
+            remainingN-=partN;remainingM-=uint64_t(partMass);remainingResidual-=partResidual;
+            moved[side]=plus(moved[side],partN);
+        }
+    }
+    putQuantity(field(F_OLD_MASS)+2*cell,totalMass);
+    uint64_t movedTotal=uint64_t(0);int last=-1;
+    for(int side=0;side<6;side++){
+        movedTotal=plus(movedTotal,moved[side]);if(moved[side]>uint64_t(0))last=side;
+        putDouble(field(F_ENERGY_ROUNDOFF)+2*routePart(cell,side),0.0LF);
+    }
+    if(total>uint64_t(0)&&movedTotal==total){
+        double remaining=readDouble(gasField(G_INTERNAL_ENERGY)+2*cell);
+        for(int side=0;side<last;side++){
+            double next,remainder;exactAdd(remaining,-energy[side],next,remainder);
+            putDouble(field(F_ENERGY_ROUNDOFF)+2*routePart(cell,side),-remainder);remaining=next;
+        }
+        energy[last]=remaining;
+    }
+    for(int side=0;side<6;side++){
+        if(!isFinite(energy[side])){reportInvalid();return;}
+        putDouble(field(F_ENERGY)+2*routePart(cell,side),energy[side]);
+        putDouble(field(F_VOLUME)+2*routePart(cell,side),total==uint64_t(0)?0.0:volume*double(moved[side])/double(total));
+    }
+}
+uint64_t incoming(int fieldId,int cell,int component,int side){return quantity(field(fieldId)+2*componentPart(cell,component,side));}
+void gather(int cell){
+    int components=headerWord(1),stride=headerWord(2);ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));uint64_t targetMass=uint64_t(0),outMass=uint64_t(0);
+    double externalIn=0.0LF,externalOut=0.0LF,ambientTemperature=readDouble(p.header+10);
+    for(int component=0;component<components;component++){
+        int i=cell*components+component;uint64_t n=quantity(gasField(G_STANDARD_VOLUME_NANOS)+2*i),m=quantity(gasField(G_MASS_UNITS)+2*i);
+        int64_t residual=signedQuantity(gasField(G_MASS_RESIDUAL_UNITS)+2*i);
+        for(int side=0;side<6;side++){
+            uint64_t outN=incoming(F_NANOS,cell,component,side),outM=incoming(F_MASS,cell,component,side);
+            if(outN>n||outM>m){reportInvalid();return;}n-=outN;m-=outM;outMass=plus(outMass,outM);
+            residual=signedPlus(residual,-signedQuantity(field(F_RESIDUAL)+2*componentPart(cell,component,side)));
+            int other=localGasNeighbor(cell,side,size);if(other>=0){
+                n=plus(n,incoming(F_NANOS,other,component,side^1));m=plus(m,incoming(F_MASS,other,component,side^1));
+                residual=signedPlus(residual,signedQuantity(field(F_RESIDUAL)+2*componentPart(other,component,side^1)));
+            }else if(headerWord(5)==0){
+                uint64_t added=ambientComponent(quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),component),mass=ambientMass(added,component);
+                if(mass==uint64_t(0))added=uint64_t(0);
+                int64_t extra=ambientResidual(added,component,mass);
+                n=plus(n,added);m=plus(m,mass);residual=signedPlus(residual,extra);
+                int src=components*(headerWord(0))+component,sink=src+components;
+                if(added>uint64_t(0)){
+                    atomicAdd(longs[(gasField(G_STANDARD_VOLUME_NANOS)+2*src)/2],int64_t(added));atomicAdd(longs[(gasField(G_MASS_UNITS)+2*src)/2],int64_t(mass));
+                    if(extra!=int64_t(0))atomicAdd(longs[(gasField(G_MASS_RESIDUAL_UNITS)+2*src)/2],extra);
+                }
+                if(outN>uint64_t(0)){
+                    atomicAdd(longs[(gasField(G_STANDARD_VOLUME_NANOS)+2*sink)/2],int64_t(outN));atomicAdd(longs[(gasField(G_MASS_UNITS)+2*sink)/2],int64_t(outM));
+                    int64_t removed=signedQuantity(field(F_RESIDUAL)+2*componentPart(cell,component,side));
+                    if(removed!=int64_t(0))atomicAdd(longs[(gasField(G_MASS_RESIDUAL_UNITS)+2*sink)/2],removed);
+                }
+                if(mass>uint64_t(0)){double specific,capacity;material(component,ambientTemperature,specific,capacity);externalIn+=double(mass)*1e-10LF*specific;}
+            }
+        }
+        if((n==uint64_t(0))!=(m==uint64_t(0))){reportInvalid();return;}
+        targetMass=plus(targetMass,m);putQuantity(gasField(G_STANDARD_VOLUME_NANOS)+2*i,n);putQuantity(gasField(G_MASS_UNITS)+2*i,m);putQuantity(gasField(G_MASS_RESIDUAL_UNITS)+2*i,uint64_t(residual));
+    }
+    putQuantity(field(F_NEW_MASS)+2*cell,targetMass);
+    for(int local=0;local<stride;local++){
+        int i=cell*stride+local;uint64_t q=quantity(gasField(G_SPECIES_AMOUNTS)+2*i);
+        for(int side=0;side<6;side++){
+            uint64_t sent=quantity(field(F_SPECIES)+2*speciesPart(cell,local,side));if(sent>q){reportInvalid();return;}q-=sent;
+            int other=localGasNeighbor(cell,side,size);if(other>=0)q=plus(q,quantity(field(F_SPECIES)+2*speciesPart(other,local,side^1)));
+            else if(headerWord(5)==0) {
+                int component=0;while(component+1<components && local>=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+cell*components+component+1])-cell*stride)component++;
+                int entry=cell*stride+local,handle=int(words[gasField(G_SPECIES_HANDLES)+entry]);
+                uint64_t addedN=ambientComponent(quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),component);
+                if(ambientMass(addedN,component)==uint64_t(0))addedN=uint64_t(0);
+                uint64_t added=ambientSpecies(addedN,component,handle);q=plus(q,added);
+                if(added>uint64_t(0))atomicAdd(longs[(gasField(G_SPECIES_AMOUNTS)+2*(headerWord(0)*stride+local))/2],int64_t(added));
+                if(sent>uint64_t(0))atomicAdd(longs[(gasField(G_SPECIES_AMOUNTS)+2*((headerWord(0)+1)*stride+local))/2],int64_t(sent));
+                externalIn+=double(added)*readDouble(sourceEosWord(GAS_H_SPECIES_REFERENCE)+2*(component*sourceEosWord(GAS_H_SPECIES_STRIDE)+handle));
+            }
+        }
+        putQuantity(gasField(G_SPECIES_AMOUNTS)+2*i,q);
+    }
+    double outEnergy=0.0,inEnergy=0.0;uint64_t oldMass=quantity(field(F_OLD_MASS)+2*cell);
+    bool emptied=oldMass>uint64_t(0)&&outMass==oldMass;
+    int errorBase=field(F_GATHER_ROUNDOFF)+42*cell;
+    for(int side=0;side<6;side++){
+        double next,remainder,part=readDouble(field(F_ENERGY)+2*routePart(cell,side));
+        exactAdd(outEnergy,part,next,remainder);outEnergy=next;
+        putDouble(errorBase+2*side,emptied?0.0LF:remainder);
+        int other=localGasNeighbor(cell,side,size);
+        if(other>=0){
+            exactAdd(inEnergy,readDouble(field(F_ENERGY)+2*routePart(other,side^1)),next,remainder);inEnergy=next;
+            putDouble(errorBase+2*(6+side),-remainder);putDouble(errorBase+2*(12+side),0.0LF);
+        }else{
+            exactAdd(externalOut,part,next,remainder);externalOut=next;
+            putDouble(errorBase+2*(6+side),0.0LF);putDouble(errorBase+2*(12+side),-remainder);
+        }
+    }
+    putDouble(field(F_EXTERNAL_SOURCE_ENERGY)+2*cell,externalIn);putDouble(field(F_EXTERNAL_SINK_ENERGY)+2*cell,externalOut);
+    double next,remainder;exactAdd(inEnergy,externalIn,next,remainder);inEnergy=next;putDouble(errorBase+36,-remainder);
+    double retained=0.0LF;
+    if(!emptied){exactAdd(readDouble(gasField(G_INTERNAL_ENERGY)+2*cell),-outEnergy,retained,remainder);putDouble(errorBase+38,-remainder);}
+    else putDouble(errorBase+38,0.0LF);
+    double energy;exactAdd(retained,inEnergy,energy,remainder);putDouble(errorBase+40,-remainder);
+    if(!isFinite(energy)){reportInvalid();return;}
+    putDouble(gasField(G_INTERNAL_ENERGY)+2*cell,energy);
+}
+void primalMass(int face){
+    ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62)),ends=localGasFaceEndpoints(face,size);
+    int64_t amount=int64_t(0);
+    if(ends.x>=0&&ends.y>=0)for(int component=0;component<headerWord(1);component++){
+        amount=signedPlus(amount,signedQuantity(field(F_MASS)+2*componentPart(ends.x,component,2*ends.z+1)));
+        amount=signedPlus(amount,-signedQuantity(field(F_MASS)+2*componentPart(ends.y,component,2*ends.z)));
+    }
+    if(ends.x<0 || ends.y<0){
+        int cell=max(ends.x,ends.y),side=2*ends.z+(ends.y<0?1:0);int64_t outward=int64_t(0),inward=int64_t(0);
+        uint64_t n=quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side));
+        for(int component=0;component<headerWord(1);component++){
+            outward=signedPlus(outward,signedQuantity(field(F_MASS)+2*componentPart(cell,component,side)));
+            inward=signedPlus(inward,int64_t(ambientMass(ambientComponent(n,component),component)));
+        }
+        int direction=ends.y<0?1:-1;amount=int64_t(direction)*(outward-inward);
+    }
+    putQuantity(field(F_PRIMAL_MASS)+2*face,uint64_t(amount));
+}
+// Absolute caloric U includes each component and its species reference energy.
+double gasEnergyAtTemperature(int cell,double temperature){
+    double cold=0.0LF;
+    int components=headerWord(1),stride=sourceEosWord(GAS_H_SPECIES_STRIDE);
+    for(int component=0;component<components;component++){
+        int row=cell*components+component;uint64_t mass=quantity(gasField(G_MASS_UNITS)+2*row);
+        if(mass==uint64_t(0))continue;
+        double specific,capacity;material(component,temperature,specific,capacity);cold+=double(mass)*1e-10LF*specific;
+        int first=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+row]),last=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+row+1]);
+        for(int entry=first;entry<last;entry++){
+            uint64_t amount=quantity(gasField(G_SPECIES_AMOUNTS)+2*entry);if(amount==uint64_t(0))continue;
+            int handle=int(words[gasField(G_SPECIES_HANDLES)+entry]);
+            cold+=double(amount)*readDouble(sourceEosWord(GAS_H_SPECIES_REFERENCE)+2*(component*stride+handle));
+        }
+    }
+    return cold;
+}
+void applyPressureWork(int cell){
+    ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));double outgoing=0.0,incoming=0.0,externalVolume=0.0;
+    for(int side=0;side<6;side++){
+        outgoing+=readDouble(field(F_VOLUME)+2*routePart(cell,side));int other=localGasNeighbor(cell,side,size);
+        if(other>=0)incoming+=readDouble(field(F_VOLUME)+2*routePart(other,side^1));
+        else {
+            uint64_t offered=quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),accepted=uint64_t(0);
+            for(int component=0;component<headerWord(1);component++){
+                uint64_t part=ambientComponent(offered,component);
+                if(ambientMass(part,component)>uint64_t(0))accepted=plus(accepted,part);
+            }
+            double received=double(accepted)*1e-9LF*readDouble(p.header+10)/293.15LF;
+            incoming+=received;
+            externalVolume+=received-readDouble(field(F_VOLUME)+2*routePart(cell,side));
+        }
+    }
+    putDouble(field(F_EXTERNAL_PRESSURE_WORK)+2*cell,(MIXTURE_PRESSURE_LIMIT-MIXTURE_BULK)*externalVolume);
+    int nextMixture=int(p.valueLow);double oldVolume=readDouble(field(F_OLD_VOLUME)+2*cell),nextVolume=readDouble(nextMixture+2*(7*cell+2));
+    uint64_t oldMass=quantity(field(F_OLD_MASS)+2*cell),nextMass=quantity(field(F_NEW_MASS)+2*cell);
+    int target=gasField(G_INTERNAL_ENERGY)+2*cell;double energy=readDouble(target),work=0.0LF;
+    if(oldMass>uint64_t(0)&&nextMass>uint64_t(0)){
+        double advectedVolume=max(0.0LF,oldVolume-outgoing)+incoming;
+        int eos=sourceEosWord(GAS_H_STATES)+18*cell;
+        double temperature=readDouble(eos),capacity=readDouble(eos+6),constant=readDouble(eos+8);
+        if(!(isFinite(capacity)&&capacity>0.0LF&&isFinite(constant)&&constant>0.0LF&&nextVolume>0.0LF&&advectedVolume>0.0LF)){reportInvalid();return;}
+        if(advectedVolume!=nextVolume){
+            // Solve the same frozen-Cv adiabatic state and mixture EOS together.
+            double bulk=MIXTURE_BULK,limit=MIXTURE_PRESSURE_LIMIT;
+            double liquidVolume=readDouble(nextMixture+2*(7*cell+1));
+            double liquidScale=readDouble(nextMixture+2*(7*cell+3));
+            double liquidReference=liquidVolume>0.0LF?liquidVolume/liquidScale:0.0LF;
+            double poreVolume=liquidVolume+nextVolume;
+            double low=liquidReference>0.0LF?max(0.0LF,limit-bulk*poreVolume/liquidReference):0.0LF,high=limit;
+            double pressure=readDouble(nextMixture+2*(7*cell));
+            if(!(pressure>low&&pressure<high))pressure=.5LF*(low+high);
+            double a=capacity*bulk/(limit*constant);
+            double b=capacity*constant/(capacity*bulk+limit*constant);
+            double referenceVolume=advectedVolume+b*temperature;
+            double finalTemperature=temperature;
+            for(int iteration=0;iteration<48;iteration++){
+                double scale=(limit-pressure)/bulk;
+                double gasVolume=poreVolume-liquidReference*scale;
+                finalTemperature=pressure*gasVolume/(constant*scale);
+                double residual=double(log(float((gasVolume+b*finalTemperature)/referenceVolume)))
+                    +a*double(log(float(finalTemperature/temperature)));
+                if(abs(residual)<=1e-7LF||iteration==47)break;
+                if(residual<0.0LF)low=pressure;else high=pressure;
+                double dTemperature=finalTemperature*(1.0LF/pressure+liquidReference/(bulk*gasVolume)+1.0LF/(bulk*scale));
+                double derivative=(liquidReference/bulk+b*dTemperature)/(gasVolume+b*finalTemperature)+a*dTemperature/finalTemperature;
+                double candidate=pressure-residual/derivative;
+                pressure=candidate>low&&candidate<high?candidate:.5LF*(low+high);
+            }
+            if(!(isFinite(finalTemperature)&&finalTemperature>=readDouble(headerWord(H_SOURCE_EOS)+GAS_H_MINIMUM_TEMPERATURE))){reportInvalid();return;}
+            double finalEnergy=gasEnergyAtTemperature(cell,finalTemperature);
+            work=finalEnergy-energy;energy=finalEnergy;
+        }
+    }
+    if(!isFinite(energy)||!isFinite(work)){reportInvalid();return;}putDouble(target,energy);putDouble(field(F_WORK)+2*cell,work);
+}
+void main(){int id=int(gl_GlobalInvocationID.y*gl_NumWorkGroups.x*128u+gl_GlobalInvocationID.x);if(id>=p.count||errors!=0u)return;if(p.stage==0)split(id);else if(p.stage==1)gather(id);else if(p.stage==2)primalMass(id);else if(p.stage==6)applyPressureWork(id);}

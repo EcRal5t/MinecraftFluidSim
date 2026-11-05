@@ -5,7 +5,6 @@ import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FlipThermalParticleState;
 import mmm.fluid.PendingPhaseMotionState;
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
 import mmm.model.region.RegionGeometry;
 import mmm.model.region.RegionIdentity;
@@ -21,7 +20,6 @@ public interface RegionCheckpointSource {
 	RegionRuntimeIntent runtimeIntent();
 	mmm.fluid.FluidDomainState authoritativeState();
 	GranularStateSnapshot granularState();
-	GasStateSnapshot gasState(String chemicalRegistryFingerprint);
 	FlipThermalParticleState thermalState();
 	PendingPhaseMotionState pendingPhaseMotion();
 	FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint);

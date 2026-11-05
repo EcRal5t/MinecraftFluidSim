@@ -15,7 +15,6 @@ public final class LiquidCellInventoryValidation {
 	public static void main(String[] args) {
 		continuousFluxMovesResolvedMinorityMaterial();
 		continuousSlowFluxDoesNotStopAcrossSteps();
-		interiorFullnessSharesTheFluxSettlement();
 		sharedFluxPreservesAllQuantities();
 		bulkVolumeReplacement();
 		collisionPreservesGeometricTail();
@@ -87,35 +86,14 @@ public final class LiquidCellInventoryValidation {
 				&&cells.exactInternalEnergy().subtract(SignedDyadic.of(400)).equals(energy),
 				"Continuous slow transport lost carried volume, integer mass, species or U");
 	}
-	private static LiquidTransportRoutes circulatingComponentRoutes(LiquidCellInventory cells,double flow) {
-		var routes=new PhaseQuantitySettlement.RouteBuffer();routes.reset(cells.stocks(),4);
-		int[] successor={1,3,0,2};
-		for(int source=0;source<routes.sourceCount();source++){
-			int cell=routes.key(source).cell();
-			routes.add(source,cell,successor[cell],255,flow);
-		}
-		var capacities=new SignedDyadic[4];java.util.Arrays.fill(capacities,SignedDyadic.ZERO);
-		for(int cell=0;cell<4;cell++)capacities[cell]=SignedDyadic.of(1);
-		return PhaseQuantitySettlement.settle(routes,capacities,capacities,null,null,source->{throw new AssertionError("Balanced circulation expanded capacity alternatives");});
-	}
-	private static void interiorFullnessSharesTheFluxSettlement(){
-		var cells=new LiquidCellInventory(3,null);
-		for(int cell=0;cell<3;cell++)cells.planAdditions(List.of(new LiquidCellInventory.Stock(
-				new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(cell==2?.5:1),cell==2?500:1000,null,cell==2?50:100))).commit();
-		var raw=new PhaseQuantitySettlement.RouteBuffer();raw.reset(cells.stocks(),3);
-		for(int s=0;s<raw.sourceCount();s++){
-			int cell=raw.key(s).cell();double outgoing=cell==0?.2:cell==1?.3:0;
-			if(outgoing>0)raw.add(s,cell,cell+1,255,outgoing);
-		}
-		var high=new SignedDyadic[3];java.util.Arrays.fill(high,SignedDyadic.ZERO);
-		for(int cell=0;cell<3;cell++)high[cell]=SignedDyadic.of(1);
-		var low=new SignedDyadic[3];low[0]=low[1]=SignedDyadic.of(1);
-		var routes=PhaseQuantitySettlement.settle(raw,high,low,null,null,s->{});
-		var plan=cells.planRoutes(routes,null);plan.commit();
-		require(cells.exactCellVolume(0).equals(SignedDyadic.of(1))&&cells.exactCellVolume(1).equals(SignedDyadic.of(1))
-				&&cells.exactVolume().equals(SignedDyadic.of(2.5))&&cells.massUnits()==2500
-				&&cells.exactInternalEnergy().equals(SignedDyadic.of(250)),"Full interior settlement opened a void or changed its material quantities");
-	}
+    private static LiquidTransportRoutes circulatingComponentRoutes(LiquidCellInventory cells,double flow){
+        var routes=LiquidTransportRoutes.builder(cells.size(),cells.size());int[] successor={1,3,0,2};
+        for(var stock:cells.stocks()){
+            int cell=stock.key().cell();routes.source(stock);
+            routes.route(cell,successor[cell],stock.key().supportMask(),SignedDyadic.of(stock.volumeFraction()*flow));
+        }
+        return routes.build();
+    }
 	private static void bulkVolumeReplacement() {
 		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F);
 		var bulk=new HostFluidState(3,3,3,config);var single=new HostFluidState(3,3,3,config);

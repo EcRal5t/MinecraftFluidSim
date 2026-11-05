@@ -24,7 +24,6 @@ import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.air.BuiltinGasDefinitions;
 import mmm.fluid.air.GasRegistry;
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.BuiltinGranularDefinitions;
 import mmm.granular.GranularLimits;
 import mmm.granular.GranularRegistry;
@@ -123,7 +122,6 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		Arrays.fill(occupancy,8*cell,8*cell+8,0);
 		occupancy[8*cell]=occupancy[8*cell+7]=.125;
 		source.restorePhaseOccupancyState(new mmm.inventory.PhaseOccupancyState(occupancy));
-		source.bootstrapGasState("");
 		var region=fixtureRegion(new UUID(31L,32L),source);
 		var before=source.captureAuthoritativeState();
 		var state=RegionCheckpointFixtures.capture(region,1L);
@@ -169,7 +167,6 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 	}
 
 	static void validateThermalCodec() throws Exception {
-		validateGasPieceCodec();
 		validateFiniteDeviceJournal();
 		for(var origin:List.of(new net.minecraft.core.BlockPos(15,16,15),new net.minecraft.core.BlockPos(0,16,0),
 				new net.minecraft.core.BlockPos(16_777_213,16,16_777_213),new net.minecraft.core.BlockPos(-16_777_219,16,-16_777_219)))
@@ -279,6 +276,16 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 										thermal.materialHandle("mmm:thermal/persistence_device"),
 										2.0, java.util.Map.of(), 350.0)))));
 		expectedDevices.requireCompatible(thermal);
+		var sourceBody=expectedDevices.devices().getFirst();
+		var ordinaryWall=new FiniteThermalDeviceState("mmm:ordinary_wall", "123@minecraft:stone", sourceBody.deviceTypeId(), sourceBody.body());
+		var emptyWallAudit=FiniteThermalDeviceInventory.empty(thermal.fingerprint()).insertExternal(ordinaryWall)
+				.extractExternal(ordinaryWall.providerId(),ordinaryWall.objectId());
+		var deviceCodec=new FiniteThermalDeviceCodec();
+		var restoredEmpty=deviceCodec.decode(deviceCodec.encode(emptyWallAudit),thermal);
+		require(restoredEmpty.equals(emptyWallAudit) && restoredEmpty.devices().isEmpty()
+				&& restoredEmpty.audit().externalSource().equals(SignedDyadic.of(ordinaryWall.body().internalEnergyJ()))
+				&& restoredEmpty.audit().externalSink().equals(SignedDyadic.of(ordinaryWall.body().internalEnergyJ())),
+				"ordinary wall source/sink audit did not survive removal and recovery");
 		region.restoreFiniteThermalDevices(expectedDevices, thermal, region.checkpointGeneration());
 		TestHostAccess.editable(region).setThermalTemperatureInCell(2, 1, 2, 325.0);
 		TestHostAccess.editable(region).setThermalTemperatureInCell(1, 1, 1, 340.0);
@@ -294,7 +301,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		require(Double.doubleToRawLongBits(expected.insertionTemperatureK())
 				== Double.doubleToRawLongBits(insertionTemperatureK), "configured insertion temperature was not captured");
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		GasStateSnapshot expectedGas = TestHostAccess.editable(region).exportGasState("");
+		var expectedGas = TestHostAccess.editable(region).captureAuthoritativeState().spatialGas();
 		GranularStateSnapshot expectedGranular = TestHostAccess.editable(region).exportGranularState();
 		double[] expectedOccupancy = TestHostAccess.editable(region).exportPhaseOccupancyState().copyLiquidMicroVolumes();
 
@@ -302,13 +309,16 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		state.validate();
 		assertMaterialStateEquals(TestHostAccess.editable(region).exportMaterialParticleState(), restorer(state).reconstructMaterial());
 		assertGranularStateEquals(expectedGranular, restorer(state).reconstructGranular(granular));
-		assertGasStateEquals(expectedGas, restorer(state).reconstructGas(gas, null));
 		assertThermalStateEquals(expected, restorer(state).reconstructThermal(thermal));
 		require(restorer(state).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"finite thermal device truth did not round-trip");
 		require(restorer(state).reconstructPendingPhaseMotion().entries().equals(expectedPending.entries()),
 				"pending phase-motion record did not round-trip");
 		var complete = restorer(state).reconstructAuthoritativeState(null,granular,thermal,gas,BuiltinFluidMaterials.createRegistry());
+		var restoredGas=complete.spatialGas();
+		require(expectedGas.cells().equals(restoredGas.cells()) && Arrays.equals(expectedGas.internalEnergy(),restoredGas.internalEnergy())
+				&& expectedGas.externalSource().equals(restoredGas.externalSource()) && expectedGas.escapedSink().equals(restoredGas.escapedSink()),
+				"Spatial gas inventory, energy or audit did not round-trip");
 		require(Arrays.equals(expectedOccupancy,complete.phaseOccupancy().copyLiquidMicroVolumes()),
 				"Cold checkpoint reconstruction changed micro phase occupancy");
 		HostFluidState restoredDomain = HostFluidState.restoreAuthoritativeState(complete);
@@ -407,49 +417,6 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		expectIOException(() -> codec.decodeManifest(previousVersion), "previous thermal payload schema was accepted");
 	}
 
-	static void validateGasPieceCodec() throws Exception {
-		var network = new mmm.fluid.air.AirNetwork();
-		network.addNode(1.0, 1.0);
-		network.addNode(2.0, 2.0);
-		int[] pieces = new int[48]; Arrays.fill(pieces, -1);
-		pieces[3] = 1; pieces[7] = 2; pieces[8] = 0; pieces[9] = 2;
-		GasStateSnapshot snapshot = GasStateSnapshot.capture(3, 2, 1, pieces, network, "");
-		require(snapshot.nodes().get(0).inventory().equals(network.inventory(1))
-				&& snapshot.nodes().get(1).inventory().equals(network.inventory(2))
-				&& snapshot.nodes().get(0).topologyKey() == 3 && snapshot.nodes().get(1).topologyKey() == 7,
-				"piece snapshot lost same-cell independent chambers or reordered node inventories");
-		GasRegionStateCodec codec = new GasRegionStateCodec();
-		var section = new GasRegionStateCodec.SectionData(snapshot.pieceNodeOrdinal());
-		pieces[3] = -1; int[] alias = section.pieceNodeOrdinal(); alias[7] = -1;
-		require(section.pieceNodeOrdinal()[3] == 1 && section.pieceNodeOrdinal()[7] == 2,
-				"gas section aliases primary piece membership");
-		byte[] payload = codec.encodeSection(section);
-		var restored = codec.decodeSection(payload, 6, 2);
-		require(Arrays.equals(restored.pieceNodeOrdinal(), snapshot.pieceNodeOrdinal()),
-				"gas section lost full 8N memberships or absent/ambient distinction");
-		expectIOException(() -> codec.decodeSection(Arrays.copyOf(payload, payload.length - 4), 6, 2),
-				"gas section accepted missing final micro piece");
-		byte[] wrongOwner = payload.clone();
-		java.nio.ByteBuffer.wrap(wrongOwner).putInt(8 + 9 * Integer.BYTES, 3);
-		expectIOException(() -> codec.decodeSection(wrongOwner, 6, 2),
-				"gas section accepted an unknown node owner");
-		byte[] negative = payload.clone(); java.nio.ByteBuffer.wrap(negative).putInt(8, -2);
-		expectIOException(() -> codec.decodeSection(negative, 6, 2), "gas section accepted invalid absent sentinel");
-		expectIOException(() -> codec.decodeSection(Arrays.copyOf(payload, payload.length + 1), 6, 2),
-				"gas section accepted trailing bytes");
-		expectIOException(() -> codec.decodeSection(payload, Integer.MAX_VALUE, 2), "gas section piece count overflow");
-		expectIOException(() -> codec.decodeSection(payload, 524288, 2), "gas section allocation exceeded 16 MiB");
-		var manifest = new GasRegionStateCodec.ManifestData(GasRegionStateCodec.CAP_MATERIALS | GasRegionStateCodec.CAP_GAS,
-				snapshot.registryFingerprint(), "", snapshot.nodes().stream()
-				.map(n -> new GasRegionStateCodec.NodeData(n.topologyKey(), n.inventory())).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink(),
-				List.of(new GasRegionStateCodec.SectionLedger(new RegionSectionState.SectionKey(0, 0, 0), 3)));
-		var decodedManifest = codec.decodeManifest(codec.encodeManifest(manifest));
-		require(decodedManifest.sectionLedgers().getFirst().sealedPieceCount() == 3
-				&& decodedManifest.nodes().getFirst().topologyKey() == 3 && decodedManifest.nodes().getLast().topologyKey() == 7,
-				"gas manifest lost sealed piece count or global micro keys");
-	}
-
 	/** A sealed, inventory-free cavity is durable vacuum, not a malformed gas thermal node. */
 	private static void validateExplicitVacuumThermalCheckpoint() throws Exception {
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
@@ -462,9 +429,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		FullCapabilityTestFixture.bindFull(TestHostAccess.editable(vacuumRegion), registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		TestHostAccess.editable(vacuumRegion).setSolidMicroMask(1, 1, 1, 0xAA);
-		TestHostAccess.editable(vacuumRegion).synchronizeGasTopologyForPersistence();
+		int vacuumCell=1+vacuumRegion.sizeX()*(1+vacuumRegion.sizeY());
 		require(TestHostAccess.editable(vacuumRegion).gasBoundary().nodeCount() == 1
-				&& TestHostAccess.editable(vacuumRegion).gasBoundary().inventory(1).isEmpty()
+				&& TestHostAccess.editable(vacuumRegion).gasBoundary().inventory(vacuumCell+1).isEmpty()
 				&& TestHostAccess.editable(vacuumRegion).exactGasInternalEnergy().equals(SignedDyadic.ZERO),
 				"vacuum checkpoint fixture did not contain one zero-U cavity");
 
@@ -474,10 +441,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				registries.thermal(), registries.gas());
 		store.publish(vacuumState);
 		RegionCheckpointRestorer restored = restorer(store.read(vacuumRegion.id()));
-		FlipThermalParticleState thermal = restored.reconstructThermal(
-				registries.thermal(), registries.gas(), registries.chemical());
-		require(thermal.copyGasNodeEnergy().length == 1 && thermal.copyGasNodeEnergy()[0] == 0.0,
-				"durable vacuum checkpoint changed its zero-U gas node");
+		var gas=restored.reconstructSpatialGas(registries.gas(),registries.chemical());
+		require(gas.cells().get(vacuumCell).isEmpty() && gas.energyAt(vacuumCell)==0.0,
+				"durable vacuum checkpoint changed its zero-U gas cell");
 	}
 
 	static void validateGranularCodec() throws Exception {
@@ -644,7 +610,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var auditFixture = TestHostAccess.editable(region).chemicalLedgerForMarkerRange(0, 1);
 		TestHostAccess.editable(region).chemistry().recordExternalSource(auditFixture);
 		TestHostAccess.editable(region).chemistry().recordEscapedSink(auditFixture);
-		FlipChemicalParticleState expected = TestHostAccess.editable(region).exportChemicalParticleState();
+		FlipChemicalParticleState expected = TestHostAccess.editable(region).captureAuthoritativeState().chemicals();
 		RegionState state = RegionCheckpointFixtures.captureChemical(region, 1L);
 		state.validate();
 		expectIOException(restorer(state)::reconstruct, "chemical state was silently reconstructed as pure water");
@@ -731,8 +697,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		TestHostAccess.editable(region).restoreMaterialParticleState(input);
 		TestHostAccess.editable(region).bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
 		// Point samples are derived from the committed shared MAC field after initialization.
-		FlipMaterialParticleState expected = TestHostAccess.editable(region).exportMaterialParticleState();
 		var authoritativeBefore=TestHostAccess.editable(region).captureAuthoritativeState();
+		FlipMaterialParticleState expected = authoritativeBefore.materials();
 		assertFixtureMaterialQuantities(input,authoritativeBefore);
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		var canonicalRegion = canonicalCodecRegion(new UUID(15L, 16L));

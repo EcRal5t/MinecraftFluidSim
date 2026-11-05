@@ -20,7 +20,7 @@ const int SAMPLE_MASS = 8;
 const int SAMPLE_PRESSURE_FORCE_X = 9;
 const int SAMPLE_WATER_VOLUME = 12;
 const double PLANE_AXIS_TOLERANCE = 1e-12;
-const double FULL_CELL_VOLUME_TOLERANCE = 4e-5;
+// FULL_CELL_VOLUME_TOLERANCE
 const double KILOGRAMS_PER_MASS_UNIT = 1e-10;
 const double ATMOSPHERIC_PRESSURE_PA = 101325.0;
 // Geometry stores volume, mass and available volume in a four-double record.
@@ -95,7 +95,7 @@ void sampleCell(int cellIndex,ivec3 coord,out double sampleValues[SAMPLE_FIELD_C
  }
  double waterMinimumHeight=waterVolume>0.0?materialLayerHeight(cellIndex,denserVolume,plane,poreFraction):0.0,waterMaximumHeight=waterVolume>0.0?materialLayerHeight(cellIndex,denserVolume+waterVolume,plane,poreFraction):0.0;
  double liquidVerticalMoment=0.0;for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),hi=lo+.5,center;double v=clippedBoxVolume(plane,lo,hi,center)*poreFraction;liquidVerticalMoment+=v*center.y;}
- double liquidCentroidHeight=volume>0.0?liquidVerticalMoment/volume:.5,basePressure=availableVolume-volume<=FULL_CELL_VOLUME_TOLERANCE&&headerWord(H_GAS_PRESSURE)>=0?readDouble(headerWord(H_GAS_PRESSURE)+2*cellIndex):gasGaugePressure(cellIndex);
+ double liquidCentroidHeight=volume>0.0?liquidVerticalMoment/volume:.5,basePressure=availableVolume-volume<=FULL_CELL_VOLUME_TOLERANCE&&headerWord(H_GAS_PRESSURE)>=0?readDouble(headerWord(H_GAS_PRESSURE)+14*cellIndex)-ATMOSPHERIC_PRESSURE_PA:gasGaugePressure(cellIndex);
  if(availableVolume-volume>FULL_CELL_VOLUME_TOLERANCE){double surfaceY=abs(plane.y)>PLANE_AXIS_TOLERANCE?clamp((plane.w-.5*plane.x-.5*plane.z)/plane.y,0.0,1.0):liquidCentroidHeight;basePressure+=density*gravity()*size*(surfaceY-liquidCentroidHeight);}
  for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){
   dvec3 micro=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),lo=max(micro,boundLow),hi=min(micro+.5,boundHigh),center;

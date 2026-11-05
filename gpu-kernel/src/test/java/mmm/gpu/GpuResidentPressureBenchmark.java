@@ -21,8 +21,8 @@ public final class GpuResidentPressureBenchmark {
         var config = FluidSolverConfig.prototypeDefaults();
         var fixture = ManufacturedPressureFixture.manufacture(dimension, config.pressureTolerance(), config.maxPressureIterations());
         int n = fixture.size(), edges = fixture.values().length;
-        long[] lengths = {4L * (n + 1), 4L * edges, 8L * edges, 4L * n, 8L * n, 8L * n,
-                56L * n, 8L * n, 24L * n + 8, 128, 32L * ((n + 255) / 256)};
+        long[] lengths = {4L * (n + 1), 4L * edges, 8L * edges, 4L * n, 8L * n,
+                40L * n, 16L * n + 8, 128, 32L * ((n + 255) / 256)};
         try (var context = new VulkanDeviceContext(device, true, true);
              var pressure = new VulkanPressureKernel(context, 4096)) {
             long[] offsets = new long[lengths.length];
@@ -36,8 +36,8 @@ public final class GpuResidentPressureBenchmark {
             initial.slice(Math.toIntExact(offsets[1]), Math.toIntExact(lengths[1])).order(ByteOrder.nativeOrder()).asIntBuffer().put(fixture.columns());
             initial.slice(Math.toIntExact(offsets[2]), Math.toIntExact(lengths[2])).order(ByteOrder.nativeOrder()).asDoubleBuffer().put(fixture.values());
             initial.slice(Math.toIntExact(offsets[3]), Math.toIntExact(lengths[3])).order(ByteOrder.nativeOrder()).asIntBuffer().put(fixture.rows());
-            initial.slice(Math.toIntExact(offsets[8]), Math.toIntExact(lengths[8])).order(ByteOrder.nativeOrder()).asDoubleBuffer().put(fixture.rhs());
-            initial.putDouble(Math.toIntExact(offsets[8] + 24L * n), fixture.tolerance());
+            initial.slice(Math.toIntExact(offsets[6]), Math.toIntExact(lengths[6])).order(ByteOrder.nativeOrder()).asDoubleBuffer().put(fixture.rhs());
+            initial.putDouble(Math.toIntExact(offsets[6] + 16L * n), fixture.tolerance());
             try (var storage = new VulkanRegionStorage(context, total, 1024 * 1024)) {
                 storage.initialize(initial, 0);
                 for (int warm = 0; warm < 5; warm++) advance(storage, pressure, fixture, offsets, lengths);

@@ -185,12 +185,12 @@ final class ActiveGenerationStore {
 			restorer.reconstructLiquid(null);
 		}
 		var owners=restorer.reconstructThermalOwners(thermalRegistry);
-		var gas=restorer.reconstructGas(gasRegistry,chemicalRegistry);
-		var model=new mmm.thermal.GasThermalModel(thermalRegistry,gasRegistry);double[] energy=owners.copyGasNodeEnergy();
-		for(int i=0;i<energy.length;i++)model.requireInventoryEnergy(gas.nodes().get(i).inventory(),energy[i]);
+		var model=new mmm.thermal.GasThermalModel(thermalRegistry,gasRegistry);var spatial=restorer.hasSpatialGas()?restorer.reconstructSpatialGas(gasRegistry,chemicalRegistry):null;
+		if(spatial==null)throw new IOException("Thermal checkpoint requires local gas inventory");
+		for(int i=0;i<spatial.cellCount();i++)model.requireInventoryEnergy(spatial.cells().get(i),spatial.energyAt(i));
 		var liquid=restorer.reconstructLiquid(chemicalRegistry);var liquidU=mmm.units.SignedDyadic.ZERO;
 		for(var stock:liquid.stocks())liquidU=liquidU.add(mmm.units.SignedDyadic.of(stock.internalEnergy()));
-		owners.requireClosed(liquidU,liquid.cellCount());
+		owners.requireClosed(liquidU.add(mmm.units.SignedDyadic.sum(spatial.internalEnergy())),liquid.cellCount());
 		restorer.reconstructFiniteThermalDevices(thermalRegistry);
 	}
 

@@ -10,12 +10,32 @@ public record ChemicalReaction(
 		String phaseId,
 		Map<String, Integer> reactants,
 		Map<String, Integer> products,
-		ExactRational volumeDeltaCubicMetersPerExtent
+		ExactRational volumeDeltaCubicMetersPerExtent,
+		Kinetics kinetics
 ) {
-	public enum Kind { COMPLETE_DISSOCIATION, INSTANTANEOUS }
+	public enum Kind { COMPLETE_DISSOCIATION, INSTANTANEOUS, FINITE_RATE }
+
+	/** Mass-action constants use mol/m³; activation energies use J/mol. */
+	public record Kinetics(double forwardRate, double reverseRate, double forwardActivationJMol,
+			double reverseActivationJMol, double referenceTemperatureK) {
+		public static final Kinetics FAST = new Kinetics(0, 0, 0, 0, 298.15);
+		public Kinetics {
+			for (double value : new double[]{forwardRate, reverseRate, forwardActivationJMol, reverseActivationJMol})
+				if (!Double.isFinite(value) || value < 0) throw new IllegalArgumentException("Invalid reaction kinetics");
+			if (!Double.isFinite(referenceTemperatureK) || referenceTemperatureK <= 0)
+				throw new IllegalArgumentException("Invalid kinetic reference temperature");
+		}
+	}
+
+	public ChemicalReaction(String id, Kind kind, String phaseId, Map<String, Integer> reactants,
+			Map<String, Integer> products, ExactRational volumeDeltaCubicMetersPerExtent) {
+		this(id, kind, phaseId, reactants, products, volumeDeltaCubicMetersPerExtent, Kinetics.FAST);
+	}
 
 	public ChemicalReaction {
 		ChemicalIds.requireId(id, "reaction id");
+		if (kinetics == null || (kind == Kind.FINITE_RATE && kinetics.forwardRate() == 0 && kinetics.reverseRate() == 0))
+			throw new IllegalArgumentException("Finite reaction requires a rate: " + id);
 		if (kind == null) throw new IllegalArgumentException("Reaction kind is missing: " + id);
 		ChemicalIds.requireId(phaseId, "reaction phase id");
 		reactants = canonicalSide(reactants, id, "reactant");

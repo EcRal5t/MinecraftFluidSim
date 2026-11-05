@@ -22,9 +22,14 @@ public final class ChemicalDefinitionCodec {
 
 	public static ChemicalSpecies decodeSpecies(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "composition", "charge", "molar_mass_kg_per_mol", "base_argb");
+		var fields = new ArrayList<>(List.of("composition", "charge", "molar_mass_kg_per_mol", "base_argb"));
+		if (root.has("diffusivity_m2_per_s")) fields.add("diffusivity_m2_per_s");
+		if (root.has("effective_volume_m3_per_mol")) fields.add("effective_volume_m3_per_mol");
+		requireOnly(root, fields.toArray(String[]::new));
 		return new ChemicalSpecies(stableId, integerMap(root, "composition"),
-				exactInteger(root, "charge"), exact(root, "molar_mass_kg_per_mol"), color(root, "base_argb"));
+				exactInteger(root, "charge"), exact(root, "molar_mass_kg_per_mol"), color(root, "base_argb"),
+				root.has("diffusivity_m2_per_s") ? exact(root, "diffusivity_m2_per_s").toDouble() : null,
+				root.has("effective_volume_m3_per_mol") ? exact(root, "effective_volume_m3_per_mol").toDouble() : null);
 	}
 
 	public static ChemicalPhaseDefinition decodePhase(String stableId, Reader input) {
@@ -43,7 +48,8 @@ public final class ChemicalDefinitionCodec {
 
 	public static ChemicalReaction decodeReaction(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "kind", "phase", "reactants", "products", "volume_delta_m3_per_extent");
+		if (root.has("kinetics")) requireOnly(root, "kind", "phase", "reactants", "products", "volume_delta_m3_per_extent", "kinetics");
+		else requireOnly(root, "kind", "phase", "reactants", "products", "volume_delta_m3_per_extent");
 		ChemicalReaction.Kind kind;
 		try {
 			kind = ChemicalReaction.Kind.valueOf(string(required(root, "kind"), "kind").toUpperCase(java.util.Locale.ROOT));
@@ -51,7 +57,16 @@ public final class ChemicalDefinitionCodec {
 			throw new IllegalArgumentException("Unknown reaction kind", invalid);
 		}
 		return new ChemicalReaction(stableId, kind, string(required(root, "phase"), "phase"),
-				integerMap(root, "reactants"), integerMap(root, "products"), exact(root, "volume_delta_m3_per_extent"));
+				integerMap(root, "reactants"), integerMap(root, "products"), exact(root, "volume_delta_m3_per_extent"),
+				root.has("kinetics") ? kinetics(object(root, "kinetics")) : ChemicalReaction.Kinetics.FAST);
+	}
+
+	private static ChemicalReaction.Kinetics kinetics(JsonObject root) {
+		requireOnly(root, "forward_rate", "reverse_rate", "forward_activation_j_per_mol",
+				"reverse_activation_j_per_mol", "reference_temperature_k");
+		return new ChemicalReaction.Kinetics(exact(root, "forward_rate").toDouble(), exact(root, "reverse_rate").toDouble(),
+				exact(root, "forward_activation_j_per_mol").toDouble(), exact(root, "reverse_activation_j_per_mol").toDouble(),
+				exact(root, "reference_temperature_k").toDouble());
 	}
 
 	public static GasLiquidMassTransferDefinition decodeGasLiquidMassTransfer(String stableId, Reader input) {

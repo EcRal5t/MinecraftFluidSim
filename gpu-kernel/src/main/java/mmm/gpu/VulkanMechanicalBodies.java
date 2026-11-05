@@ -20,7 +20,7 @@ final class VulkanMechanicalBodies implements AutoCloseable {
     }
 
     /** Contact components use active particle ordinals; -1 omits particle-particle contact links. */
-    record GranularLinks(VulkanGranularStateLayout state,VulkanGranularPressure.Layout pressure,int contactComponentsWordOffset) { }
+    record GranularLinks(VulkanGranularStateLayout state,VulkanMixturePressure.Layout pressure,int contactComponentsWordOffset) { }
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
                   int projectedFacesWordOffset, int gasCellNodesWordOffset, int gasNodeCapacity, int gasCountsWordOffset,
                   GranularLinks granular,
@@ -49,13 +49,13 @@ final class VulkanMechanicalBodies implements AutoCloseable {
             target.putInt(4*Header.PARTICLE_CAPACITY.ordinal(),granular==null?0:granular.state().particleCapacity());
             if(granular!=null){var state=granular.state();var pressure=granular.pressure();
                 target.putInt(4*Header.GRAIN_COUNTS.ordinal(),state.word(VulkanGranularStateLayout.Field.COUNTS));
-                target.putInt(4*Header.GRAIN_FACE_IDS.ordinal(),pressure.word(VulkanGranularPressure.Field.FACE_IDS));
-                target.putInt(4*Header.GRAIN_FACE_SHARES.ordinal(),pressure.word(VulkanGranularPressure.Field.FACE_SHARES));
-                target.putInt(4*Header.GRAIN_DRAG_WEIGHTS.ordinal(),pressure.word(VulkanGranularPressure.Field.DRAG_WEIGHTS));
+                target.putInt(4*Header.GRAIN_FACE_IDS.ordinal(),pressure.word(VulkanMixturePressure.Field.FACE_IDS));
+                target.putInt(4*Header.GRAIN_FACE_SHARES.ordinal(),pressure.word(VulkanMixturePressure.Field.FACE_SHARES));
+                target.putInt(4*Header.GRAIN_DRAG_WEIGHTS.ordinal(),pressure.word(VulkanMixturePressure.Field.DRAG_WEIGHTS));
                 target.putInt(4*Header.GRAIN_SUPPORT_CELLS.ordinal(),state.word(VulkanGranularStateLayout.Field.SUPPORT_CELLS));
                 target.putInt(4*Header.GRAIN_SUPPORT_QUOTAS.ordinal(),state.word(VulkanGranularStateLayout.Field.SUPPORT_QUOTAS));
                 target.putInt(4*Header.CONTACT_COMPONENTS.ordinal(),granular.contactComponentsWordOffset());
-                target.putInt(4*Header.GRAIN_DRAG_RESISTANCE.ordinal(),pressure.word(VulkanGranularPressure.Field.DRAG_RESISTANCE));
+                target.putInt(4*Header.GRAIN_DRAG_RESISTANCE.ordinal(),pressure.word(VulkanMixturePressure.Field.DRAG_RESISTANCE));
             }
             return target;
         }

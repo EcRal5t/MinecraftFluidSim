@@ -37,10 +37,3 @@
   - 运行方式：`uv run pytool/gas_caloric_materials.py`
   - 导热率采用 NIST Huber 300 K 常数近似；CO₂ 在 298 K 以下沿用 298 K 的 Cp。同一生成过程按模型摩尔质量与相图参考点推导水蒸气批次体积，参考能保持常压潜焓 2256700 J/kg，CO₂ 参考能及原物种偏移保持。
 
-- **[analyze_aperture_graph.py](../../pytool/analyze_aperture_graph.py)**
-  - 用途：读取性能入口显式导出的 `MMMGAS01` 孔流图，统计实际度数、强连接、大气腔、低度组件，以及多轮独立 Schur 消元的余图和连通分量，用于选择压力图算法。
-  - 运行方式：`uv run pytool/analyze_aperture_graph.py build/gpu-cut64-aperture-graph.bin --json build/gpu-cut64-aperture-graph-analysis.json`
-
-- **[analyze_common_pressure_graph.py](../../pytool/analyze_common_pressure_graph.py)**
-  - 用途：读取 `MMMPRE01` 共同压力图，统计液气自由度、约束、强连接和空间聚合内的连通分量，用于定位多重网格与活动集成本。
-  - 运行方式：先由性能入口 `-PgpuMechanicalCommonPressureDump=<绝对路径>` 在计时后导出，再执行 `uv run pytool/analyze_common_pressure_graph.py build/gpu-cut64-common-pressure.bin --json build/gpu-cut64-common-pressure-analysis.json`。

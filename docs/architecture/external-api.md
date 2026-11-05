@@ -37,9 +37,9 @@
 
 - **恒温源界面授权**
   - 代码入口：[ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java)
-  - 测试选择器：`protocol,thermal`
+  - 测试选择器：`protocol`
 
-执行方式见 [验证指南](../maintenance/validation.md#cpu)。 Jade 入口分为[服务端](../../fabric/src/main/java/mmm/compat/jade/)和[客户端](../../fabric/src/client/java/mmm/compat/jade/)。
+执行方式见 [验证指南](../maintenance/validation.md#host)。 Jade 入口分为[服务端](../../fabric/src/main/java/mmm/compat/jade/)和[客户端](../../fabric/src/client/java/mmm/compat/jade/)。
 
 ## 本文内容
 
@@ -173,7 +173,7 @@ Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `Containe
 
 `TransferRequest` 携带调用方生成的操作 UUID、actor 及预期代次、区域与维度身份、世界坐标、方向和数量。方向相对于区域库存：`INSERT` 注入区域，`EXTRACT` 提取到容器。液体使用 `TransferQuantity.Liquid` 的 nanos（10⁻⁹ m³），颗粒使用 `TransferQuantity.Granular` 的 SVQ（2⁻²⁷ m³）。请求的液体 U 字段为空；实际组成、质量和内能由来源库存计算。
 
-公共转移使用真实发射器正对的显式 `mmm:fluid_port`。端口 `FACING` 朝外，发射器位于该正面相邻格并朝向端口；请求世界坐标所在方块必须是端口反方向紧邻的内部格，且属于请求指定的唯一已加载区域。该限制同时适用于注入和提取。登记 actor 只建立持久身份，实际操作时再核对端口路径；区域与 chunk 均由现有驻留状态提供，接口不启动加载或恢复。
+公共转移使用真实发射器正对的显式 `mmm:fluid_port`。端口 `FACING` 朝外，发射器位于该正面相邻格并朝向端口；请求世界坐标所在方块必须是端口反方向紧邻的内部方块，且属于请求指定的唯一已加载区域。实际交接从该方块与端口接触面相邻的求解格开始，并检查该格活动组的可用性；注入和提取共用这一规则。登记 actor 只建立持久身份，实际操作时再核对端口路径；区域与 chunk 均由现有驻留状态提供，接口不启动加载或恢复。
 
 `plan` 在执行私有预览前检查路径，无效路径返回 `INVALID_REQUEST`。`commit` 再次读取实际发射器朝向、端口和区域目标；路径改变使计划返回 `STALE_PLAN`。端口保持外壳碰撞，库存交接沿共同容器事务执行；支持范围与玩家路由见[玩家与发射器路由](world-ownership-and-containers.md#玩家与发射器路由)。
 

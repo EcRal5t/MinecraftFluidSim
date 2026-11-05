@@ -13,6 +13,10 @@
 ./gradlew.bat :fabric:runGpuProductionDemoValidation -PgpuDemo=<场景> -PgpuDemoSteps=<步数> --console=plain
 ```
 
+本轮 S1—S7 的功能证据集中在[仿真能力验证](#simulation-capabilities)。普通墙、周期投料、规定运动、局部气体及统一相间交换沿同一生产候选推进；组合流程使用实际物料容器、取样、提取和 checkpoint 续算。
+
+游戏内工艺入口为 `/mmm process feed <间隔tick>`、`/mmm process drive <秒数>`、`/mmm process sample`、`/mmm process stop`。机械驱动器方块安装在区域外壳，点击启动、潜行点击停止；区域状态使用 `/mmm regions checkpoint` 保存。
+
 ### 演示选择器与场景参数
 
 - `-PgpuDemo`：指定场景，支持 `tank`、`flow`、`ambient`、`air`、`vacuum`、`controller`、`precipitation`、`tension`、`demo`、`material`、`chemistry`、`capture`、`takeover`、`droplet`、`droplet-tail`。
@@ -23,7 +27,7 @@
 | 场景 (`gpuDemo`) | 步数 | 物理过程与验证要点 | 验收指标 |
 |---|---|---|---|
 | `tank` | 120 | 依次重置为清水、油水、稀酸碱三种生产配方；室温常压复位与真实桶量事务 | 清水下落铺开、油水分层、酸碱中和并生成水，质量守恒闭合 |
-| `flow` | 120 | 水向空侧扩散；实体进入、移动、离开及交互扰动 | 自由面平稳推进，实体受力反馈正确 |
+| `flow` | 500 | 水向空侧扩散；实体进入、移动、离开及交互扰动 | 自由面平稳推进，实体受力反馈正确 |
 | `ambient` | 500 | 小型 U 管双侧连通水柱常压平衡 | 两侧液位保持接近，主体温度稳定 |
 | `air` | 500 | 同一 U 管左气腔加压 | 加压侧液位下降、对侧上升 |
 | `vacuum` | 500 | 同一 U 管左气腔降压 | 低压侧液位上升、对侧下降 |
@@ -91,7 +95,7 @@
 
 本轮补充验证：`lifecycle,protocol` 通过；生命周期实际写入世界能力包及演示记录后再次启动。`tank 120` 和 `controller 20` 通过，控制器从未标注温度的原版水桶开始，经真实计划、WAL、HEAD、恢复及创造模式取水，核对物质与内能。`ContainerTransferStoreValidation --journal-thermal` 通过，覆盖带独立来源库存的日志与公共转移回执。完整 `containers` 选择器在日志及恢复用例通过后进入较长的 CPU 物理矩阵，本轮终止该部分，未计为全套通过。
 
-小型 U 管常压、加压及低压各连续 500 步通过，均包含暂停单步、导出恢复、编辑后续算和生产超时暂停规则。末态两臂液位差分别约 2 cm、22 cm、18 cm，加压与低压方向相反；主体水温约 293.14 K，质量按环境交换后的整数收支严格闭合。低压重放出现高温微气泡，其气体质量占比很小，主体气温约 300 K；温度验收按实际库存质量加权，同时记录局部极值及其库存占比。
+水流及小型 U 管常压、加压、低压场景各连续 500 步通过，包含实体交互、暂停单步、导出恢复及编辑后续算。U 管加压与低压的液位变化方向相反，常压两臂保持接近；质量按环境交换后的整数收支闭合。记录 `build/final-pressure-flow.log`、`build/final-pressure-air.log`、`build/final-pressure-ambient.log` 和 `build/final-pressure-vacuum.log`。
 
 真实方块写入、鼠标命中、字体排版及图形绘制由图形客户端观察。入口为 `/mmm demo`：清水开始后切到油水和酸碱，切换显色，暂停、单步、重置、移除，再切换水流池及三种气压预设。带光影包和资源重载的观察仍单独保留。
 
@@ -116,21 +120,78 @@ S1 的针对性入口：
 ./gradlew.bat :gpu-kernel:runGpuWetWallValidation :gpu-kernel:runGpuEntityBodyCouplingBenchmark :gpu-kernel:runGpuChannelFlowValidation --offline --no-daemon --console=plain --max-workers=1
 ```
 
-2026-10-30，RTX 5070 Ti 上湿壁几何、静止无额外生热和黏性动能转热通过；覆盖满液、半液、贴壁薄层及紧凑小液滴，干顶墙接触面积为零。规定运动物体的黏性外功等于液体动能变化加耗散热，反作用及外部功沿同一账本结算。记录 `build/simulation-s1-physics.log`。
+2026-11-05，RTX 5070 Ti 上按主轴液面几何验证满液、半液和薄至 1/32768 格的贴壁液膜；干顶墙接触面积为零，静止液体无额外生热，黏性动能与热量结算闭合。记录 `build/s5-s1-regression3.log`。
 
-压差通道使用相同初始液位差、h=0.5 m、16 个 0.05 s 连续设备机械步，比较真实几何和黏度。基准通道长 4 格、截面 2×2 格、μ=20 Pa·s，向低液位侧转移约 0.58327 m³；黏度加倍为 0.54583 m³，长度增至 8 格为 0.39675 m³，截面增至 2×3 格为 0.78551 m³。这是有限液柱的短时流量趋势，未作充分发展流或实际湍流压降标定。入口检查实际整数质量、液体体积和候选热账。
+压差通道采用相同初始液位差、0.5 m 格长和 16 个 0.05 s 设备机械步。基准、黏度加倍、通道长度加倍、截面加宽的归一化转移量依次为 5.61901921、5.28871587、3.97673898、7.38734165；入口核对整数质量和热账。该场景覆盖有限液柱短时流量趋势。记录同上。
+
+2026-11-05，统一气液传质的沸腾、混合液沸腾、混合液冷凝和相邻双气格接触场景通过，检查质量、物种、内能审计、机械续算与 checkpoint；记录 `build/s5-local-layout-validation2.log`。完全汽化后的空相行、机械续算和恢复通过，记录 `build/s5-empty-final.log`。固液传质验证通过新颗粒床、库存容量和双供体物种／质量结算，记录 `build/s5-coupled-acceptance.log` 中的固液任务输出。
+
+同日 `region-state` 全组通过，覆盖液体、局部气体、化学、颗粒、热载体及世界能力定义的持久恢复，记录 `build/host-mixture-region-state-current.log`；生命周期、区域登记及气体初态库存检查通过，记录 `build/host-mixture-lifecycle-current.log` 和 `build/host-mixture-manager-current2.log`。
+
+共同液气及外界半格惯量接入后，固液多供体、颗粒床、冻结和融化回归通过，记录 `build/s5-mixture-solid-phase.log`。
+
+同格半液的气液热接触复用 PLIC 内部界面面积；热气向冷液传热且两相热账闭合，记录 `build/plic-internal-thermal.log`。
+
+逐格气体初始化和共享 PLIC 查询迁移后，`:fabric:compileTestJava`、`MarkerVelocityTransferValidation` 与 `AirNetworkValidation` 通过；覆盖实体浸液、水接触、局部气压作用及冷恢复，以及显式气体初态和整数库存分份；命令与输出记录于 `build/spatial-gas-host-queries.log`。
+
+宿主冷编辑沿真实干口转移受挤气体后，1 m³ 桶量投料、封闭气体绝热压缩、1/256 格薄膜的干口与湿面、CO₂ 物种质量与残差分份、气体库存和热账、已有混合编辑与容器全组通过；记录 `build/gas-split-host-validation3.log`。
+
+共享开放面候选迁移后，宿主 `MarkerVelocityTransferValidation` 通过，覆盖封闭隔板两侧投料和提取、打开通路后的提取、路径距离与本格取样；记录 `build/container-reachable-faces-host.log`。
+
+微量混合液容器取样按整数体积回算实际扣取量后，宿主 `containers` 全组通过；覆盖局部微升量级样品与剩余库存的整数质量、物种和内能交接，记录 `build/small-chemical-sample-host.log`。
+
+同日宿主 `containers` 全组通过，覆盖 WAL 和恢复、整数库存、气体功审计及部分水桶最终可表示的微小内能；使用既有 classpath 和独立编译目录，记录 `build/container-fix-validation.log`。 架构检查扫描 603 个生产源，依赖方向、包环与液体库存写入职责检查通过，记录 `build/current-architecture-validation2.log`。
+
+2026-11-05，共同压力及接收体 EOS 容量约束下，生产水流完成 120 步，非冷导入步墙钟中位数 36.113 ms、P95 43.979 ms、最大 54.182 ms；同批气体脉冲、气袋及纯气 EOS／功恒等式通过，记录 `build/mixture-receiver-eos-flow120.log`。加压、常压和低压三种 U 管各完成 120 步，记录 `build/mixture-u-air-current.log`、`build/mixture-u-ambient-current.log` 和 `build/mixture-u-vacuum-current.log`。工艺加热场景通过，记录 `build/process-heat-evaporation-eos2.log`；扩散的单量子溶质排空与完整内能交接通过，记录 `build/diffusion-empty-quantum.log`。
+
+实际容器组合工艺复现：
+
+```powershell
+./gradlew.bat :fabric:runGpuProcessFlowsValidation -PgpuProcessScenario=all -PgpuProcessSteps=20 -PgpuProbeDevice=0 --offline --no-daemon --console=plain --max-workers=1
+```
+
+该入口执行有限墙加热、CO₂ 吸收脱除、晶种结晶、双挥发冷凝、碱液碳化及规定运动驱动，均通过容器事务完成投料与取样，并在 checkpoint 恢复后续算。普通场景按 20 个 0.05 s 步推进；驱动至少 40 步，冷凝运行 1200 步。冷凝从热池底部接口经 15 次实际容器事务连续投入同配方液体，热池保留自由高度，并使用抽气后的气道和 285 K 普通金属干冷壁，从固定冷壁接触格取样。
+
+2026-11-05，六条组合工艺完成实际投料、取样、checkpoint 恢复及续算。干冷壁样品为 4.611 mL，乙醇摩尔分率为 0.34155，原料为 0.23591。吸收脱除使用 1 mol/m³ 稀碳酸水，气体抽除后继续推进，液相无机碳减少且气相 CO₂ 增加。记录 `build/final-pressure-process-all.log`；实体关闭格处理更新后的规定运动驱动复验记录 `build/final-pressure-drive-final.log`。
+
+该组小型区域的每次 `motion.step` 墙钟时间如下，包含冷导入首步；投料 WAL、采样、存档与实际绘制在计时外。
+
+| 工艺 | 步数 | 中位数 ms | P95 ms | 最大 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 加热 | 20 | 15.712 | 48.354 | 190.176 |
+| 吸收与脱除 | 40 | 12.913 | 69.262 | 115.221 |
+| 结晶 | 20 | 26.627 | 85.498 | 113.985 |
+| 蒸发与冷凝 | 1200 | 11.173 | 13.126 | 185.377 |
+| 碳化 | 20 | 11.620 | 51.003 | 97.926 |
+| 规定运动驱动 | 40 | 11.105 | 16.681 | 94.100 |
+
+共同压力下，完整水流 120 步、实体交互、暂停单步、checkpoint 恢复、库存编辑与续算通过；119 个非冷导入步中位数 16.088 ms、P95 23.953 ms、最大 40.922 ms，末态水温 293.145146 K。记录 `build/pressure-csr-flow120.log`。`assemble verifyArchitecture :fabric:compileTestJava :gpu-kernel:compileTestJava` 通过，架构检查扫描 601 个生产源，记录 `build/s1-s7-integrated-build.log`。
+
+64³ 全能力设备预算使用同一切格几何、两相体积分数与初始速度，按正式支持的 0.5 m 格长加载生产物性、逐格气体、热、扩散、反应、相变及固态布局，并执行候选提交：
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuLiquidMechanicalBenchmark -PgpuMechanicalGrids=64 -PgpuMechanicalScene=cut -PgpuMechanicalGas=true -PgpuMechanicalThermal=true -PgpuMechanicalProduction=true -PgpuMechanicalWarmup=5 -PgpuMechanicalSamples=10 --offline --no-daemon --console=plain --max-workers=1
+```
+
+该后端预算输入超出默认区域登记规模；相对原 0.25 m 切格机械输入，其边长加倍、物理库存按格容增至 8 倍，分别记录结果。它覆盖设备候选及提交，Minecraft 世界交互与绘制另计。2026-11-05，关闭阶段诊断、预热 5 步并测量 10 步：生产 64³ 中位 136.088 ms、最大 192.170 ms，GPU 均值 91.035 ms，单 bank 工作区为 3,715,820,224 B；测量步实际子步数为 `[1,1,1,1,1,2,2,2,2,2]`，记录 `build/final-pressure-production64-final.log`。原 64³ 切格机械场景中位 204.619 ms、最大 228.557 ms，记录 `build/final-pressure-mechanical64-final.log`；32³／256 颗粒场景中位 149.753 ms、最大 297.675 ms，记录 `build/debug-granular32.log`。当前耗时高于 50 ms 目标，后续继续优化。
+
+气体及相变 13 个场景与有限墙通过，记录 `build/final-pressure-phase.log`、`build/final-pressure-walls.log`。纯真空实体关闭与重开、有库存实体对齐关闭通过，记录 `build/entity-vacuum-closure.log`、`build/aligned-body-check.log`。
+
+局部气体点查询使用共同 PLIC 后，宿主完整气体传输验证通过，覆盖点位置、局部库存和内能编辑及 EOS 功恒等式；记录 `build/host-gas-point-validation.log`。
+
+同一批串行验证通过竞争反应、局部气体脉冲与气袋、空液相行，以及 flow 120 步的编辑和恢复；flow 119 个非冷导入步中位数 15.202 ms、P95 23.810 ms、最大 36.045 ms，记录 `build/indexed-pending-integration.log`。
 
 原规模成本继续使用 `runGpuLiquidMechanicalBenchmark` 的 64³ 切格及 32³／256 颗粒场景。该入口覆盖连续设备机械步及可选导热，反应、相变、生产调度、世界与展示另由生产演示评价；两类成本分别登记。湿壁派生列在 64³ 时每代占 24 MiB，两代共 48 MiB，几何复用时随同代派生字段复制。
 
 同日统一构建 `assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuChannelFlowValidation :gpu-kernel:runGpuThermalContactsBenchmark :gpu-kernel:runGpuThermalPhaseValidation :fabric:runGpuProductionDemoValidation` 通过；参数为 `hostValidation=region-state`、`gpuDemo=flow`、`gpuDemoSteps=120`、`gpuDemoStage=complete`，使用 `--offline --no-daemon --console=plain --max-workers=1`。架构扫描 611 个生产源，完整区域存档及世界定义恢复通过。有限热设备与区域热步的能量账闭合，七类热相变均含机械续算和 checkpoint。水流场景完成实体交互、暂停单步、导出恢复、库存编辑和继续推进；119 个非冷导入步墙钟中位数 23.092 ms、P95 30.538 ms、最大 47.036 ms，未触发耗时暂停。该计时涵盖生产演示的输入、设备与采用流程，逐步诊断在计时之外。记录 `build/simulation-s1-delivery.log`，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
-原规模验收未通过：64³ 切格保持有限气体、导热、3 步预热与 12 步计时，在第 4 个计时步达到容量修正 512 轮上限；32³／256 颗粒与床层保持有限气体、导热、1 步预热与 3 步计时，在首个预热步的位移计算达到同一上限。日志为 `build/simulation-s1-cut64.log`、`build/simulation-s1-granular32.log`，失败输入分别为 `build/simulation-s1-cut64-capacity.bin` 和 `build/simulation-s1-granular32-capacity.bin`。输入静态分析确认两者的原格留存满足单元与气组容量，因此这里是搜索未完成。原规模完整步性能尚无通过结果，不能据小型演示宣布 64³／50 ms 达标。
-
-32³ 失败短重放保持 512 轮，仍有少量正余额，现有诊断未能确认局部实现错误；残差传播与满气组之间的交接成本交给后续共同压力／通量设计处理。新增诊断读取剩余顶点、相邻残差、距离和流量，生产算法及预算保持原值。记录 `build/simulation-s1-capacity-detail.log`，重放方式：
+### 竞争反应与有限动力学
 
 ```powershell
-./gradlew.bat :gpu-kernel:runGpuLiquidCapacityReplay '-PgpuCapacityReplayFile=D:/Proj/260817-MinecraftMod/fabric-example-mod/build/simulation-s1-granular32-capacity.bin' -PgpuCapacityRounds=512 --offline --no-daemon --console=plain --max-workers=1
+./gradlew.bat :gpu-kernel:runGpuLiquidReactionsValidation --console=plain
 ```
+
+2026-10-30，五个 GPU 场景通过，日志 `build/competitive-reactions.log`。快速解离与中和保持原有整数结果；两条等速反应共享 100000 个反应物量子，分别生成 50000；正逆速率比 2:1 的反应在 100 个连续步后得到 33333/66667 的平衡分配。10 个量子的慢反应在中途捕获、重建设备存储并恢复进度后生成 4 个产物量子，保留其余 6 个。高温与放热反馈改变竞争产物分配，实际质量和内能保持闭合。该入口验证局部反应职责，完整工艺和完整步耗时由组合场景另行登记。
 
 <a id="host"></a>
 ## 宿主事务、存档与协议验证

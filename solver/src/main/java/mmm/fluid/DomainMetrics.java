@@ -146,10 +146,15 @@ final class DomainMetrics {
 
 
 	boolean hasAmbientGasCells() {
-		var frame = domain.gasState.frame;
-		if (frame == null) return false;
-		for (var component : frame.geometry().components())
-			if(frame.topology().nodeOfComponent(component.cell(),component.supportMask())==AirNetwork.AMBIENT_NODE)return true;
+		if(domain.gasState.spatial!=null){
+			if(domain.gasState.sealedDomainBoundary)return false;
+			for(int cell=0;cell<domain.cellCount;cell++){
+				int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY),mask=domain.geometry.cutCells.mask(cell);
+				for(int bit=0;bit<8;bit++)if((mask&(1<<bit))==0 && ((x==0&&(bit&1)==0)||(x==domain.sizeX-1&&(bit&1)!=0)
+						||(y==0&&(bit&2)==0)||(y==domain.sizeY-1&&(bit&2)!=0)||(z==0&&(bit&4)==0)||(z==domain.sizeZ-1&&(bit&4)!=0)))return true;
+			}
+			return false;
+		}
 		return false;
 	}
 }

@@ -48,8 +48,7 @@ public final class RegionChemistry {
 		ordered.sort(null);
 		MassTransferPending previous = null;
 		for (var entry : ordered) {
-			if (entry.cell() >= cellCount || previous != null && previous.compareTo(entry) == 0
-					|| registry.gasLiquidMassTransfers().stream().noneMatch(rule -> rule.id().equals(entry.definitionId())))
+			if (entry.cell() >= cellCount || previous != null && previous.compareTo(entry) == 0)
 				throw new IllegalArgumentException("Pending mass transfer identity is outside the region or registry");
 			previous = entry;
 		}

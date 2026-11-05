@@ -68,6 +68,7 @@ final class VulkanRegionThermal implements AutoCloseable {
         var i=layout.input();var input=new VulkanThermalContacts.Inputs(i.liquid(),i.liquidThermal(),i.gas(),eos,geometry,i.granular(),i.granularThermal(),
                 i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.facesWord(),i.cellSize(),i.activityCellWord(),i.plicPlanesWord(),i.plicCellsWord());
         var contacts=VulkanThermalContacts.layout(input,layout.contacts().materials,layout.conduction(),layout.contacts().header.offset(),alignment);
+        contacts.wallGeometryWord=layout.contacts().wallGeometryWord;
         return new Layout(input,layout.conduction(),contacts,layout.reservoir(),layout.roundoff(),layout.endOffset());
     }
     private static VulkanEnergyLedger.Stream stream(VulkanThermalConduction.Layout l,VulkanThermalConduction.Field field,int sign){
@@ -75,20 +76,19 @@ final class VulkanRegionThermal implements AutoCloseable {
     }
     private final List<AutoCloseable> owned=new ArrayList<>();
     private final VulkanLiquidThermodynamics caloric;
-    private final VulkanGasThermodynamics gasEOS;
     private final VulkanThermalContacts contacts;
     private final VulkanThermalConduction conduction;
     private final VulkanPressureKernel pressure;
     private final VulkanEnergyLedger deviceLedger;
     private VulkanStageTimings timings;
     VulkanRegionThermal(VulkanDeviceContext context){
-        try{caloric=own(new VulkanLiquidThermodynamics(context));gasEOS=own(new VulkanGasThermodynamics(context));
+        try{caloric=own(new VulkanLiquidThermodynamics(context));
             contacts=own(new VulkanThermalContacts(context));conduction=own(new VulkanThermalConduction(context));pressure=own(new VulkanPressureKernel(context,4096));deviceLedger=own(new VulkanEnergyLedger(context));
             if(Boolean.getBoolean("mmm.gpuMechanicalStages")&&context.hasTimestampQueries())timings=own(new VulkanStageTimings(context,384));
         }catch(RuntimeException|Error failure){try{close();}catch(RuntimeException closing){failure.addSuppressed(closing);}throw failure;}
     }
     private <T extends AutoCloseable>T own(T resource){owned.add(resource);return resource;}
-    /** Leaves the candidate open for its remaining phases and the single request commit. */
+    /** Consumes current gas caloric state and leaves the candidate open for its remaining phases. */
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration){return execute(candidate,l,duration,null,null,false);}
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation){
         return execute(candidate,l,duration,sourceDevices,settlement,continuation,null,null,-1);
@@ -104,17 +104,16 @@ final class VulkanRegionThermal implements AutoCloseable {
         var status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             if(prefix!=null)prefix.record(command,in,out,errors,staging,stack);
             var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);
-            caloric.rebindRanges(arena,err);gasEOS.rebindRanges(arena,err);contacts.rebindRanges(arena,err);
+            caloric.rebindRanges(arena,err);contacts.rebindRanges(arena,err);
             deviceLedger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);
             conduction.rebindRanges(arena,err);pressure.rebindRanges(l.conduction().pressureRanges(arena,err));
             if(timings!=null)timings.reset(command);
             timed(command,"thermal-caloric",()->{
-                // Temperature belongs to the post-work inventory, including the finite-aperture gas transfer.
+                // Temperature belongs to the post-work inventory, including the local gas transfer.
                 caloric.record(command,l.input().liquidThermal());
                 if(l.input().granular()!=null)caloric.record(command,l.input().granularThermal());
                 if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
                 if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
-                if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
             });
             timed(command,"thermal-samples",()->contacts.recordSpatial(command,l.contacts()));
             conduction.recordSpatialInitialize(command,l.conduction(),duration);
@@ -152,7 +151,6 @@ final class VulkanRegionThermal implements AutoCloseable {
             if(l.input().granular()!=null)caloric.record(command,l.input().granularThermal());
             if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
             if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
-            if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
             if(suffix!=null)suffix.record(command,in,out,errors,staging,stack);
         };
         int finalError=finalUploadedBytes<0?candidate.continueBatch(publish,0,0).error():candidate.finishBatch(finalUploadedBytes,publish);
@@ -165,6 +163,17 @@ final class VulkanRegionThermal implements AutoCloseable {
         return finalError;
     }
     long deviceBytes(){return contacts.frozenBytes();}
+    /** Settles the wall energy written by dry-wall condensation after conduction. */
+    void recordCondensationSettlement(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,
+            VulkanThermalDeviceLayout device,VulkanThermalDeviceLayout.Settlement settlement,
+            VulkanLiquidThermodynamics.Layout deviceThermal){
+        var arena=new FlipKernelBindings.BufferRange(output);
+        var errorBuffer=new FlipKernelBindings.BufferRange(errors);
+        deviceLedger.rebindRanges(arena,arena,errorBuffer);
+        device.recordSettle(command,device,settlement,deviceLedger,output,true);
+        caloric.rebindRanges(arena,errorBuffer);
+        caloric.record(command,deviceThermal);
+    }
     private void timed(org.lwjgl.vulkan.VkCommandBuffer command,String label,Runnable commands){
         if(timings==null)commands.run();else timings.record(command,label,commands);
     }

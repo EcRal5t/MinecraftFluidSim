@@ -6,9 +6,9 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /** Exact region summaries and closure checks, independent of the finite columns of one node. */
-final class GasRegionAudit {
+public final class GasRegionAudit {
 	private GasRegionAudit() { }
-	static GasAuditLedger aggregate(Iterable<GasInventory> inventories) {
+	public static GasAuditLedger aggregate(Iterable<GasInventory> inventories) {
 		TreeMap<String, Accumulator> totals = new TreeMap<>();
 		for (GasInventory inventory : inventories) for (var component : inventory.components()) {
 			Accumulator total = totals.get(component.componentId());
@@ -43,7 +43,7 @@ final class GasRegionAudit {
 		merge(left, columns(source)); merge(right, columns(sink));
 		if (!left.equals(right)) throw new IllegalArgumentException("Gas topology remap does not close component nanos/species");
 	}
-	static boolean closed(GasAuditLedger live, GasAuditLedger source, GasAuditLedger sink) {
+	public static boolean closed(GasAuditLedger live, GasAuditLedger source, GasAuditLedger sink) {
 		source.standardVolumeNanos(); sink.standardVolumeNanos();
 		TreeMap<String, Columns> left = columns(live), right = columns(source);
 		merge(left, columns(sink));

@@ -54,16 +54,12 @@ final class DomainInventoryLifecyclePlanner {
 		}
 		FluidDomainContracts.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
 		FluidDomainContracts.GranularClearPlan granular = planGranularClear();
-		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
-		if (domain.gasState.frame != null) {
-			domain.domainFlowFields.ensureInventoryGrid();
-			gasTopology = domain.gasTopologyCoordinator.planAfterOperatorClear(condensed.liquid().inventory().future());
-		}
+        var mixture=domain.domainInventory.prepareCondensedClear(condensed,true);
 		ThermalDomainState.Revision thermalRevision = domain.thermalState == null
 				? null : domain.thermalState.thermalRevision();
 		if (domain.thermalState != null) domain.thermalState.requireCanCommitOperatorClear(
 				thermalRevision, condensed.liquid().internalEnergy(), condensed.coherentEnergy(),
-				granular.internalEnergy(), gasTopology == null ? null : gasTopology.thermalPlan());
-		return new FluidDomainContracts.OperatorClearPlan(condensed, granular, gasTopology, thermalRevision);
+				granular.internalEnergy());
+		return new FluidDomainContracts.OperatorClearPlan(condensed, granular, mixture, thermalRevision);
 	}
 }

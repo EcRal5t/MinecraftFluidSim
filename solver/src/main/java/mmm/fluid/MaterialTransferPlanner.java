@@ -19,9 +19,7 @@ import java.util.TreeMap;
 /** Exact external quantity transactions over the same persistent cells used by fluid transport. */
 final class MaterialTransferPlanner {
 	private final HostFluidState domain;
-	private double externalKineticSinkJoules;
 	MaterialTransferPlanner(HostFluidState domain) { this.domain = domain; }
-	double externalKineticSinkJoules() { return externalKineticSinkJoules; }
 	private record Input(int material, SignedDyadic volume, long mass, ChemicalMixtureRecord mixture) { }
 	private record Placement(LiquidCellInventory.Key key, SignedDyadic volume, int input) { }
 	private record Extraction(LiquidCellInventory.Plan inventory, List<FluidDomainContracts.MaterialPortion> portions,
@@ -61,7 +59,8 @@ final class MaterialTransferPlanner {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
 		if (amount <= 0) return new FluidDomainContracts.VolumeAddition(0, false);
 		var nearby = domain.domainFlowFields.editableNearbyCells(x, y, z, radius); var room = SignedDyadic.ZERO;
-		for (var candidate : nearby) room = room.add(available(candidate.index()));
+		if(domain.gasState.spatial!=null)room=SignedDyadic.of(amount);
+		else for (var candidate : nearby) room = room.add(available(candidate.index()));
 		var requested = SignedDyadic.of(amount); var accepted = minimum(room, requested);
 		float represented = (float) accepted.toDouble();
 		if (SignedDyadic.of(represented).compareTo(accepted) > 0) represented = Math.nextDown(represented);
@@ -84,8 +83,7 @@ final class MaterialTransferPlanner {
 		domain.domainFlowFields.ensureInventoryGrid();
 		var requested = SignedDyadic.ZERO; long mass = domain.liquidCells.massUnits();
 		for (var input : inputs) { requested = requested.add(input.volume()); mass = Math.addExact(mass, input.mass()); }
-		if (!domain.domainCollision.canAddCarrierVolume(requested.toDouble())) return false;
-		var routing = new LiquidInsertionGasPlan.CapacityRouting(domain);
+		if(domain.gasState.spatial==null && !domain.domainCollision.canAddCarrierVolume(requested.toDouble()))return false;
 		var rooms = new LinkedHashMap<Long, SignedDyadic>(); var placements = new ArrayList<Placement>();
 		for (int input = 0; input < inputs.size(); input++) {
 			var remaining = inputs.get(input).volume();
@@ -100,13 +98,17 @@ final class MaterialTransferPlanner {
 					if (free == null) { free = capacities[component]; for (var stock : domain.liquidCells.stocksInCell(cell))
 						if (stock.key().supportMask() == support) free = free.subtract(stock.volume()); rooms.put(identity, free); }
 					var take = minimum(free, remaining); if (take.signum() <= 0) continue;
-					if (take.equals(availableFromRooms(cell, rooms)) && !routing.canFill(cell)) continue;
 					placements.add(new Placement(new LiquidCellInventory.Key(cell, inputs.get(input).material(), support), take, input));
 					rooms.put(identity, free.subtract(take)); remaining = remaining.subtract(take);
-					if (availableFromRooms(cell, rooms).signum() == 0) routing.filled(cell);
 				}
 			}
-			if (remaining.signum() > 0) return false;
+			if(remaining.signum()>0){
+				if(domain.gasState.spatial==null||nearby.isEmpty()||nearby.getFirst().distanceSquared()!=0)return false;
+				int cell=nearby.getFirst().index();
+				if(!(domain.domainCollision.effectiveOpenCellVolume(cell)>0))return false;
+				int support=~domain.geometry.cutCells.mask(cell)&255;
+				placements.add(new Placement(new LiquidCellInventory.Key(cell,inputs.get(input).material(),support),remaining,input));
+			}
 		}
 		Transaction candidate;
 		try {
@@ -358,8 +360,9 @@ final class MaterialTransferPlanner {
 
 	private Transaction prepare(LiquidCellInventory.Plan original, ChemicalTransferLedger source, ChemicalTransferLedger sink,
 	                            SignedDyadic sourceEnergy, SignedDyadic sinkEnergy) {
-		var momentum = domain.cellMacStage.prepareExternalMomentum(original);
-		var inventory = original.withMechanicalHeat(momentum.heatByCell());
+		var edit = HostMixtureEdit.prepare(domain,original,domain.occupiedSolidSvq(),null,original.changedCells());
+		var momentum = edit.momentum();
+		var inventory = edit.inventory();
 		long quanta = 0; for (var stock : inventory.future().stocks()) if (stock.mixture() != null) quanta = Math.addExact(quanta, stock.mixture().totalQuanta());
 		if (quanta > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) throw new IllegalArgumentException("Liquid chemical inventory is over budget");
 		if (domain.thermalState != null) for (int cell : inventory.changedCells())
@@ -370,48 +373,31 @@ final class MaterialTransferPlanner {
 		var before = domain.thermalState == null ? null : domain.thermalState.auditLedger();
 		var after = before == null ? null : before.withExternalSourceEnergy(sourceEnergy).withExternalSinkEnergy(sinkEnergy)
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyChange().subtract(sourceEnergy).add(sinkEnergy).subtract(inventory.mechanicalHeat()));
-		long[] occupied = domain.occupiedSolidSvq();
-		var gas = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterCarrierEdit(inventory.future(), occupied);
-		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
-		if (after != null) {
-			var combined = after; var thermal = gas == null ? null : gas.thermalPlan();
-			if (thermal != null) combined = combined.withExternalSourceEnergy(thermal.sourceEnergy()).withExternalSinkEnergy(thermal.sinkEnergy())
-					.withMechanicalWork(thermal.mechanicalWork()).withRoundoff(thermal.roundoff());
-			combined.expectedInventory();
-		}
-		return new Transaction(inventory, momentum, momentum.removedKineticEnergy(), gas, chemical, before, after);
+		var localGas=edit.gas();
+		if(after!=null&&localGas!=null)after=localGas.applyAudit(after);
+		if(after!=null)after.expectedInventory();
+		return new Transaction(inventory, momentum, localGas, chemical, before, after);
 	}
 	private final class Transaction {
-		final LiquidCellInventory.Plan inventory; final CellMacStage.ExternalMomentum momentum; final double removedKinetic;
-		final GasTopologyCoordinator.GasTopologyPlan gas; final RegionChemistry.AuditExchange chemical; final ThermalAuditLedger before, after;
-		Transaction(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum, double removedKinetic,
-		            GasTopologyCoordinator.GasTopologyPlan gas, RegionChemistry.AuditExchange chemical, ThermalAuditLedger before, ThermalAuditLedger after) {
-			this.inventory = inventory; this.momentum = momentum; this.removedKinetic = removedKinetic; this.gas = gas; this.chemical = chemical; this.before = before; this.after = after;
+		final LiquidCellInventory.Plan inventory; final CellMacStage.ExternalMomentum momentum;
+		final SpatialGasEdits.Plan localGas; final RegionChemistry.AuditExchange chemical; final ThermalAuditLedger before, after;
+		Transaction(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum,
+		            SpatialGasEdits.Plan localGas, RegionChemistry.AuditExchange chemical, ThermalAuditLedger before, ThermalAuditLedger after) {
+			this.inventory = inventory; this.momentum = momentum; this.localGas=localGas; this.chemical = chemical; this.before = before; this.after = after;
 		}
 		void commit() {
 			inventory.requireCurrent();
 			if (chemical != null) domain.chemistry.requireCurrentAuditExchange(chemical);
 			if (before != null && domain.thermalState.auditLedger() != before) throw new IllegalStateException("Liquid external thermal audit changed after preparation");
-			domain.cellMacStage.publishMaterialChange(inventory,()->domain.cellMacStage.commitMomentum(momentum),gas,null,()->{
+			if(localGas!=null)localGas.requireCurrent(domain);
+			domain.cellMacStage.publishMaterialChange(inventory,()->domain.cellMacStage.commitMomentum(momentum),()->{
                 if(chemical!=null)domain.chemistry.commitAuditExchange(chemical);
+                if(localGas!=null)localGas.commit(domain);
                 if(after!=null)domain.thermalState.restoreAuditLedger(after);
             });
-            externalKineticSinkJoules+=removedKinetic;
 		}
 	}
 	private SignedDyadic available(int cell) { return SignedDyadic.of(domain.domainCollision.effectiveOpenCellVolume(cell)).subtract(domain.liquidCells.exactCellVolume(cell)); }
-	private SignedDyadic availableFromRooms(int cell, Map<Long, SignedDyadic> rooms) {
-		var total = available(cell);
-		for (var entry : rooms.entrySet()) if ((int) (entry.getKey() >>> 8) == cell) {
-			int support = (int) (entry.getKey() & 255); var original = SignedDyadic.ZERO;
-			var supports = LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell));
-			var capacities = CellRemapMicroTopology.capacities(domain.geometry.cutCells.mask(cell), SignedDyadic.of(domain.domainCollision.effectiveOpenCellVolume(cell)));
-			for (int i = 0; i < supports.size(); i++) if (supports.get(i) == support) original = capacities[i];
-			for (var stock : domain.liquidCells.stocksInCell(cell)) if (stock.key().supportMask() == support) original = original.subtract(stock.volume());
-			total = total.subtract(original.subtract(entry.getValue()));
-		}
-		return total;
-	}
 	private String materialId(int material) { return domain.materialRegistry == null ? BuiltinFluidMaterials.WATER.id() : domain.materialRegistry.material(material).id(); }
 	private Map<String, Long> stable(ChemicalMixtureRecord mixture) { return mixture == null ? Map.of() : mixture.stableAmounts(domain.chemistry.registry()); }
 	private double modeledEnergy(int material, long mass, ChemicalMixtureRecord mixture, double temperature) {

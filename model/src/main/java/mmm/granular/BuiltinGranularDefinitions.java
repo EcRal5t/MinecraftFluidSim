@@ -30,7 +30,8 @@ public final class BuiltinGranularDefinitions {
 						BuiltinChemicalDefinitions.CL_MINUS, 64), PRECIPITATE, Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64,
 						BuiltinChemicalDefinitions.CL_MINUS, 64), ExactRational.ONE,
-				281L, 50L, 4_096L, true)), BuiltinChemicalDefinitions.REGISTRY);
+				// NaCl near ambient pressure: 36 g / 100 g water at 25 C; linear approximation over 0–100 C.
+				281L, 50L, 4_096L, true,new SolidLiquidReaction.Solubility(BuiltinChemicalDefinitions.H2O,298.15,.1109,.000095,273.15,373.15,1.6e-9))), BuiltinChemicalDefinitions.REGISTRY);
 	}
 
 	private static ParticulateMaterial material(

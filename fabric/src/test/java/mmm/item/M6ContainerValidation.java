@@ -373,8 +373,10 @@ public final class M6ContainerValidation {
 				&&inventoryVolume(domain).equals(SignedDyadic.of(inserted.volume()))&&domain.totalMassUnits()==inserted.massUnits(),
 				"Exact insertion did not publish the reported volume and integer mass");
 		var before=domain.captureAuthoritativeState();
-		check(!domain.tryInsertExactVolume(3,2,3,100,3).transferred(),"Insertion exceeded actual open capacity");
-		FluidDomainStateAssertions.assertSameState(before,domain.captureAuthoritativeState(),"Capacity-limited insertion");
+		var compressed=domain.tryInsertExactVolume(3,2,3,100,3);
+		check(compressed.transferred()&&domain.totalMassUnits()==before.liquid().stocks().stream().mapToLong(mmm.inventory.LiquidCellInventory.Stock::massUnits).sum()+compressed.massUnits()
+				&&inventoryVolume(domain).equals(SignedDyadic.of(100.375)),"Compressed insertion lost material");
+		check(domain.pressure(3,2,3)>0,"Compressed source did not produce pressure");
 		var compact=new HostFluidState(6,4,6,CONFIG);
 		var addition=compact.tryInsertExactVolume(3,2,3,1,2);
 		check(addition.transferred()&&inventoryVolume(compact).equals(SignedDyadic.of(1))&&compact.totalMassUnits()==addition.massUnits(),

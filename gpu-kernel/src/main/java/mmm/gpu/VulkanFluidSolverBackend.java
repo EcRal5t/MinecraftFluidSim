@@ -160,7 +160,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 try {
                     var audit = successor.thermalOwner() == null
                         ? null
-                        : successor.thermalOwner().audit().withRoundoff(prepared.importRoundoff());
+                        : codec.initialGasAudit(successor.thermalOwner().audit()).withRoundoff(prepared.importRoundoff());
                     return new Edited(
                         prepared, new State(current.region, codec, ports, prepared.captureState(), audit));
                 } catch (RuntimeException | Error failure) {
@@ -306,7 +306,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 capture = region.device.captureState();
                 var audit = template.thermalOwner() == null
                     ? null
-                    : template.thermalOwner().audit().withRoundoff(region.device.importRoundoff());
+                    : codec.initialGasAudit(template.thermalOwner().audit()).withRoundoff(region.device.importRoundoff());
                 return new State(region, capture, audit);
             } catch (RuntimeException | Error failure) {
                 if (capture != null)
@@ -331,7 +331,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             prepared = source.region.device.prepareMechanical(source.capture,
                 new VulkanLiquidProjection.Parameters(config.cellSize(), config.timeStep(), config.gravity(),
                     config.pressureTolerance(), config.maxPressureIterations()),
-                512, new VulkanLiquidRegion.RequestInputs(request));
+                new VulkanLiquidRegion.RequestInputs(request));
             var pending = new Pending(source, prepared);
             prepared = null;
             try {
@@ -342,13 +342,14 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 var granular = pending.successor.capture.granularCounters();
                 var stats = new FluidDomainContracts.StepStats(pending.prepared.substeps(), (int) diagnostic[0],
                     (float) diagnostic[1], (float) before.volume(), (float) after.volume(), before.mass(), after.mass(),
-                    chemical[3], chemical[4], chemical[5], condensedStats(pending.successor),
+                    chemical[4], chemical[5], condensedStats(pending.successor),
                     gasPhaseStats(pending.successor),
                     new FluidDomainContracts.MechanicalStepAudit(
                         false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, SignedDyadic.ZERO, 0),
                     thermalStats(pending.successor),
                     new mmm.granular.GranularDepositDynamics.Stats(granular[3], granular[5], granular[4], 0, 0),
-                    new FluidDomainContracts.CarrierViscosityStats(0, ""),
+                    new FluidDomainContracts.CarrierViscosityStats(after.viscosityOutsideRange(),
+                        after.viscosityOutsideRange()==0?"":"黏度组成或温度超出已声明的物性数据范围"),
                     new FluidDomainContracts.ViscousStepStats(0, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
                         after.viscousHeat(), Double.NaN, Double.NaN, Double.NaN),
                     new FluidDomainContracts.MechanicalCorrection(after.liquidForce(), after.granularForce(),

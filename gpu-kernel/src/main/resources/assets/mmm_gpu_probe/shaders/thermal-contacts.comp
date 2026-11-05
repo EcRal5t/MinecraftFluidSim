@@ -90,12 +90,20 @@ void clear(int id){
   if(liveLiquid()<0||liveLiquid()>headerWord(H_LIQUID_CAPACITY)||liveGas()<0||liveGas()>headerWord(H_GAS_CAPACITY)||liveParticle()<0||liveParticle()>headerWord(H_PARTICLE_CAPACITY)||liveDeposit()<0||liveDeposit()>headerWord(H_DEPOSIT_CAPACITY)||liveCoherent()<0||liveCoherent()>headerWord(H_COHERENT_CAPACITY)||liveDevice()<0||liveDevice()>headerWord(H_DEVICE_CAPACITY)||livePorts()<0||livePorts()>headerWord(H_PORT_CAPACITY))reportInvalid();}
 }
 void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[workField(FIELD_OWNER_FLAGS)+id]=exists&&hasMass(kind,row)?1u:0u;}
+double liquidEthanolMass(int row){
+ if(int(words[headerWord(H_LIQUID_MATERIALS)+row])!=headerWord(H_AQUEOUS_MATERIAL)||headerWord(H_ETHANOL_SPECIES)<0)return 0.0;
+ double amount=0.0;for(int i=int(words[headerWord(H_LIQUID_SPECIES_OFFSETS)+row]);i<int(words[headerWord(H_LIQUID_SPECIES_OFFSETS)+row+1]);i++)
+  if(int(words[headerWord(H_LIQUID_SPECIES_HANDLES)+i])==headerWord(H_ETHANOL_SPECIES))amount+=double(readQuantity(headerWord(H_LIQUID_SPECIES_AMOUNTS)+2*i));
+ return min(double(readQuantity(headerWord(H_LIQUID_MASS)+2*row))*1e-10LF,amount*1e-6LF*.046LF);
+}
 void prepareOwner(int candidate){
  if(candidate==0){int n=liveOwners();words[workField(FIELD_REQUIREMENTS)]=uint(n);words[headerWord(H_CONDUCTION_COUNTS)]=uint(n);if(n>headerWord(H_CONDUCTION_OWNER_CAPACITY))atomicOr(errors,64u);}
  if(words[workField(FIELD_OWNER_FLAGS)+candidate]==0u)return;int owner=int(words[workField(FIELD_OWNER_PREFIX)+candidate]);if(owner>=headerWord(H_CONDUCTION_OWNER_CAPACITY))return;
  int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);words[workField(FIELD_OWNER_KIND)+owner]=uint(kind);words[workField(FIELD_OWNER_INDEX)+owner]=uint(row);
  double energy=0.0,temperature=0.0,k=0.0;int terms=1;
- if(kind==0){energy=readDouble(headerWord(H_LIQUID_ENERGY)+2*row);temperature=readDouble(headerWord(H_LIQUID_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_LIQUID_MATERIALS)+row])));}
+ if(kind==0){energy=readDouble(headerWord(H_LIQUID_ENERGY)+2*row);temperature=readDouble(headerWord(H_LIQUID_TEMPERATURE)+2*row);int handle=int(words[headerWord(H_LIQUID_MATERIALS)+row]);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,handle));
+  double mass=double(readQuantity(headerWord(H_LIQUID_MASS)+2*row))*1e-10LF;
+  k=mix(k,ETHANOL_CONDUCTIVITY,liquidEthanolMass(row)/mass);}
  else if(kind==2){energy=readDouble(headerWord(H_GRANULAR_ENERGY)+2*row);temperature=readDouble(headerWord(H_GRANULAR_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_GRANULAR_MATERIAL)+row])));}
  else if(kind==4){energy=readDouble(headerWord(H_DEVICE_ENERGY)+2*row);temperature=readDouble(headerWord(H_DEVICE_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_DEVICE_MATERIAL)+row])));}
  else if(kind==3){energy=readDouble(headerWord(H_COHERENT_ENERGY)+2*row);temperature=readDouble(headerWord(H_COHERENT_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_COHERENT_MATERIAL)+row])));}
@@ -108,9 +116,9 @@ void prepareTerms(int candidate){
  if(candidate==0){uint total=words[headerWord(H_CONDUCTION_TERM_OFFSETS)+headerWord(H_CONDUCTION_OWNER_CAPACITY)];words[workField(FIELD_REQUIREMENTS)+1]=total;words[headerWord(H_CONDUCTION_COUNTS)+1]=total;if(total>uint(headerWord(H_CONDUCTION_TERM_CAPACITY)))atomicOr(errors,64u);}
  if(errors!=0u||words[headerWord(H_CONDUCTION_TERM_OFFSETS)+headerWord(H_CONDUCTION_OWNER_CAPACITY)]>uint(headerWord(H_CONDUCTION_TERM_CAPACITY))||words[workField(FIELD_OWNER_FLAGS)+candidate]==0u)return;int owner=int(words[workField(FIELD_OWNER_PREFIX)+candidate]);if(owner>=headerWord(H_CONDUCTION_OWNER_CAPACITY))return;
  int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);int outAt=int(words[headerWord(H_CONDUCTION_TERM_OFFSETS)+owner]);
- if(kind!=1){int handle=int(words[(kind==0?headerWord(H_LIQUID_MATERIALS):kind==2?headerWord(H_GRANULAR_MATERIAL):kind==3?headerWord(H_COHERENT_MATERIAL):headerWord(H_DEVICE_MATERIAL))+row]);words[headerWord(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,handle));writeDouble(headerWord(H_CONDUCTION_TERM_MASS)+2*outAt,double(readQuantity((kind==0?headerWord(H_LIQUID_MASS):kind==2?headerWord(H_GRANULAR_MASS):kind==3?headerWord(H_COHERENT_MASS):headerWord(H_DEVICE_MASS))+2*row))*1e-10LF);}
+ if(kind!=1){int handle=int(words[(kind==0?headerWord(H_LIQUID_MATERIALS):kind==2?headerWord(H_GRANULAR_MATERIAL):kind==3?headerWord(H_COHERENT_MATERIAL):headerWord(H_DEVICE_MATERIAL))+row]);words[headerWord(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,handle));writeDouble(headerWord(H_CONDUCTION_TERM_MASS)+2*outAt,double(readQuantity((kind==0?headerWord(H_LIQUID_MASS):kind==2?headerWord(H_GRANULAR_MASS):kind==3?headerWord(H_COHERENT_MASS):headerWord(H_DEVICE_MASS))+2*row))*1e-10LF);writeDouble(conductionField(CONDUCTION_TERM_ETHANOL_MASS)+2*outAt,kind==0?liquidEthanolMass(row):0.0);}
  else for(int c=int(words[headerWord(H_GAS_COMPONENT_OFFSETS)+row]);c<int(words[headerWord(H_GAS_COMPONENT_OFFSETS)+row+1]);c++)if(readQuantity(headerWord(H_GAS_MASS)+2*c)>uint64_t(0)){
-  words[headerWord(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,int(words[headerWord(H_GAS_COMPONENT_HANDLES)+c])));writeDouble(headerWord(H_CONDUCTION_TERM_MASS)+2*outAt,double(readQuantity(headerWord(H_GAS_MASS)+2*c))*1e-10LF);outAt++;}
+  words[headerWord(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,int(words[headerWord(H_GAS_COMPONENT_HANDLES)+c])));writeDouble(headerWord(H_CONDUCTION_TERM_MASS)+2*outAt,double(readQuantity(headerWord(H_GAS_MASS)+2*c))*1e-10LF);writeDouble(conductionField(CONDUCTION_TERM_ETHANOL_MASS)+2*outAt,0.0);outAt++;}
 }
 int liquidCell(int row){int lo=0,hi=headerWord(H_CELL_COUNT);while(lo<hi){int mid=(lo+hi)/2;if(int(words[headerWord(H_LIQUID_CELL_OFFSETS)+mid+1])<=row)lo=mid+1;else hi=mid;}return lo<headerWord(H_CELL_COUNT)?lo:-1;}
 void sampleAddress(int id,out int owner,out int cell,out int mask,out double volume){
@@ -162,7 +170,33 @@ double wetPort(int cell,int bit,int axis,int side){
 }
 double sameConductance(int point,int q){
  int owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),other=int(words[workField(FIELD_SAMPLE_OWNER)+q]);int overlap=bitCount(words[workField(FIELD_SAMPLE_MASK)+point]&words[workField(FIELD_SAMPLE_MASK)+q]);
- if(owner==other||overlap==0)return 0.0;double fp=fraction(point),fq=fraction(q);
+ if(owner==other)return 0.0;
+ int first=family(owner),second=family(other);
+ if((first==0&&second==1)||(first==1&&second==0)){
+  int liquid=first==0?point:q,gas=first==1?point:q,cell=int(words[workField(FIELD_SAMPLE_CELL)+liquid]);
+  if(headerWord(H_PLIC_PLANES)<0||headerWord(H_PLIC_CELLS)<0)return 0.0;
+  double fill=readDouble(headerWord(H_PLIC_CELLS)+8*cell+6);if(fill<=0.0LF||fill>=1.0LF)return 0.0;
+  int base=headerWord(H_PLIC_PLANES)+8*cell;
+  dvec4 plane=dvec4(readDouble(base),readDouble(base+2),readDouble(base+4),readDouble(base+6));
+  uint boxes=plicInternalInterfaceBoxes(plane,uint((~openMask(cell))&255),words[workField(FIELD_SAMPLE_MASK)+liquid]);
+  double area=0.0LF,portion=fraction(liquid);
+  for(uint remaining=boxes;remaining!=0u;remaining&=remaining-1u){
+   uint bit=uint(findLSB(remaining));double covered=0.0LF;
+   for(int at=int(words[workField(FIELD_CELL_OFFSETS)+cell]);at<int(words[workField(FIELD_CELL_OFFSETS)+cell+1]);at++){
+    int candidatePoint=int(words[workField(FIELD_CELL_SAMPLES)+at]);
+    if(family(int(words[workField(FIELD_SAMPLE_OWNER)+candidatePoint]))==0 && (words[workField(FIELD_SAMPLE_MASK)+candidatePoint]&(1u<<bit))!=0u)covered+=fraction(candidatePoint);
+   }
+   if(covered>0.0LF)area+=.25LF*portion/covered;
+  }
+  if(area<=0.0LF)return 0.0LF;
+  int axis=plane.x!=0.0LF?0:plane.y!=0.0LF?1:2;double cut=plane.w/plane[axis];
+  double depth=plane[axis]>0.0LF?cut:1.0LF-cut;
+  double kl=readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+liquid]));
+  double kg=readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+gas]));
+  if(kl<=0.0LF||kg<=0.0LF)return 0.0LF;
+  return 2.0LF*cellSize()*area/(depth/kl+(1.0LF-depth)/kg);
+ }
+ if(overlap==0)return 0.0;double fp=fraction(point),fq=fraction(q);
  float radius=uintBitsToFloat(words[workField(FIELD_MF_POW)+(fp<=fq?point:q)]);
  precise double conductance=2.0LF*harmonic(readDouble(workField(FIELD_OWNER_K)+2*owner),readDouble(workField(FIELD_OWNER_K)+2*other))*cellSize()*(.125LF*double(overlap)*double(radius));return conductance;
 }
@@ -211,7 +245,18 @@ double deviceConductance(int point,int port){
    area+=physical*(fp*.125LF)/covered;
   }
  }
- precise double conductance=cellSize()*cellSize()*area/(readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port)/readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port)+readDouble(headerWord(H_PORT_FILM_THICKNESS)+2*port)/k);return conductance;
+ double film=readDouble(headerWord(H_PORT_FILM_THICKNESS)+2*port);
+ if(fam==0 && area>0.0LF){
+  int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]),wall=headerWord(H_PLIC_WALL_GEOMETRY);
+  double wet=wall<0?0.0LF:readDouble(wall+2*(12*cell+2*direction));
+  double inverseDistance=wall<0?0.0LF:readDouble(wall+2*(12*cell+2*direction+1));
+  if(wet>0.0LF && inverseDistance>0.0LF)film=cellSize()*wet/inverseDistance;
+  else {
+   double volume=.125LF*double(bitCount(uint(mask)))*fp;
+   film=min(.5LF*cellSize(),.5LF*cellSize()*volume/area);
+  }
+ }
+ precise double conductance=cellSize()*cellSize()*area/(readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port)/readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port)+film/k);return conductance;
 }
 // Port weights are geometry alone. The material conductivity and finite owner temperatures
 // remain in the one canonical pair evaluator used by both explicit and implicit conduction.
@@ -270,7 +315,7 @@ void contacts(int point,bool writing){
  if(kp==0.0){if(!writing)words[workField(FIELD_CONTACT_COUNTS)+point]=0u;return;}
  for(int at=int(words[workField(FIELD_CELL_OFFSETS)+cell]);at<int(words[workField(FIELD_CELL_OFFSETS)+cell+1]);at++){
   int q=int(words[workField(FIELD_CELL_SAMPLES)+at]);if(q<=point||words[workField(FIELD_SAMPLE_OWNER)+q]==uint(owner))continue;double kq=readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+q]));
-  int overlap=bitCount(uint(mask)&words[workField(FIELD_SAMPLE_MASK)+q]);if(overlap==0||kq==0.0)continue;
+  if(kq==0.0)continue;
   double conductance=sameConductance(point,q);
   edge(point,q,conductance,0.0,writing,count);
  }

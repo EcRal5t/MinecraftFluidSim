@@ -14,7 +14,6 @@ const int MICROCELL_COUNT = 8;
 const double MICROCELL_SIZE = .5, MICROFACE_AREA = .25;
 const double SOLID_QUANTA_PER_CELL = 16777216.0;
 const double OCCUPATION_ROUNDOFF_TOLERANCE = 1e-9;
-const double UNRESOLVED_GAS_VOLUME = 4e-5;
 const uint ERROR_INVALID_BODY = 16777216u;
 
 layout(local_size_x = 128) in;
@@ -410,49 +409,19 @@ void gatherBodyTotals(int body) {
     }
     writeDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_VOLUME, wetVolume);
 }
-int pressureHeaderWord(int headerField) {
-    if (headerWord(H_GAS_PRESSURE) >= 0)
-        return int(arenaWords[headerWord(H_GAS_PRESSURE) + headerField]);
-    return headerField == GAS_H_STARTS     ? headerWord(H_PRESSURE_STARTS)
-           : headerField == GAS_H_VALUES   ? headerWord(H_PRESSURE_VALUES)
-           : headerField == GAS_H_ROWS     ? headerWord(H_PRESSURE_ROW_META)
-           : headerField == GAS_H_PRESSURE ? headerWord(H_PRESSURE_VALUES_OUTPUT)
-           : headerField == GAS_H_META     ? headerWord(H_PRESSURE_META)
-           : headerField == GAS_H_PROBLEM  ? headerWord(H_PRESSURE_PROBLEM)
-                                           : 0;
-}
-int gasFieldWordOffset(int field) {
-    return pressureHeaderWord(GAS_WORK_FIELDS + field);
-}
 int coupledHeaderWord(int headerField) {
     return int(arenaWords[headerWord(H_COUPLED_PRESSURE) + headerField]);
 }
 int coupledFieldWordOffset(int field) {
     return coupledHeaderWord(COUPLED_WORK_FIELDS + field);
 }
-bool isLiquidFull(int cellIndex) {
-    return cellGeometry(cellIndex, CELL_LIQUID_MASS) > 0.0 && cellGeometry(cellIndex, CELL_PORE_VOLUME) > 0.0 &&
-           cellGeometry(cellIndex, CELL_PORE_VOLUME) - cellGeometry(cellIndex, CELL_LIQUID_VOLUME) <=
-               UNRESOLVED_GAS_VOLUME;
-}
 int pressureRowForCell(int cellIndex) {
-    if (cellIndex < 0)
-        return -1;
-    if (isLiquidFull(cellIndex))
-        return cellIndex;
-    if (headerWord(H_GAS_PRESSURE) < 0)
-        return -1;
-    int node = int(arenaWords[pressureHeaderWord(GAS_H_CELL_NODES) + cellIndex]);
-    return node > 0 ? headerWord(H_CELLS) + node - 1 : -1;
-}
-double pressureDatum() {
-    return headerWord(H_GAS_PRESSURE) < 0 ? 0.0 : readDoubleAt(gasFieldWordOffset(GAS_F_DATUM));
+    return cellIndex >= 0 && cellGeometry(cellIndex, CELL_LIQUID_MASS) > 0.0 && cellGeometry(cellIndex, CELL_PORE_VOLUME) > 0.0
+        ? cellIndex : -1;
 }
 double physicalRowPressure(int row) {
-    return row < 0
-               ? 0.0
-               : (headerWord(H_GAS_PRESSURE) < 0 ? 0.0 : readDoubleAt(gasFieldWordOffset(GAS_F_REFERENCE) + 2 * row)) +
-                     readDoubleAt(pressureHeaderWord(GAS_H_PRESSURE) + 2 * row) + pressureDatum();
+    return row < 0 ? 0.0 : max(0.0, readDoubleAt(headerWord(H_MIXTURE_STATES) + 2 * (7 * row)) +
+        readDoubleAt(coupledHeaderWord(COUPLED_H_PRESSURE) + 2 * row));
 }
 void buildPressureContacts(int contact) {
     for (int side = 0; side < 2; side++) {
@@ -475,59 +444,20 @@ void buildPressureContacts(int contact) {
         double coefficient = (side == 0 ? 1.0 : -1.0) * readDoubleField(F_CONTACT_SHARE, contact) / params.cellSize;
         writeIntField(F_PRESSURE_ROW, index, pressureRows[side]);
         writeDoubleField(F_PRESSURE_COEFFICIENT, index, coefficient);
-        if (pressureRows[side] >= 0)
-            atomicAdd(arenaWords[fieldWordOffset(F_ROW_COUNTS) + pressureRows[side]], 1u);
     }
 }
 void assembleBodyVolumeRate(int row) {
-    double bodyVolumeRate = 0.0;
-    for (int member = readIntField(F_ROW_OFFSETS, row); member < readIntField(F_ROW_OFFSETS, row + 1); member++) {
-        int term = readIntField(F_ROW_ENTRIES, member), contact = term / 2,
-            body = readIntField(F_CONTACT_BODY, contact), axis = faceAxis(readIntField(F_CONTACT_FACE, contact));
-        bodyVolumeRate += readDoubleField(F_PRESSURE_COEFFICIENT, term) *
-                          readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body + axis);
-    }
+    double bodyVolumeRate = row < headerWord(H_CELLS)
+        ? double(readInt64At(headerWord(H_SOURCE_OCCUPATION) + 2 * row) - readInt64At(fieldWordOffset(F_OCCUPIED_SVQ) + 2 * row)) /
+              (SOLID_QUANTA_PER_CELL * params.duration)
+        : 0.0;
     writeDoubleField(F_ROW_BODY_RATE, row, bodyVolumeRate);
-    if (bodyVolumeRate == 0.0)
+    if (bodyVolumeRate == 0.0 || row >= headerWord(H_CELLS) || pressureRowForCell(row) < 0)
         return;
-    if (row >= headerWord(H_CELLS) && row < headerWord(H_CELLS) + pressureHeaderWord(GAS_H_GAS_CAPACITY)) {
-        int node = row - headerWord(H_CELLS);
-        double pressure = readDoubleAt(pressureHeaderWord(GAS_H_THERMODYNAMIC_STATES) +
-                                       2 * (GAS_STATE_STRIDE * node + GAS_ABSOLUTE_PRESSURE));
-        if (pressure <= 0.0)
-            return;
-        double storage = readDoubleAt(gasFieldWordOffset(GAS_F_STORAGE) + 2 * node);
-        if (storage <= 0.0) {
-            storage = readDoubleAt(pressureHeaderWord(GAS_H_NODE_VOLUMES) + 2 * node) *
-                      readDoubleAt(pressureHeaderWord(GAS_H_THERMODYNAMIC_STATES) +
-                                   2 * (GAS_STATE_STRIDE * node + GAS_COMPRESSIBILITY)) /
-                      (params.duration * params.duration * params.cellSize * params.cellSize * params.cellSize);
-            if (!(storage > 0.0 && isFinite(storage))) {
-                reportInvalidBody();
-                return;
-            }
-            writeDoubleAt(gasFieldWordOffset(GAS_F_STORAGE) + 2 * node, storage);
-            arenaWords[gasFieldWordOffset(GAS_F_MECHANICAL_MODE) + node] = 1u;
-            writeDoubleAt(gasFieldWordOffset(GAS_F_DIAGONAL) + 2 * node, storage);
-            if (headerWord(H_COUPLED_PRESSURE) >= 0)
-                writeDoubleAt(coupledFieldWordOffset(COUPLED_F_STORAGE) + 2 * row, storage);
-            else {
-                int diagonal = int(arenaWords[pressureHeaderWord(GAS_H_STARTS) + row]);
-                writeDoubleAt(pressureHeaderWord(GAS_H_VALUES) + 2 * diagonal, storage);
-                arenaWords[pressureHeaderWord(GAS_H_META) + row] = 1u;
-            }
-        }
-    }
-    if (headerWord(H_COUPLED_PRESSURE) >= 0) {
-        writeDoubleAt(
-            coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row,
-            readDoubleAt(coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row) - bodyVolumeRate / params.duration);
-        arenaWords[coupledFieldWordOffset(COUPLED_F_ROW_ENABLED) + row] = 1u;
-    } else {
-        writeDoubleAt(pressureHeaderWord(GAS_H_PROBLEM) + 2 * row,
-                      readDoubleAt(pressureHeaderWord(GAS_H_PROBLEM) + 2 * row) - bodyVolumeRate / params.duration);
-        arenaWords[pressureHeaderWord(GAS_H_ROWS) + row] = uint(row);
-    }
+    writeDoubleAt(
+        coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row,
+        readDoubleAt(coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row) - bodyVolumeRate / params.duration);
+    arenaWords[coupledFieldWordOffset(COUPLED_F_ROW_ENABLED) + row] = 1u;
 }
 void gatherBodyResult(int body) {
     for (int component = 0; component < BODY_RESULT_STRIDE; component++)
@@ -535,7 +465,7 @@ void gatherBodyResult(int body) {
     if (body >= bodyCount())
         return;
     dvec3 pressureImpulse = dvec3(0.0), shearImpulse = dvec3(0.0);
-    double shearWork = 0.0, volume = 0.0;
+    double volume = 0.0;
     for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
         for (int slot = 0; slot < CELL_SIDE_COUNT; slot++) {
             int contact = readIntField(F_ENTRY_CONTACTS, CELL_SIDE_COUNT * entry + slot);
@@ -550,27 +480,19 @@ void gatherBodyResult(int body) {
                 params.duration * params.cellSize * params.cellSize * params.cellSize * pressureForceDensity;
             if (headerWord(H_CONTACT_IMPULSE) >= 0)
                 shearImpulse[axis] -= readDoubleAt(headerWord(H_CONTACT_IMPULSE) + 2 * contact);
-            if (headerWord(H_CONTACT_WORK) >= 0)
-                shearWork += readDoubleAt(headerWord(H_CONTACT_WORK) + 2 * contact);
         }
     for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
         volume += readDoubleField(F_ENTRY_VOLUME, entry) * params.cellSize * params.cellSize * params.cellSize;
-    dvec3 velocity = dvec3(readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body),
-                           readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body + 1),
-                           readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body + 2));
     for (int axis = 0; axis < 3; axis++)
         writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_IMPULSE_X + axis,
                          pressureImpulse[axis] + shearImpulse[axis]);
-    writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_PRESSURE_WORK,
-                     dot(pressureImpulse, velocity));
-    writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_SHEAR_WORK, shearWork);
     writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_COUPLED_VOLUME, volume);
 }
 void settleCellExternalWork(int cellIndex) {
     double externalWork =
         headerWord(H_SOURCE_CELL_WORK) < 0 ? 0.0 : readDoubleAt(headerWord(H_SOURCE_CELL_WORK) + 2 * cellIndex);
     externalWork -= params.duration * params.cellSize * params.cellSize * params.cellSize *
-                    readDoubleField(F_ROW_BODY_RATE, cellIndex) * physicalRowPressure(cellIndex);
+                    readDoubleField(F_ROW_BODY_RATE, cellIndex) * physicalRowPressure(pressureRowForCell(cellIndex));
     writeDoubleField(F_SOURCE_WORK, cellIndex, externalWork);
 }
 void main() {
@@ -581,7 +503,6 @@ void main() {
         if (id < headerWord(H_CELLS)) {
             writeIntField(F_CELL_COUNTS, id, 0);
             writeIntField(F_CELL_CURSORS, id, 0);
-            writeDoubleField(F_SOURCE_WORK, id, 0.0);
         }
         if (id < headerWord(H_FACES)) {
             writeIntField(F_FACE_COUNTS, id, 0);
@@ -660,29 +581,8 @@ void main() {
                          total > 0.0 ? area / params.cellSize * readDoubleField(F_CONTACT_SHARE, id) / total : 0.0);
         return;
     }
-    if (params.stage == STAGE_APPLY_FACE_APERTURES) {
-        double area = max(0.0, faceGeometry(id, FACE_OPEN_AREA) - readDoubleField(F_FACE_AREA, id));
-        writeDoubleAt(headerWord(H_GEOMETRY_FACES) + 2 * (GEOMETRY_STRIDE * id + FACE_OPEN_AREA), area);
-        writeDoubleAt(headerWord(H_GEOMETRY_FACES) + 2 * (GEOMETRY_STRIDE * id + FACE_LIQUID_AREA),
-                      min(faceGeometry(id, FACE_LIQUID_AREA), area));
-        return;
-    }
-    if (params.stage == STAGE_RESET_PRESSURE_ROWS) {
-        writeIntField(F_ROW_COUNTS, id, 0);
-        writeIntField(F_ROW_CURSORS, id, 0);
-        return;
-    }
     if (params.stage == STAGE_BUILD_PRESSURE_CONTACTS) {
         buildPressureContacts(id);
-        return;
-    }
-    if (params.stage == STAGE_SCATTER_PRESSURE_ENTRIES) {
-        int row = readIntField(F_PRESSURE_ROW, id);
-        if (row >= 0) {
-            int slot =
-                readIntField(F_ROW_OFFSETS, row) + int(atomicAdd(arenaWords[fieldWordOffset(F_ROW_CURSORS) + row], 1u));
-            writeIntField(F_ROW_ENTRIES, slot, id);
-        }
         return;
     }
     if (params.stage == STAGE_ASSEMBLE_BODY_VOLUME_RATE) {
@@ -695,16 +595,4 @@ void main() {
     }
     if (params.stage == STAGE_SETTLE_CELL_WORK)
         settleCellExternalWork(id);
-    if (params.stage == STAGE_SETTLE_GAS_WORK) {
-        writeDoubleField(F_GAS_EXTERNAL_WORK, id, 0.0);
-        if (id < pressureHeaderWord(GAS_H_GAS_CAPACITY)) {
-            double bodyVolumeRate = readDoubleField(F_ROW_BODY_RATE, headerWord(H_CELLS) + id);
-            writeDoubleAt(gasFieldWordOffset(GAS_F_NODE_PREDICTED_VOLUME_CHANGE) + 2 * id,
-                          readDoubleAt(gasFieldWordOffset(GAS_F_NODE_PREDICTED_VOLUME_CHANGE) + 2 * id) +
-                              params.duration * params.cellSize * params.cellSize * params.cellSize * bodyVolumeRate);
-            writeDoubleField(F_GAS_EXTERNAL_WORK, id,
-                             -params.duration * params.cellSize * params.cellSize * params.cellSize * bodyVolumeRate *
-                                 physicalRowPressure(headerWord(H_CELLS) + id));
-        }
-    }
 }

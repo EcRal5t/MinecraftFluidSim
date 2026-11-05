@@ -82,6 +82,7 @@ public final class RegistryBundleLoader {
 		registry.component(BuiltinGasDefinitions.NITROGEN);
 		registry.component(BuiltinGasDefinitions.OXYGEN);
 		registry.component(BuiltinGasDefinitions.WATER_VAPOR);
+		registry.component(BuiltinGasDefinitions.ETHANOL_VAPOR);
 		registry.component(BuiltinGasDefinitions.CO2);
 		for (var component : registry.components()) for (String species : component.allowedSpecies()) {
 			if (!chemicalRegistry.hasSpecies(species)) {

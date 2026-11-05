@@ -64,15 +64,13 @@ public final class HostFluidState {
 	final CellLiquidGrid liquidGrid;
 	final MacVelocityGrid mac;
 	final CellMacStage cellMacStage;
-	final MechanicalEnergySettlement mechanicalEnergy;
 	final SurfaceTensionFields tension;
 	final CondensedInventoryClearPlanner clearPlanner;
 	final MaterialTransferPlanner transferPlanner;
 	final GranularTransferPlanner granularTransferPlanner;
 	final DomainInventoryLifecyclePlanner lifecyclePlanner;
-	final GasTopologyCoordinator gasTopologyCoordinator;
+	final GasInitialization gasInitialization;
 	final GasLifecyclePlanner gasLifecyclePlanner;
-	final PressureBoundaryView pressureBoundaryView;
 	final PressureSystem pressureSystem;
 	final GranularMechanicalStage granularMechanicalStage;
 	final float[] volume;
@@ -144,7 +142,6 @@ public final class HostFluidState {
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.cellMacStage = new CellMacStage(domain);
-		this.mechanicalEnergy = new MechanicalEnergySettlement(domain);
 		this.tension = new SurfaceTensionFields(this);
 		this.pendingPhaseMotion = new PendingPhaseMotionWork(cellCount);
 		this.thermalMarkers = domain.domainCapabilities.createThermalMarkerContext();
@@ -155,9 +152,8 @@ public final class HostFluidState {
 		this.clearPlanner = new CondensedInventoryClearPlanner(domain);
 		this.granularTransferPlanner = new GranularTransferPlanner(domain);
 		this.lifecyclePlanner = new DomainInventoryLifecyclePlanner(domain);
-		this.gasTopologyCoordinator = new GasTopologyCoordinator(domain);
+		this.gasInitialization = new GasInitialization(domain);
 		this.gasLifecyclePlanner = new GasLifecyclePlanner(domain);
-		this.pressureBoundaryView = new PressureBoundaryView(domain);
 		this.pressureSystem = new PressureSystem(domain);
 		this.granularMechanicalStage = new GranularMechanicalStage(this);
 						}
@@ -193,8 +189,8 @@ public final class HostFluidState {
 				if (!found) throw new IllegalArgumentException("Liquid stock crosses a fixed collision component");
 				if (materialRegistry != null) materialRegistry.material(stock.key().material());
 			}
-			if (candidate.exactCellVolume(cell).compareTo(mmm.units.SignedDyadic.of(domainCollision.effectiveOpenCellVolume(cell))) > 0)
-				throw new IllegalArgumentException("Liquid inventory exceeds joint cell capacity at " + cell);
+			if (candidate.exactCellVolume(cell).signum()>0 && !(domainCollision.effectiveOpenCellVolume(cell)>0))
+				throw new IllegalArgumentException("Liquid inventory has no open cell capacity at " + cell);
 		}
 		liquidCells = candidate;
 		phaseOccupancy=null;
@@ -226,7 +222,7 @@ public final class HostFluidState {
 	static float clamp01(float value) { return DomainFlowFields.clamp01(value); }
 	static float clamp(float value, float min, float max) { return DomainFlowFields.clamp(value, min, max); }
 	static float lerp(float first, float second, float t) { return DomainFlowFields.lerp(first, second, t); }
-	public void synchronizeGasTopologyForPersistence() { gasTopologyCoordinator.synchronizeForPersistence(); }
+	public void synchronizeGasTopologyForPersistence() { gasInitialization.synchronizeForPersistence(); }
 	static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) { return DomainInventoryGeometry.parcelPosition(parcel); }
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) { return DomainInventoryGeometry.trilinearWeight(ox, oy, oz, fx, fy, fz); }
 	public ActivityStats activityStats() { return activityGroups.stats(); }
@@ -407,7 +403,7 @@ public final class HostFluidState {
 	public FluidDomainContracts.CarrierViscosityStats carrierViscosityStats() { return domainPhaseInventory.carrierViscosityStats(); }
 	public Double carrierViscosityPascalSeconds(int cell) { return domainPhaseInventory.carrierViscosityPascalSeconds(cell); }
 	public GasPressureBoundary gasBoundary() { return domainPhaseInventory.gasBoundary(); }
-	/** Read-only local-metre query on the committed finite gas geometry; -1 means no editable chamber. */
+	/** Read-only local-metre query on the committed PLIC; -1 means no editable gas at the point. */
 	public int gasNodeAt(double x, double y, double z) { return domainPhaseInventory.gasNodeAt(x, y, z); }
 	/** Null component selects the ambient insertion recipe or the existing extraction mixture. */
 	public GasEdit editGas(int node, String componentId, long nanos, double temperatureK, boolean extract) {
@@ -416,8 +412,8 @@ public final class HostFluidState {
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) { domainPhaseInventory.setGasNodeStandardVolume(nodeId, standardVolume); }
 	public void sealDomainBoundary() { domainPhaseInventory.sealDomainBoundary(); }
 	public void bindGasRegistry(GasRegistry registry) { domainPhaseInventory.bindGasRegistry(registry); }
+	public void resetAmbientGas() { DomainGasInventory.resetAmbient(this); }
 	public GasStateSnapshot bootstrapGasState(String chemicalRegistryFingerprint) { return domainPhaseInventory.bootstrapGasState(chemicalRegistryFingerprint); }
-	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) { return domainPhaseInventory.exportGasState(chemicalRegistryFingerprint); }
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) { domainPhaseInventory.restoreGasState(state, registry); }
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) { domainPhaseInventory.restoreGasState(state, registry, thermal); }
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, mmm.thermal.ThermalOwnerSnapshot thermal) { domainPhaseInventory.restoreGasState(state, registry, thermal); }

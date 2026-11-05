@@ -34,6 +34,13 @@ void writeDouble(int at, double x) {
     words[at] = bits.x;
     words[at + 1] = bits.y;
 }
+double ethanolMass(int material,int stock,double mass) {
+    if (material != headerWord(CAL_AQUEOUS_MATERIAL) || headerWord(CAL_ETHANOL_SPECIES) < 0) return 0.0;
+    for (int item=int(words[headerWord(CAL_SPECIES_OFFSETS)+stock]);item<int(words[headerWord(CAL_SPECIES_OFFSETS)+stock+1]);item++)
+        if (int(words[headerWord(CAL_SPECIES_HANDLES)+item])==headerWord(CAL_ETHANOL_SPECIES))
+            return caloricEthanolMass(mass,double(readQuantity(headerWord(CAL_SPECIES_AMOUNTS)+2*item)));
+    return 0.0;
+}
 void stockState(int stock) {
     writeDouble(headerWord(CAL_TEMPERATURES) + 2 * stock, 0.0);
     writeDouble(headerWord(CAL_HEAT_CAPACITIES) + 2 * stock, 0.0);
@@ -60,8 +67,9 @@ void stockState(int stock) {
             atomicOr(errors, 16384u);
             return;
         }
-        base += double(readQuantity(headerWord(CAL_SPECIES_AMOUNTS) + 2 * item)) *
-                readDouble(headerWord(CAL_SPECIES_REFERENCE) + 2 * (material * headerWord(CAL_SPECIES_STRIDE) + species));
+        int64_t amount = readQuantity(headerWord(CAL_SPECIES_AMOUNTS) + 2 * item);
+        if (amount != 0l)
+            base += double(amount) * readDouble(headerWord(CAL_SPECIES_REFERENCE) + 2 * (material * headerWord(CAL_SPECIES_STRIDE) + species));
     }
     int first = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material]),
         last = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
@@ -69,34 +77,8 @@ void stockState(int stock) {
         atomicOr(errors, 16384u);
         return;
     }
-    double temperature = readDouble(headerWord(CAL_REFERENCE_TEMPERATURE) + 2 * material), remaining = energy - base, capacity = 0.0;
-    while (segment < last && temperature >= readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment))
-        segment++;
-    if (remaining >= 0.0) {
-        for (;; segment++) {
-            capacity = mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
-            double upper = readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment), span = (upper - temperature) * capacity;
-            if (segment == last || remaining < span) {
-                temperature += remaining / capacity;
-                break;
-            }
-            remaining -= span;
-            temperature = upper;
-        }
-    } else {
-        remaining = -remaining;
-        for (;; segment--) {
-            capacity = mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
-            double lower = segment == first ? 0.0 : readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * (segment - 1)),
-                   span = (temperature - lower) * capacity;
-            if (segment == first || remaining <= span) {
-                temperature -= remaining / capacity;
-                break;
-            }
-            remaining -= span;
-            temperature = lower;
-        }
-    }
+    double capacity = 0.0, ethanol = ethanolMass(material,stock,mass);
+    double temperature = caloricStateTemperature(p.header,material,mass,ethanol,energy-base,capacity);
     double minimum = readDouble(p.header + CAL_MINIMUM_TEMPERATURE);
     if (temperature < minimum - 1e-7 || capacity <= 0.0) {
         atomicOr(errors, 16384u);
@@ -104,7 +86,9 @@ void stockState(int stock) {
     }
     writeDouble(headerWord(CAL_TEMPERATURES) + 2 * stock, max(minimum, temperature));
     writeDouble(headerWord(CAL_HEAT_CAPACITIES) + 2 * stock, capacity);
-    writeDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock, min(energy, fma(mass, readDouble(headerWord(CAL_COLD_SENSIBLE) + 2 * material), base)));
+    double waterCold=readDouble(headerWord(CAL_COLD_SENSIBLE)+2*material);
+    double ethanolCold=(minimum-readDouble(headerWord(CAL_REFERENCE_TEMPERATURE)+2*material))*CAL_ETHANOL_CP;
+    writeDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock, min(energy, base+(mass-ethanol)*waterCold+ethanol*ethanolCold));
 }
 void cellState(int cell) {
     int begin = int(words[headerWord(CAL_CELL_OFFSETS) + cell]), end = int(words[headerWord(CAL_CELL_OFFSETS) + cell + 1]);
@@ -129,7 +113,7 @@ void cellState(int cell) {
                 last = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
             while (segment < last && temperature >= readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment))
                 segment++;
-            capacity += mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            capacity += caloricCapacity(mass,ethanolMass(material,stock,mass),readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment));
             if (segment < last)
                 next = min(next, readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment));
         }

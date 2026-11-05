@@ -16,6 +16,11 @@ import static org.lwjgl.vulkan.VK10.*;
  * Each (row, velocity) pair occurs once. Unused term slots have row=-1.
  * Geometry writes the inputs on device; no iteration assembles a host matrix. */
 final class VulkanCoupledPressure implements AutoCloseable {
+    record PressureBuffers(VulkanLiquidStateLayout.Column starts,VulkanLiquidStateLayout.Column columns,
+                           VulkanLiquidStateLayout.Column values,VulkanLiquidStateLayout.Column rows,
+                           VulkanLiquidStateLayout.Column pressure,VulkanLiquidStateLayout.Column work,
+                           VulkanLiquidStateLayout.Column problem,
+                           VulkanLiquidStateLayout.Column control) { }
     /** Header word positions used by host encoding and the shader. */
     enum Header {
         ROW_COUNT(0),
@@ -31,9 +36,8 @@ final class VulkanCoupledPressure implements AutoCloseable {
         ROWS(11),
         PRESSURE(12),
         WORK(13),
-        META(14),
-        PROBLEM(15),
-        CONTROL(16);
+        PROBLEM(14),
+        CONTROL(15);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -55,16 +59,16 @@ final class VulkanCoupledPressure implements AutoCloseable {
     }
     static final class Layout {
         private final int liquidCount, rows, velocities, terms, owners, blocks;
-        private final VulkanGasPressure.PressureBuffers pressure;
+        private final PressureBuffers pressure;
         private final VulkanLiquidStateLayout.Column header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         private final long endOffset;
-        Layout(int liquidCount,int rows,int velocities,int terms,VulkanGasPressure.PressureBuffers pressure,
+        Layout(int liquidCount,int rows,int velocities,int terms,PressureBuffers pressure,
                long scratchBase,long alignment){
             if(liquidCount<0||rows<liquidCount||velocities<0||terms<0||scratchBase<0||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid coupled pressure dimensions");
             if(pressure.starts().count()<rows+1||pressure.rows().count()<rows||pressure.pressure().count()<rows
-                    ||pressure.work().count()<7L*rows||pressure.meta().count()<2L*rows||pressure.problem().count()<3L*rows+1)
+                    ||pressure.work().count()<5L*rows||pressure.problem().count()<2L*rows+1)
                 throw new IllegalArgumentException("Coupled pressure buffers have a different row stride");
             this.liquidCount=liquidCount;this.rows=rows;this.velocities=velocities;this.terms=terms;this.pressure=pressure;
             owners=Math.addExact(rows,velocities);blocks=Math.addExact(owners,Math.multiplyExact(2,terms)/128);
@@ -96,7 +100,7 @@ final class VulkanCoupledPressure implements AutoCloseable {
             var result=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);
             result.putInt(4 * Header.ROW_COUNT.word,rows).putInt(4 * Header.VELOCITY_COUNT.word,velocities).putInt(4 * Header.TERM_COUNT.word,terms).putInt(4 * Header.OWNER_COUNT.word,owners).putInt(4 * Header.BLOCK_COUNT.word,blocks).putInt(4 * Header.LIQUID_COUNT.word,liquidCount);
             var buffers=List.of(pressure.starts(),pressure.columns(),pressure.values(),pressure.rows(),pressure.pressure(),
-                    pressure.work(),pressure.meta(),pressure.problem(),pressure.control());
+                    pressure.work(),pressure.problem(),pressure.control());
             for(int i=0;i<buffers.size();i++)result.putInt(4*(8+i),Math.toIntExact(buffers.get(i).offset()/4));
             for(Field field:Field.values())result.putInt(4*(WORK_FIELDS+field.ordinal()),word(field));
             return result;
@@ -105,8 +109,10 @@ final class VulkanCoupledPressure implements AutoCloseable {
     }
     record Operator(VulkanCoupledPressure kernel,Layout layout) implements VulkanPressureKernel.PressureOperator {
         @Override public int liquidCount(){return layout.liquidCount();}
-        @Override public int matrixFreeFromRow(){return 0;}
-        @Override public void recordProduct(VkCommandBuffer command,boolean direction){kernel.recordProduct(command,layout,direction);}
+        @Override public int matrixFreeFromRow(){return layout.pressureSize()==layout.liquidCount()?layout.pressureSize():0;}
+        @Override public void recordProduct(VkCommandBuffer command,boolean direction){
+            if(layout.pressureSize()!=layout.liquidCount())kernel.recordProduct(command,layout,direction);
+        }
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;

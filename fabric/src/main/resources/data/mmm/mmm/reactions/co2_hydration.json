@@ -1,0 +1,1 @@
+{"kind":"finite_rate","phase":"mmm:aqueous","reactants":{"mmm:co2":"1","mmm:h2o":"1"},"products":{"mmm:h_plus":"1","mmm:hco3_minus":"1"},"volume_delta_m3_per_extent":"0","kinetics":{"forward_rate":"0.000000666","reverse_rate":"76","forward_activation_j_per_mol":"61400","reverse_activation_j_per_mol":"52300","reference_temperature_k":"298.15"}}

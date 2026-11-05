@@ -20,7 +20,7 @@ final class VulkanEnergyLedger implements AutoCloseable {
                 throw new IllegalArgumentException("Invalid device energy stream");
         }
     }
-    record Layout(List<Stream> streams,int terms,VulkanLiquidStateLayout.Column header,
+    record Layout(List<Stream> streams,int blocks,VulkanLiquidStateLayout.Column header,
                   VulkanLiquidStateLayout.Column scratchA,VulkanLiquidStateLayout.Column scratchB,
                   VulkanLiquidStateLayout.Column result,long endOffset) {
         int headerWordOffset(){return word(header);}
@@ -30,27 +30,28 @@ final class VulkanEnergyLedger implements AutoCloseable {
         }
         ByteBuffer headerBytes() {
             var target=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
-            int at=Math.toIntExact(0);target.putInt(at,streams.size());int first=0;
+            target.putInt(0,streams.size());int block=0,map=1+6*streams.size();
             for(int i=0;i<streams.size();i++) {
-                var stream=streams.get(i);int base=at+4*(1+7*i);
-                target.putInt(base,first).putInt(base+4,stream.count()).putInt(base+8,stream.bank())
-                        .putInt(base+12,stream.wordOffset()).putInt(base+16,stream.strideWords()).putInt(base+20,stream.coefficient()).putInt(base+24,stream.liveCountWord());
-                first=Math.addExact(first,stream.count());
+                var stream=streams.get(i);int base=4*(1+6*i);
+                target.putInt(base,stream.count()).putInt(base+4,stream.bank())
+                        .putInt(base+8,stream.wordOffset()).putInt(base+12,stream.strideWords()).putInt(base+16,stream.coefficient()).putInt(base+20,stream.liveCountWord());
+                for(long first=0;first<stream.count();first+=1024,block++)
+                    target.putInt(4*(map+2*block),i).putInt(4*(map+2*block+1),(int)first);
             }
-
+            if(block==0)target.putInt(4*map,-1).putInt(4*(map+1),0);
             return target;
         }
     }
     static Layout layout(List<Stream> streams,long scratchBase,long alignment) {
         if(scratchBase<0||alignment<8||(alignment&(alignment-1))!=0)throw new IllegalArgumentException("Invalid energy workspace");
-        var inputs=List.copyOf(streams);int terms=0;
-        for(var stream:inputs)terms=Math.addExact(terms,stream.count());
-        int blocks=Math.max(1,(int)(((long)terms+1023)/1024));long[] cursor={scratchBase};
-        var header=column(cursor,Math.addExact(1,Math.multiplyExact(inputs.size(),7)),alignment);
+        var inputs=List.copyOf(streams);int blocks=0;
+        for(var stream:inputs)blocks=Math.addExact(blocks,(int)(((long)stream.count()+1023)/1024));
+        blocks=Math.max(1,blocks);long[] cursor={scratchBase};
+        var header=column(cursor,Math.addExact(Math.addExact(1,Math.multiplyExact(inputs.size(),6)),Math.multiplyExact(blocks,2)),alignment);
         var a=column(cursor,Math.multiplyExact(blocks,WORDS),alignment);
         var b=column(cursor,Math.multiplyExact(Math.max(1,(blocks+63)/64),WORDS),alignment);
         var result=column(cursor,WORDS+4,alignment);
-        return new Layout(inputs,terms,header,a,b,result,align(cursor[0],alignment));
+        return new Layout(inputs,blocks,header,a,b,result,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
     VulkanEnergyLedger(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),24);}
@@ -58,9 +59,9 @@ final class VulkanEnergyLedger implements AutoCloseable {
         bindings.rebindRanges(List.of(source,candidate,errors));
     }
     void record(VkCommandBuffer command,Layout layout) {
-        int count=Math.max(1,(int)(((long)layout.terms()+1023)/1024));
+        int count=layout.blocks();
         int from=word(layout.scratchA()),to=word(layout.scratchB());
-        stage(command,layout,0,layout.terms(),0,from,count);
+        stage(command,layout,0,count,0,from,count);
         while(count>1){int groups=(count+63)/64;stage(command,layout,1,count,from,to,groups);count=groups;int swap=from;from=to;to=swap;}
         stage(command,layout,2,1,from,word(layout.result()),1);
     }

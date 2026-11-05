@@ -1,6 +1,5 @@
 package mmm.simulation.persistence;
 
-import mmm.model.region.RegionSectionState;
 
 import mmm.fluid.air.GasAuditLedger;
 import mmm.fluid.air.GasComponentAmount;
@@ -26,150 +25,63 @@ final class GasRegionStateCodec {
 	static final int CAP_CHEMISTRY = 1 << 1;
 	static final int CAP_GAS = 1 << 2;
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GAS;
-	private static final int MANIFEST_MAGIC = 0x4741534e; // GASN
-	private static final int SECTION_MAGIC = 0x47534543; // GSEC
+	private static final int SPATIAL_MANIFEST_MAGIC = 0x4753504d; // GSPM
+	private static final int SPATIAL_SECTION_MAGIC = 0x47535053; // GSPS
 	private static final int MAX_DYADIC_BYTES = 16 * 1_024;
 
-	record NodeData(int topologyKey, GasInventory inventory) { }
-	record SectionLedger(RegionSectionState.SectionKey key, int sealedPieceCount) { }
-	record ManifestData(
-			int capabilities, String registryFingerprint, String chemicalRegistryFingerprint,
-			List<NodeData> nodes, GasAuditLedger externalSource, GasAuditLedger escapedSink, GasAuditLedger phaseSource, GasAuditLedger phaseSink,
-			List<SectionLedger> sectionLedgers
-	) {
-		ManifestData { nodes = List.copyOf(nodes); sectionLedgers = List.copyOf(sectionLedgers); }
-	}
-	record SectionData(int[] pieceNodeOrdinal) {
-		SectionData {
-			if (pieceNodeOrdinal == null || pieceNodeOrdinal.length % 8 != 0)
-				throw new IllegalArgumentException("Gas section piece cardinality mismatch");
-			pieceNodeOrdinal = pieceNodeOrdinal.clone();
-			for (int node : pieceNodeOrdinal) if (node < -1 || node > GasLimits.MAX_NODES_PER_REGION)
-				throw new IllegalArgumentException("Invalid gas section node ordinal");
-		}
-		@Override public int[] pieceNodeOrdinal() { return pieceNodeOrdinal.clone(); }
-	}
+	record SpatialEntry(int cell, GasInventory inventory, double energy) { }
+	static boolean isSpatial(byte[] payload) { return payload != null && payload.length >= 4 && java.nio.ByteBuffer.wrap(payload).getInt() == SPATIAL_MANIFEST_MAGIC; }
+	record SpatialManifest(int capabilities, String registryFingerprint, String chemicalRegistryFingerprint,
+			GasAuditLedger inventory, GasAuditLedger externalSource, GasAuditLedger escapedSink,
+			GasAuditLedger phaseSource, GasAuditLedger phaseSink, SignedDyadic energy) { }
 
-	byte[] encodeManifest(ManifestData data) throws IOException {
-		validateManifest(data);
+	byte[] encodeSpatialManifest(SpatialManifest data) throws IOException {
 		return encode(out -> {
-			out.writeInt(MANIFEST_MAGIC); out.writeInt(data.capabilities());
-			out.writeUTF(mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID);
-			out.writeLong(Double.doubleToRawLongBits(mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA));
-			out.writeLong(Double.doubleToRawLongBits(mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K));
-			out.writeUTF(data.registryFingerprint()); out.writeUTF(data.chemicalRegistryFingerprint());
-			out.writeInt(data.nodes().size());
-			for (NodeData node : data.nodes()) { out.writeInt(node.topologyKey()); writeInventory(out, node.inventory()); }
-			writeAudit(out, data.externalSource()); writeAudit(out, data.escapedSink());
-			writeAudit(out, data.phaseSource()); writeAudit(out, data.phaseSink());
+			out.writeInt(SPATIAL_MANIFEST_MAGIC);out.writeInt(data.capabilities());
+			out.writeUTF(mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID);out.writeDouble(mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA);out.writeDouble(mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K);
+			out.writeUTF(data.registryFingerprint());out.writeUTF(data.chemicalRegistryFingerprint());
+			writeAudit(out,data.inventory());writeAudit(out,data.externalSource());writeAudit(out,data.escapedSink());
+			writeAudit(out,data.phaseSource());writeAudit(out,data.phaseSink());writeDyadic(out,data.energy());
+		});
+	}
 
-			out.writeInt(data.sectionLedgers().size());
-			for (SectionLedger ledger : data.sectionLedgers()) {
-				out.writeInt(ledger.key().x()); out.writeInt(ledger.key().y()); out.writeInt(ledger.key().z());
-				out.writeInt(ledger.sealedPieceCount());
+	SpatialManifest decodeSpatialManifest(byte[] payload) throws IOException {
+		try(var in=input(payload)) {
+			if(in.readInt()!=SPATIAL_MANIFEST_MAGIC)throw new IOException("Unknown spatial gas manifest");
+			int capabilities=in.readInt();
+			if(!mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID.equals(in.readUTF())||in.readDouble()!=mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA||in.readDouble()!=mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K)
+				throw new IOException("Spatial gas standard state differs");
+			String registry=in.readUTF(),chemical=in.readUTF();
+			if((capabilities&~KNOWN_CAPABILITIES)!=0||(capabilities&CAP_GAS)==0||!registry.matches("[0-9a-f]{64}")
+					||!(chemical.isEmpty()||chemical.matches("[0-9a-f]{64}"))||((capabilities&CAP_CHEMISTRY)!=0)!=!chemical.isEmpty())
+				throw new IOException("Spatial gas manifest identity differs");
+			var result=new SpatialManifest(capabilities,registry,chemical,readAudit(in),readAudit(in),readAudit(in),readAudit(in),readAudit(in),readDyadic(in));
+			requireEnd(in);return result;
+		} catch(EOFException|IllegalArgumentException failure){throw new IOException("Invalid spatial gas manifest",failure);}
+	}
+
+	byte[] encodeSpatialSection(List<SpatialEntry> entries) throws IOException {
+		return encode(out -> {
+			out.writeInt(SPATIAL_SECTION_MAGIC);out.writeInt(entries.size());int previous=-1;
+			for(var entry:entries){
+				if(entry.cell()<=previous||entry.inventory().isEmpty()||!Double.isFinite(entry.energy()))
+					throw new IOException("Invalid spatial gas section row");
+				previous=entry.cell();out.writeInt(entry.cell());writeInventory(out,entry.inventory());out.writeDouble(entry.energy());
 			}
 		});
 	}
 
-	ManifestData decodeManifest(byte[] payload) throws IOException {
-		try (DataInputStream input = input(payload)) {
-			if (input.readInt() != MANIFEST_MAGIC) throw new IOException("Unknown gas manifest payload");
-			int capabilities = input.readInt();
-			if (!mmm.fluid.air.GasRegistry.UNIT_SYSTEM_ID.equals(input.readUTF())
-					|| input.readLong() != Double.doubleToRawLongBits(mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA)
-					|| input.readLong() != Double.doubleToRawLongBits(mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K)) {
-				throw new IOException("Unsupported gas standard state");
+	List<SpatialEntry> decodeSpatialSection(byte[] payload,int cells) throws IOException {
+		try(var in=input(payload)) {
+			if(in.readInt()!=SPATIAL_SECTION_MAGIC)throw new IOException("Unknown spatial gas section");
+			int count=count(in.readInt(),cells,"spatial cells"),previous=-1;var entries=new ArrayList<SpatialEntry>(count);
+			for(int i=0;i<count;i++){
+				int cell=in.readInt();var inventory=readInventory(in);double energy=in.readDouble();
+				if(cell<=previous||cell>=cells||inventory.isEmpty()||!Double.isFinite(energy))throw new IOException("Invalid spatial gas row");
+				previous=cell;entries.add(new SpatialEntry(cell,inventory,energy));
 			}
-			String registry = input.readUTF(), chemistry = input.readUTF();
-			int nodeCount = count(input.readInt(), GasLimits.MAX_NODES_PER_REGION, "nodes");
-			ArrayList<NodeData> nodes = new ArrayList<>(nodeCount);
-			for (int node = 0; node < nodeCount; node++) nodes.add(new NodeData(input.readInt(), readInventory(input)));
-			GasAuditLedger source = readAudit(input), sink = readAudit(input), phaseSource = readAudit(input), phaseSink = readAudit(input);
-
-			int sectionCount = count(input.readInt(), RegionStateCodec.MAX_SECTIONS, "section ledgers");
-			if (sectionCount == 0) throw new IOException("Gas manifest has no section ledgers");
-			ArrayList<SectionLedger> ledgers = new ArrayList<>(sectionCount);
-			for (int section = 0; section < sectionCount; section++) ledgers.add(new SectionLedger(
-					new RegionSectionState.SectionKey(input.readInt(), input.readInt(), input.readInt()),
-					count(input.readInt(), Integer.MAX_VALUE, "sealed pieces")));
-			requireEnd(input);
-			ManifestData result = new ManifestData(capabilities, registry, chemistry, nodes, source, sink, phaseSource, phaseSink,
-					ledgers);
-			validateManifest(result);
-			return result;
-		} catch (EOFException truncated) {
-			throw new IOException("Truncated gas manifest payload", truncated);
-		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid gas manifest payload: " + invalid.getMessage(), invalid);
-		}
-	}
-
-	byte[] encodeSection(SectionData data) throws IOException {
-		if (data == null) throw new IOException("Gas section data is missing");
-		requireSectionSize(data.pieceNodeOrdinal.length);
-		return encode(out -> {
-			out.writeInt(SECTION_MAGIC);
-			int[] membership = data.pieceNodeOrdinal(); out.writeInt(membership.length);
-			for (int value : membership) out.writeInt(value);
-		});
-	}
-
-	SectionData decodeSection(byte[] payload, int expectedCells, int nodeCount) throws IOException {
-		if (expectedCells < 0 || nodeCount < 0 || nodeCount > GasLimits.MAX_NODES_PER_REGION)
-			throw new IOException("Invalid gas section dimensions or node count");
-		int expectedPieces;
-		try { expectedPieces = Math.multiplyExact(expectedCells, 8); }
-		catch (ArithmeticException overflow) { throw new IOException("Gas section piece count overflows", overflow); }
-		requireSectionSize(expectedPieces);
-		try (DataInputStream input = input(payload)) {
-			if (input.readInt() != SECTION_MAGIC) throw new IOException("Unknown gas section payload");
-			int length = count(input.readInt(), expectedPieces, "section pieces");
-			if (length != expectedPieces) throw new IOException("Gas section membership cardinality mismatch");
-			int[] membership = new int[length];
-			for (int piece = 0; piece < length; piece++) {
-				membership[piece] = input.readInt();
-				if (membership[piece] < -1 || membership[piece] > nodeCount) {
-					throw new IOException("Gas section names an unknown node ordinal");
-				}
-			}
-			requireEnd(input); return new SectionData(membership);
-		} catch (EOFException truncated) { throw new IOException("Truncated gas section payload", truncated); }
-	}
-
-	private static void requireSectionSize(int pieces) throws IOException {
-		if (2L * Integer.BYTES + (long) pieces * Integer.BYTES > GasLimits.MAX_SERIALIZED_EXTENSION_BYTES)
-			throw new IOException("Gas section is over its serialized budget");
-	}
-
-	private static void validateManifest(ManifestData data) {
-		if (data == null || (data.capabilities() & ~KNOWN_CAPABILITIES) != 0
-				|| (data.capabilities() & CAP_GAS) == 0
-				|| data.registryFingerprint() == null || !data.registryFingerprint().matches("[0-9a-f]{64}")
-				|| data.chemicalRegistryFingerprint() == null
-				|| !(data.chemicalRegistryFingerprint().isEmpty() || data.chemicalRegistryFingerprint().matches("[0-9a-f]{64}"))
-				|| ((data.capabilities() & CAP_CHEMISTRY) != 0) != !data.chemicalRegistryFingerprint().isEmpty()
-				|| data.nodes() == null || data.nodes().size() > GasLimits.MAX_NODES_PER_REGION
-				|| data.externalSource() == null || data.escapedSink() == null || data.phaseSource() == null || data.phaseSink() == null
-				|| data.sectionLedgers() == null || data.sectionLedgers().isEmpty()
-				|| data.sectionLedgers().size() > RegionStateCodec.MAX_SECTIONS) {
-			throw new IllegalArgumentException("Gas manifest identity/capability is invalid");
-		}
-		int previousKey = -1;
-		for (NodeData node : data.nodes()) {
-			if (node == null || node.topologyKey() < 0 || node.topologyKey() <= previousKey
-					|| node.inventory() == null) {
-				throw new IllegalArgumentException("Gas manifest nodes are not canonical");
-			}
-			previousKey = node.topologyKey();
-		}
-		RegionSectionState.SectionKey previousSection = null;
-		for (SectionLedger ledger : data.sectionLedgers()) {
-			if (ledger == null || ledger.sealedPieceCount() < 0
-					|| previousSection != null && previousSection.compareTo(ledger.key()) >= 0) {
-				throw new IllegalArgumentException("Gas manifest section ledgers are not canonical");
-			}
-			previousSection = ledger.key();
-		}
+			requireEnd(in);return List.copyOf(entries);
+		} catch(EOFException|IllegalArgumentException failure){throw new IOException("Invalid spatial gas section",failure);}
 	}
 
 	private static void writeInventory(DataOutputStream out, GasInventory inventory) throws IOException {

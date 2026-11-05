@@ -11,6 +11,8 @@ public record ThermalPhaseTransition(
 		String id,
 		String lowerEnergyMaterialId,
 		String upperEnergyMaterialId,
+		String speciesId,
+		Double transferVelocityMPerS,
 		long lowerVolumeSvqPerBatch,
 		long upperVolumeSvqPerBatch,
 		ExactRational massKgPerBatch,
@@ -34,7 +36,7 @@ public record ThermalPhaseTransition(
 			ExactRational massKgPerBatch, InterfaceRequirement interfaceRequirement,
 			double minimumPressurePa, double maximumPressurePa
 	) {
-		this(id, lowerEnergyMaterialId, upperEnergyMaterialId,
+		this(id, lowerEnergyMaterialId, upperEnergyMaterialId, null, null,
 				lowerVolumeSvqPerBatch, upperVolumeSvqPerBatch, massKgPerBatch, interfaceRequirement, List.of(
 						new EquilibriumPoint(minimumPressurePa, equilibriumTemperatureK),
 						new EquilibriumPoint(maximumPressurePa, equilibriumTemperatureK)));
@@ -56,6 +58,12 @@ public record ThermalPhaseTransition(
 		}
 		mmm.units.Mass.exactUnits(massKgPerBatch.numerator(), massKgPerBatch.denominator());
 		if (interfaceRequirement == null) throw new IllegalArgumentException("Thermal transition interface is missing");
+		if (interfaceRequirement == InterfaceRequirement.LIQUID_GAS) {
+			ThermalIds.requireId(speciesId, "phase species id");
+			if (transferVelocityMPerS == null || !(Double.isFinite(transferVelocityMPerS) && transferVelocityMPerS > 0))
+				throw new IllegalArgumentException("Gas/liquid transfer velocity must be positive");
+		} else if (speciesId != null || transferVelocityMPerS != null)
+			throw new IllegalArgumentException("Condensed transition must not specify gas transfer parameters");
 		if (equilibriumCurve == null || equilibriumCurve.size() < 2
 				|| equilibriumCurve.size() > ThermalLimits.MAX_EQUILIBRIUM_CURVE_POINTS) {
 			throw new IllegalArgumentException("Thermal equilibrium curve size is invalid");

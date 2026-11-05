@@ -20,7 +20,7 @@ final class CarrierThermalConduction {
 		var conductance = new java.util.TreeMap<Integer, java.util.Map<Integer, Double>>();
 		var seen = new java.util.HashSet<Long>();
 		double h = domain.config.cellSize();
-		var phase = domain.gasState.frame.phase();
+		var phase = domain.pressureSystem.phaseGeometry();
 		for (var request : requests) {
 			int cell = domain.domainFlowFields.cellIndexChecked(request.cellX(), request.cellY(), request.cellZ());
             if(!domain.groupAvailable(cell))continue;

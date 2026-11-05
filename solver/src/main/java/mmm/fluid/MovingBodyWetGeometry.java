@@ -41,8 +41,7 @@ final class MovingBodyWetGeometry {
   static Capture capture(HostFluidState domain, Bounds bounds) {
     domain.domainFlowFields.preparePhysicalState();
     double h = domain.config.cellSize(), h2 = h * h, h3 = h2 * h;
-    var frame = domain.gasState.frame;
-    var phase = frame.phase();
+    var phase = domain.pressureSystem.phaseGeometry();
     double[] occupied = new double[domain.cellCount];
     double[] wetAreaByNormal = new double[3];
     double volume = 0, mass = 0, wetArea = 0, waterVolume = 0;
@@ -100,7 +99,7 @@ final class MovingBodyWetGeometry {
               for (var stock : domain.liquidCells.stocksInCell(cell))
                 if (stock.key().supportMask() == p.support()) stocks.add(stock);
               boolean hasWater = stocks.stream().anyMatch(stock -> isWater(domain, stock.key().material()));
-              layers = hasWater ? GasLiquidContactGeometry.layers(domain, frame, cell, p.support(), stocks)
+              layers = hasWater ? GasLiquidContactGeometry.layers(domain, phase, cell, p.support(), stocks)
                   .stream().filter(layer -> isWater(domain, layer.stock().key().material())).toList() : List.of();
               waterLayers.put(p.support(), layers);
             }
@@ -139,11 +138,11 @@ final class MovingBodyWetGeometry {
               }
           }
         }
-    if (!(volume > 0))
-      return new Capture(FluidDomainContracts.BodyFluidSample.EMPTY, occupied, wetAreaByNormal);
-    force = force.add(gasSurfaceForce(domain, bounds, start, end));
-    center = center.times(1 / volume);
-    velocity = velocity.times(1 / volume);
+    force = force.add(gasSurfaceForce(domain, phase, bounds, start, end));
+    if (volume > 0) {
+      center = center.times(1 / volume);
+      velocity = velocity.times(1 / volume);
+    }
     return new Capture(
         new FluidDomainContracts.BodyFluidSample(
             volume,
@@ -169,11 +168,12 @@ final class MovingBodyWetGeometry {
   }
 
   /**
-   * Dry body faces carry their own cavity pressure; uniform gas pressure cancels over a closed
+   * Dry body faces carry their local gas pressure; uniform gas pressure cancels over a closed
    * body.
    */
-  private static Point gasSurfaceForce(HostFluidState domain, Bounds bounds, int[] start, int[] end) {
-    var frame = domain.gasState.frame;
+  private static Point gasSurfaceForce(HostFluidState domain, FlipPressurePhaseGeometry phase, Bounds bounds, int[] start, int[] end) {
+    var gas = domain.gasState.spatial;
+    if (gas == null) return new Point(0, 0, 0);
     double h = domain.config.cellSize();
     Point force = new Point(0, 0, 0);
     for (int z = start[2]; z <= end[2]; z++)
@@ -181,24 +181,19 @@ final class MovingBodyWetGeometry {
         for (int x = start[0]; x <= end[0]; x++) {
           int cell = x + domain.sizeX * (y + domain.sizeY * z);
           var body = bodyPlanes(bounds, h, x, y, z);
+          if (gas.cells().get(cell).isEmpty()) continue;
+          double pressure = DomainGasInventory.spatialPressure(domain, cell) - mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA;
+          if (pressure == 0) continue;
           for (int micro = 0; micro < 8; micro++) {
-            int id = 8 * cell + micro, node = frame.nodeOfPiece(id);
-            if (node <= 0) continue;
-            var piece = frame.geometry().piece(id);
-            if (piece == null) continue;
-            double pressure = domain.pressureBoundaryView.gasPressureOfNode(node);
-            if (pressure == 0) continue;
+            if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) continue;
+            var p = phase.componentPlane(cell, micro);
+            if (p == null || p.fraction() >= 1) continue;
             var faces = box(micro);
-            var dry = piece.dryPlane();
-            if (dry != null)
-              faces =
-                  clip(
-                      faces,
-                      new Plane(new Point(-dry.nx(), -dry.ny(), -dry.nz()), -dry.threshold(), -1));
+            if (p.fraction() > 0)
+              faces = clip(faces, new Plane(new Point(-p.nx(), -p.ny(), -p.nz()), -p.offset(), -1));
             for (var plane : body) faces = clip(faces, plane);
             if (!(moment(faces).volume() > 0)) continue;
-            var p = frame.phase().componentPlane(cell, micro);
-            double porosity = p == null ? 1 : p.porosity();
+            double porosity = p.porosity();
             for (var face : faces)
               if (face.plane.bodyFace >= 0) {
                 var polygon = face.vertices;

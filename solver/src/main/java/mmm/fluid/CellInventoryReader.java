@@ -1,8 +1,6 @@
 package mmm.fluid;
 
 import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.fluid.air.AirNetwork;
-import mmm.fluid.air.GasRegistry;
 import mmm.granular.GranularParcelStore;
 import mmm.thermal.CoherentPhaseStore;
 
@@ -62,28 +60,15 @@ final class CellInventoryReader {
 		}
 
 		CellCarrierInventoryView.GasAmount gas = null;
-		if (domain.gasState.frame != null) {
-			int node = domain.gasState.frame.commonCellNode(requested);
-			if (node == AirNetwork.AMBIENT_NODE) {
-				gas = new CellCarrierInventoryView.GasAmount(true, node, AirNetwork.REFERENCE_PRESSURE,
-						GasRegistry.STANDARD_TEMPERATURE_K, List.of());
-			} else if (node > 0) {
-				List<CellCarrierInventoryView.ComponentAmount> components =
-						domain.gasState.network.inventory(node).components()
-						.stream().map(component -> new CellCarrierInventoryView.ComponentAmount(
-								component.componentId(), component.standardVolumeNanos(), component.mass())).toList();
-				gas = new CellCarrierInventoryView.GasAmount(false, node,
-						AirNetwork.REFERENCE_PRESSURE + observedGasNodeGaugePressurePa(node),
-						domain.gasNodeTemperatureK(node), components);
+		if(domain.gasState.spatial!=null){
+			var local=domain.gasState.spatial.cells().get(requested);
+			if(domain.gasBoundary.cellNode(requested)>0){
+				var components=local.components().stream().map(component->new CellCarrierInventoryView.ComponentAmount(component.componentId(),component.standardVolumeNanos(),component.mass())).toList();
+				gas=new CellCarrierInventoryView.GasAmount(false,requested+1,DomainGasInventory.spatialPressure(domain,requested),DomainGasInventory.spatialTemperature(domain,requested),components);
 			}
 		}
-		return solids.isEmpty() && gas == null ? null : new CellCarrierInventoryView(solids, gas);
-	}
 
-	double observedGasNodeGaugePressurePa(int nodeId) {
-		return domain.thermalState == null || !domain.thermalState.gasModelBound()
-				? domain.gasState.network.observedGaugePressure(nodeId)
-				: domain.thermalState.gasGaugePressure(nodeId, domain.gasState.network);
+		return solids.isEmpty() && gas == null ? null : new CellCarrierInventoryView(solids, gas);
 	}
 
 	boolean hasCondensedInventoryInCell(int x, int y, int z) {

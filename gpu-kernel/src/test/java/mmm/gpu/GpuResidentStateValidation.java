@@ -42,11 +42,11 @@ public final class GpuResidentStateValidation {
                         domain.observeCellCarriers(1, 6, 1));
                 requireDisplayTemperature(fields.capture(cold, codec).thermal(), 65, 300);
             }
-            try(var before=region.captureState();var abandoned=region.prepareMechanical(before,p,512)) {
+            try(var before=region.captureState();var abandoned=region.prepareMechanical(before,p)) {
                 try(var current=region.captureState()){if(current.generation()!=0)throw new AssertionError("Unadopted candidate changed committed generation");}
             }
             for(int i=0;i<3;i++) {
-                try(var before=region.captureState();var prepared=i==1?region.prepareThermal(before,.05):region.prepareMechanical(before,p,512);
+                try(var before=region.captureState();var prepared=i==1?region.prepareThermal(before,.05):region.prepareMechanical(before,p);
                     var successor=prepared.captureState()) {
                     var posting=successor.thermalPosting();audit=posting.apply(audit);
                     var exported=codec.export(successor,audit);

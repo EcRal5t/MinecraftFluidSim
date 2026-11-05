@@ -138,9 +138,23 @@ public final class ShellFluidQueryValidation {
 			var inward = outward.getOpposite();
 			for (var requested : Direction.values()) {
 				var target = FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension, port, outward, requested);
-				if (requested == inward) require(target != null && target.region() == source
-						&& target.interiorBlock().equals(port.relative(inward)), "Port front did not select its immediate interior: " + outward);
-				else require(target == null, "Back or side approach crossed a directional port: " + outward + "/" + requested);
+				if (requested == inward) {
+					require(target != null && target.region() == source
+							&& target.interiorBlock().equals(port.relative(inward)), "Port front did not select its immediate interior: " + outward);
+					int[] expected = switch (outward) {
+						case WEST -> new int[] {0, 3, 3};
+						case EAST -> new int[] {3, 3, 3};
+						case DOWN -> new int[] {3, 0, 3};
+						case UP -> new int[] {3, 3, 3};
+						case NORTH -> new int[] {3, 3, 0};
+						case SOUTH -> new int[] {3, 3, 3};
+					};
+					require(java.util.Arrays.equals(target.cell(), expected), "Port cell differs from contact face: " + outward);
+					var interior = target.interiorBlock();
+					int[] center = {2*interior.getX()+1, 2*interior.getY()+1, 2*interior.getZ()+1};
+					var direct = new FluidWorldTargetResolver.TransferTarget(source, interior, null);
+					require(java.util.Arrays.equals(direct.cell(), center), "Direct block target did not use its center: " + outward);
+				} else require(target == null, "Back or side approach crossed a directional port: " + outward + "/" + requested);
 			}
 			require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension, port, null, inward) == null,
 					"Ordinary wall without a port facing admitted a container");
@@ -149,6 +163,14 @@ public final class ShellFluidQueryValidation {
 			require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), otherDimension, port, outward, inward) == null,
 					"Port selected an owner in another dimension");
 		}
+		var westTarget = FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension,
+				portPosition(Direction.WEST), Direction.WEST, Direction.EAST);
+		source.prepareGroupAvailability(new boolean[source.sizeX()*source.sizeY()*source.sizeZ()]);
+		require(westTarget.cell() == null, "Port selected an unavailable activity group");
+		var available = new boolean[source.sizeX()*source.sizeY()*source.sizeZ()];
+		java.util.Arrays.fill(available, true);
+		source.prepareGroupAvailability(available);
+		require(java.util.Arrays.equals(westTarget.cell(), new int[] {0, 3, 3}), "Port did not recover with its activity group");
 		require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension,
 				new BlockPos(-1, -1, -1), Direction.WEST, Direction.EAST) == null,
 				"Corner port guessed a diagonal interior");

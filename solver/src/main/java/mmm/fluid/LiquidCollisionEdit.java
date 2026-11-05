@@ -13,14 +13,14 @@ import java.util.List;
 final class LiquidCollisionEdit {
 	final LiquidCellInventory.Plan inventory;
 	final CellMacStage.ExternalMomentum momentum;
-	final GasTopologyCoordinator.GasTopologyPlan gas;
+	final SpatialGasEdits.Plan localGas;
 	final FixedGeometrySnapshot fixedGeometry;
 	final List<List<LiquidCellInventory.Stock>> displaced;
 	final SignedDyadic removedEnergy, energyRoundoff;
 	private LiquidCollisionEdit(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum,
-	                            GasTopologyCoordinator.GasTopologyPlan gas, FixedGeometrySnapshot fixedGeometry,
+	                            SpatialGasEdits.Plan localGas, FixedGeometrySnapshot fixedGeometry,
 	                            List<List<LiquidCellInventory.Stock>> displaced) {
-		this.inventory = inventory; this.momentum = momentum; this.gas = gas;
+		this.inventory = inventory; this.momentum = momentum; this.localGas=localGas;
 		this.fixedGeometry = fixedGeometry; this.displaced = List.copyOf(displaced);
 		var observed = SignedDyadic.ZERO;
 		for (var row : displaced) for (var stock : row) observed = observed.add(SignedDyadic.of(stock.internalEnergy()));
@@ -122,10 +122,13 @@ final class LiquidCollisionEdit {
 		var inventoryEdits = new ArrayList<LiquidCellInventory.Edit>();
 		for (var key : changedKeys) inventoryEdits.add(new LiquidCellInventory.Edit(key, candidate.stock(key)));
 		var plan = domain.liquidCells.planEdits(inventoryEdits);
-		var momentum = domain.cellMacStage.prepareExternalMomentum(plan,masks);
-		plan = plan.withMechanicalHeat(momentum.heatByCell());
-		var gas = domain.gasTopologyCoordinator.planAfterCollisionCells(plan.future(), occupied, masks);
-		return new LiquidCollisionEdit(plan, momentum, gas, gas.frame().geometry().actualCapacity().fixedGeometry, removed);
+		var changed=new java.util.TreeSet<Integer>(plan.changedCells());
+		for(var edit:edits)changed.add(domain.domainFlowFields.cellIndex(edit.x(),edit.y(),edit.z()));
+		long[] beforeOccupied=domain.occupiedSolidSvq();for(int cell=0;cell<domain.cellCount;cell++)if(beforeOccupied[cell]!=occupied[cell])changed.add(cell);
+		var edit=HostMixtureEdit.prepare(domain,plan,occupied,masks,List.copyOf(changed));
+		plan=edit.inventory();var momentum=edit.momentum();var localGas=edit.gas();
+		var fixed=FixedGeometrySnapshot.fromMasks(domain.sizeX,domain.sizeY,domain.sizeZ,masks);
+		return new LiquidCollisionEdit(plan, momentum, localGas, fixed, removed);
 	}
 
 	float report(int index, HostFluidState domain, ChemicalTransferLedger.Builder chemistry,

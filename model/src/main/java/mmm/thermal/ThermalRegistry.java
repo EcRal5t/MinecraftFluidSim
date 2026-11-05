@@ -339,7 +339,8 @@ public final class ThermalRegistry {
 		}
 		for (ThermalPhaseTransition transition : transitions) {
 			out.append("P|").append(transition.id()).append('|').append(transition.lowerEnergyMaterialId()).append('|')
-					.append(transition.upperEnergyMaterialId()).append('|')
+					.append(transition.upperEnergyMaterialId()).append('|').append(transition.speciesId() == null ? "" : transition.speciesId()).append('|')
+					.append(transition.transferVelocityMPerS() == null ? "" : Double.toHexString(transition.transferVelocityMPerS())).append('|')
 					.append(transition.lowerVolumeSvqPerBatch()).append('|')
 					.append(transition.upperVolumeSvqPerBatch()).append('|')
 					.append(transition.massKgPerBatch().canonical()).append('|')

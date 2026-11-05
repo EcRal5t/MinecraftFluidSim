@@ -34,6 +34,37 @@ public final class ThermalOwnerStoreValidation {
 
 		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
+		diluteAqueousPropertiesReportTheirRange();
+        ethanolMixtureUsesConservedMassFractions();
+	}
+
+    private static void ethanolMixtureUsesConservedMassFractions() {
+        var water=new ThermalMaterialDefinition("mmm:test_water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",
+                293.15,0,.6,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,4200)));
+        var pure=AqueousMixtureProperties.thermalMaterial(water,.046,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L));
+        require(Math.abs(pure.specificHeatAt(300)-2430)<1e-9 && Math.abs(pure.conductivityWPerMeterK()-.171)<1e-12,
+                "Pure ethanol thermal properties differ");
+        var mixture=AqueousMixtureProperties.thermalMaterial(water,.092,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L));
+        require(Math.abs(mixture.specificHeatAt(300)-3315)<1e-9 && Math.abs(mixture.conductivityWPerMeterK()-.3855)<1e-12,
+                "Mixed thermal properties do not follow ethanol mass fraction");
+        var state=AqueousMixtureProperties.evaluate(Map.of(BuiltinChemicalDefinitions.ETHANOL,1.0),.046,.0000583,293.15,101325,
+                .046*4200,.001,.6);
+        require(Math.abs(state.heatCapacityJPerK()-.046*2430)<1e-9 && Math.abs(state.viscosityPaS()-.0012)<1e-12,
+                "Pure ethanol caloric or viscous state differs");
+    }
+
+	private static void diluteAqueousPropertiesReportTheirRange() {
+		var amounts=Map.of(BuiltinChemicalDefinitions.H2O, 1000.0/18, BuiltinChemicalDefinitions.NA_PLUS, .01,
+				BuiltinChemicalDefinitions.CL_MINUS, .01);
+		var state=AqueousMixtureProperties.evaluate(amounts,1.0,.001,298.15,101325,4200,.001,.6);
+		require(state.effectiveVolumesSupported() && state.viscositySupported() && state.viscosityPaS()>.001
+				&& state.densityKgPerM3()==1000, "Dilute NaCl state or measured range differs");
+		require(AqueousMixtureProperties.effectiveVolumePerMole(BuiltinChemicalDefinitions.NA_PLUS)
+				+ AqueousMixtureProperties.effectiveVolumePerMole(BuiltinChemicalDefinitions.CL_MINUS)
+				== AqueousMixtureProperties.SALT_EFFECTIVE_VOLUME_M3_PER_MOL, "Ion transfer volumes do not add to salt");
+		var unsupported=AqueousMixtureProperties.evaluate(Map.of(BuiltinChemicalDefinitions.H2O,1000.0/18,
+				BuiltinChemicalDefinitions.NA_PLUS,.01),1,.001,298.15,101325,4200,.001,.6);
+		require(!unsupported.effectiveVolumesSupported() && !unsupported.viscositySupported(), "Unpaired ion was reported as supported NaCl");
 	}
 
 	private static void thermalAuditAcceptsFloatingPointResidual() {

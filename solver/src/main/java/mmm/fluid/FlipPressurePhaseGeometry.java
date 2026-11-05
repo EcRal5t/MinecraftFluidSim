@@ -133,50 +133,45 @@ final class FlipPressurePhaseGeometry {
 	private void buildOccupancyCells(PhaseOccupancyState state,FlipCutCellGeometry cut,double[] pore,
 	                                 FlipPressurePhaseGeometry captured,GasComponentCapacity.Prepared capacity){
 		for(int cell=0;cell<fraction.length;cell++){
-			int x=cell%sizeX,y=cell/sizeX%sizeY,z=cell/(sizeX*sizeY);double center=fraction[cell];
-			int[] supports=CellRemapMicroTopology.components(collisionMask(cell));
-			if(supports.length==0){occupancyCells[cell]=CLOSED;continue;}
-			if((center==0||center==1)&&supports.length==1){
-				int support=supports[0];double porosity=8*microPore(cell,Integer.numberOfTrailingZeros(support),pore,capacity);
-				occupancyCells[cell]=support==255&&porosity==1?(center==0?EMPTY_OPEN:FULL_OPEN)
-						:new OccupancyCell(new PlicComponentGeometry.Plane(support,center,porosity,0,0,0,null));
+			int x=cell%sizeX,y=cell/sizeX%sizeY,z=cell/(sizeX*sizeY),support=(~collisionMask(cell))&255;
+			double fill=fraction[cell];
+			if(support==0){occupancyCells[cell]=CLOSED;continue;}
+			double porosity=poreVolumes[cell].toDouble()/(Integer.bitCount(support)*.125);
+			if(fill==0||fill==1){
+				occupancyCells[cell]=support==255&&porosity==1?(fill==0?EMPTY_OPEN:FULL_OPEN)
+						:new OccupancyCell(new PlicComponentGeometry.Plane(support,fill,porosity,0,0,0,null));
 				continue;
 			}
 			if(captured!=null&&sameOccupancyInputs(cell,x,y,z,state,pore,captured,capacity)){
-				copyCell(captured,cell);
-				occupancyCells[cell]=captured.occupancyCells[cell];
-				continue;
+				copyCell(captured,cell);occupancyCells[cell]=captured.occupancyCells[cell];continue;
 			}
-			double nx=coarseSample(x-1,y,z,center)-coarseSample(x+1,y,z,center);
-			double ny=coarseSample(x,y-1,z,center)-coarseSample(x,y+1,z,center);
-			double nz=coarseSample(x,y,z-1,center)-coarseSample(x,y,z+1,center);
-			double length=Math.sqrt(nx*nx+ny*ny+nz*nz);if(length==0){ny=1;length=1;}
-			float fx=(float)(nx/length),fy=(float)(ny/length),fz=(float)(nz/length);
+			float fallback=(float)fill;
+			float gx=(float)coarseSample(x-1,y,z,fallback)-(float)coarseSample(x+1,y,z,fallback);
+			float gy=(float)coarseSample(x,y-1,z,fallback)-(float)coarseSample(x,y+1,z,fallback);
+			float gz=(float)coarseSample(x,y,z-1,fallback)-(float)coarseSample(x,y,z+1,fallback);
+			int axis=1;if(Math.abs(gx)>Math.abs(gy))axis=0;
+			if(Math.abs(gz)>Math.abs(axis==0?gx:gy))axis=2;
+			float gradient=axis==0?gx:axis==1?gy:gz,sign=gradient<0?-1:1;
+			int low=axis==0?0x55:axis==1?0x33:0x0f,firstBits=sign>0?low:(low^255);
+			int first=Integer.bitCount(support&firstBits),second=Integer.bitCount(support&(firstBits^255));
+			double target=fill*Integer.bitCount(support)*.125,firstVolume=first*.125;
+			double depth=target<=firstVolume&&first>0?target/(.25*first)
+					:.5+(second>0?(target-firstVolume)/(.25*second):0);
+			double cutPosition=sign>0?depth:1-depth;
+			float nx=axis==0?sign:0,ny=axis==1?sign:0,nz=axis==2?sign:0;
+			var bracket=new PlicPlaneOffset.Result(sign*cutPosition,target);
+			normalX[cell]=nx;normalY[cell]=ny;normalZ[cell]=nz;planeOffset[cell]=bracket.offset();offsetBrackets[cell]=bracket;
+			var plane=new PlicComponentGeometry.Plane(support,fill,porosity,nx,ny,nz,bracket);
 			var fractions=new double[8];var planes=new PlicComponentGeometry.Plane[8];
-			for(int support:supports){
-				double amount=0,poreVolume=0;for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){int p=8*cell+bit;amount+=state.liquidVolume(p);poreVolume+=microPore(cell,bit,pore,capacity);}
-				double value=poreVolume>0?Math.clamp(amount/poreVolume,0,1):0;
-				double porosity=8*microPore(cell,Integer.numberOfTrailingZeros(support),pore,capacity);
-				if(value==0||value==1){
-					var plane=new PlicComponentGeometry.Plane(support,value,porosity,0,0,0,null);
-					for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){fractions[bit]=value;planes[bit]=plane;}
-					continue;
-				}
-				boolean unresolved = Math.min(amount, poreVolume - amount) <= CELL_VOLUME_RESOLUTION;
-				float px = unresolved ? 0 : fx, py = unresolved ? 1 : fy, pz = unresolved ? 0 : fz;
-				double target = value * Integer.bitCount(support) * .125;
-				var plane = unresolved ? horizontalLayer(support, target) : PlicPlaneOffset.solve(support,px,py,pz,target);
-				double offset=plane.offset();normalX[cell]=px;normalY[cell]=py;normalZ[cell]=pz;planeOffset[cell]=offset;offsetBrackets[cell]=plane;
-				var component=new PlicComponentGeometry.Plane(support,value,porosity,px,py,pz,plane);
-				for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){
-					planes[bit]=component;
-					fractions[bit]=unresolved ? Math.clamp(2 * offset - (bit >>> 1 & 1), 0, 1)
-							: FlipFreeSurfaceGeometry.unitCubeLiquidFraction(.5*px,.5*py,.5*pz,offset-.5*(px*(bit&1)+py*(bit>>>1&1)+pz*(bit>>>2&1)));
-				}
+			for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){
+				double origin=.5*((bit>>>axis)&1);
+				double liquidDepth=sign>0?Math.clamp(cutPosition-origin,0,.5):Math.clamp(origin+.5-cutPosition,0,.5);
+				fractions[bit]=2*liquidDepth;planes[bit]=plane;
 			}
 			occupancyCells[cell]=new OccupancyCell(fractions,planes);
 		}
 	}
+
 	private boolean sameOccupancyInputs(int cell,int x,int y,int z,PhaseOccupancyState state,double[] pore,FlipPressurePhaseGeometry old,
 	                                    GasComponentCapacity.Prepared capacity){
 		if(old.microOccupancy==null||collisionMask(cell)!=old.collisionMask(cell)||fraction[cell]!=old.fraction[cell])return false;
@@ -195,14 +190,7 @@ final class FlipPressurePhaseGeometry {
 				&&coarseSample(x,y,z-1,center)==old.coarseSample(x,y,z-1,center)
 				&&coarseSample(x,y,z+1,center)==old.coarseSample(x,y,z+1,center);
 	}
-	/** Unresolved small phases use a volume-preserving layer in their real fixed support. */
-	private static PlicPlaneOffset.Result horizontalLayer(int support, double target) {
-		double lower = Integer.bitCount(support & 0x33) * .125;
-		double upper = Integer.bitCount(support & 0xcc) * .125;
-		double offset = lower > 0 && target <= lower ? .5 * target / lower
-				: .5 + .5 * (target - lower) / upper;
-		return new PlicPlaneOffset.Result(offset, target);
-	}
+
 	private double coarseSample(int x,int y,int z,double fallback) {
 		if(!inside(x,y,z))return fallback;
 		int cell=cellIndex(x,y,z);return poreVolumes[cell].signum()>0?fraction[cell]:fallback;
@@ -298,38 +286,25 @@ final class FlipPressurePhaseGeometry {
 
 
 	private void solveCell(int cell, int x, int y, int z, boolean[] solid, FlipCutCellGeometry cutCells,
-	                       float cellSize,
-	                       PhaseLiquidGeometryEdit edit) {
-		double center = fraction[cell];
-		float nx = (float) -(sampleFraction(x + 1, y, z, center, solid) - sampleFraction(x - 1, y, z, center, solid));
-		float ny = (float) -(sampleFraction(x, y + 1, z, center, solid) - sampleFraction(x, y - 1, z, center, solid));
-		float nz = (float) -(sampleFraction(x, y, z + 1, center, solid) - sampleFraction(x, y, z - 1, center, solid));
-		float gradientX = nx, gradientY = ny, gradientZ = nz;
-		double lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
-		if (lengthSquared == 0) {
-			nx = airDirection(x + 1, y, z, solid) - airDirection(x - 1, y, z, solid);
-			ny = airDirection(x, y + 1, z, solid) - airDirection(x, y - 1, z, solid);
-			nz = airDirection(x, y, z + 1, solid) - airDirection(x, y, z - 1, solid);
-			lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
-		}
-		if (lengthSquared == 0) ny = 1.0F;
-		else {
-			double inverseLength = 1.0 / Math.sqrt(lengthSquared);
-			nx = (float) (nx * inverseLength); ny = (float) (ny * inverseLength); nz = (float) (nz * inverseLength);
-		}
-		normalX[cell] = nx; normalY[cell] = ny; normalZ[cell] = nz;
-		var stock = edit;
-		SignedDyadic open = poreVolumes[cell];
-		if (stock == null) planeOffset[cell] = PlicPlaneOffset.solve(~cutCells.mask(cell)&255,nx,ny,nz,center * cutCells.openCellVolume(cell)).offset();
-		else {
-			components[cell] = PlicComponentGeometry.capture(stock, CellRemapMicroTopology.capacities(cutCells.mask(cell), open),
-					x, y, z, cellSize, nx, ny, nz);
-			if (stock.components().size() == 1) {
-				int micro = Integer.numberOfTrailingZeros(stock.components().getFirst().supportMask());
-				var plane = components[cell].plane(micro);
-				normalX[cell]=plane.nx();normalY[cell]=plane.ny();normalZ[cell]=plane.nz();
-				planeOffset[cell]=plane.offset();offsetBrackets[cell]=plane.bracket();
-			}
+	                       float cellSize, PhaseLiquidGeometryEdit edit) {
+		double fill=fraction[cell];float fallback=(float)fill;
+		float gx=(float)sampleFraction(x-1,y,z,fallback,solid)-(float)sampleFraction(x+1,y,z,fallback,solid);
+		float gy=(float)sampleFraction(x,y-1,z,fallback,solid)-(float)sampleFraction(x,y+1,z,fallback,solid);
+		float gz=(float)sampleFraction(x,y,z-1,fallback,solid)-(float)sampleFraction(x,y,z+1,fallback,solid);
+		int axis=1;if(Math.abs(gx)>Math.abs(gy))axis=0;
+		if(Math.abs(gz)>Math.abs(axis==0?gx:gy))axis=2;
+		float sign=(axis==0?gx:axis==1?gy:gz)<0?-1:1;
+		int support=(~cutCells.mask(cell))&255,low=axis==0?0x55:axis==1?0x33:0x0f;
+		int firstBits=sign>0?low:(low^255),first=Integer.bitCount(support&firstBits),second=Integer.bitCount(support&(firstBits^255));
+		double target=fill*Integer.bitCount(support)*.125,firstVolume=first*.125;
+		double depth=target<=firstVolume&&first>0?target/(.25*first):.5+(second>0?(target-firstVolume)/(.25*second):0);
+		double coordinate=sign>0?depth:1-depth;
+		float nx=axis==0?sign:0,ny=axis==1?sign:0,nz=axis==2?sign:0;
+		var bracket=new PlicPlaneOffset.Result(sign*coordinate,target);
+		normalX[cell]=nx;normalY[cell]=ny;normalZ[cell]=nz;planeOffset[cell]=bracket.offset();offsetBrackets[cell]=bracket;
+		if(edit!=null){
+			double porosity=poreVolumes[cell].toDouble()/(Integer.bitCount(support)*.125);
+			components[cell]=PlicComponentGeometry.single(support,fill,porosity,nx,ny,nz,bracket);
 		}
 	}
 
@@ -387,23 +362,6 @@ final class FlipPressurePhaseGeometry {
 				|| Double.doubleToRawLongBits(fraction[cell]) == Double.doubleToRawLongBits(captured.fraction[cell]));
 	}
 
-	static double ownMomentDirection(double first, double metricVolume, int coordinate, int support, int axis) {
-		int low = 0;
-		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) low += 1 - (micro >>> axis & 1);
-		return momentDirection(centeredMoment(first, metricVolume, coordinate), low, Integer.bitCount(support));
-	}
-
-	static double centeredMoment(double first, double metricVolume, int coordinate) {
-		return Math.fma(-(coordinate + .5), metricVolume, first) / metricVolume;
-	}
-
-	static double momentDirection(double centre, int lowCount, int openCount) {
-		double lower = lowCount == 0 ? 0 : -.5, upper = lowCount == openCount ? 0 : .5;
-		double openCentre = .25 * (openCount - 2.0 * lowCount) / openCount;
-		if (centre <= lower) return Double.POSITIVE_INFINITY;
-		if (centre >= upper) return Double.NEGATIVE_INFINITY;
-		return (openCentre - centre) / ((upper - centre) * (centre - lower));
-	}
 
 	float liquidFraction(int cell) { return (float) fraction[cell]; }
 	float planeNormal(int cell, int axis) { return axis == 0 ? normalX[cell] : axis == 1 ? normalY[cell] : normalZ[cell]; }
@@ -565,11 +523,6 @@ final class FlipPressurePhaseGeometry {
 		return solid[cell] ? fallback : fraction[cell];
 	}
 
-	private int airDirection(int x, int y, int z, boolean[] solid) {
-		if (!inside(x, y, z)) return 0;
-		int cell = cellIndex(x, y, z);
-		return !solid[cell] && fraction[cell] <= 0.5F ? 1 : 0;
-	}
 
 	private boolean inside(int x, int y, int z) {
 		return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ;

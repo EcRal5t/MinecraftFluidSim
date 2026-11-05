@@ -268,8 +268,7 @@
   "screen.mmm.demos.reset": "Reset",
   "screen.mmm.demos.remove": "Remove",
   "screen.mmm.demos.paused": "Paused",
-  "screen.mmm.demos.running": "Running"
+  "screen.mmm.demos.running": "Running",
+  "block.mmm.mechanical_driver": "Mechanical Driver",
+  "block.mmm.mechanical_driver.tooltip": "Install in the region shell; use an empty hand to start, sneak-use to stop."
 }
-
-
-

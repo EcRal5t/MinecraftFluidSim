@@ -83,8 +83,8 @@ public final class FlipThermalParticleState {
 		for (double energy : depositEnergy) if (!Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Deposit granular energy is not finite");
 		}
-		if (gasNodeEnergy.length > ThermalLimits.MAX_GAS_NODES_PER_REGION) {
-			throw new IllegalArgumentException("Gas thermal handoff exceeds node budget");
+		if (gasNodeEnergy.length > cellCount) {
+			throw new IllegalArgumentException("Gas thermal handoff exceeds spatial cell count");
 		}
 		for (double energy : gasNodeEnergy) if (!Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Gas node energy is not finite");

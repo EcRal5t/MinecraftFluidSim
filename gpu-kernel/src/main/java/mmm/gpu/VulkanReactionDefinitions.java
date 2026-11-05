@@ -13,7 +13,7 @@ import java.util.*;
 /** Immutable registry tables shared by inventory chemistry, saturation transfer and thermal conversion.
  * All offsets in the uploaded header are relative uint32 word offsets from the table base. */
 final class VulkanReactionDefinitions {
-    enum Kind { CHEMICAL, SOLID_LIQUID, GAS_LIQUID_FILM, THERMAL_PHASE }
+    enum Kind { CHEMICAL, SOLID_LIQUID, GAS_LIQUID_FILM, THERMAL_PHASE, DIFFUSION }
     record Identity(String chemicalFingerprint,String granularFingerprint,String thermalFingerprint,String gasFingerprint,
                     List<String> species,List<String> elements,List<String> phases,List<String> thermalMaterials,
                     List<String> granularMaterials,List<String> gasComponents,List<String> rules){
@@ -74,22 +74,28 @@ final class VulkanReactionDefinitions {
             int carrier=-1;if(material.carrierKind()==ThermalMaterialDefinition.CarrierKind.GAS)carrier=handle(gasIds,material.carrierId());
             if(material.carrierKind()==ThermalMaterialDefinition.CarrierKind.LIQUID)for(int j=0;j<chemical.phases().size();j++)if(chemical.phases().get(j).materialId().equals(material.carrierId()))carrier=j;
             b.set(thermalTable+2*i+1,carrier);}
-        for(var rule:chemical.reactionOrder()){
-            // phase, dissociation/instantaneous kind, reactant CSR offset/count, product CSR offset/count.
-            int row=b.reserve(6);b.set(row,chemical.phaseHandle(rule.phaseId()));b.set(row+1,rule.kind().ordinal());
+        for(var rule:chemical.reactions()){
+            // Phase, kinetic kind, two stoichiometric CSRs, Arrhenius constants.
+            int row=b.reserve(16);b.set(row,chemical.phaseHandle(rule.phaseId()));b.set(row+1,rule.kind().ordinal());
             side(b,row+2,rule.reactants(),chemical);side(b,row+4,rule.products(),chemical);
+            var k=rule.kinetics();double[] rates={k.forwardRate(),k.reverseRate(),k.forwardActivationJMol(),k.reverseActivationJMol(),k.referenceTemperatureK()};
+            for(int j=0;j<rates.length;j++)b.setLong(row+6+2*j,Double.doubleToRawLongBits(rates[j]));
             add(directory,ruleIds,Kind.CHEMICAL,rule.id(),row);
         }
         for(var rule:granular.reactions()){
             // phase, solid material, reversible; exact extent, SVQ, accessible surface; rational saturation; two stoichiometric CSRs.
-            int row=b.reserve(15);b.set(row,chemical.phaseHandle(rule.liquidPhaseId()));b.set(row+1,granular.materialHandle(rule.solidMaterialId()));b.set(row+2,rule.reversible()?1:0);
+            int row=b.reserve(28);b.set(row,chemical.phaseHandle(rule.liquidPhaseId()));b.set(row+1,granular.materialHandle(rule.solidMaterialId()));b.set(row+2,rule.reversible()?1:0);
             b.setLong(row+3,rule.solidExtentPerBatch());b.setLong(row+5,rule.solidVolumeSvqPerBatch());b.setLong(row+7,rule.accessibleSurfaceSvqPerCellStep());
             b.set(row+9,b.rational(rule.saturationConcentrationMolPerCubicMeter()));
             side(b,row+10,rule.aqueousStoichiometry(),chemical);side(b,row+12,rule.solidComposition(),chemical);
             long mass=0;for(var term:rule.solidComposition().entrySet()){
                 var m=chemical.species(chemical.speciesHandle(term.getKey())).molarMassKgPerMol().divide(ChemicalLimits.QUANTA_PER_MOL);
                 mass=Math.addExact(mass,Math.multiplyExact(Mass.exactUnits(m.numerator(),m.denominator()),term.getValue()));}
-            b.set(row+14,b.size());b.addLong(Math.multiplyExact(mass,rule.solidExtentPerBatch()));add(directory,ruleIds,Kind.SOLID_LIQUID,rule.id(),row);
+            b.set(row+14,b.size());b.addLong(Math.multiplyExact(mass,rule.solidExtentPerBatch()));
+            var curve=rule.solubility();b.set(row+15,curve==null?-1:chemical.speciesHandle(curve.solventSpeciesId()));
+            if(curve!=null){b.setLong(row+16,Double.doubleToRawLongBits(curve.referenceTemperatureK()));b.setLong(row+18,Double.doubleToRawLongBits(curve.ratio()));
+                b.setLong(row+20,Double.doubleToRawLongBits(curve.slopePerK()));b.setLong(row+22,Double.doubleToRawLongBits(curve.minimumK()));b.setLong(row+24,Double.doubleToRawLongBits(curve.maximumK()));b.setLong(row+26,Double.doubleToRawLongBits(curve.diffusivityM2PerS()));}
+            add(directory,ruleIds,Kind.SOLID_LIQUID,rule.id(),row);
         }
         for(var rule:chemical.gasLiquidMassTransfers()){
             // species, liquid phase, gas component; SI fit coefficients in declared temperature interval.
@@ -97,6 +103,12 @@ final class VulkanReactionDefinitions {
             for(double value:new double[]{rule.referenceTemperatureK(),rule.henrySolubilityMolPerM3Pa(),rule.temperatureSlopeK(),
                     rule.liquidFilmVelocityMPerS(),rule.gasFilmVelocityMPerS(),rule.minimumTemperatureK(),rule.maximumTemperatureK()})b.addDouble(value);
             add(directory,ruleIds,Kind.GAS_LIQUID_FILM,rule.id(),row);
+        }
+        for(var rule:AqueousDiffusion.rules(chemical)){
+            int row=b.reserve(10);b.set(row,chemical.phaseHandle(rule.phaseId()));b.set(row+1,rule.first());b.set(row+2,rule.second());
+            b.set(row+3,rule.firstCount());b.set(row+4,rule.secondCount());b.set(row+5,rule.axis());
+            b.setLong(row+6,Double.doubleToRawLongBits(rule.diffusivityM2PerS()));b.setLong(row+8,Double.doubleToRawLongBits(rule.solventMolesPerExtent()));
+            add(directory,ruleIds,Kind.DIFFUSION,rule.id(),row);
         }
         var phaseModel=new GasLiquidPhaseModel(thermal,gas);
         for(var rule:thermal.transitions()){

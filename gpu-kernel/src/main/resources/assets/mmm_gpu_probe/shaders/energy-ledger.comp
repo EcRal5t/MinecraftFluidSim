@@ -11,15 +11,9 @@ layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header;int stage;int count;int inputOffset;int outputOffset;int groups; } p;
 shared int bins[136];
 uint readWord(int bank,int at){return bank==0?sourceWords[at]:words[at];}
-void accumulateDouble(int index){
-    int streamCount=int(words[p.header]);int at=0,coefficient=1,bank=0;
-    for(int stream=0;stream<streamCount;stream++) {
-        int descriptor=p.header+1+7*stream,first=int(words[descriptor]),count=int(words[descriptor+1]);
-        if(index<first||index>=first+count)continue;
-        bank=int(words[descriptor+2]);int live=int(words[descriptor+6]);if(live>=0&&index-first>=int(readWord(bank,live)))return;
-        at=int(words[descriptor+3])+(index-first)*int(words[descriptor+4]);
-        coefficient=int(words[descriptor+5]);break;
-    }
+void accumulateDouble(int index,int descriptor){
+    int bank=int(words[descriptor+1]);
+    int at=int(words[descriptor+2])+index*int(words[descriptor+3]),coefficient=int(words[descriptor+4]);
     uint low=readWord(bank,at),high=readWord(bank,at+1);int exponent=int((high>>20)&2047u);
     if(exponent==2047){atomicOr(errors,ERROR_ENERGY_LEDGER);return;}
     uint64_t mantissa=(uint64_t(high&1048575u)<<32)|uint64_t(low);
@@ -75,7 +69,14 @@ void main(){
     for(int digit=lane;digit<136;digit+=128)bins[digit]=0;barrier();
     if(p.stage==STAGE_ADD_CANONICAL){if(lane<68){accumulateCanonical(0,p.inputOffset,lane);accumulateCanonical(1,p.count,lane);}}
     else if(p.stage==STAGE_ACCUMULATE_DOUBLE) {
-        for(uint index=1024u*uint(block)+uint(lane);index<min(uint(p.count),1024u*uint(block)+1024u);index+=128u)accumulateDouble(int(index));
+        int map=p.header+1+6*int(words[p.header])+2*block,stream=int(words[map]);
+        if(stream>=0){
+            int descriptor=p.header+1+6*stream;
+            uint first=words[map+1],end=min(words[descriptor],first+1024u);
+            int live=int(words[descriptor+5]);
+            if(live>=0)end=min(end,readWord(int(words[descriptor+1]),live));
+            for(uint index=first+uint(lane);index<end;index+=128u)accumulateDouble(int(index),descriptor);
+        }
     } else {
         // A lane owns one base-2^16 digit; all source rows are read without atomics.
         for(int digit=lane;digit<136;digit+=128) {

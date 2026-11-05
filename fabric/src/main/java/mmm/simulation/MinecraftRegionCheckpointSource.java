@@ -6,7 +6,6 @@ import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FlipThermalParticleState;
 import mmm.fluid.PendingPhaseMotionState;
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
 import mmm.model.region.RegionGeometry;
 import mmm.model.region.RegionIdentity;
@@ -60,7 +59,6 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 		return state;
 	}
 	@Override public GranularStateSnapshot granularState() { return authoritativeState().granular(); }
-	@Override public GasStateSnapshot gasState(String fingerprint) { return authoritativeState().gas(); }
 	@Override public FlipThermalParticleState thermalState() { return authoritativeState().thermal(); }
 	@Override public PendingPhaseMotionState pendingPhaseMotion() { return authoritativeState().pendingPhaseMotion(); }
 	@Override public FiniteThermalDeviceInventory finiteThermalDevices(String fingerprint) {

@@ -29,6 +29,7 @@ final class MinecraftContainerTransferPlan {
 	private final long requestedAmount;
 	private final long baseAmount;
 	private final boolean externalSource;
+	private final int materialScoopRadius;
 	private final FluidMixture mixture;
 	private final ChemicalContents chemical;
 	private final GranularContents granular;
@@ -45,7 +46,7 @@ final class MinecraftContainerTransferPlan {
 			ContainerTransferJournal.ResourceKind resourceKind,
 			long requestedAmount,
 			long baseAmount,
-			boolean externalSource,
+			boolean externalSource, int materialScoopRadius,
 			FluidMixture mixture,
 			ChemicalContents chemical,
 			GranularContents granular,
@@ -62,6 +63,7 @@ final class MinecraftContainerTransferPlan {
 		this.requestedAmount = requestedAmount;
 		this.baseAmount = baseAmount;
 		this.externalSource = externalSource;
+		this.materialScoopRadius = materialScoopRadius;
 		this.mixture = mixture;
 		this.chemical = chemical;
 		this.granular = granular;
@@ -74,7 +76,7 @@ final class MinecraftContainerTransferPlan {
 			FluidRegion region,
 			int[] cell,
 			ItemStack sourceStack,
-			boolean externalSource
+			boolean externalSource, int materialScoopRadius
 	) {
 		MinecraftContainerTransferOperations.TransferKind kind =
 				MinecraftContainerTransferOperations.classify(sourceStack);
@@ -152,7 +154,7 @@ final class MinecraftContainerTransferPlan {
 					}
 					if (!region.hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
 					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
-							ContainerFluidLedger.NANOS_PER_BLOCK, 6, -1);
+							ContainerFluidLedger.NANOS_PER_BLOCK, materialScoopRadius, -1);
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的材料流体");
 				}
 				case GRANULAR_POUR -> {
@@ -184,7 +186,7 @@ final class MinecraftContainerTransferPlan {
 		if (requested <= 0L) return new Resolution(null, "容器转移请求没有正库存");
 		ThermalContents thermal = MinecraftContainerTransferOperations.thermalContents(sourceStack);
 		return new Resolution(new MinecraftContainerTransferPlan(transactions, world, region, cell, sourceStack, kind,
-				operation, resourceKind, requested, base, externalSource,
+				operation, resourceKind, requested, base, externalSource, materialScoopRadius,
 				mixture, chemical, granular, thermal), null);
 	}
 
@@ -204,9 +206,9 @@ final class MinecraftContainerTransferPlan {
 							world, targetRegion, cell, chemical, requested, 6, externalSource, thermal);
 			case MATERIAL_SCOOP -> chemistryEnabled()
 					? MinecraftContainerTransferOperations.scoopChemicalIntoCell(
-							world, targetRegion, cell, requested, 6, world.chemicalRegistry())
+							world, targetRegion, cell, requested, materialScoopRadius, world.chemicalRegistry())
 					: MinecraftContainerTransferOperations.scoopMaterialIntoCell(
-							world, targetRegion, cell, requested, 6);
+							world, targetRegion, cell, requested, materialScoopRadius);
 			case GRANULAR_POUR -> MinecraftContainerTransferOperations.pourGranularIntoCell(
 					world, targetRegion, cell, granular, requested, 6, externalSource, thermal);
 			case GRANULAR_SCOOP -> MinecraftContainerTransferOperations.scoopGranularIntoCell(

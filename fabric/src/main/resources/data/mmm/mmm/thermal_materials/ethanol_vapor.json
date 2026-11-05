@@ -1,0 +1,1 @@
+{"carrier_kind":"GAS","carrier_id":"mmm:ethanol_vapor","reference_temperature_k":"293.15","reference_specific_energy_j_per_kg":"925000","conductivity_w_per_m_k":"0.017","caloric_segments":[{"minimum_temperature_k":"273.15","maximum_temperature_k":"500.0","specific_heat_j_per_kg_k":"1250"}]}

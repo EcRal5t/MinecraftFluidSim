@@ -27,7 +27,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         GRAIN_OFFSETS(99), GRAIN_ENTRIES(100), DEPOSIT_CELL(101), SOURCE_FACE_K(102),
         GAS_EXTERNAL_WORK(103), GAS_ENERGY(104), GAS_HEAT_CAPACITY(105), GAS_COLD_ENERGY(106),
         GAS_ENERGY_CHANGES(107), GAS_COUNTS(108), ROUTE_OFFSETS(109), ROUTE_MASKS(110),
-        ACTIVITY_CELLS(111), ACTIVITY_FACES(112);
+        ACTIVITY_CELLS(111), ACTIVITY_FACES(112), SOURCE_ELASTIC(113), TARGET_ELASTIC(114), GAS_STATES(115), GAS_POTENTIAL(116), GAS_ROUTE_MASS(117), GAS_COMPONENTS(118), GAS_EOS(119);
         final int word; Header(int word) { this.word = word; }
     }
     private static String shaderLayout() {
@@ -38,6 +38,9 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
 
     record GranularEnergy(VulkanLiquidThermodynamics.Layout thermal,VulkanGranularGeometry.Layout geometry,
                           int sourceHeatWordOffset,int externalWorkWordOffset) { }
+    record LocalMixture(VulkanLiquidStateLayout.Column source,VulkanMixtureState.Layout target,
+                        VulkanLocalGasTransport.ProductionLayout transport,VulkanGasThermodynamics.Layout eos,
+                        VulkanLiquidStateLayout.Column energyChanges,VulkanLiquidStateLayout.Column potential) { }
     record Layout(VulkanMechanicalBodies.Layout bodies,VulkanLiquidMomentum.Layout momentum,
                   VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,int sourceHeatWordOffset,int externalWorkWordOffset,
                   GranularEnergy granular,
@@ -47,12 +50,18 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                   VulkanLiquidStateLayout.Column blockRoots,VulkanLiquidStateLayout.Column partials,
                   VulkanLiquidStateLayout.Column bodyData,VulkanLiquidStateLayout.Column energyChanges,
                   VulkanLiquidStateLayout.Column dispatch,VulkanLiquidStateLayout.Column scanWorkspace,
-                  VulkanLiquidStateLayout.Column granularTerms,VulkanLiquidStateLayout.Column granularChanges,int sourceFaceKWordOffset,int gasExternalWorkWordOffset,VulkanGasMechanicalHeat.Layout gasEnergy,long endOffset) {
+                  VulkanLiquidStateLayout.Column granularTerms,VulkanLiquidStateLayout.Column granularChanges,int sourceFaceKWordOffset,int gasExternalWorkWordOffset,LocalMixture gasEnergy,long endOffset) {
         Layout withSourceFaceK(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,word,gasExternalWorkWordOffset,gasEnergy,endOffset);}
-        Layout withGasExternalWork(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,sourceFaceKWordOffset,word,gasEnergy,endOffset);}
-        Layout withGasEnergy(VulkanGasMechanicalHeat.Layout gas){
-            if(gas.work().thermodynamics().gas().nodeCapacity()!=bodies.gasNodeCapacity()||gas.work().thermodynamics().tables().isothermal())throw new IllegalArgumentException("Mechanical gas heat requires the same finite caloric source nodes");
-            return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,sourceFaceKWordOffset,gasExternalWorkWordOffset,gas,endOffset);}
+        Layout withLocalMixture(VulkanLiquidStateLayout.Column source,VulkanMixtureState.Layout target,
+                                VulkanLocalGasTransport.ProductionLayout transport,VulkanGasThermodynamics.Layout eos){
+            long alignment=momentum.source().alignment(),offset=align(endOffset,alignment);
+            var changes=new VulkanLiquidStateLayout.Column(offset,transport==null?0:2*transport.cells,8);
+            var potential=new VulkanLiquidStateLayout.Column(align(offset+changes.bindingBytes(),alignment),transport==null?0:2*transport.cells,8);
+            var local=new LocalMixture(source,target,transport,eos,changes,potential);
+            return new Layout(bodies,momentum,thermal,transport==null?-1:transport.word(VulkanLocalGasTransport.Field.WORK),sourceHeatWordOffset,externalWorkWordOffset,
+                    granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,
+                    granularTerms,granularChanges,sourceFaceKWordOffset,transport==null?-1:transport.word(VulkanLocalGasTransport.Field.EXTERNAL_PRESSURE_WORK),local,align(potential.offset()+potential.bindingBytes(),alignment));
+        }
         ByteBuffer headerBytes(){return headerBytes(momentum.source());}
         ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
             var out=ByteBuffer.allocateDirect(512).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[128];
@@ -72,8 +81,8 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                 data[Header.PARTICLE_CAPACITY.word]=state.particleCapacity();data[Header.GRAIN_COUNTS.word]=state.word(VulkanGranularStateLayout.Field.COUNTS);
                 data[Header.GRAIN_HEAT_CAPACITY.word]=word(granular.thermal().heatCapacities());data[Header.GRAIN_COLD_ENERGY.word]=word(granular.thermal().coldEnergies());
                 data[Header.GRAIN_ENERGY.word]=state.word(VulkanGranularStateLayout.Field.INTERNAL_ENERGY);
-                data[Header.SOURCE_K.word]=pressure.word(VulkanGranularPressure.Field.SOURCE_K);data[Header.FINAL_K.word]=pressure.word(VulkanGranularPressure.Field.FINAL_K);
-                data[Header.SOURCE_Y.word]=pressure.word(VulkanGranularPressure.Field.SOURCE_Y);data[Header.FINAL_Y.word]=pressure.word(VulkanGranularPressure.Field.FINAL_Y);
+                data[Header.SOURCE_K.word]=pressure.word(VulkanMixturePressure.Field.SOURCE_K);data[Header.FINAL_K.word]=pressure.word(VulkanMixturePressure.Field.FINAL_K);
+                data[Header.SOURCE_Y.word]=pressure.word(VulkanMixturePressure.Field.SOURCE_Y);data[Header.FINAL_Y.word]=pressure.word(VulkanMixturePressure.Field.FINAL_Y);
                 data[Header.GRAIN_MASS.word]=state.word(VulkanGranularStateLayout.Field.MASS_UNITS);data[Header.GRAIN_TERMS.word]=word(granularTerms);data[Header.GRAIN_CHANGES.word]=word(granularChanges);
                 data[Header.GRAIN_EXTERNAL_WORK.word]=granular.externalWorkWordOffset();data[Header.GRAIN_SOURCE_HEAT.word]=granular.sourceHeatWordOffset();
                 data[Header.DEPOSIT_CAPACITY.word]=state.depositCapacity();data[Header.GRAIN_OFFSETS.word]=granular.geometry().word(VulkanGranularGeometry.Field.OFFSETS);
@@ -82,22 +91,38 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             }
             data[Header.SOURCE_FACE_K.word]=sourceFaceKWordOffset;
             data[Header.GAS_EXTERNAL_WORK.word]=gasExternalWorkWordOffset;
-            data[Header.GAS_ENERGY.word]=gasEnergy==null?-1:word(gasEnergy.work().candidateEnergy());
-            if(gasEnergy!=null){data[Header.GAS_HEAT_CAPACITY.word]=word(gasEnergy.capacity());data[Header.GAS_COLD_ENERGY.word]=word(gasEnergy.coldEnergy());data[Header.GAS_ENERGY_CHANGES.word]=word(gasEnergy.energyChanges());data[Header.GAS_COUNTS.word]=Math.toIntExact(gasEnergy.work().thermodynamics().gas().column(VulkanGasStateLayout.Field.COUNTS).offset()/4);}
+            data[Header.GAS_POTENTIAL.word]=-1;data[Header.GAS_ENERGY.word]=-1;data[Header.SOURCE_ELASTIC.word]=-1;data[Header.TARGET_ELASTIC.word]=-1;
+            if(gasEnergy!=null){
+                data[Header.SOURCE_ELASTIC.word]=word(gasEnergy.source())+2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
+                data[Header.TARGET_ELASTIC.word]=gasEnergy.target().statesWord()+2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
+                if(gasEnergy.transport()!=null){var gas=gasEnergy.transport().source;
+                    data[Header.GAS_ENERGY.word]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.INTERNAL_ENERGY).offset()/4);
+                    data[Header.GAS_COUNTS.word]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
+                    data[Header.GAS_POTENTIAL.word]=word(gasEnergy.potential());
+                    data[Header.GAS_ROUTE_MASS.word]=gasEnergy.transport().word(VulkanLocalGasTransport.Field.MASS);
+                    data[Header.GAS_COMPONENTS.word]=gas.definitions().componentIds().size();
+                    data[Header.GAS_ENERGY_CHANGES.word]=word(gasEnergy.energyChanges());data[Header.GAS_STATES.word]=word(gasEnergy.eos().states());data[Header.GAS_EOS.word]=gasEnergy.eos().headerWordOffset();
+                }
+            }
             data[Header.ROUTE_OFFSETS.word]=word(momentum.routes().column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS));data[Header.ROUTE_MASKS.word]=word(momentum.routes().column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS));
             data[Header.ACTIVITY_CELLS.word]=momentum.activityCellsWordOffset();data[Header.ACTIVITY_FACES.word]=momentum.activityFacesWordOffset();
-            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);return out;
+            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4*120,mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);return out;
         }
         void initializeHeader(ByteBuffer destination){destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());}
         /** Actual stored U change minus the physical work; exact binary reduction retains all rounding. */
         List<VulkanEnergyLedger.Stream> roundoffStreams() {
             var streams=new java.util.ArrayList<VulkanEnergyLedger.Stream>();
             streams.add(stream(faceTerms,-1));streams.add(stream(potentialTerms,-1));streams.add(stream(energyChanges,1));
-            if(gasWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasWorkWordOffset,2*bodies.gasNodeCapacity(),2,1));
+            if(gasWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasWorkWordOffset,bodies.gasNodeCapacity(),2,1));
             if(sourceHeatWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,sourceHeatWordOffset,bodies.source().cellCount(),2,1));
             if(externalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,externalWorkWordOffset,bodies.source().cellCount(),2,-1));
             if(gasExternalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasExternalWorkWordOffset,bodies.gasNodeCapacity(),2,-1));
-            if(gasEnergy!=null)streams.add(stream(gasEnergy.energyChanges(),1));
+            if(gasEnergy!=null){
+                if(gasEnergy.transport()!=null){streams.add(stream(gasEnergy.energyChanges(),1));streams.add(stream(gasEnergy.potential(),-1));}
+                int quantity=2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
+                streams.add(new VulkanEnergyLedger.Stream(1,word(gasEnergy.source())+quantity,bodies.source().cellCount(),14,-1));
+                streams.add(new VulkanEnergyLedger.Stream(1,gasEnergy.target().statesWord()+quantity,bodies.source().cellCount(),14,1));
+            }
             if(granular!=null){
                 streams.add(stream(granularTerms,-1));streams.add(stream(granularChanges,1));int count=bodies.granular().state().particleCapacity();
                 if(granular.sourceHeatWordOffset()>=0)streams.add(new VulkanEnergyLedger.Stream(1,granular.sourceHeatWordOffset(),count,2,1));
@@ -153,7 +178,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
     /** Run after accepted momentum mixing heat and stock caloric fields, with stable body CSR. */
     void record(VkCommandBuffer command,Layout layout,double cellSize,double gravity){
         stage(command,layout,0,layout.bodies().faces(),cellSize,gravity,false);
-        stage(command,layout,1,layout.momentum().source().stockCapacity(),cellSize,gravity,false);
+        stage(command,layout,1,Math.max(layout.momentum().source().stockCapacity(),layout.bodies().gasNodeCapacity()),cellSize,gravity,false);
         if(layout.granular()!=null)stage(command,layout,8,layout.granularChanges().count()/2,cellSize,gravity,false);
         stage(command,layout,2,layout.bodies().vertices(),cellSize,gravity,false);
         scan.record(command,layout.bodies().vertices(),word(layout.blockCounts()),word(layout.blockOffsets()),word(layout.scanWorkspace()));
@@ -163,7 +188,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         stage(command,layout,6,layout.thermal().liquid().stockCapacity(),cellSize,gravity,false);
         stage(command,layout,7,layout.thermal().liquid().cellCount(),cellSize,gravity,false);
         if(layout.granular()!=null)stage(command,layout,9,layout.granularChanges().count()/2,cellSize,gravity,false);
-        if(layout.gasEnergy()!=null)stage(command,layout,10,layout.bodies().gasNodeCapacity(),cellSize,gravity,false);
+        if(layout.gasEnergy()!=null&&layout.gasEnergy().transport()!=null)stage(command,layout,10,layout.bodies().gasNodeCapacity(),cellSize,gravity,false);
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double cellSize,double gravity,boolean indirect){
         if(count==0)return;int groups=(count+127)/128;
@@ -187,7 +212,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
     }
     private static String shader(){
         try(var input=VulkanMechanicalEnergy.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/mechanical-energy.comp")){
-            if(input==null)throw new IllegalStateException("Mechanical energy shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout() + VulkanShaderLayout.fields("L_", VulkanLiquidStateLayout.Field.values()));
+            if(input==null)throw new IllegalStateException("Mechanical energy shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout() + VulkanShaderLayout.fields("L_", VulkanLiquidStateLayout.Field.values()) + VulkanGasThermodynamics.shaderLayout()).replace("// GAS_CALORIC_MATERIAL",VulkanLiquidPhaseRows.resource("gas-caloric-material.glsl")).replace("// LOCAL_GAS_GRID",VulkanLiquidPhaseRows.resource("local-gas-grid.glsl"));
         }catch(IOException failure){throw new IllegalStateException("Mechanical energy shader unavailable",failure);}
     }
     @Override public void close(){try{scan.close();}finally{bindings.close();}}

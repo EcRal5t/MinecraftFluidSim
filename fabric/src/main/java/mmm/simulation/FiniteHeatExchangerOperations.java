@@ -349,10 +349,11 @@ public final class FiniteHeatExchangerOperations {
 
 	private FluidRegion portRegion(ServerLevel level,BlockPos position) {
 		FluidRegion result=null;
-		for(var direction:List.of(Direction.NORTH,Direction.SOUTH)) {
+		for(var port:world.thermalRegistry().finiteDevice(PROVIDER).ports()) {
+			Direction direction=Direction.valueOf(port.localFace().name());
 			FluidRegion candidate=targets.regionAtBlock(level,position.relative(direction));
 			if(candidate==null) continue;
-			if(result!=null && result!=candidate) throw new IllegalArgumentException("换热器两端口需连接同一控制器区域");
+			if(result!=null && result!=candidate) throw new IllegalArgumentException("换热器各端口需连接同一控制器区域");
 			result=candidate;
 		}
 		return result;
@@ -366,9 +367,11 @@ public final class FiniteHeatExchangerOperations {
 		if (world.thermalOrNull() != null) {
 			var registry = world.thermalRegistry();
 			for (var device : region.finiteThermalDevices(registry.fingerprint()).devices()) {
-				if (!device.providerId().equals(PROVIDER)) continue;
-				var requests = ports(region, BlockPos.of(Long.parseLong(device.objectId())),
+				List<mmm.fluid.FluidDomainContracts.ThermalPortRequest> requests;
+				if (device.providerId().equals(PROVIDER)) requests = ports(region, BlockPos.of(Long.parseLong(device.objectId())),
 						registry.finiteDevice(device.deviceTypeId()), registry);
+				else if (device.providerId().equals(OrdinaryThermalWalls.PROVIDER)) requests = OrdinaryThermalWalls.ports(region, device, registry);
+				else continue;
 				for (var port : requests) devicePorts.add(new mmm.fluid.FluidStateAccess.DevicePort(device.providerId(),device.objectId(),port));
 				connections.add(requests.stream().mapToInt(port ->
 						(port.cellZ() * region.sizeY() + port.cellY()) * region.sizeX() + port.cellX()).distinct().toArray());

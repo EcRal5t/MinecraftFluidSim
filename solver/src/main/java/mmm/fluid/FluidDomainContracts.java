@@ -166,7 +166,6 @@ public final class FluidDomainContracts {
 			float volumeAfter,
 			double massBefore,
 			double massAfter,
-			int chemistryVisitedCells,
 			int chemistryEvaluations,
 			int chemistryChangedStocks,
 			FluidDomainContracts.ThermalPhaseStats condensedPhase,
@@ -216,24 +215,23 @@ public final class FluidDomainContracts {
 	}
 	public record OperatorClear(CondensedClear condensed, FluidDomainContracts.GranularClear granular) { }
 	public record OperatorGasVent(GasAuditLedger removed, SignedDyadic internalEnergy, int sealedNodes) { }
-	public record OperatorGasVentPlan(
-			int nodeCount, GasAuditLedger removed, AirNetwork.RemapPlan gasPlan,
-			GasEnergyStore.GasVentPlan thermalPlan, ThermalDomainState.Revision thermalRevision,
-			GasRuntimeGeometry sourceGeometry
-	) { }
+    public record OperatorGasVentPlan(int nodeCount, GasAuditLedger removed, SignedDyadic internalEnergy,
+                                      HostMixtureEdit edit, ThermalDomainState.Revision thermalRevision,
+                                      long momentumRevision) { }
+
 	public static final class OperatorClearPlan {
 		final CondensedClearPlan condensed;
 		final FluidDomainContracts.GranularClearPlan granular;
-		final GasTopologyCoordinator.GasTopologyPlan gasTopology;
+		final HostMixtureEdit mixture;
 		final ThermalDomainState.Revision thermalRevision;
 
 		OperatorClearPlan(
 				CondensedClearPlan condensed, FluidDomainContracts.GranularClearPlan granular,
-				GasTopologyCoordinator.GasTopologyPlan gasTopology, ThermalDomainState.Revision thermalRevision
+				HostMixtureEdit mixture, ThermalDomainState.Revision thermalRevision
 		) {
 			this.condensed = condensed;
 			this.granular = granular;
-			this.gasTopology = gasTopology;
+			this.mixture = mixture;
 			this.thermalRevision = thermalRevision;
 		}
 

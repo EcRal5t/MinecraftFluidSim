@@ -133,6 +133,7 @@ final class FluidRegionFactory {
 			}
 		}
 		domain.setVolumes(volumes);
+		domain.resetAmbientGas();
 		region.commitHostEdit(generation, domain);
 		return wetCells;
 	}

@@ -16,11 +16,15 @@ layout(push_constant) uniform Params {
     int header;
     int stage;
     int count;
+    int padding;
+    double duration;
+    double cellVolume;
 }
 p;
+shared int64_t initializedQuanta[128];
 bool activeCell(int cell);
 // HOST_LAYOUT
-const uint ERROR_INVALID_STATE = 33554432u;
+const uint ERROR_INVALID_STATE = 268435456u;
 const double MASS_UNIT_KG = 1e-10;
 const int STAGE_INITIALIZE = 0;
 const int STAGE_REACT_CELL = 1;
@@ -29,6 +33,11 @@ const int STAGE_CAPACITY_STATUS = 3;
 const int STAGE_SCATTER = 4;
 const int STAGE_PUBLISH = 5;
 const int STAGE_CLEAR_CONTROL = 6;
+const int STAGE_CLEAR_PENDING_INDEX = 7;
+const int STAGE_INDEX_PENDING = 8;
+const int STAGE_DIFFUSION_ACTIVITY = 9;
+const int STAGE_SOLID_ACTIVITY = 10;
+shared uint activityFlags[128];
 
 const int64_t LIMIT = int64_t(0x7fffffffffffffffUL), QUANTA_LIMIT = 2000000000000000l;
 int headerWord(int i) {
@@ -118,6 +127,16 @@ int64_t portion(int64_t amount, int64_t weight, int64_t total) {
 bool same(int a, int b) {
     return support(a) == support(b) && phase(a) == phase(b);
 }
+double ethanolMassFor(int r,int64_t quanta){
+    if(material(r)!=caloricHeaderWord(CAL_AQUEOUS_MATERIAL)||caloricHeaderWord(CAL_ETHANOL_SPECIES)<0)return 0.0;
+    return caloricEthanolMass(double(mass(r))*MASS_UNIT_KG,double(quanta));
+}
+double ethanolColdCorrection(int r,int64_t quanta){
+    int m=material(r);double cold=readDouble(headerWord(H_CALORIC_HEADER)+CAL_MINIMUM_TEMPERATURE);
+    double waterCold=readDouble(caloricHeaderWord(CAL_COLD_SENSIBLE)+2*m);
+    return ethanolMassFor(r,quanta)*((cold-readDouble(caloricHeaderWord(CAL_REFERENCE_TEMPERATURE)+2*m))*CAL_ETHANOL_CP-waterCold);
+}
+int64_t rowEthanol(int r){int s=caloricHeaderWord(CAL_ETHANOL_SPECIES);return s<0?0l:dense(r,s);}
 double baseCold(int r) {
     int m = material(r);
     return double(mass(r)) * MASS_UNIT_KG * (readDouble(caloricHeaderWord(CAL_MATERIAL_REFERENCE) + 2 * m) + readDouble(caloricHeaderWord(CAL_COLD_SENSIBLE) + 2 * m));
@@ -126,7 +145,7 @@ double speciesReference(int r, int s) {
     return readDouble(caloricHeaderWord(CAL_SPECIES_REFERENCE) + 2 * (material(r) * caloricHeaderWord(CAL_SPECIES_STRIDE) + s));
 }
 double rowCold(int r) {
-    double coldEnergy = baseCold(r);
+    double coldEnergy = baseCold(r)+ethanolColdCorrection(r,rowEthanol(r));
     for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
         int64_t amount = dense(r, s);
         if (amount != 0l)
@@ -134,13 +153,15 @@ double rowCold(int r) {
     }
     return coldEnergy;
 }
-double groupCold(int first, int end, int64_t amounts[256], int64_t totalMass) {
+double groupCold(int first, int end, int64_t amounts[SPECIES_WORKSPACE], int64_t totalMass) {
     double coldEnergy = 0.0;
     int64_t prefix = 0l;
     for (int r = first; r < end; r++)
         if (same(first, r)) {
             int64_t next = add(prefix, mass(r));
-            coldEnergy += baseCold(r);
+            int ethanol=caloricHeaderWord(CAL_ETHANOL_SPECIES);
+            int64_t q=ethanol<0?0l:portion(amounts[ethanol],next,totalMass)-portion(amounts[ethanol],prefix,totalMass);
+            coldEnergy += baseCold(r)+ethanolColdCorrection(r,q);
             for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
                 if (amounts[s] != 0l) {
                     int64_t amount = portion(amounts[s], next, totalMass) - portion(amounts[s], prefix, totalMass);
@@ -151,7 +172,7 @@ double groupCold(int first, int end, int64_t amounts[256], int64_t totalMass) {
         }
     return coldEnergy;
 }
-bool representable(int first, int end, int64_t amounts[256], int64_t totalMass) {
+bool representable(int first, int end, int64_t amounts[SPECIES_WORKSPACE], int64_t totalMass) {
     int64_t prefix = 0l;
     for (int r = first; r < end; r++)
         if (same(first, r)) {
@@ -181,12 +202,13 @@ bool reserveQuanta(int64_t delta) {
         old = actual;
     }
 }
-void initialize(int r) {
+int64_t initialize(int r) {
+    int64_t rowQuanta=0l;
     words[headerWord(H_ROW_COUNTS) + r] = 0u;
     writeDouble(headerWord(H_ENERGIES) + 2 * r, 0.0LF);
     writeDouble(headerWord(H_INITIAL_ENERGIES) + 2 * r, 0.0LF);
     if (r >= rowCount())
-        return;
+        return 0l;
     for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
         denseAt(r, s, 0l);
     for (int i = int(words[liquidStockField(STOCK_SPECIES_OFFSETS) + r]); i < int(words[liquidStockField(STOCK_SPECIES_OFFSETS) + r + 1]);
@@ -195,31 +217,22 @@ void initialize(int r) {
         int64_t speciesAmount = readInt64(liquidStockField(STOCK_SPECIES_AMOUNTS) + 2 * i);
         if (s < 0 || s >= headerWord(H_SPECIES_COUNT) || speciesAmount < 0l) {
             reportInvalid();
-            return;
+            return 0l;
         }
         denseAt(r, s, speciesAmount);
-        atomicAdd(integers[headerWord(H_TOTAL_QUANTA) / 2], speciesAmount);
+        rowQuanta=add(rowQuanta,speciesAmount);
     }
     writeDouble(headerWord(H_ENERGIES) + 2 * r, readDouble(liquidStockField(STOCK_ENERGY_BITS) + 2 * r));
     writeDouble(headerWord(H_INITIAL_ENERGIES) + 2 * r, readDouble(liquidStockField(STOCK_ENERGY_BITS) + 2 * r));
+    return rowQuanta;
 }
-void advance(int64_t before[256], out int64_t after[256], int rule, int64_t extent) {
-    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
-        after[s] = before[s];
-    for (int side = 0; side < 2; side++) {
-        int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
-        for (int t = 0; t < count; t++) {
-            int species = definitionDataWord(start + 2 * t), coefficient = definitionDataWord(start + 2 * t + 1);
-            int64_t q = extent * int64_t(coefficient);
-            after[species] = add(after[species], side == 0 ? -q : q);
-        }
-    }
-}
+
 double capacityAt(int r, double t) {
     int m = material(r), first = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1, segment = first;
     while (segment < last && t >= readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * segment))
         segment++;
-    return double(mass(r)) * MASS_UNIT_KG * readDouble(caloricHeaderWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
+    double total=double(mass(r))*MASS_UNIT_KG;
+    return caloricCapacity(total,ethanolMassFor(r,rowEthanol(r)),readDouble(caloricHeaderWord(CAL_SEGMENT_CAPACITY)+2*segment));
 }
 double sensibleAboveCold(int r, double t) {
     int m = material(r), first = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
@@ -231,8 +244,138 @@ double sensibleAboveCold(int r, double t) {
             lower = upper;
         }
     }
-    return double(mass(r)) * MASS_UNIT_KG * sum;
+    double total=double(mass(r))*MASS_UNIT_KG,ethanol=ethanolMassFor(r,rowEthanol(r));
+    double minimum=readDouble(headerWord(H_CALORIC_HEADER)+CAL_MINIMUM_TEMPERATURE);
+    return (total-ethanol)*sum+ethanol*CAL_ETHANOL_CP*(t-minimum);
 }
+int progress(int field) { return int(words[headerWord(H_PROGRESS) + 16 + field]); }
+int finiteRuleOrdinal(int ruleIndex) {
+    int count=definitionWord(4),directory=definitionWord(5),ordinal=0;
+    if(ruleIndex<0||ruleIndex>=count||definitionDataWord(directory+2*ruleIndex)!=0)return -1;
+    for(int i=0;i<=ruleIndex;i++) {
+        if(definitionDataWord(directory+2*i)!=0)return -1;
+        int rule=definitionDataWord(directory+2*i+1);
+        if(definitionDataWord(rule+1)==2) {
+            if(i==ruleIndex)return ordinal;
+            ordinal++;
+        } else if(i==ruleIndex)return -1;
+    }
+    return -1;
+}
+void indexPending(int id) {
+    if(id>=int(words[progress(PROGRESS_PENDING_COUNT)]))return;
+    int c=int(words[progress(PROGRESS_PENDING_CELL)+id]);
+    int m=int(words[progress(PROGRESS_PENDING_MATERIAL)+id]);
+    int mask=int(words[progress(PROGRESS_PENDING_SUPPORT)+id]);
+    int ordinal=finiteRuleOrdinal(int(words[progress(PROGRESS_PENDING_RULE)+id]));
+    if(c<0||c>=headerWord(H_CELL_COUNT)||ordinal<0||ordinal>=headerWord(H_FINITE_RULE_COUNT))return;
+    int begin=int(words[liquidStockField(STOCK_CELL_OFFSETS)+c]);
+    int end=int(words[liquidStockField(STOCK_CELL_OFFSETS)+c+1]);
+    for(int r=begin;r<end;r++)if(material(r)==m&&support(r)==mask) {
+        atomicMin(words[headerWord(H_PENDING_INDEX)+r*headerWord(H_FINITE_RULE_COUNT)+ordinal],uint(id));
+        return;
+    }
+}
+int pendingRow(int first,int ordinal) {
+    return int(words[headerWord(H_PENDING_INDEX)+first*headerWord(H_FINITE_RULE_COUNT)+ordinal]);
+}
+void saveResidual(int c, int first, int ruleIndex, int row, double residual) {
+    if (row < 0 && residual == 0.0) return;
+    if (row < 0) {
+        row = int(atomicAdd(words[progress(PROGRESS_PENDING_COUNT)], 1u));
+        if (row >= int(words[headerWord(H_PROGRESS) + 1])) { reportInvalid(); return; }
+    }
+    words[progress(PROGRESS_PENDING_CELL) + row] = uint(c);
+    words[progress(PROGRESS_PENDING_MATERIAL) + row] = uint(material(first));
+    words[progress(PROGRESS_PENDING_SUPPORT) + row] = uint(support(first));
+    words[progress(PROGRESS_PENDING_RULE) + row] = uint(ruleIndex);
+    writeDouble(progress(PROGRESS_PENDING_SECONDS) + 2 * row, 0.0LF);
+    writeDouble(progress(PROGRESS_RESIDUAL_MOLES) + 2 * row, residual / 1000000.0LF);
+}
+double temperatureFor(int begin, int end, double energy, double coldEnergy) {
+    double temperature = readDouble(headerWord(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE);
+    double remaining = max(0.0LF, energy - coldEnergy);
+    for (;;) {
+        double cv = 0.0, next = 1.7976931348623157e308LF;
+        for (int r = begin; r < end; r++) if (mass(r) > 0l) {
+            cv += capacityAt(r, temperature);
+            int m = material(r), segment = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]);
+            int last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+            while (segment < last && temperature >= readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * segment)) segment++;
+            if (segment < last) next = min(next, readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * segment));
+        }
+        if (cv <= 0.0) return temperature;
+        double cost = (next - temperature) * cv;
+        if (next == 1.7976931348623157e308LF || remaining < cost) return temperature + remaining / cv;
+        remaining -= cost; temperature = next;
+    }
+}
+int ruleAt(int index) { return definitionDataWord(definitionWord(5) + 2 * index + 1); }
+int coefficient(int rule, int side, int species) {
+    int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
+    for (int t = 0; t < count; t++) if (definitionDataWord(start + 2 * t) == species) return definitionDataWord(start + 2 * t + 1);
+    return 0;
+}
+// Net-stoichiometric availability also supports catalysts appearing on both sides.
+int64_t available(int rule, int direction, int64_t amounts[SPECIES_WORKSPACE]) {
+    int side = direction > 0 ? 0 : 1;
+    int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
+    int64_t result = LIMIT;
+    for (int t = 0; t < count; t++) {
+        int sp = definitionDataWord(start + 2 * t), gross = definitionDataWord(start + 2 * t + 1);
+        if (amounts[sp] == 0l) return 0l;
+        int net = gross - coefficient(rule, 1 - side, sp);
+        if (net > 0) result = min(result, amounts[sp] / int64_t(net));
+    }
+    return result == LIMIT ? 0l : result;
+}
+double rate(int rule, int side, double volume, double temperature, int64_t amounts[SPECIES_WORKSPACE]) {
+    double k = readDouble(headerWord(H_DEFINITIONS) + rule + 6 + 2 * side);
+    if (k == 0.0) return 0.0LF;
+    double activation = readDouble(headerWord(H_DEFINITIONS) + rule + 10 + 2 * side);
+    double reference = readDouble(headerWord(H_DEFINITIONS) + rule + 14);
+    double exponent = -activation / 8.314462618LF * (1.0LF / temperature - 1.0LF / reference);
+    double result = k * double(exp(float(clamp(exponent, -80.0LF, 80.0LF)))) * volume * 1000000.0LF;
+    int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
+    for (int t = 0; t < count; t++) {
+        int sp = definitionDataWord(start + 2 * t), power = definitionDataWord(start + 2 * t + 1);
+        double concentration = double(amounts[sp]) / (volume * 1000000.0LF);
+        for (int j = 0; j < power; j++) result *= concentration;
+    }
+    return result;
+}
+double derivative(int rule, int side, double rateValue, int64_t amounts[SPECIES_WORKSPACE]) {
+    double result = 0.0LF;
+    int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
+    for (int t = 0; t < count; t++) {
+        int sp = definitionDataWord(start + 2 * t), power = definitionDataWord(start + 2 * t + 1);
+        int net = coefficient(rule, 1, sp) - coefficient(rule, 0, sp);
+        if (amounts[sp] > 0l) result += double(power * net) / double(amounts[sp]);
+    }
+    return rateValue * result;
+}
+void batch(int64_t before[SPECIES_WORKSPACE], out int64_t after[SPECIES_WORKSPACE], double proposals[REACTION_WORKSPACE], int ruleCount, double scale) {
+    for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) after[sp] = before[sp];
+    for (int i = 0; i < ruleCount; i++) {
+        int64_t extent = int64_t(floor(abs(proposals[i]) * scale));
+        if (proposals[i] < 0.0) extent = -extent;
+        if (extent == 0l) continue;
+        int rule = ruleAt(i);
+        for (int side = 0; side < 2; side++) {
+            int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
+            for (int t = 0; t < count; t++) {
+                int sp = definitionDataWord(start + 2 * t), factor = definitionDataWord(start + 2 * t + 1);
+                after[sp] = add(after[sp], (side == 0 ? -extent : extent) * int64_t(factor));
+            }
+        }
+    }
+}
+// Integer acceptance is checked after rounding the common progress, before any stock write.
+bool nonnegative(int64_t amounts[SPECIES_WORKSPACE]) {
+    for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) if (amounts[sp] < 0l) return false;
+    return true;
+}
+
 void cell(int c) {
     if (!activeCell(c))
         return;
@@ -257,7 +400,7 @@ void cell(int c) {
             }
         if (!representative)
             continue;
-        int64_t amounts[256], candidate[256];
+        int64_t amounts[SPECIES_WORKSPACE], candidate[SPECIES_WORKSPACE];
         for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             amounts[s] = 0l;
         int64_t totalMass = 0l, oldTotal = 0l;
@@ -269,6 +412,35 @@ void cell(int c) {
             }
         if (totalMass <= 0l)
             continue;
+        int ruleCount = 0;
+        while (ruleCount < definitionWord(4) && definitionDataWord(definitionWord(5) + 2 * ruleCount) == 0) ruleCount++;
+        bool activeNetwork=false;
+        for(int i=0;i<ruleCount;i++) {
+            int rule=ruleAt(i);
+            if(definitionDataWord(rule)!=phase(first))continue;
+            bool finiteRate=definitionDataWord(rule+1)==2;
+            if(available(rule,1,amounts)>0l || (finiteRate && available(rule,-1,amounts)>0l)) {
+                activeNetwork=true;
+                break;
+            }
+        }
+        if(!activeNetwork) {
+            int ordinal=0;
+            for(int i=0;i<ruleCount;i++) {
+                int rule=ruleAt(i);
+                if(definitionDataWord(rule+1)!=2)continue;
+                if(definitionDataWord(rule)==phase(first)) {
+                    int row=pendingRow(first,ordinal);
+                    if(row>=0) {
+                        pending=pending || readDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*row)!=0.0LF;
+                        writeDouble(progress(PROGRESS_PENDING_SECONDS)+2*row,0.0LF);
+                        writeDouble(progress(PROGRESS_RESIDUAL_MOLES)+2*row,0.0LF);
+                    }
+                }
+                ordinal++;
+            }
+            continue;
+        }
         for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             oldTotal = add(oldTotal, amounts[s]);
         double previousCold = 0.0;
@@ -276,45 +448,81 @@ void cell(int c) {
             if (same(first, r))
                 previousCold += rowCold(r);
         double otherCold = coldEnergy - previousCold;
-        bool groupChanged = false;
-        for (int i = 0; i < definitionWord(4); i++) {
-            int directory = definitionWord(5) + 2 * i;
-            if (definitionDataWord(directory) != 0)
-                continue;
-            int rule = definitionDataWord(directory + 1);
-            if (definitionDataWord(rule) != phase(first))
-                continue;
-            atomicAdd(words[headerWord(H_CONTROL) + 3], 1u);
-            int64_t maximum = LIMIT;
-            int reactants = definitionDataWord(rule + 2), count = definitionDataWord(rule + 3);
-            for (int term = 0; term < count; term++)
-                maximum = min(maximum, amounts[definitionDataWord(reactants + 2 * term)] / int64_t(definitionDataWord(reactants + 2 * term + 1)));
-            if (maximum <= 0l || maximum == LIMIT)
-                continue;
-            int64_t accepted = maximum;
-            advance(amounts, candidate, rule, accepted);
-            if (groupCold(first, end, candidate, totalMass) > energy - otherCold) {
-                int64_t low = 0l, high = accepted;
-                while (low < high) {
-                    int64_t middle = low + (high - low + 1l) / 2l;
-                    advance(amounts, candidate, rule, middle);
-                    if (groupCold(first, end, candidate, totalMass) <= energy - otherCold)
-                        low = middle;
-                    else
-                        high = middle - 1l;
+        double proposals[REACTION_WORKSPACE], residual[REACTION_WORKSPACE];
+        int pendingRows[REACTION_WORKSPACE];
+        double volume = 0.0;
+        for (int r = first; r < end; r++) if (same(first,r))
+            volume += readDouble(liquidStockField(STOCK_NUMERIC_VOLUMES) + 2 * r) * p.cellVolume;
+        if (volume <= 0.0) continue;
+        int finiteOrdinal=0;
+        for (int i = 0; i < ruleCount; i++) {
+            pendingRows[i] = -1; residual[i] = 0.0LF;
+            int rule = ruleAt(i);
+            if (definitionDataWord(rule + 1) == 2) {
+                if (definitionDataWord(rule) == phase(first)) {
+                    pendingRows[i] = pendingRow(first,finiteOrdinal);
+                    if (pendingRows[i] >= 0) residual[i] = 1000000.0LF * readDouble(progress(PROGRESS_RESIDUAL_MOLES) + 2 * pendingRows[i]);
                 }
-                accepted = low;
-                advance(amounts, candidate, rule, accepted);
+                finiteOrdinal++;
             }
-            pending = pending || accepted < maximum;
-            if (accepted == 0l)
-                continue;
-            for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
-                amounts[s] = candidate[s];
-            groupChanged = true;
         }
-        if (!groupChanged)
-            continue;
+        bool groupChanged = false;
+        for (int step = 0; step < 8; step++) {
+            double temperature = temperatureFor(begin,end,energy,otherCold + groupCold(first,end,amounts,totalMass));
+            double demand[SPECIES_WORKSPACE];
+            for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) demand[sp] = 0.0LF;
+            bool any = false;
+            for (int i = 0; i < ruleCount; i++) {
+                proposals[i] = 0.0LF;
+                int rule = ruleAt(i);
+                if (definitionDataWord(rule) != phase(first)) continue;
+                bool finiteRate = definitionDataWord(rule + 1) == 2;
+                double proposal;
+                if (finiteRate) {
+                    double forward = rate(rule,0,volume,temperature,amounts), reverse = rate(rule,1,volume,temperature,amounts);
+                    double slope = derivative(rule,0,forward,amounts) - derivative(rule,1,reverse,amounts);
+                    double dt = p.duration / 8.0LF;
+                    proposal = dt * (forward - reverse) / (1.0LF + dt * max(0.0LF,-slope)) + residual[i];
+                    if (isnan(proposal) || isinf(proposal)) { reportInvalid(); return; }
+                    pending = pending || proposal != 0.0LF;
+                } else proposal = double(available(rule,1,amounts));
+                int direction = proposal < 0.0 ? -1 : 1;
+                proposal = double(direction) * min(abs(proposal),double(available(rule,direction,amounts)));
+                proposals[i] = proposal;
+                any = any || abs(proposal) >= 1.0LF;
+                int side = direction > 0 ? 0 : 1, start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
+                for (int t = 0; t < count; t++) {
+                    int sp = definitionDataWord(start + 2 * t);
+                    int net = definitionDataWord(start + 2 * t + 1) - coefficient(rule,1-side,sp);
+                    if (net > 0) demand[sp] += abs(proposal) * double(net);
+                }
+            }
+            double scale = 1.0LF;
+            for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++)
+                if (demand[sp] > 0.0) scale = min(scale,double(amounts[sp]) / demand[sp]);
+            batch(amounts,candidate,proposals,ruleCount,scale);
+            while (!nonnegative(candidate)) {
+                scale = max(0.0LF, scale - 4.440892098500626e-16LF);
+                batch(amounts,candidate,proposals,ruleCount,scale);
+            }
+            if (groupCold(first,end,candidate,totalMass) > energy - otherCold) {
+                double low = 0.0LF, high = scale;
+                for (int iteration = 0; iteration < 40; iteration++) {
+                    double middle = 0.5LF * (low + high);
+                    batch(amounts,candidate,proposals,ruleCount,middle);
+                    if (nonnegative(candidate) && groupCold(first,end,candidate,totalMass) <= energy - otherCold) low = middle; else high = middle;
+                }
+                scale = low; batch(amounts,candidate,proposals,ruleCount,scale); pending = true;
+            }
+            for (int i = 0; i < ruleCount; i++) {
+                double extent = proposals[i] * scale;
+                residual[i] = extent - (extent < 0.0 ? -floor(-extent) : floor(extent));
+            }
+            if (any) for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) {
+                groupChanged = groupChanged || amounts[sp] != candidate[sp];
+                amounts[sp] = candidate[sp];
+            }
+        }
         int64_t newTotal = 0l;
         for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             newTotal = add(newTotal, amounts[s]);
@@ -322,6 +530,12 @@ void cell(int c) {
             pending = true;
             continue;
         }
+        for (int i = 0; i < ruleCount; i++) {
+            int rule = ruleAt(i);
+            if (definitionDataWord(rule) == phase(first) && definitionDataWord(rule + 1) == 2)
+                saveResidual(c,first,i,pendingRows[i],residual[i]);
+        }
+        if (!groupChanged) continue;
         int64_t prefix = 0l;
         for (int r = first; r < end; r++)
             if (same(first, r)) {
@@ -340,28 +554,7 @@ void cell(int c) {
     if (!changed)
         return;
     atomicAdd(words[headerWord(H_CONTROL) + 4], 1u);
-    double temperature = readDouble(headerWord(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), remaining = max(0.0LF, energy - coldEnergy);
-    for (;;) {
-        double cv = 0.0, next = 1.7976931348623157e308;
-        for (int r = begin; r < end; r++)
-            if (mass(r) > 0l) {
-                cv += capacityAt(r, temperature);
-                int m = material(r), s = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
-                while (s < last && temperature >= readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * s))
-                    s++;
-                if (s < last)
-                    next = min(next, readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * s));
-            }
-        if (cv <= 0.0)
-            break;
-        double cost = (next - temperature) * cv;
-        if (next == 1.7976931348623157e308 || remaining < cost) {
-            temperature += remaining / cv;
-            break;
-        }
-        remaining -= cost;
-        temperature = next;
-    }
+    double temperature = temperatureFor(begin,end,energy,coldEnergy);
     for (int r = begin; r < end; r++)
         writeDouble(headerWord(H_ENERGIES) + 2 * r, mass(r) > 0l ? rowCold(r) + sensibleAboveCold(r, temperature) : 0.0LF);
 }
@@ -418,8 +611,110 @@ void publish(int id) {
 bool activeCell(int cell) {
     return headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + cell] != 0u;
 }
+bool sourceHasSpecies(int begin,int end,int wantedPhase,int species) {
+    for(int row=begin;row<end;row++)if(phase(row)==wantedPhase && mass(row)>0l){
+        int first=int(words[liquidStockField(STOCK_SPECIES_OFFSETS)+row]);
+        int last=int(words[liquidStockField(STOCK_SPECIES_OFFSETS)+row+1]);
+        for(int j=first;j<last;j++)if(int(words[liquidStockField(STOCK_SPECIES_HANDLES)+j])==species &&
+                readInt64(liquidStockField(STOCK_SPECIES_AMOUNTS)+2*j)>0l)return true;
+    }
+    return false;
+}
+bool sourceSideAvailable(int begin,int end,int wantedPhase,int rule,int side) {
+    int first=definitionDataWord(rule+2+2*side), count=definitionDataWord(rule+3+2*side);
+    for(int j=0;j<count;j++)if(!sourceHasSpecies(begin,end,wantedPhase,definitionDataWord(first+2*j)))return false;
+    return true;
+}
+// Conservative inventory support retains a whole network if any direction can start.
+uint reactionActivity(int id, bool solid) {
+    uint found=0u;
+    int count=rowCount(), rules=definitionWord(4), directory=definitionWord(5);
+    if(solid && id==0 && p.padding>=0 && (words[p.padding]!=0u || words[p.padding+1]!=0u)) found=1u;
+    if(id<count) {
+        int materialPhase=phase(id);
+        if(materialPhase>=0 && mass(id)>0l) {
+            int first=int(words[liquidStockField(STOCK_SPECIES_OFFSETS)+id]);
+            int last=int(words[liquidStockField(STOCK_SPECIES_OFFSETS)+id+1]);
+            for(int i=0;i<rules && found==0u;i++) {
+                int kind=definitionDataWord(directory+2*i), rule=definitionDataWord(directory+2*i+1);
+                if((solid && kind!=1)||(!solid && kind!=4)||definitionDataWord(rule)!=materialPhase)continue;
+                if(solid) {
+                    int begin=definitionDataWord(rule+10), terms=definitionDataWord(rule+11);
+                    for(int j=0;j<terms;j++){
+                        int species=definitionDataWord(begin+2*j);
+                        bool present=p.stage!=STAGE_SOLID_ACTIVITY?sourceHasSpecies(id,id+1,materialPhase,species):dense(id,species)>0l;
+                        if(present){found=1u;break;}
+                    }
+                } else {
+                    int a=definitionDataWord(rule+1),b=definitionDataWord(rule+2);
+                    for(int j=first;j<last;j++){
+                        int species=int(words[liquidStockField(STOCK_SPECIES_HANDLES)+j]);
+                        if((species==a||species==b)&&readInt64(liquidStockField(STOCK_SPECIES_AMOUNTS)+2*j)>0l){found=1u;break;}
+                    }
+                }
+            }
+        }
+    }
+    if(!solid && id<headerWord(H_CELL_COUNT) && activeCell(id)) {
+        words[headerWord(H_DIRTY_CELLS)+id]=0u;
+        int begin=int(words[liquidStockField(STOCK_CELL_OFFSETS)+id]);
+        int end=int(words[liquidStockField(STOCK_CELL_OFFSETS)+id+1]);
+        for(int row=begin;row<end && (found&2u)==0u;row++) {
+            int materialPhase=phase(row);if(materialPhase<0||mass(row)<=0l)continue;
+            for(int i=0;i<rules;i++) {
+                int kind=definitionDataWord(directory+2*i);if(kind!=0)continue;
+                int rule=definitionDataWord(directory+2*i+1);if(definitionDataWord(rule)!=materialPhase)continue;
+                if(sourceSideAvailable(begin,end,materialPhase,rule,0) ||
+                        (definitionDataWord(rule+1)==2 && sourceSideAvailable(begin,end,materialPhase,rule,1))) {
+                    found|=2u;break;
+                }
+            }
+        }
+    }
+    int progress=headerWord(H_PROGRESS), pendingCount=int(words[int(words[progress+16+PROGRESS_PENDING_COUNT])]);
+    int pendingRule=int(words[progress+16+PROGRESS_PENDING_RULE]);
+    int pendingSeconds=int(words[progress+16+PROGRESS_PENDING_SECONDS]);
+    int pendingResidual=int(words[progress+16+PROGRESS_RESIDUAL_MOLES]);
+    for(int i=id;i<pendingCount;i+=p.count) {
+        int ordinal=int(words[pendingRule+i]);
+        if(ordinal<0||ordinal>=rules)continue;
+        int kind=definitionDataWord(directory+2*ordinal);
+        if(readDouble(pendingSeconds+2*i)!=0.0LF || readDouble(pendingResidual+2*i)!=0.0LF) {
+            if(solid && kind==1)found|=1u;
+            if(!solid && kind==4)found|=1u;
+            if(!solid && kind==0)found|=2u;
+        }
+    }
+    return found;
+}
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if(p.stage==STAGE_INITIALIZE) {
+        uint lane=gl_LocalInvocationID.x;
+        initializedQuanta[lane]=(id<p.count && errors==0u)?initialize(id):0l;
+        barrier();
+        for(uint stride=64u;stride>0u;stride>>=1u) {
+            if(lane<stride)initializedQuanta[lane]=add(initializedQuanta[lane],initializedQuanta[lane+stride]);
+            barrier();
+        }
+        if(lane==0u)atomicAdd(integers[headerWord(H_TOTAL_QUANTA)/2],initializedQuanta[0]);
+        return;
+    }
+    if(p.stage==STAGE_DIFFUSION_ACTIVITY||p.stage==STAGE_SOLID_ACTIVITY) {
+        uint lane=gl_LocalInvocationID.x;
+        uint found=0u;
+        if(id<p.count && errors==0u) {
+            if(p.stage==STAGE_DIFFUSION_ACTIVITY) {
+                found=reactionActivity(id,false);
+                if(p.padding>=0)found|=reactionActivity(id,true)<<2;
+            } else found=reactionActivity(id,true);
+        }
+        activityFlags[lane]=found;
+        barrier();
+        for(uint stride=64u;stride>0u;stride>>=1u){if(lane<stride)activityFlags[lane]|=activityFlags[lane+stride];barrier();}
+        if(lane==0u&&activityFlags[0]!=0u)atomicOr(words[headerWord(H_CONTROL)+7],activityFlags[0]);
+        return;
+    }
     if (id >= p.count)
         return;
     if (p.stage == STAGE_CLEAR_CONTROL) {
@@ -430,8 +725,10 @@ void main() {
     }
     if (errors != 0u)
         return;
-    if (p.stage == STAGE_INITIALIZE)
-        initialize(id);
+    if (p.stage == STAGE_CLEAR_PENDING_INDEX)
+        words[headerWord(H_PENDING_INDEX)+id]=0xffffffffu;
+    else if (p.stage == STAGE_INDEX_PENDING)
+        indexPending(id);
     else if (p.stage == STAGE_REACT_CELL)
         cell(id);
     else if (p.stage == STAGE_COUNT_ROW)

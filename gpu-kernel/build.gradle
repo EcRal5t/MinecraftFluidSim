@@ -102,18 +102,6 @@ registerGpuProbe(
 }
 
 registerGpuProbe(
-    'runGpuCommonPressureReplay',
-    'Measures a captured liquid/gas pressure graph without repeating preceding simulation steps.',
-    'mmm.gpu.GpuCommonPressureReplay',
-    'gpu-common-pressure-replay-work'
-) { probeTask ->
-    probeTask.systemProperty 'mmm.gpuPressureGraphProfile', providers.gradleProperty('gpuPressureGraphProfile').getOrElse('false')
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        rootProject.file(providers.gradleProperty('gpuCommonPressureReplayFile').getOrElse('build/gpu-cut64-common-pressure.bin')).absolutePath,
-        providers.gradleProperty('gpuPressureSamples').getOrElse('3')
-}
-
-registerGpuProbe(
     'runGpuLiquidGeometryBenchmark',
     'Measures resident mixed-liquid PLIC, cut-cell and MAC geometry reconstruction.',
     'mmm.gpu.GpuLiquidGeometryBenchmark',
@@ -121,7 +109,6 @@ registerGpuProbe(
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
         providers.gradleProperty('gpuGeometrySamples').getOrElse('10'),
-        providers.gradleProperty('gpuGeometryProjection').getOrElse('false'),
         providers.gradleProperty('gpuGeometryGrids').getOrElse('16,32,64')
     probeTask.jvmArgs '-Xmx1g'
 }
@@ -149,21 +136,6 @@ registerGpuProbe(
 }
 
 registerGpuProbe(
-    'runGpuLiquidCapacityBenchmark',
-    'Measures integer capacity repair on divergent circulation and finite-gas dam inputs.',
-    'mmm.gpu.GpuLiquidCapacityBenchmark',
-    'gpu-liquid-capacity-work'
-) { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        providers.gradleProperty('gpuCapacityGrids').getOrElse('32,64'),
-        providers.gradleProperty('gpuCapacityScene').getOrElse('all'),
-        providers.gradleProperty('gpuCapacityRounds').getOrElse('512'),
-        providers.gradleProperty('gpuCapacityControl').getOrElse('false'),
-        providers.gradleProperty('gpuCapacityFlowRatio').getOrElse('false')
-    probeTask.jvmArgs '-Xmx2g'
-}
-
-registerGpuProbe(
     'runGpuLiquidMechanicalBenchmark',
     'Measures consecutive resident liquid mechanical commits with capacity, inventory transport and optional finite gas.',
     'mmm.gpu.GpuLiquidMechanicalBenchmark',
@@ -177,27 +149,14 @@ registerGpuProbe(
         providers.gradleProperty('gpuMechanicalScene').getOrElse('dam'),
         rootProject.layout.buildDirectory.file('gpu-liquid-capacity-failure.bin').get().asFile.absolutePath,
         providers.gradleProperty('gpuMechanicalGranular').getOrElse('0'),
-        providers.gradleProperty('gpuMechanicalThermal').getOrElse('false')
+        providers.gradleProperty('gpuMechanicalThermal').getOrElse('false'),
+        providers.gradleProperty('gpuMechanicalProduction').getOrElse('false'),
+        rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath
     probeTask.jvmArgs '-Xmx3g'
-    probeTask.systemProperty 'mmm.gpuApertureFailureDump', rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
-    probeTask.systemProperty 'mmm.gpuMechanicalPressureDump', providers.gradleProperty('gpuMechanicalPressureDump').getOrElse('')
-    probeTask.systemProperty 'mmm.gpuMechanicalCapacityDump', providers.gradleProperty('gpuMechanicalCapacityDump').getOrElse('')
-    probeTask.systemProperty 'mmm.gpuMechanicalCommonPressureDump', providers.gradleProperty('gpuMechanicalCommonPressureDump').getOrElse('')
     if (providers.gradleProperty('gpuMechanicalJfr').getOrElse('false').toBoolean()) {
         probeTask.jvmArgs "-XX:StartFlightRecording=filename=${rootProject.layout.buildDirectory.file('gpu-liquid-mechanical.jfr').get().asFile.absolutePath},settings=profile,dumponexit=true"
     }
-}
-
-registerGpuProbe(
-    'runGpuGasGeometryBenchmark',
-    'Measures resident dry geometry, finite chamber topology, member volumes and segmented gas EOS.',
-    'mmm.gpu.GpuGasGeometryBenchmark',
-    'gpu-gas-geometry-work'
-) { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        providers.gradleProperty('gpuGasSamples').getOrElse('10')
-    probeTask.jvmArgs '-Xmx3g'
 }
 
 registerGpuProbe(
@@ -211,34 +170,6 @@ registerGpuProbe(
         providers.gradleProperty('gpuGranularCounts').getOrElse('256,1536'),
         providers.gradleProperty('gpuGranularWarmup').getOrElse('5'),
         providers.gradleProperty('gpuGranularSamples').getOrElse('10')
-}
-
-registerGpuProbe(
-    'runGpuGasPressureBenchmark',
-    'Measures common resident liquid and finite gas pressure with real inventory EOS.',
-    'mmm.gpu.GpuGasPressureBenchmark',
-    'gpu-gas-pressure-work'
-) { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        providers.gradleProperty('gpuGasPressureGrid').getOrElse('64'),
-        providers.gradleProperty('gpuGasPressureScene').getOrElse('dam'),
-        providers.gradleProperty('gpuGasPressureSamples').getOrElse('3'),
-        providers.gradleProperty('gpuGasPressureWarmup').getOrElse('1'),
-        providers.gradleProperty('gpuGasPressureStages').getOrElse('false')
-    probeTask.jvmArgs '-Xmx3g'
-}
-
-registerGpuProbe(
-    'runGpuGasFlowBenchmark',
-    'Measures continuous finite-aperture gas pressure, inventory transport and donor cooling.',
-    'mmm.gpu.GpuGasFlowBenchmark',
-    'gpu-gas-flow-work'
-) { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        providers.gradleProperty('gpuGasFlowGrid').getOrElse('64'),
-        providers.gradleProperty('gpuGasFlowWarmup').getOrElse('5'),
-        providers.gradleProperty('gpuGasFlowSamples').getOrElse('10')
-    probeTask.jvmArgs '-Xmx3g'
 }
 
 registerGpuProbe(
@@ -269,16 +200,12 @@ registerGpuProbe(
 }
 
 registerGpuProbe(
-    'runGpuLiquidCapacityReplay',
-    'Replays exact captured capacity inputs with complete integer quota and bound checks.',
-    'mmm.gpu.GpuLiquidCapacityReplay',
-    'gpu-liquid-capacity-replay-work'
+    'runGpuLiquidDiffusionValidation',
+    'Checks conservative same-phase diffusion and isolation by a closed face.',
+    'mmm.gpu.GpuLiquidDiffusionValidation',
+    'gpu-liquid-diffusion-work'
 ) { probeTask ->
-    probeTask.systemProperty 'mmm.gpuCapacityStages', providers.gradleProperty('gpuCapacityStages').getOrElse('false')
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        providers.gradleProperty('gpuCapacityReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-liquid-capacity-cut64-original-failure.bin').get().asFile.absolutePath),
-        providers.gradleProperty('gpuCapacityRounds').getOrElse('512')
-    probeTask.jvmArgs '-Xmx1g'
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
 registerGpuProbe(
@@ -318,30 +245,18 @@ registerGpuProbe('runGpuSolidLiquidReactionsValidation', 'Executes conservative 
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
-registerGpuProbe('runGpuGasFlowReplay', 'Replays a captured aperture graph through the production Schur solver.',
-    'mmm.gpu.GpuGasFlowReplay', 'gpu-gas-flow-replay-work') { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
-        providers.gradleProperty('gpuGasFlowReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath)
-    probeTask.jvmArgs '-Xmx1g'
-}
-
 registerGpuProbe(
     'runGpuThermalPhaseValidation',
     'Runs thermal conversion, mechanical continuation and checkpoint through the resident backend.',
     'mmm.gpu.GpuThermalPhaseValidation',
     'gpu-thermal-phase-work'
 ) { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath, providers.gradleProperty('gpuPhaseCases').getOrElse('freeze,melt,boil,condense,dissolve,outgas,ambient-outgas')
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath, providers.gradleProperty('gpuPhaseCases').getOrElse('freeze,melt,boil,condense,dissolve,outgas,ambient-outgas,mixed-boil,mixed-condense,multi-contact,vapor-empty')
 }
 
 registerGpuProbe('runGpuActivityMaskValidation', 'Checks active and paused physical groups through a resident mechanical step.',
     'mmm.gpu.GpuActivityMaskValidation', 'gpu-activity-mask-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath
-}
-
-registerGpuProbe('runGpuLiquidCapacityInputsValidation', 'Checks gas reservation and displaced liquid capacity.',
-    'mmm.gpu.GpuLiquidCapacityInputsValidation', 'gpu-liquid-capacity-inputs-work') { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
 registerGpuProbe('runGpuWetWallValidation', 'Checks wet fixed-wall geometry and viscous energy settlement.',
@@ -353,3 +268,5 @@ registerGpuProbe('runGpuChannelFlowValidation', 'Runs pressure-driven resolved l
     'mmm.gpu.GpuChannelFlowValidation', 'gpu-channel-flow-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), providers.gradleProperty('gpuChannelSteps').getOrElse('16')
 }
+
+

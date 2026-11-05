@@ -50,9 +50,9 @@ final class VulkanGranularMotion implements AutoCloseable {
         final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         final VulkanLiquidStateLayout.Column header;
         final long endOffset;
-        Layout(VulkanGranularStateLayout state,VulkanGranularContacts.Layout contacts,VulkanGranularPressure.Layout pressure,
+        Layout(VulkanGranularStateLayout state,VulkanGranularContacts.Layout contacts,VulkanMixturePressure.Layout pressure,
                int masksWord,long base,long alignment){
-            this(state,contacts,pressure.column(VulkanGranularPressure.Field.FINAL_Y),masksWord,base,alignment);
+            this(state,contacts,pressure.column(VulkanMixturePressure.Field.FINAL_Y),masksWord,base,alignment);
         }
         Layout(VulkanGranularStateLayout state,VulkanGranularContacts.Layout contacts,VulkanLiquidStateLayout.Column finalY,
                int masksWord,long base,long alignment){

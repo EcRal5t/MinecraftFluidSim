@@ -141,11 +141,7 @@ public final class GasRegistry {
 	public GasInventory createMixture(long standardVolumeNanos, List<AmbientFraction> recipe) {
 		return createMixtureInterval(0, standardVolumeNanos, recipe);
 	}
-	public GasInventory createAtState(double volume, double pressure, double temperature, List<AmbientFraction> recipe) {
-		if (!(Double.isFinite(volume) && volume >= 0 && Double.isFinite(pressure) && pressure >= 0 && Double.isFinite(temperature) && temperature > 0))
-			throw new IllegalArgumentException("Gas source pressure/temperature is invalid");
-		return createMixture(AirNetwork.nanos(volume * pressure / STANDARD_PRESSURE_PA * STANDARD_TEMPERATURE_K / temperature), recipe);
-	}
+
 	/** Cumulative-source differences preserve trace gas and chemical quanta across tiny injections. */
 	public GasInventory createAmbientInterval(long previousNanos, long addedNanos) {
 		return createMixtureInterval(previousNanos, addedNanos, ambient);

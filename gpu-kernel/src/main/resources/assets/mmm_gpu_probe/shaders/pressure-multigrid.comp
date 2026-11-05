@@ -13,18 +13,16 @@ const int STAGE_INVERT_COARSE = 9;
 const int STAGE_SCHEDULE_APPLY = 10;
 const int STAGE_CLEAR_ACTIVE_ROWS = 11;
 const int CONTROL_RUN = 3;
-const int CONTROL_PHASE = 12;
 const double DOUBLE_EPSILON = 2.22044604925031308085e-16LF;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Starts { int starts[]; };
 layout(binding=1,std430) readonly buffer Columns { int columns[]; };
 layout(binding=2,std430) readonly buffer Values { double values[]; };
 layout(binding=3,std430) readonly buffer Rows { int rows[]; };
-layout(binding=4,std430) readonly buffer Metadata { int meta[]; };
-layout(binding=5,std430) buffer Work { double work[]; };
-layout(binding=6,std430) readonly buffer Control { double control[]; };
-layout(binding=7,std430) buffer Hierarchy { double hierarchy[]; };
-layout(binding=8,std430) buffer Dispatch { uint dispatchWords[]; };
+layout(binding=4,std430) buffer Work { double work[]; };
+layout(binding=5,std430) readonly buffer Control { double control[]; };
+layout(binding=6,std430) buffer Hierarchy { double hierarchy[]; };
+layout(binding=7,std430) buffer Dispatch { uint dispatchWords[]; };
 layout(push_constant) uniform Params {
     int sx; int sy; int sz; int stage;
     int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int factor;
@@ -98,8 +96,7 @@ void buildCoarse(int row) {
 }
 
 void loadFine(int row,int n) {
-    // The fixed SPD hierarchy is projected onto the current free space at both ends.
-    float rhs=meta[p.pressureStride+row]!=0?float(work[row]):0.0;
+    float rhs=float(work[row]);
     writeVector(residualIndex(p.base,n,row),rhs);
     writeVector(temporaryIndex(p.base,n,row),scaled(p.base,row,rhs));
 }
@@ -167,7 +164,7 @@ void scheduleApply(){
     ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0,base=p.base;
     for(;;){
         int at=p.applyDispatch+4*command++,n=count(shape);
-        dispatchWords[at]=control[CONTROL_RUN]!=0.0&&control[CONTROL_PHASE]<3.0?uint((dispatchWords[activeBase(base,n)]+127u)/128u):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
+        dispatchWords[at]=control[CONTROL_RUN]!=0.0?uint((dispatchWords[activeBase(base,n)]+127u)/128u):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
         if(max(shape.x,max(shape.y,shape.z))<=4)break;base+=levelDoubles(n);shape=(shape+1)/2;
     }
 }
@@ -205,5 +202,5 @@ void main() {
     else if(p.stage==STAGE_LOAD_FINE)loadFine(row,n);
     else if(p.stage==STAGE_RESTRICT_RESIDUAL)restrictResidual(row,n);
     else if(p.stage==STAGE_PROLONG_AND_SMOOTH)prolongAndSmooth(row,n);
-    else if(p.stage==STAGE_STORE_CORRECTION)work[3*p.pressureStride+row]=meta[p.pressureStride+row]!=0?double(vectorValue(correctionIndex(p.base,n,row))):0.0;
+    else if(p.stage==STAGE_STORE_CORRECTION)work[3*p.pressureStride+row]=double(vectorValue(correctionIndex(p.base,n,row)));
 }

@@ -61,8 +61,8 @@ final class VulkanRegionReactions implements AutoCloseable {
     }
     record Layout(VulkanReactionDefinitions.Layout definitions, VulkanReactionProgressLayout progress,
         VulkanLiquidReactions.Layout liquid, SolidInputs solidInputs, VulkanSolidLiquidReactions.Layout solid,
-        VulkanGasPhaseChange.Layout gasPhase, VulkanCondensedPhaseChange.Layout condensedPhase,
-        VulkanGasLiquidMassTransfer.Layout massTransfer, long endOffset) {
+        VulkanCondensedPhaseChange.Layout condensedPhase,
+        VulkanGasLiquidMassTransfer.Layout massTransfer, VulkanLiquidDiffusion.Layout diffusion, long endOffset) {
         List<VulkanGasThermodynamics.TableChunk> headers() {
             var result = new ArrayList<VulkanGasThermodynamics.TableChunk>();
             result.add(new VulkanGasThermodynamics.TableChunk(
@@ -77,12 +77,11 @@ final class VulkanRegionReactions implements AutoCloseable {
                     solid.phaseRows.column(VulkanLiquidPhaseRows.Field.HEADER).offset(),
                     solid.phaseRows.headerBytes()));
             }
-            if (gasPhase != null)
-                result.addAll(gasPhase.headers());
             if (condensedPhase != null)
                 result.addAll(condensedPhase.headers());
             if (massTransfer != null)
                 result.addAll(massTransfer.headers());
+            if (diffusion != null) result.addAll(diffusion.headers());
             return List.copyOf(result);
         }
         List<VulkanGasThermodynamics.TableChunk> tables() {
@@ -95,12 +94,11 @@ final class VulkanRegionReactions implements AutoCloseable {
                     solidInputs.transitions().materialBytes(solidInputs.registry())));
                 result.addAll(solid.tableChunks());
             }
-            if (gasPhase != null)
-                result.addAll(gasPhase.tables());
             if (condensedPhase != null)
                 result.addAll(condensedPhase.tableChunks());
             if (massTransfer != null)
                 result.addAll(massTransfer.tables());
+            if (diffusion != null) result.addAll(diffusion.tables());
             return List.copyOf(result);
         }
         List<VulkanEnergyLedger.Stream> roundoffStreams() {
@@ -109,24 +107,22 @@ final class VulkanRegionReactions implements AutoCloseable {
                 result.addAll(solid.roundoffStreams());
                 result.addAll(solidInputs.transitions().roundoffStreams());
             }
-            if (gasPhase != null)
-                result.addAll(gasPhase.roundoffStreams());
             if (condensedPhase != null)
                 result.addAll(condensedPhase.roundoffStreams());
             if (massTransfer != null)
                 result.addAll(massTransfer.roundoffStreams());
+            if (diffusion != null) result.addAll(diffusion.roundoffStreams());
             return List.copyOf(result);
         }
         List<VulkanEnergyLedger.Stream> mechanicalWorkStreams() {
             var result = new ArrayList<VulkanEnergyLedger.Stream>();
             if (solid != null)
                 result.addAll(solid.mechanicalWorkStreams());
-            if (gasPhase != null)
-                result.addAll(gasPhase.mechanicalWorkStreams());
             if (condensedPhase != null)
                 result.addAll(condensedPhase.mechanicalWorkStreams());
             if (massTransfer != null)
                 result.addAll(massTransfer.mechanicalWorkStreams());
+            if (diffusion != null) result.addAll(diffusion.mechanicalWorkStreams());
             return List.copyOf(result);
         }
         List<VulkanEnergyLedger.Stream> sourceStreams() {
@@ -201,19 +197,26 @@ final class VulkanRegionReactions implements AutoCloseable {
         return layout(configuration, liquid, caloric, solid, null, base, alignment);
     }
     static Layout layout(Configuration configuration, VulkanLiquidStateLayout liquid,
-        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasPhaseChange.Inputs gas, long base,
+        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasLiquidMassTransfer.Inputs gas, long base,
         long alignment) {
         return layout(configuration, liquid, caloric, solid, gas, null, base, alignment);
     }
     static Layout layout(Configuration configuration, VulkanLiquidStateLayout liquid,
-        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasPhaseChange.Inputs gas,
+        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasLiquidMassTransfer.Inputs gas,
         VulkanCondensedPhaseChange.Inputs condensed, long base, long alignment) {
         return layout(configuration, liquid, caloric, solid, gas, condensed, base, alignment, -1, -1);
     }
     static Layout layout(Configuration configuration, VulkanLiquidStateLayout liquid,
-        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasPhaseChange.Inputs gas,
+        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasLiquidMassTransfer.Inputs gas,
         VulkanCondensedPhaseChange.Inputs condensed, long base, long alignment, int activityCellsWord,
         int activityFacesWord) {
+        return layout(configuration,liquid,caloric,solid,gas,condensed,base,alignment,activityCellsWord,activityFacesWord,-1,
+                gas!=null?gas.geometry().cellSize():solid!=null?solid.cellSize():1.0);
+    }
+    static Layout layout(Configuration configuration, VulkanLiquidStateLayout liquid,
+        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasLiquidMassTransfer.Inputs gas,
+        VulkanCondensedPhaseChange.Inputs condensed, long base, long alignment, int activityCellsWord,
+        int activityFacesWord, int faceGeometryWord, double cellSize) {
         var definitions = configuration.definitions().layout(base, alignment);
         int rules = 0;
         int[] words = configuration.definitions().words();
@@ -221,14 +224,18 @@ final class VulkanRegionReactions implements AutoCloseable {
             for (int i = 0; i < words[4]; i++)
                 if (words[words[5] + 2 * i] == VulkanReactionDefinitions.Kind.SOLID_LIQUID.ordinal())
                     rules++;
-        int proposals = Math.max(1, configuration.initial().pending().size());
-        proposals = Math.max(proposals,
-            Math.multiplyExact(liquid.cellCount(), configuration.chemistry().gasLiquidMassTransfers().size()));
-        if (rules > 0)
-            proposals = Math.max(
-                proposals, Math.multiplyExact(Math.multiplyExact(liquid.cellCount(), liquid.materialCount()), rules));
+        int kineticRules=Math.toIntExact(configuration.chemistry().reactions().stream()
+                .filter(rule->rule.kind()==mmm.chemistry.ChemicalReaction.Kind.FINITE_RATE).count());
+        int diffusionRules=VulkanLiquidDiffusion.supportedRules(configuration).size();
+        int vaporRules=configuration.thermal()==null?0:Math.toIntExact(configuration.thermal().transitions().stream()
+                .filter(rule->rule.interfaceRequirement()==mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS).count());
+        int pendingRules = Math.addExact(Math.addExact(configuration.chemistry().gasLiquidMassTransfers().size(),vaporRules),
+                Math.addExact(diffusionRules,Math.addExact(kineticRules,rules)));
+        int pendingCapacity=Math.multiplyExact(liquid.cellCount(),pendingRules);
+        int solidProposals=solid==null?0:Math.multiplyExact(Math.multiplyExact(solid.transitions().source.rowCapacity(),rules),8);
+        int pending = Math.max(1, Math.max(configuration.initial().pending().size(), pendingCapacity));
         var progress = new VulkanReactionProgressLayout(
-            liquid.cellCount(), proposals, 0, List.of(), definitions, definitions.endOffset(), alignment);
+            liquid.cellCount(), pending, solidProposals, definitions, definitions.endOffset(), alignment);
         var reaction = VulkanLiquidReactions.layout(liquid, definitions, caloric, progress, configuration.fluids(),
             configuration.chemistry(), progress.endOffset(), alignment, activityCellsWord);
         var exchange = rules == 0
@@ -238,18 +245,10 @@ final class VulkanRegionReactions implements AutoCloseable {
                   solid.cellSize(), configuration.gravity(), solid.faceGeometryWord(),
                   configuration.precipitationEnabled(), reaction.endOffset(), alignment);
         long end = exchange == null ? reaction.endOffset() : exchange.endOffset;
-        VulkanGasPhaseChange.Layout gasPhase = null;
-        if (gas != null && configuration.thermal() != null
-            && configuration.thermal().transitions().stream().anyMatch(
-                t -> t.interfaceRequirement() == mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS)) {
-            var rows = new VulkanLiquidPhaseRows.Layout(liquid, definitions, gas.geometry().cellSize(), end, alignment);
-            gasPhase = new VulkanGasPhaseChange.Layout(configuration, rows, gas, progress, rows.endOffset, alignment);
-            end = gasPhase.endOffset;
-        }
         VulkanCondensedPhaseChange.Layout condensedPhase = null;
         if (condensed != null) {
             var input = new VulkanCondensedPhaseChange.Inputs(liquid, condensed.coherent(), caloric,
-                condensed.coherentCaloric(), definitions, progress, condensed.pressureWord(),
+                condensed.coherentCaloric(), definitions, progress, condensed.pressureWord(), condensed.pressureStride(),
                 condensed.fixedMasksWord(), condensed.occupiedAllSvqWord(), condensed.cellSize(), condensed.gravity());
             condensedPhase = new VulkanCondensedPhaseChange.Layout(
                 input, configuration.fluids(), configuration.chemistry(), configuration.thermal(), end, alignment);
@@ -257,21 +256,26 @@ final class VulkanRegionReactions implements AutoCloseable {
         }
         VulkanGasLiquidMassTransfer.Layout massTransfer = null;
         if (gas != null && configuration.thermal() != null
-            && !configuration.chemistry().gasLiquidMassTransfers().isEmpty()) {
+            && (!configuration.chemistry().gasLiquidMassTransfers().isEmpty() || vaporRules > 0)) {
             var rows = new VulkanLiquidPhaseRows.Layout(liquid, definitions, gas.geometry().cellSize(), end, alignment);
-            massTransfer =
+            var candidateTransfer =
                 new VulkanGasLiquidMassTransfer.Layout(configuration, rows, gas, progress, rows.endOffset, alignment);
-            end = massTransfer.endOffset;
+            if(candidateTransfer.rules > 0) { massTransfer=candidateTransfer; end=massTransfer.endOffset; }
+        }
+        VulkanLiquidDiffusion.Layout diffusion = null;
+        if (faceGeometryWord >= 0 && diffusionRules > 0) {
+            var rows = new VulkanLiquidPhaseRows.Layout(liquid,definitions,cellSize,end,alignment);
+            diffusion = new VulkanLiquidDiffusion.Layout(configuration,rows,caloric,progress,faceGeometryWord,
+                    cellSize,activityCellsWord,activityFacesWord,rows.endOffset,alignment);
+            end = diffusion.endOffset;
         }
         if (exchange != null) {
+            exchange.configureGas(gas == null ? null : gas.gas().gas(), gas == null ? 0 : gas.ambientMassUnits());
             exchange.activityCellsWord = activityCellsWord;
             exchange.activityFacesWord = activityFacesWord;
         }
-        if (gasPhase != null) {
-            gasPhase.activityCellsWord = activityCellsWord;
-            gasPhase.activityFacesWord = activityFacesWord;
-        }
         if (condensedPhase != null) {
+            condensedPhase.configureGas(gas == null ? null : gas.gas().gas(), gas == null ? 0 : gas.ambientMassUnits(), faceGeometryWord);
             condensedPhase.activityCellsWord = activityCellsWord;
             condensedPhase.activityFacesWord = activityFacesWord;
         }
@@ -280,24 +284,24 @@ final class VulkanRegionReactions implements AutoCloseable {
             massTransfer.activityFacesWord = activityFacesWord;
         }
         return new Layout(
-            definitions, progress, reaction, solid, exchange, gasPhase, condensedPhase, massTransfer, end);
+            definitions, progress, reaction, solid, exchange, condensedPhase, massTransfer, diffusion, end);
     }
     private final VulkanLiquidReactions kernel;
+    private final VulkanLiquidDiffusion diffusionKernel;
     private final VulkanLiquidThermodynamics caloric;
     private final VulkanGasLiquidMassTransfer massTransferKernel;
     private final VulkanGasThermodynamics gasCaloric;
-    private final VulkanGasPhaseChange gasPhaseKernel;
     private final VulkanCondensedPhaseChange condensedKernel;
     private final VulkanSolidLiquidReactions exchange;
     private final VulkanGranularTransitions transitions;
-    VulkanRegionReactions(VulkanDeviceContext context) {
+    VulkanRegionReactions(VulkanDeviceContext context, ChemicalRegistry chemistry) {
         var allocated = new ArrayList<AutoCloseable>();
         try {
-            kernel = own(allocated, new VulkanLiquidReactions(context));
+            kernel = own(allocated, new VulkanLiquidReactions(context, chemistry));
+            diffusionKernel = own(allocated, new VulkanLiquidDiffusion(context));
             caloric = own(allocated, new VulkanLiquidThermodynamics(context));
             exchange = own(allocated, new VulkanSolidLiquidReactions(context));
             transitions = own(allocated, new VulkanGranularTransitions(context));
-            gasPhaseKernel = own(allocated, new VulkanGasPhaseChange(context));
             condensedKernel = own(allocated, new VulkanCondensedPhaseChange(context));
             massTransferKernel = own(allocated, new VulkanGasLiquidMassTransfer(context));
             gasCaloric = own(allocated, new VulkanGasThermodynamics(context));
@@ -321,8 +325,6 @@ final class VulkanRegionReactions implements AutoCloseable {
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, stack);
             var clear = new ArrayList<>(layout.postingColumns());
-            if (layout.gasPhase() != null)
-                clear.add(layout.gasPhase().column(VulkanGasPhaseChange.Field.CONTROL));
             if (layout.condensedPhase() != null)
                 clear.add(layout.condensedPhase().column(VulkanCondensedPhaseChange.Field.CONTROL));
             if (layout.massTransfer() != null)
@@ -333,21 +335,52 @@ final class VulkanRegionReactions implements AutoCloseable {
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
         }
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout layout) {
+    int execute(VulkanRegionStorage.Candidate candidate, Layout layout) { return execute(candidate,layout,0.05,1.0); }
+    private static long stageStart() { return Boolean.getBoolean("mmm.gpuMechanicalStages") ? System.nanoTime() : 0; }
+    private static long stageTime(String stage, long started) {
+        if (started == 0) return 0;
+        long now=System.nanoTime();
+        System.out.printf("reaction_stage=%s wall_ms=%.3f%n",stage,(now-started)*1e-6);
+        return now;
+    }
+    void recordLiquidActivity(VkCommandBuffer command,Layout layout,GpuBuffer output,GpuBuffer errors) {
+        kernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+        int solidCounts=layout.solid()==null?-1:Math.toIntExact(layout.solidInputs().transitions().source.column(VulkanGranularStateLayout.Field.COUNTS).offset()/4);
+        kernel.recordActivity(command,layout.liquid(),false,solidCounts);
+    }
+    int execute(VulkanRegionStorage.Candidate candidate, Layout layout, double duration, double cellSize) {
+        return execute(candidate,layout,duration,cellSize,true,true);
+    }
+    private int execute(VulkanRegionStorage.Candidate candidate, Layout layout, double duration, double cellSize,
+                        boolean chemistryActive,boolean sourceSolidActive) {
+        long stage=stageStart();
+        if(!chemistryActive) {
+            if(layout.solid()==null || !sourceSolidActive)return 0;
+            var solidStatus=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                var arena=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
+                caloric.rebindRanges(arena,err);transitions.rebindRanges(arena,err);exchange.rebindRanges(arena,err);
+                transitions.recordCopySource(command,layout.solidInputs().transitions(),output);
+                exchange.recordPrepare(command,layout.solid(),duration);
+            },layout.solid().feedbackOffset(),48);
+            return finishSolid(candidate,layout,solidStatus,stage);
+        }
         var status = candidate.continueBatch((command, input, output, errors, staging, stack) -> {
             var arena = new FlipKernelBindings.BufferRange(output);
             var err = new FlipKernelBindings.BufferRange(errors);
             kernel.rebindRanges(arena, err);
             caloric.rebindRanges(arena, err);
-            kernel.recordPrepare(command, layout.liquid());
-        }, layout.liquid().feedbackOffset(), 12);
+            kernel.recordPrepare(command, layout.liquid(), duration, cellSize);
+            if(layout.solid()!=null)
+                kernel.recordActivity(command,layout.liquid(),true,Math.toIntExact(layout.solidInputs().transitions().source.column(VulkanGranularStateLayout.Field.COUNTS).offset()/4));
+        }, layout.liquid().feedbackOffset(), layout.solid()==null?12:32);
+        stage=stageTime("liquid-prepare",stage);
         if (status.error() != 0)
             return status.error();
         if (status.feedback().getInt(0) == VulkanLiquidReactions.NEED_CAPACITY)
             throw new CapacityGrowth(status.feedback().getInt(8));
         if (status.feedback().getInt(0) != VulkanLiquidReactions.READY)
             throw new IllegalStateException("Liquid reactions did not prepare a complete successor");
-        if (layout.solid() == null)
+        if (layout.solid() == null || status.feedback().getInt(28)==0)
             return candidate
                 .continueBatch(
                     (command, input, output, errors, staging, stack)
@@ -365,8 +398,13 @@ final class VulkanRegionReactions implements AutoCloseable {
             transitions.rebindRanges(arena, err);
             exchange.rebindRanges(arena, err);
             transitions.recordCopySource(command, layout.solidInputs().transitions(), output);
-            exchange.recordPrepare(command, layout.solid());
+            exchange.recordPrepare(command, layout.solid(), duration);
         }, layout.solid().feedbackOffset(), 48);
+        return finishSolid(candidate,layout,status,stage);
+    }
+    private int finishSolid(VulkanRegionStorage.Candidate candidate,Layout layout,
+                            VulkanRegionStorage.Candidate.BatchResult status,long stage) {
+        stage=stageTime("solid-prepare",stage);
         if (status.error() != 0)
             return status.error();
         var feedback = status.feedback();
@@ -381,6 +419,7 @@ final class VulkanRegionReactions implements AutoCloseable {
             caloric.record(command, layout.liquid().caloric());
             caloric.record(command, layout.solidInputs().solidCaloric());
         }, layout.solidInputs().transitions().column(VulkanGranularTransitions.Field.CONTROL).offset(), 12);
+        stageTime("solid-publish",stage);
         if (status.error() == 64)
             throw new CapacityGrowth(
                 0, 0, status.feedback().getInt(0), status.feedback().getInt(4), status.feedback().getInt(8));
@@ -388,37 +427,66 @@ final class VulkanRegionReactions implements AutoCloseable {
     }
     int execute(VulkanRegionStorage.Candidate candidate, Layout layout, boolean phaseEnabled, int maximum,
         VulkanGasThermodynamics.Layout eos, VulkanGasGeometry.Layout geometry, double duration) {
-        int error = execute(candidate, layout);
+        return execute(candidate,layout,phaseEnabled,maximum,eos,geometry,duration,7);
+    }
+    int execute(VulkanRegionStorage.Candidate candidate, Layout layout, boolean phaseEnabled, int maximum,
+        VulkanGasThermodynamics.Layout eos, VulkanGasGeometry.Layout geometry, double duration, int activity) {
+        int error = 0;
+        int remaining = maximum;
+        long stage=stageStart();
+        if (layout.diffusion() != null && (activity&1)!=0) {
+            error = diffusionKernel.execute(candidate,layout.diffusion(),duration);
+            stage=stageTime("diffusion",stage);
+            if(error!=0)return error;
+            var refreshed=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                caloric.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                caloric.record(command,layout.liquid().caloric());
+                recordLiquidActivity(command,layout,output,errors);
+            },layout.progress().column(VulkanReactionProgressLayout.Field.CONTROL).offset()+28,4);
+            error=refreshed.error();
+            stage=stageTime("diffusion-caloric",stage);
+            if(error!=0)return error;
+            activity=refreshed.feedback().getInt(0);
+        }
+        error = execute(candidate, layout, duration, geometry != null ? geometry.cellSize() : layout.solidInputs() != null ? layout.solidInputs().cellSize() : 1.0,
+                (activity&2)!=0,(activity&4)!=0);
+        stage=stageTime("liquid-solid-total",stage);
         if (error != 0)
             return error;
+        boolean condensedActive=false;
         if (layout.massTransfer() != null) {
-            error = massTransferKernel.execute(candidate, layout.massTransfer(), duration, eos, geometry);
+            error = massTransferKernel.execute(candidate, layout.massTransfer(), duration, phaseEnabled, maximum, eos, geometry);
+            stage=stageTime("gas-liquid",stage);
             if (error != 0)
                 return error;
-            error = candidate
+            remaining -= massTransferKernel.completedPhaseBatches();
+            boolean inspectCondensed=phaseEnabled && remaining>0 && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
+            var refreshed = candidate
                         .continueBatch(
                             (command, input, output, errors, staging, stack)
                                 -> {
                                 caloric.record(command, layout.liquid().caloric());
                                 gasCaloric.rebindRanges(new FlipKernelBindings.BufferRange(output),
                                     new FlipKernelBindings.BufferRange(errors));
-                                gasCaloric.record(command, eos);
+                                gasCaloric.recordCaloric(command, eos);
+                                if(inspectCondensed)condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors);
                             },
-                            0, 0)
-                        .error();
+                            inspectCondensed?layout.condensedPhase().feedbackOffset():0, inspectCondensed?4:0);
+            error=refreshed.error();
+            condensedActive=inspectCondensed && refreshed.feedback().getInt(0)!=0;
+            stage=stageTime("gas-liquid-caloric",stage);
             if (error != 0)
                 return error;
         }
         if (!phaseEnabled || maximum == 0)
             return 0;
-        int remaining = maximum;
-        if (layout.gasPhase() != null) {
-            error = gasPhaseKernel.execute(candidate, layout.gasPhase(), remaining, eos, geometry);
-            if (error != 0)
-                return error;
-            remaining -= gasPhaseKernel.completedOperations();
+        if(layout.massTransfer()==null && remaining>0 && layout.condensedPhase()!=null && layout.condensedPhase().enabled()) {
+            var condensedActivity=candidate.continueBatch((command,input,output,errors,staging,stack)->
+                    condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors),layout.condensedPhase().feedbackOffset(),4);
+            if(condensedActivity.error()!=0)return condensedActivity.error();
+            condensedActive=condensedActivity.feedback().getInt(0)!=0;
         }
-        if (layout.condensedPhase() != null && remaining > 0) {
+        if (condensedActive) {
             error = candidate
                         .continueBatch(
                             (command, input, output, errors, staging, stack)
@@ -428,6 +496,7 @@ final class VulkanRegionReactions implements AutoCloseable {
                             },
                             0, 0)
                         .error();
+            stage=stageTime("condensed-caloric",stage);
             if (error != 0)
                 return error;
             try {
@@ -436,10 +505,11 @@ final class VulkanRegionReactions implements AutoCloseable {
                 throw new CapacityGrowth(
                     growth.liquidSpecies, growth.liquidLimbs, 0, 0, 0, growth.coherentGroups, growth.coherentSpecies);
             }
+            stage=stageTime("condensed-phase",stage);
             if (error != 0)
                 return error;
         }
-        return candidate
+        var finalStatus = candidate
             .continueBatch(
                 (command, input, output, errors, staging, stack)
                     -> {
@@ -447,15 +517,16 @@ final class VulkanRegionReactions implements AutoCloseable {
                     if (layout.condensedPhase() != null)
                         caloric.record(command, layout.condensedPhase().input.coherentCaloric());
                 },
-                0, 0)
-            .error();
+                0, 0);
+        stageTime("final-caloric",stage);
+        return finalStatus.error();
     }
     @Override
     public void close() {
+        diffusionKernel.close();
         gasCaloric.close();
         massTransferKernel.close();
         condensedKernel.close();
-        gasPhaseKernel.close();
         try {
             transitions.close();
         } finally {

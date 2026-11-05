@@ -10,8 +10,8 @@ public final class HostValidationSuite {
         Map<String, CheckedAction> checks = new LinkedHashMap<>();
         checks.put("chemistry", () -> mmm.chemistry.M7ChemistryValidation.main(new String[0]));
         checks.put("air-network", () -> mmm.fluid.air.AirNetworkValidation.main(new String[0]));
-        checks.put("air-cavity", () -> mmm.fluid.AirCavityScannerValidation.main(new String[0]));
         checks.put("lifecycle", () -> mmm.simulation.FluidRegionLifecycleValidation.main(new String[0]));
+        checks.put("mixture-edits", () -> mmm.fluid.MarkerVelocityTransferValidation.main(new String[0]));
         checks.put("region-manager", () -> mmm.simulation.FluidRegionManagerValidation.main(new String[0]));
         checks.put("shape", () -> mmm.simulation.FluidCutCellShapeValidation.main(new String[0]));
         checks.put("region-state", () -> {

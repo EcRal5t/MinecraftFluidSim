@@ -234,7 +234,7 @@ mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启�
 
 体积使用规范二进制有理数编码；质量、物种和质量余量使用既定整数编码。
 同格同材料同开放分量的记录键唯一，记录按键排序。
-液体记录直接保存内能，热扩展保存活动颗粒、沉积、连续固相和气腔内能与审计。
+液体记录直接保存内能，热扩展保存活动颗粒、沉积、连续固相与热审计；气体 section 保存逐格库存及对应内能。
 
 每个 section 另存 `FaceMomentum(axis, globalFaceIndex, momentumBits)` 与对应单元的原始碰撞掩码。
 格面动量单位为 kg·m/s，三轴全部格面各保存一次。
@@ -243,15 +243,15 @@ mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启�
 
 所有布局均保存必需的 `mmm:phase_occupancy` section 扩展。
 它按 section 单元顺序保存每格八个 binary64 液相几何体积，单位为整单元体积；每项位于 `[0, 1/8]`，固定固体微盒为零。
-每个固定开放连通分量的浮点占据之和与同分量精确库存体积一致，允许 binary64 求和与转换舍入。
+每个固定开放连通分量的浮点占据之和与同分量经共同状态方程换算的实际液体体积一致，允许 binary64 求和与转换舍入。
 实际固体孔容在完整域恢复时共同核对；相占据随 HEAD 和 WAL 涉及的完整代次一起提交。
 
-跨 section 检查液体键唯一性、开放连通分量、逐分量容量、体积、整数质量、物种和内能总账。
+跨 section 检查液体键唯一性、开放连通分量、实际相占据、参考体积、整数质量、物种和内能总账；参考库存允许有限压缩。
 `MassEncoding` 继续绑定统一整数质量尺度，section 和 manifest 的规范校验和覆盖原始记录。
 头部保留的 `markerCount` 方法名表示液体库存记录数，容量预留字段沿用区域配额；液体点样本由库存派生。
 
 颗粒 section 保留 active/deposit 库存、组成和占容所需字段。
-气腔 section 保存完整微盒归属，气体库存与内能按规范节点编号绑定。
+气体 section 按局部格索引保存非空组分库存、整数质量、物种、质量余量和内能；空格恢复为空库存与零内能。manifest 保存材料身份、气体总量、来源／去向账和内能总账。
 `mmm:solver_runtime` 扩展保存封闭模式、化学轮转与待处理格、床层调度、热边界和最近真实压力场等运行输入。
 这些数据随正常 HEAD、容器 WAL 涉及的区域代次和上一代恢复采用同一解码链。
 
@@ -260,7 +260,7 @@ mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启�
 材料与物种索引按该代 palette 和已提交 world registry 校验后绑定。
 派生点样本的导出接口按需要生成观察数据。
 
-section、palette、deposit group、gas node 和 ledger 均采用规范排序，使相同状态的重复捕获具有相同校验和。
+section、palette、deposit group、气体格和 ledger 均采用规范排序，使相同状态的重复捕获具有相同校验和。
 
 ## 功能布局
 
@@ -275,7 +275,7 @@ section、palette、deposit group、gas node 和 ledger 均采用规范排序，
 - materials 决定液体记录的材料 palette；所有液体记录均保存整数质量；
 - chemistry 决定液体记录中的 mixture、整数物种、质量余量及 registry fingerprint 是否 required；
 - granular 决定 active/deposit、solid composition、SVQ/mass/porosity 与 granular ledger 是否 required；
-- thermal 决定非液体内能、coherent store、气腔热状态、外部注入与环境气体的配置温度、audit、buoyancy identity 和 待机械推进格集合 是否
+- thermal 决定非液体内能、coherent store、气体热状态、外部注入与环境气体的配置温度、audit、buoyancy identity 和 待机械推进格集合 是否
   required；配置温度以 Kelvin 原始 double 保存在热学 manifest，恢复时与库存一起交接。非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，
   kg 与 `U` 仍由同一 region HEAD 持有。
 
@@ -289,7 +289,7 @@ section、palette、deposit group、gas node 和 ledger 均采用规范排序，
 
 普通启动发现仅读取 HEAD 与 manifest，登记库存汇总及配额。若存在未完成删除事务，先沿原恢复规则核对其完整状态与隔离目录，再决定是否接纳区域。section 载荷由运行恢复逐批读取；清单可证明而片缺失时，区域元数据继续保留，恢复报告具体片错误。
 
-逐片读取视图绑定区域、HEAD 槽位、代次和清单校验和，每次读取及最终采用均复核绑定。未完成加载保留不可变片对象；世界区块或运行资格失效时释放这些对象，下次从当前 HEAD 重新读取。当前一个控制器构成一个共同求解活动组，全片到齐后才恢复其压力、气腔与热学状态。跨片通量继续通过唯一 MAC 面及完整候选一次提交。
+逐片读取视图绑定区域、HEAD 槽位、代次和清单校验和，每次读取及最终采用均复核绑定。未完成加载保留不可变片对象；世界区块或运行资格失效时释放这些对象，下次从当前 HEAD 重新读取。全片到齐后恢复逐格库存与热学状态，再派生共同压力和物理活动组。跨片通量继续通过唯一 MAC 面及完整候选一次提交。
 
 完整恢复按以下顺序：
 
@@ -339,12 +339,12 @@ wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启�
 
 ## 发布前同步
 
-checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归属、气体库存和内能。
-物质或几何编辑在其联合计划中准备最终拓扑、库存与热状态，再发布完整后继。
+checkpoint 捕获读取已提交的同代单元库存、固体占容、逐格气体库存和内能。
+物质或几何编辑在其联合计划中准备最终几何、库存与热状态，再发布完整后继。
 捕获期间拒绝尚未结束的碰撞事务。
 
 设备候选和 checkpoint 保持同代液体库存、几何与动量。
-冷恢复验证保存的支撑、相占据与容量，从同代相占据重建派生几何，再核对气腔归属、状态方程和全部审计。
+冷恢复验证保存的支撑和相占据，从同代库存重建派生几何，再核对逐格气体、状态方程和全部审计。
 恢复失败保留原 HEAD 与活动状态，详细格式见[气体状态](gas-state.md)。
 
 ## 故障、清理与删除
@@ -357,8 +357,7 @@ checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归
 
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
 
-气体区域载荷保存完整 `8N` 微盒节点索引 `pieceNodeOrdinal`，按全域最小干微盒编号规范节点排序并随 section 拆分、组装；捕获存盘状态时从运行分量归属展开该索引。
-section 保留全域节点编号并校核 `sealedPieceCount`；恢复从保存的相占据与固体几何生成微盒容量，核对气腔归属、库存和热能的同序绑定。
+气体区域载荷按 section 保存逐格非空库存及内能。恢复按格索引组装完整空间状态，依据保存的相占据和固体几何生成局部容量，并核对库存、内能及总账。
 具体格式见 [气体状态](gas-state.md)。
 
 化学 registry 与区域 manifest 的 `QuantaPerMol` 固定为 1000000，化学指纹覆盖 kg/mol 与 mol/m³ 定义。

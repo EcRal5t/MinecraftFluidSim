@@ -96,7 +96,7 @@ final class VulkanThermalConduction implements AutoCloseable {
 
     static final int WORK_FIELDS = 8;
     private static String shaderLayout() {
-        return headerDefines() + stageDefines() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values());
+        return headerDefines() + stageDefines() + "#define ETHANOL_CP " + mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K + "LF\n" + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values());
     }
 
     static final int COMPLETE=10;
@@ -107,8 +107,8 @@ final class VulkanThermalConduction implements AutoCloseable {
         KNOTS(8),MATERIAL_CP(8),MATERIAL_MIN_CP(8),MIN_CP(8),ROOT_CP(8),BEFORE_ENERGY(8),TEMPERATURE(8),TRIAL_T(8),
         DEGREE_COUNTS(4),DEGREE_OFFSETS(4),DEGREE_CURSORS(4),INCIDENT(4),DEGREE(8),FLUX(8),
         ENERGY_CHANGE(8),RESERVOIR_CHANGE(8),MODE(4),ACCEPTED(4),SUMMARY(8),PARTIALS(8),BATH_PARTIALS(8),DISPATCH(4),SCAN(4),
-        STARTS(4),COLUMNS(4),VALUES(8),ROWS(4),PRESSURE(8),WORK(8),META(4),PROBLEM(8),CONTROL(8),PCG_PARTIALS(8),
-        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4),BATH_EDGES(4),/* Counts: fast owners, spatial fast samples / graph baths, affected samples, graph SS edges. */ IMEX_COUNTS(4),IMEX_OWNERS(4),IMEX_INDEX(4),IMEX_SOURCE(8),IMEX_COUPLED(4);
+        STARTS(4),COLUMNS(4),VALUES(8),ROWS(4),PRESSURE(8),WORK(8),PROBLEM(8),CONTROL(8),PCG_PARTIALS(8),
+        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4),BATH_EDGES(4),/* Counts: fast owners, spatial fast samples / graph baths, affected samples, graph SS edges. */ IMEX_COUNTS(4),IMEX_OWNERS(4),IMEX_INDEX(4),IMEX_SOURCE(8),IMEX_COUPLED(4),TERM_ETHANOL_MASS(8);
         final int width;Field(int width){this.width=width;}
     }
     /** Common knots retain every registered caloric break. Cp includes endpoint extension intervals. */
@@ -147,7 +147,7 @@ final class VulkanThermalConduction implements AutoCloseable {
                 int n=switch(field){
                     case COUNTS->3;
                     case TERM_OFFSETS,DEGREE_OFFSETS,STARTS,TILE_OFFSETS->Math.addExact(owners,1);
-                    case TERM_MATERIAL,TERM_MASS->terms;
+                    case TERM_MATERIAL,TERM_MASS,TERM_ETHANOL_MASS->terms;
                     case CONTACT_A,CONTACT_B,CONTACT_G,CONTACT_BATH_T,FLUX,BATH_INDEX->contacts;
                     case KNOTS->tables.knots().length;case MATERIAL_CP->tables.heatCapacity().length;
                     case MATERIAL_MIN_CP->tables.materials();
@@ -156,8 +156,8 @@ final class VulkanThermalConduction implements AutoCloseable {
                     case MODE->2;case ACCEPTED->1;case SUMMARY->6;case IMEX_COUNTS->4;
                     case PARTIALS->Math.multiplyExact((owners+127)/128,4);case BATH_PARTIALS->Math.multiplyExact(Math.max(1,(Math.max(contacts,baths)+127)/128),4);
                     case BATH_EDGES->baths;case DISPATCH->18;case TILE_OWNERS->tiles;case TILE_PARTIALS->2*tiles;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
-                    case WORK->Math.multiplyExact(owners,7);case META->Math.multiplyExact(owners,2);
-                    case PROBLEM->Math.addExact(Math.multiplyExact(owners,3),1);case CONTROL->16;
+                    case WORK->Math.multiplyExact(owners,5);
+                    case PROBLEM->Math.addExact(Math.multiplyExact(owners,2),1);case CONTROL->16;
                     case PCG_PARTIALS->Math.multiplyExact((owners+255)/256,4);
                     default->owners;
                 };columns.put(field,allocate(cursor,n,field.width,alignment));
@@ -187,7 +187,7 @@ final class VulkanThermalConduction implements AutoCloseable {
         }
         List<FlipKernelBindings.BufferRange> pressureRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){
             return List.of(range(arena,Field.STARTS),range(arena,Field.COLUMNS),range(arena,Field.VALUES),range(arena,Field.ROWS),
-                    range(arena,Field.PRESSURE),range(arena,Field.PRESSURE),range(arena,Field.WORK),range(arena,Field.META),
+                    range(arena,Field.PRESSURE),range(arena,Field.WORK),
                     range(arena,Field.PROBLEM),range(arena,Field.CONTROL),range(arena,Field.PCG_PARTIALS),errors);
         }
         private FlipKernelBindings.BufferRange range(FlipKernelBindings.BufferRange arena,Field f){

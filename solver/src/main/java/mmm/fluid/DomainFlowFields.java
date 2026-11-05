@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Comparator;
 import static mmm.fluid.HostFluidState.*;
 import static mmm.fluid.FluidDomainContracts.*;
 
@@ -137,21 +136,37 @@ final class DomainFlowFields {
 		return room;
 	}
 	List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {
-		List<CellCandidate> result = new ArrayList<>();
-		int radiusSquared = maxRadius * maxRadius;
-		for (int z = Math.max(0, centerZ - maxRadius); z <= Math.min(domain.sizeZ - 1, centerZ + maxRadius); z++)
-			for (int y = Math.max(0, centerY - maxRadius); y <= Math.min(domain.sizeY - 1, centerY + maxRadius); y++)
-				for (int x = Math.max(0, centerX - maxRadius); x <= Math.min(domain.sizeX - 1, centerX + maxRadius); x++) {
-					int dx = x - centerX, dy = y - centerY, dz = z - centerZ, index = cellIndex(x, y, z);
-					if (dx * dx + dy * dy + dz * dz <= radiusSquared && !domain.geometry.cutCells.fullySolid(index)) result.add(new CellCandidate(index, dx * dx + dy * dy + dz * dz));
-				}
-		result.sort(Comparator.comparingInt(CellCandidate::distanceSquared));
+		return reachableCells(centerX, centerY, centerZ, maxRadius, false);
+	}
+	List<CellCandidate> editableNearbyCells(int x, int y, int z, int radius) {
+		return reachableCells(x, y, z, radius, true);
+	}
+	private List<CellCandidate> reachableCells(int x, int y, int z, int radius, boolean editable) {
+		int start = cellIndexChecked(x, y, z);
+		var result = new ArrayList<CellCandidate>();
+		if (domain.geometry.cutCells.fullySolid(start) || editable && !domain.groupAvailable(start)) return result;
+		if (radius > 0 && domain.granularCoupling != null) domain.pressureSystem.prepareGeometry();
+		boolean[] visited = new boolean[domain.cellCount];
+		var pending = new java.util.ArrayDeque<int[]>();
+		visited[start] = true; pending.add(new int[]{start, 0});
+		int[] dx = {-1, 1, 0, 0, 0, 0}, dy = {0, 0, -1, 1, 0, 0}, dz = {0, 0, 0, 0, -1, 1};
+		while (!pending.isEmpty()) {
+			var current = pending.removeFirst(); int cell = current[0], distance = current[1];
+			result.add(new CellCandidate(cell, distance * distance));
+			if (distance >= radius) continue;
+			int cx = cell % domain.sizeX, cy = cell / domain.sizeX % domain.sizeY, cz = cell / (domain.sizeX * domain.sizeY);
+			for (int direction = 0; direction < 6; direction++) {
+				int nx = cx + dx[direction], ny = cy + dy[direction], nz = cz + dz[direction];
+				if (!inside(nx, ny, nz)) continue;
+				int next = cellIndex(nx, ny, nz);
+				if (visited[next] || domain.geometry.cutCells.fullySolid(next) || editable && !domain.groupAvailable(next)
+						|| pressureOpenFaceFromCell(cell, next, dx[direction], dy[direction], dz[direction]) <= 0) continue;
+				visited[next] = true; pending.addLast(new int[]{next, distance + 1});
+			}
+		}
 		return result;
 	}
-    List<CellCandidate> editableNearbyCells(int x,int y,int z,int radius) {
-        if(!domain.groupAvailable(cellIndexChecked(x,y,z)))return new ArrayList<>();
-        var cells=nearbyCells(x,y,z,radius);cells.removeIf(cell->!domain.groupAvailable(cell.index()));return cells;
-    }
+
 	void preparePhysicalState() {
 		domain.pressureSystem.prepareGeometry();
 		ensureVelocityGrid();
@@ -160,9 +175,9 @@ final class DomainFlowFields {
 		ensureInventoryGrid();
 		if (domain.velocityGridDirty) domain.cellMacStage.rebuildVelocity();
 	}
-	void ensureInventoryGrid() { if (domain.gridDirty) domain.cellMacStage.rebuildInventory(); }
+	void ensureInventoryGrid() { domain.cellMacStage.rebuildInventory(); }
 	long carrierMutationRevision() { return domain.carrierMutationRevision; }
-	boolean isFluid(int index) { return domain.pressureSystem.faces.pressureSupports[index]!=0; }
+	boolean isFluid(int index) { return domain.liquidGrid.stockCount[index]>0; }
 	boolean isAir(int index) { return !domain.geometry.cutCells.fullySolid(index) && !isFluid(index); }
 	boolean carrierFaceActive(int first, int second, float openArea) {
 		return openArea > 0.0F && !domain.geometry.cutCells.fullySolid(first) && !domain.geometry.cutCells.fullySolid(second)

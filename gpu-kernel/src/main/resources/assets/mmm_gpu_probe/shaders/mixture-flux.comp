@@ -1,0 +1,89 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Push { int header; int stage; int count; int unused; double h; double dt; } p;
+// LOCAL_GAS_GRID
+// VOLUME_RESOLUTION
+int head(int n){return int(words[p.header+n]);}
+double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
+void putNumber(int at,double value){uvec2 b=unpackDouble2x32(value);words[at]=b.x;words[at+1]=b.y;}
+double faceValue(int face,int field){return number(head(6)+2*(4*face+field));}
+double velocity(int face){return faceValue(face,1);}
+int64_t targetPore(int cell){
+    int at=head(21)+2*cell;int64_t occupied=int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));
+    return (int64_t(bitCount((~words[head(20)+cell])&255u))<<21)-occupied;
+}
+double gasDemandForFace(int face,int other,double outward){
+    if(head(8)<0 || outward<=0.0LF)return 0.0LF;
+    if(other<0)return head(17)==0?outward*faceValue(face,2)*p.dt/p.h:0.0LF;
+    double total=number(head(7)+4*face),liquid=number(head(7)+4*face+2);
+    return max(0.0LF,abs(total)-abs(liquid));
+}
+void cellScale(int cell){
+    ivec3 size=ivec3(head(0),head(1),head(2));
+    double volume=p.h*p.h*p.h,liquid=max(0.0LF,number(head(9)+2*(7*cell+1))/volume),gas=max(0.0LF,number(head(9)+2*(7*cell+2))/volume);
+    if(targetPore(cell)==0l){
+        if(head(22)<0||number(head(22)+18*cell+4)<=0.0LF)gas=0.0LF;
+        double weights[6],sum=0.0LF;
+        for(int side=0;side<6;side++){
+            int face=localGasFace(cell,side,size),other=localGasNeighbor(cell,side,size);double sign=(side&1)==0?-1.0LF:1.0LF;
+            if(sign*velocity(face)>0.0LF)putNumber(head(14)+2*face,0.0LF);
+            weights[side]=other>=0&&targetPore(other)>0l?max(0.0LF,sign*velocity(face))*faceValue(face,2):0.0LF;sum+=weights[side];
+        }
+        if(liquid+gas<=0.0LF){putNumber(head(13)+2*(2*cell),-1.0LF);putNumber(head(13)+2*(2*cell+1),0.0LF);return;}
+        if(sum<=0.0LF){atomicOr(errors,4096u);return;}
+        for(int side=0;side<6;side++)if(weights[side]>0.0LF){
+            int face=localGasFace(cell,side,size);double sign=(side&1)==0?-1.0LF:1.0LF;
+            putNumber(head(14)+2*face,sign*(liquid+gas)*(weights[side]/sum)*p.h/(faceValue(face,2)*p.dt));
+        }
+        putNumber(head(13)+2*(2*cell),-1.0LF);putNumber(head(13)+2*(2*cell+1),liquid/(liquid+gas));return;
+    }
+    double liquidDemand=0.0LF,gasDemand=0.0LF;
+    bool liquidPresent=liquid>0.0LF&&number(head(9)+2*(7*cell+4))>0.0LF;
+    bool gasPresent=gas>0.0LF&&head(22)>=0&&number(head(22)+18*cell+4)>0.0LF;
+    for(int side=0;side<6;side++){
+        int face=localGasFace(cell,side,size),other=localGasNeighbor(cell,side,size);
+        double sign=(side&1)==0?-1.0LF:1.0LF,outward=sign*velocity(face);
+        if(outward<=0.0LF||(other>=0&&targetPore(other)==0l))continue;
+        double l=other>=0?max(0.0LF,sign*number(head(7)+4*face+2)):0.0LF,g=gasDemandForFace(face,other,outward);
+        liquidDemand+=l;gasDemand+=g;
+        double realInventory=(liquidPresent?liquid:0.0LF)+(gasPresent?gas:0.0LF);
+        double beyondCell=max(0.0LF,outward*p.dt/p.h-1.0LF)*faceValue(face,2);
+        if(min(realInventory,beyondCell)>VOLUME_RESOLUTION&&((liquidPresent&&l>0.0LF)||(gasPresent&&g>0.0LF)))atomicOr(words[head(19)],2u);
+    }
+    double actualDemand=(liquidPresent?liquidDemand:0.0LF)+(gasPresent?gasDemand:0.0LF),actualInventory=(liquidPresent?liquid:0.0LF)+(gasPresent?gas:0.0LF);
+    if(actualDemand-actualInventory>VOLUME_RESOLUTION){atomicOr(words[head(19)],1u);atomicMin(words[head(19)+1],uint(cell));}
+    putNumber(head(13)+2*(2*cell),liquidDemand>0.0LF?min(1.0LF,liquid/liquidDemand):1.0LF);
+    putNumber(head(13)+2*(2*cell+1),gasDemand>0.0LF?min(1.0LF,gas/gasDemand):1.0LF);
+}
+void constrainFace(int face){
+    ivec3 ends=localGasFaceEndpoints(face,ivec3(head(0),head(1),head(2)));
+    double v=velocity(face);if(v==0.0LF)return;
+    int donor=v>0.0LF?ends.x:ends.y;
+    double total=number(head(7)+4*face),liquid=number(head(7)+4*face+2),liquidScale=1.0LF,gasScale=1.0LF;
+    if(donor>=0){
+        int other=v>0.0LF?ends.y:ends.x;
+        if(other>=0&&targetPore(other)==0l){putNumber(head(6)+2*(4*face+1),0.0LF);putNumber(head(7)+4*face,0.0LF);putNumber(head(7)+4*face+2,0.0LF);return;}
+        liquidScale=number(head(13)+2*(2*donor));gasScale=number(head(13)+2*(2*donor+1));
+        if(liquidScale<0.0LF){
+            double accepted=number(head(14)+2*face),amount=accepted*faceValue(face,2)*p.dt/p.h;
+            putNumber(head(6)+2*(4*face+1),accepted);putNumber(head(7)+4*face,amount);
+            putNumber(head(7)+4*face+2,amount*gasScale);return;
+        }
+        if(other<0){putNumber(head(6)+2*(4*face+1),v*gasScale);return;}
+    }else if(head(8)>=0&&head(17)==0&&faceValue(face,2)>0.0LF){if(max(0.0LF,abs(v)*p.dt/p.h-1.0LF)*faceValue(face,2)>VOLUME_RESOLUTION)atomicOr(words[head(19)],4u);gasScale=min(gasScale,p.h/(abs(v)*p.dt));}
+    double acceptedLiquid=liquid*liquidScale,acceptedGas=(total-liquid)*gasScale,acceptedTotal=acceptedLiquid+acceptedGas;
+    double area=faceValue(face,2),acceptedVelocity=total!=0.0LF&&area>0.0LF?acceptedTotal*p.h/(area*p.dt):v*gasScale;
+    putNumber(head(6)+2*(4*face+1),acceptedVelocity);putNumber(head(7)+4*face,acceptedTotal);putNumber(head(7)+4*face+2,acceptedLiquid);
+}
+void main(){
+    int id=int(gl_GlobalInvocationID.y*gl_NumWorkGroups.x*128u+gl_GlobalInvocationID.x);
+    if(id>=p.count||errors!=0u)return;
+    if(p.stage==1){words[head(19)]=0u;words[head(19)+1]=0xffffffffu;}
+    else if(p.stage==2)cellScale(id);
+    else if(p.stage==3)constrainFace(id);
+
+}

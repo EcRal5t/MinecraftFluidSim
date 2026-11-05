@@ -45,7 +45,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
         domain.setVolume(2,0,0,.5F);
         var region=new FluidRegion(new UUID(571,577),DIMENSION,origin,domain,footprint);
         var state=RegionCheckpointFixtures.capture(region,1);
-        var files=new RegionGenerationStore(Files.createTempDirectory(Path.of("."),"pool-roundtrip-"));
+        var files=new RegionGenerationStore(Files.createTempDirectory("pool-roundtrip-"));
         files.publish(state);
         var restored=files.read(region.id());
         require(restored.manifest().footprint().equals(MinecraftRegionCheckpointSource.footprint(footprint)),
@@ -59,7 +59,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
     }
 
 	static void validateSectionLoading() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "section-read-");
+		Path root = Files.createTempDirectory( "section-read-");
 		FluidRegion region = populatedRegion(new UUID(541, 547));
 		var files = new RegionGenerationStore(root);
 		var original = RegionCheckpointFixtures.capture(region, 1);
@@ -110,14 +110,14 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		files.verifyReadView(current);
 		require(files.readSection(current, key).checkpointGeneration() == 3, "Repaired payload did not resume the pinned generation");
 		mmm.simulation.SectionLoadingRuntimeValidation.validate(
-				Files.createTempDirectory(Path.of("."), "section-runtime-"), populatedRegion(new UUID(557, 563)));
+				Files.createTempDirectory( "section-runtime-"), populatedRegion(new UUID(557, 563)));
 	}
 
 	static void validateExactRoundTripAndMetadataUnload() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "roundtrip-");
+		Path root = Files.createTempDirectory( "roundtrip-");
 		FluidRegion region = populatedRegion(new UUID(11L, 12L));
-		FlipParticleState before = TestHostAccess.editable(region).exportParticleState();
 		var authoritativeBefore=TestHostAccess.editable(region).captureAuthoritativeState();
+		FlipParticleState before = authoritativeBefore.particles();
 		RegionState state = RegionCheckpointFixtures.capture(region, 1L);
 		require(state.sections().size() == 4, "cross-chunk controller was not split into four complete sections");
 		RegionGenerationStore files = new RegionGenerationStore(root);
@@ -194,7 +194,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 
 	static void validateFaultMatrix() throws Exception {
 		for (RegionGenerationStore.FaultPoint point : RegionGenerationStore.FaultPoint.values()) {
-			Path root = Files.createTempDirectory(Path.of("."), "fault-" + point.name().toLowerCase() + "-");
+			Path root = Files.createTempDirectory( "fault-" + point.name().toLowerCase() + "-");
 			FluidRegion region = populatedRegion(UUID.randomUUID());
 			RegionGenerationStore files = new RegionGenerationStore(root);
 			RegionState first = RegionCheckpointFixtures.capture(region, 1L);
@@ -218,7 +218,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 	}
 
 	static void validateCorruptionAndAtomicMoveFailure() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "corrupt-");
+		Path root = Files.createTempDirectory( "corrupt-");
 		FluidRegion region = populatedRegion(UUID.randomUUID());
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		RegionState original = RegionCheckpointFixtures.capture(region, 1L);
@@ -252,7 +252,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 				&& missingSection.manifests().getFirst().equals(original.manifest()),
 				"Missing section discarded the committed metadata owner during manifest-only discovery");
 
-		Path headRoot = Files.createTempDirectory(Path.of("."), "head-corrupt-");
+		Path headRoot = Files.createTempDirectory( "head-corrupt-");
 		FluidRegion headRegion = populatedRegion(UUID.randomUUID());
 		RegionGenerationStore headFiles = new RegionGenerationStore(headRoot);
 		headFiles.publish(RegionCheckpointFixtures.capture(headRegion, 1L));
@@ -262,7 +262,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		NbtIo.writeCompressed(corruptHead, headPath);
 		expectIOException(() -> headFiles.read(headRegion.id()), "corrupt HEAD checksum was accepted");
 
-		Path unknownRoot = Files.createTempDirectory(Path.of("."), "inactive-unknown-");
+		Path unknownRoot = Files.createTempDirectory( "inactive-unknown-");
 		FluidRegion unknownRegion = populatedRegion(UUID.randomUUID());
 		RegionGenerationStore unknownFiles = new RegionGenerationStore(unknownRoot);
 		RegionState unknownFirst = RegionCheckpointFixtures.capture(unknownRegion, 1L);
@@ -283,7 +283,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 	}
 
 	static void validateRemovedHeadAndQuarantine() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "removed-head-");
+		Path root = Files.createTempDirectory( "removed-head-");
 		FluidRegion region = populatedRegion(UUID.randomUUID());
 		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
 		RegionState active = RegionCheckpointFixtures.capture(region, 1L);
@@ -322,7 +322,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		expectIOException(() -> files.publish(RegionCheckpointFixtures.capture(region, 2L)),
 				"REMOVED region UUID was reused by an ACTIVE publication");
 
-		Path strictRoot = Files.createTempDirectory(Path.of("."), "removed-strict-");
+		Path strictRoot = Files.createTempDirectory( "removed-strict-");
 		FluidRegion strictRegion = populatedRegion(UUID.randomUUID());
 		RegionState strictActive = RegionCheckpointFixtures.capture(strictRegion, 1L);
 		RegionGenerationStore strictFiles = new RegionGenerationStore(strictRoot);
@@ -340,7 +340,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		require(strictDiscovery.removed().isEmpty() && !strictDiscovery.issues().isEmpty(),
 				"REMOVED manifest accepted an extra authoritative field");
 
-		Path partialRoot = Files.createTempDirectory(Path.of("."), "removed-partial-");
+		Path partialRoot = Files.createTempDirectory( "removed-partial-");
 		FluidRegion partialRegion = populatedRegion(UUID.randomUUID());
 		RegionState partialActive = RegionCheckpointFixtures.capture(partialRegion, 1L);
 		RegionGenerationStore partialFiles = new RegionGenerationStore(partialRoot);
@@ -358,7 +358,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		require(Files.isRegularFile(partialDestination.resolve("quarantine.nbt")),
 				"REMOVED recovery did not resume after payload move and before quarantine manifest");
 
-		Path thirdRoot = Files.createTempDirectory(Path.of("."), "removed-third-");
+		Path thirdRoot = Files.createTempDirectory( "removed-third-");
 		FluidRegion thirdRegion = populatedRegion(UUID.randomUUID());
 		RegionState thirdActive = RegionCheckpointFixtures.capture(thirdRegion, 1L);
 		RegionGenerationStore thirdFiles = new RegionGenerationStore(thirdRoot);
@@ -378,7 +378,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		expectIOException(() -> thirdFiles.convergeRemovalQuarantine(thirdRegion.id()),
 				"REMOVED recovery accepted simultaneous source and quarantine payloads");
 
-		Path baseThirdRoot = Files.createTempDirectory(Path.of("."), "removed-base-third-");
+		Path baseThirdRoot = Files.createTempDirectory( "removed-base-third-");
 		FluidRegion baseThirdRegion = populatedRegion(UUID.randomUUID());
 		RegionState baseThirdActive = RegionCheckpointFixtures.capture(baseThirdRegion, 1L);
 		RegionGenerationStore baseThirdFiles = new RegionGenerationStore(baseThirdRoot);
@@ -392,7 +392,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		require(baseThirdDiscovery.manifests().isEmpty() && !baseThirdDiscovery.issues().isEmpty(),
 				"ACTIVE HEAD discarded staged removal after quarantine reached a third state");
 
-		Path unknownRoot = Files.createTempDirectory(Path.of("."), "removed-unknown-");
+		Path unknownRoot = Files.createTempDirectory( "removed-unknown-");
 		FluidRegion unknownRegion = populatedRegion(UUID.randomUUID());
 		RegionState unknownActive = RegionCheckpointFixtures.capture(unknownRegion, 1L);
 		RegionGenerationStore unknownFiles = new RegionGenerationStore(unknownRoot);
@@ -412,7 +412,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 	}
 
 	static void validateWorldConfig() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "config-");
+		Path root = Files.createTempDirectory( "config-");
 		FluidServerConfig defaults = FluidServerConfig.loadOrCreate(root);
 		require(defaults.controllersEnabled() && !defaults.worldBridgeEnabled()
 				&& defaults.limits().maximumRegions() == 4
@@ -433,7 +433,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 
 	/** prepare/commit/abort split: staging must stay unreadable until HEAD publishes, and a moved base must fail closed. */
 	static void validateStagedGeneration() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "staged-");
+		Path root = Files.createTempDirectory( "staged-");
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		UUID id = UUID.randomUUID();
 
@@ -463,7 +463,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 	}
 
 	static void validateExplicitPreviousGenerationActivation() throws Exception {
-		Path root = Files.createTempDirectory(Path.of("."), "previous-generation-");
+		Path root = Files.createTempDirectory( "previous-generation-");
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		UUID id = UUID.randomUUID();
 		FluidRegion region = populatedRegion(id);

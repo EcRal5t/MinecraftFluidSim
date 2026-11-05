@@ -162,7 +162,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(restoring.loadMetadata(manager).isEmpty(), "valid thermal metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
 		check(admitted.solverLoaded() && admitted.editableHost().hasThermalState()
-				&& admitted.editableHost().exportGasState("").registryFingerprint().equals(gas.fingerprint())
+				&& admitted.editableHost().captureAuthoritativeState().spatialGas().registryFingerprint().equals(gas.fingerprint())
 				&& admitted.editableHost().thermalAudit().equals(source.editableHost().thermalAudit()),
 				"production restore did not reconstruct gas plus thermal truth");
 

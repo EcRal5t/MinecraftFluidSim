@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.thermal.MixtureVolumeModel;
+
 import mmm.chemistry.RegionChemistry;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositDynamics;
@@ -58,57 +60,49 @@ final class DomainPhaseInventory {
 		return DomainGasInventory.edit(domain, node, componentId, nanos, temperatureK, extract);
 	}
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) {
-		domain.gasState.network.setStandardVolume(nodeId, standardVolume);
+		long target = AirNetwork.nanos(standardVolume);
+		long current = domain.gasState.spatial.cells().get(nodeId - 1).standardVolumeNanos();
+		if (target != current) DomainGasInventory.edit(domain, nodeId, null, Math.abs(target - current),
+				GasRegistry.STANDARD_TEMPERATURE_K, target < current);
 	}
+
 	public void sealDomainBoundary() {
 		if (domain.gasState.sealedDomainBoundary) return;
-		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0 || domain.gasState.network.drawnFromAmbientNanos() != 0L) {
+		if (domain.gasState.spatial != null || domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0 || domain.gasState.network.drawnFromAmbientNanos() != 0L) {
 			throw new IllegalStateException("Gas domain boundary cannot change after topology initialization");
 		}
 		domain.gasState.sealedDomainBoundary = true;
 	}
 	public void bindGasRegistry(GasRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Gas registry is missing");
-		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0 || domain.gasState.network.drawnFromAmbientNanos() != 0L) {
+		if(domain.gasState.spatial!=null && domain.gasState.spatial.registryFingerprint().equals(registry.fingerprint()))return;
+		if (domain.gasState.spatial != null || domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0 || domain.gasState.network.drawnFromAmbientNanos() != 0L) {
 			throw new IllegalStateException("Gas registry cannot change after topology initialization");
 		}
 		domain.gasState.network = new AirNetwork(registry);
 	}
 	public GasStateSnapshot bootstrapGasState(String chemicalRegistryFingerprint) {
-		return domain.gasTopologyCoordinator.bootstrap(chemicalRegistryFingerprint);
-	}
-	public GasStateSnapshot exportGasState(String chemicalRegistryFingerprint) {
-		return domain.gasTopologyCoordinator.export(chemicalRegistryFingerprint);
+		return domain.gasInitialization.bootstrap(chemicalRegistryFingerprint);
 	}
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) {
-		domain.gasTopologyCoordinator.restore(state, registry);
+		domain.gasInitialization.restore(state, registry);
 	}
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) {
-		domain.gasTopologyCoordinator.restore(state, registry, thermal);
+		domain.gasInitialization.restore(state, registry, thermal);
 	}
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, mmm.thermal.ThermalOwnerSnapshot thermal) {
-		domain.gasTopologyCoordinator.restore(state, registry, thermal);
+		domain.gasInitialization.restore(state, registry, thermal);
 	}
 	public boolean gasPressureActive() { return domain.gasState.pressureActive; }
-	public double gasNodeTemperatureK(int nodeId) {
-		return domain.thermalState == null || !domain.thermalState.gasModelBound()
-				? GasRegistry.STANDARD_TEMPERATURE_K : domain.thermalState.gasTemperature(nodeId, domain.gasState.network);
-	}
-	public double gasNodeGaugePressurePa(int nodeId) {
-		return domain.gasBoundary.nodeGaugePressurePa(nodeId);
-	}
-	public int airNodeAt(int x, int y, int z) {
-		return domain.gasBoundary.cellNode(domain.domainFlowFields.cellIndexChecked(x, y, z));
-	}
+	public double gasNodeTemperatureK(int nodeId) { return DomainGasInventory.spatialTemperature(domain,nodeId-1); }
+	public double gasNodeGaugePressurePa(int nodeId) { return domain.gasBoundary.nodeGaugePressurePa(nodeId); }
+	public int airNodeAt(int x, int y, int z) { return domain.gasBoundary.cellNode(domain.domainFlowFields.cellIndexChecked(x,y,z)); }
 	public byte[] copyGasNodeMask() {
 		byte[] mask = new byte[domain.cellCount];
-		if (domain.gasState.frame == null) return mask;
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			int node = domain.gasState.frame.commonCellNode(cell);
-			mask[cell] = node >= 1 ? (byte) Math.min(255, node) : 0;
-		}
+		if(domain.gasState.spatial!=null)for(int cell=0;cell<domain.cellCount;cell++)if(!domain.gasState.spatial.cells().get(cell).isEmpty())mask[cell]=1;
 		return mask;
 	}
+
 	public int markerCellCount() { return domain.metrics.markerCellCount(); }
 	public FluidSolverConfig config() { return domain.config; }
 	public SolverUnitScale unitScale() { return domain.unitScale; }
@@ -169,13 +163,13 @@ final class DomainPhaseInventory {
 		domain.thermalState.settleExternalInsertion(insertedCarrierEnergy, coupledItemEnergy);
 	}
 	public double totalInternalEnergy() {
-		return domain.thermalState == null ? 0.0 : domain.thermalState.totalEnergy(domain.liquidCells.physicalSize());
+		return exactInternalEnergy().toDouble();
 	}
 	public SignedDyadic exactInternalEnergy() {
-		return domain.thermalState == null ? SignedDyadic.ZERO : domain.thermalState.exactEnergy(domain.liquidCells.physicalSize());
+		return domain.thermalState == null ? SignedDyadic.ZERO : domain.thermalState.exactEnergy(domain.liquidCells.physicalSize()).add(domain.gasState.spatial==null?SignedDyadic.ZERO:SignedDyadic.sum(domain.gasState.spatial.internalEnergy()));
 	}
 	public SignedDyadic exactGasInternalEnergy() {
-		return domain.thermalState == null ? SignedDyadic.ZERO : domain.thermalState.exactGasEnergy();
+		return domain.thermalState == null ? SignedDyadic.ZERO : domain.gasState.spatial==null?domain.thermalState.exactGasEnergy():SignedDyadic.sum(domain.gasState.spatial.internalEnergy());
 	}
 	public int granularParcelCount() { return domain.granularState == null ? 0 : domain.granularState.parcels.count(); }
 	public int granularDepositCellCount() { return domain.granularState == null ? 0 : domain.granularState.deposits.occupiedCellCount(); }
@@ -393,6 +387,12 @@ final class DomainPhaseInventory {
 	}
 	static void requireJointCapacity(HostFluidState domain, SignedDyadic[] liquid, long[] occupied) {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
+			if(domain.gasState.spatial!=null){
+				double h=domain.config.cellSize(),capacity=(domain.geometry.cutCells.openCellVolume(cell)-Math.scalb((double)occupied[cell],-24))*h*h*h;
+				var gas=domain.gasState.spatial.cells().get(cell);double gasConstant=GasRegistry.STANDARD_PRESSURE_PA*gas.standardVolumeNanos()*1e-9/GasRegistry.STANDARD_TEMPERATURE_K;
+				MixtureVolumeModel.evaluate(capacity,liquid[cell].toDouble()*h*h*h,0,gasConstant,293.15,1.4,domain.config.timeStep(),h);
+				continue;
+			}
 			var excess = liquid[cell].add(SignedDyadic.of(occupied[cell], -24))
 					.subtract(SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell)));
 			if (excess.signum() > 0 && (!domain.pendingPhaseMotion.isPending(cell)

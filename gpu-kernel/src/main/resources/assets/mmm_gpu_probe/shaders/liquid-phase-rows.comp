@@ -48,6 +48,8 @@ u64vec2 product(uint64_t a, uint64_t b) {
 void terms(int row, out DyadicTerm items[7]) {
     for (int i = 0; i < 7; i++)
         items[i] = DyadicTerm(1, 0, 0, 0, 0);
+    if (phaseRowMass(p.header, row) == 0l)
+        return;
     if (row < headerWord(LP_H_SLOT_COUNT) && row < int(words[stockField(LP_STOCK_COUNTS)])) {
         int begin = int(words[stockField(LP_STOCK_VOLUME_OFFSETS) + row]),
             count = int(words[stockField(LP_STOCK_VOLUME_COUNTS) + row]);
@@ -77,6 +79,7 @@ void initialize(int id) {
         for (int i = 0; i < 8; i++)
             words[workField(LP_FIELD_VOLUME_RESULTS) + 8 * id + i] = 0u;
         writePhaseRowInteger(workField(LP_FIELD_MASS) + 2 * id, 0l);
+        writePhaseRowInteger(workField(LP_FIELD_MASS_RESIDUAL) + 2 * id, 0l);
         writePhaseRowInteger(workField(LP_FIELD_DELTA_SVQ) + 2 * id, 0l);
         writePhaseRowDouble(workField(LP_FIELD_ENERGY) + 2 * id, 0.0LF);
         writePhaseRowDouble(workField(LP_FIELD_BASE_VOLUME) + 2 * id, 0.0LF);
@@ -104,6 +107,7 @@ void importCell(int cell) {
         words[workField(LP_FIELD_MIXTURE) + row] = words[stockField(LP_STOCK_MIXTURE_PRESENT) + row];
         words[workField(LP_FIELD_LIVE) + row] = words[stockField(LP_STOCK_VOLUME_COUNTS) + row] > 0u ? 1u : 0u;
         writePhaseRowInteger(workField(LP_FIELD_MASS) + 2 * row, readPhaseRowInteger(stockField(LP_STOCK_MASS_UNITS) + 2 * row));
+        writePhaseRowInteger(workField(LP_FIELD_MASS_RESIDUAL) + 2 * row, readPhaseRowInteger(stockField(LP_STOCK_MASS_RESIDUAL_UNITS) + 2 * row));
         double internalEnergy = readPhaseRowDouble(stockField(LP_STOCK_ENERGY_BITS) + 2 * row);
         writePhaseRowDouble(workField(LP_FIELD_ENERGY) + 2 * row, internalEnergy);
         writePhaseRowDouble(workField(LP_FIELD_OLD_ENERGY) + 2 * row, internalEnergy);

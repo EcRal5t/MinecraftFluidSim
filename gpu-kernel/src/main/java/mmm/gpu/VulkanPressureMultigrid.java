@@ -26,9 +26,9 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     private final VulkanStageTimings timings;
     private FlipKernelBindings.BufferRange workspace;
 
-    VulkanPressureMultigrid(VulkanDeviceContext context) {this(context,false);}
+    VulkanPressureMultigrid(VulkanDeviceContext context) {this(context,Boolean.getBoolean("mmm.gpuMechanicalStages"));}
     VulkanPressureMultigrid(VulkanDeviceContext context,boolean profile) {
-        bindings = new FlipKernelBindings(context, 9, shader(), 52);
+        bindings = new FlipKernelBindings(context, 8, shader(), 52);
         try {timings=profile?new VulkanStageTimings(context,1024):null;}
         catch(RuntimeException|Error failure){bindings.close();throw failure;}
     }
@@ -60,13 +60,13 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         return new Layout(levels, cursor, pressureStride,factor,dispatch);
     }
 
-    /** Bind starts, columns, values, rows, pressure metadata, pressure work, control and this workspace. */
+    /** Bind starts, columns, values, rows, pressure work, control and this workspace. */
     void rebindRanges(List<FlipKernelBindings.BufferRange> buffers) {
         workspace=buffers.getLast();var ranges=new ArrayList<>(buffers);
         ranges.add(workspace);bindings.rebindRanges(ranges);
     }
 
-    /** The full physical liquid block is fixed for one pressure solve, independently of FREE. */
+    /** The full physical liquid block is fixed for one pressure solve. */
     void recordBuild(VkCommandBuffer command, Layout layout) {
         if(timings==null)recordBuildCommands(command,layout);else timings.record(command,"mg-build",()->recordBuildCommands(command,layout));
     }

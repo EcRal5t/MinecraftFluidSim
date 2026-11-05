@@ -20,7 +20,7 @@ bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
 // DYADIC_LIBRARY
 // HOST_LAYOUT
-const uint ERROR_INVALID_STATE = 33554432u;
+const uint ERROR_INVALID_STATE = 1073741824u;
 const int STAGE_INITIALIZE = 0;
 const int STAGE_IMPORT_SOLID = 1;
 const int STAGE_CAPTURE_CELL = 2;
@@ -31,6 +31,8 @@ const int STAGE_COUNT_ROWS = 6;
 const int STAGE_FINISH_CAPACITY = 7;
 const int STAGE_WRITE_SPECIES = 8;
 const int STAGE_PUBLISH = 9;
+const int STAGE_ACTIVITY = 10;
+shared uint activityFlags[128];
 
 const int64_t LIMIT = 0x7fffffffffffffffl;
 int headerWord(int i) {
@@ -184,7 +186,11 @@ double capacity(int kind, int row, double temperature, out double knot) {
     while (at + 1 < end && temperature >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
     knot = at + 1 < end ? readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at) : 1.7976931348623157e308LF;
-    return double(mass(kind, row)) * 1e-10LF * readDouble(caloricHeaderWord(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
+    double total=double(mass(kind,row))*1e-10LF, ethanol=0.0;
+    int ethanolSpecies=caloricHeaderWord(kind,CAL_ETHANOL_SPECIES);
+    if(m==caloricHeaderWord(kind,CAL_AQUEOUS_MATERIAL)&&ethanolSpecies>=0)
+        ethanol=caloricEthanolMass(total,double(readQuantity(kind,row,ethanolSpecies)));
+    return caloricCapacity(total,ethanol,readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at));
 }
 int64_t freezable(int liquid) {
     int64_t result = phaseRowMass(phaseRowsHeader(), liquid);
@@ -217,8 +223,16 @@ dvec2 pairEnergy(int liquid, int solid, double temperature, bool freezing, int64
     for (int s = 0; s < speciesCount(); s++) {
         int64_t q = movedQuantity(liquid, solid, s, freezing, moved, divisor),
                 qa = readQuantity(0, liquid, s) + (freezing ? -q : q), qb = readQuantity(1, solid, s) + (freezing ? q : -q);
-        if (qa != 0l)
+        if (qa != 0l) {
             result.x += double(qa) * reference(0, liquid, s);
+            int m=material(0,liquid);
+            if(m==caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL)&&s==caloricHeaderWord(0,CAL_ETHANOL_SPECIES)) {
+                double ethanol=caloricEthanolMass(double(a)*1e-10LF,double(qa));
+                double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
+                double pureSensible=specific(0,liquid,temperature)-readDouble(caloricHeaderWord(0,CAL_MATERIAL_REFERENCE)+2*m);
+                result.x+=ethanol*((temperature-refT)*CAL_ETHANOL_CP-pureSensible);
+            }
+        }
         if (qb != 0l)
             result.y += double(qb) * reference(1, solid, s);
     }
@@ -249,7 +263,7 @@ double pairTemperature(int liquid, int solid, double target) {
     return temperature;
 }
 double equilibrium(int payload, int cell) {
-    double pressure = headerWord(H_PRESSURE) < 0 ? 101325.0LF : max(0.0LF, 101325.0LF + readDouble(headerWord(H_PRESSURE) + 2 * cell));
+    double pressure = headerWord(H_PRESSURE) < 0 ? 101325.0LF : max(0.0LF, readDouble(headerWord(H_PRESSURE) + 2 * headerWord(H_PRESSURE_STRIDE) * cell));
     int first = int(words[headerWord(H_DEFINITIONS) + payload + 9]), count = int(words[headerWord(H_DEFINITIONS) + payload + 10]);
     for (int i = 1; i < count; i++) {
         int lo = headerWord(H_DEFINITIONS) + first + 4 * (i - 1), hi = lo + 4;
@@ -329,6 +343,8 @@ void captureCell(int cell) {
         liquidMass = add(liquidMass, phaseRowMass(phaseRowsHeader(), cell * liquidMaterialCount() + a));
     for (int a = 0; a < coherentMaterialCount(); a++)
         svq = add(svq, get64(FIELD_SVQ, cell * coherentMaterialCount() + a));
+    for (int component = 0; component < headerWord(H_GAS_COMPONENTS); component++)
+        liquidMass = add(liquidMass, readInt64(headerWord(H_GAS_MASS) + 2 * (cell * headerWord(H_GAS_COMPONENTS) + component)));
     set64(FIELD_CELL_OLD_MASS, cell, liquidMass);
     set64(FIELD_CELL_NEW_MASS, cell, liquidMass);
     int64_t other = headerWord(H_OCCUPIED_SVQ) < 0 ? 0l : readInt64(headerWord(H_OCCUPIED_SVQ) + 2 * cell) - svq;
@@ -550,6 +566,12 @@ void settleFace(int face) {
             newMass = add(newMass, get64(FIELD_CELL_NEW_MASS, pair[i]));
             removed = add(removed, get64(FIELD_CELL_REMOVED_MASS, pair[i]));
         }
+    if ((pair.x < 0 || pair.y < 0) && headerWord(H_FACE_GEOMETRY) >= 0 &&
+        readDouble(headerWord(H_FACE_GEOMETRY) + 8 * face + 4) > 0.0LF) {
+        int64_t ambient = readInt64(p.header + H_AMBIENT_MASS);
+        oldMass = add(oldMass, ambient);
+        newMass = add(newMass, ambient);
+    }
     double oldP = readDouble(momentumAddress(face)), oldM = .5LF * double(oldMass) * 1e-10LF,
            newM = .5LF * double(newMass) * 1e-10LF,
            nextP = oldMass > 0l ? oldP * (1.0LF - double(removed) / double(oldMass)) : 0.0LF;
@@ -680,6 +702,25 @@ bool activeFace(int face) {
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
+    if(p.stage==STAGE_ACTIVITY){
+        uint lane=gl_LocalInvocationID.x, found=0u;
+        if(id==0 && words[coherentField(COHERENT_COUNTS)]!=0u)found=1u;
+        if(id<p.count && id<int(words[liquidField(LIQUID_COUNTS)]) &&
+                words[liquidField(LIQUID_VOLUME_COUNTS)+id]!=0u &&
+                readInt64(liquidField(LIQUID_MASS_UNITS)+2*id)>0l) {
+            int m=int(words[liquidField(LIQUID_MATERIALS)+id]),cell=id/liquidMaterialCount();
+            if(activeCell(cell))for(int rule=0;rule<headerWord(H_RULE_COUNT);rule++) {
+                if(int(words[workField(FIELD_RULES)+3*rule+1])!=m)continue;
+                int payload=int(words[workField(FIELD_RULES)+3*rule+2]);
+                double temperature=readDouble(caloricHeaderWord(0,CAL_TEMPERATURES)+2*id);
+                if(temperature<=equilibrium(payload,cell)){found=1u;break;}
+            }
+        }
+        activityFlags[lane]=found;barrier();
+        for(uint stride=64u;stride>0u;stride>>=1u){if(lane<stride)activityFlags[lane]|=activityFlags[lane+stride];barrier();}
+        if(lane==0u&&activityFlags[0]!=0u)atomicOr(words[workField(FIELD_CONTROL)],1u);
+        return;
+    }
     if (id >= p.count)
         return;
     if (p.stage == STAGE_INITIALIZE) {

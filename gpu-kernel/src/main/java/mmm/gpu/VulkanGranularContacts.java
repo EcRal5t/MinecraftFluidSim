@@ -48,8 +48,8 @@ final class VulkanGranularContacts implements AutoCloseable {
         private final int contacts;private final long endOffset;
         private final VulkanLiquidStateLayout.Column header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
-        Layout(VulkanGranularStateLayout state,VulkanGranularPressure.Layout pressure,int contactCapacity,long scratchBase,long alignment){
-            this(state,pressure.column(VulkanGranularPressure.Field.FINAL_K),contactCapacity,scratchBase,alignment);
+        Layout(VulkanGranularStateLayout state,VulkanMixturePressure.Layout pressure,int contactCapacity,long scratchBase,long alignment){
+            this(state,pressure.column(VulkanMixturePressure.Field.FINAL_K),contactCapacity,scratchBase,alignment);
             if(scratchBase<pressure.endOffset())throw new IllegalArgumentException("Contact scratch overlaps pressure");
         }
         Layout(VulkanGranularStateLayout state,VulkanLiquidStateLayout.Column finalK,int contactCapacity,long scratchBase,long alignment){

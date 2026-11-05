@@ -65,7 +65,7 @@ final class FluidWorldTargetResolver {
 				state.getValue(FluidPortBlock.FACING), inwardDirection);
 		if (MmmBlocks.isBoundary(state)) return null;
 		FluidRegion direct = regionAtBlock(level, position);
-		return direct != null && direct.solverLoaded() ? new TransferTarget(direct, position.immutable()) : null;
+		return direct != null && direct.solverLoaded() ? new TransferTarget(direct, position.immutable(), null) : null;
 	}
 
 	static TransferTarget resolvePortTarget(java.util.List<FluidRegion> regions,
@@ -79,7 +79,7 @@ final class FluidWorldTargetResolver {
 			BlockPos interior = footprint.adjacentInteriorAlong(position, inward);
 			if (interior == null) continue;
 			if (resolved != null) return null;
-			resolved = new TransferTarget(region, interior);
+			resolved = new TransferTarget(region, interior, outward);
 		}
 		return resolved;
 	}
@@ -90,7 +90,7 @@ final class FluidWorldTargetResolver {
 	) {
 		if (position == null) return null;
 		FluidRegion direct = regionAtBlock(level, position);
-		if (direct != null) return new TransferTarget(direct, position.immutable());
+		if (direct != null) return new TransferTarget(direct, position.immutable(), null);
 		if (!MmmBlocks.isBoundary(level.getBlockState(position))) return null;
 
 		TransferTarget resolved = null;
@@ -102,7 +102,7 @@ final class FluidWorldTargetResolver {
 					: footprint.adjacentInteriorAlong(position, boundaryInteriorDirection);
 			if (interior == null) continue;
 			if (resolved != null) return null;
-			resolved = new TransferTarget(region, interior);
+			resolved = new TransferTarget(region, interior, null);
 		}
 		return resolved;
 	}
@@ -163,22 +163,22 @@ final class FluidWorldTargetResolver {
 		return requireFluid ? null : previousOpen;
 	}
 
-	/** Resolves the solver cell containing the center of an interior block. */
-	int[] cellAtBlock(ServerLevel level, FluidRegion region, BlockPos position) {
-		if (!level.dimension().equals(region.dimension())) return null;
-		return cellAtInteriorBlock(region, position);
-	}
-
-	static int[] cellAtInteriorBlock(FluidRegion region, BlockPos position) {
+	/** Selects the cell adjacent to the given outward face; null selects the block center. */
+	static int[] cellAtInteriorFace(FluidRegion region, BlockPos position, Direction outward) {
 		if (!region.solverLoaded()) return null;
 		if (region.footprint() != null && !region.footprint().containsInterior(position)) return null;
 		BlockPos origin = region.origin();
-		double cellSize = region.solverConfig().cellSize();
-		int x = Mth.floor((position.getX() + 0.5 - origin.getX()) / cellSize);
-		int y = Mth.floor((position.getY() + 0.5 - origin.getY()) / cellSize);
-		int z = Mth.floor((position.getZ() + 0.5 - origin.getZ()) / cellSize);
-		if (!inBounds(region, x, y, z) || !region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x)) return null;
-		return new int[] {x, y, z};
+		double h = region.solverConfig().cellSize();
+		int[] block = {position.getX()-origin.getX(), position.getY()-origin.getY(), position.getZ()-origin.getZ()};
+		int[] cell = {Mth.floor((block[0]+0.5)/h), Mth.floor((block[1]+0.5)/h), Mth.floor((block[2]+0.5)/h)};
+		if (outward != null) {
+			int axis = outward.getAxis() == Direction.Axis.X ? 0 : outward.getAxis() == Direction.Axis.Y ? 1 : 2;
+			cell[axis] = outward.getAxisDirection() == Direction.AxisDirection.NEGATIVE
+					? Mth.floor(block[axis]/h) : Mth.floor(Math.nextDown((block[axis]+1.0)/h));
+		}
+		if (!inBounds(region, cell[0], cell[1], cell[2])
+				|| !region.groupAvailable((cell[2]*region.sizeY()+cell[1])*region.sizeX()+cell[0])) return null;
+		return cell;
 	}
 
 	/** Resolves the transfer target cell near the player's aim; requireFluid selects scoop semantics. */
@@ -325,7 +325,9 @@ final class FluidWorldTargetResolver {
 		}
 	}
 
-	record TransferTarget(FluidRegion region, BlockPos interiorBlock) { }
+	record TransferTarget(FluidRegion region, BlockPos interiorBlock, Direction outward) {
+		int[] cell() { return cellAtInteriorFace(region, interiorBlock, outward); }
+	}
 
 	@FunctionalInterface
 	interface CellPredicate { boolean matches(int x, int y, int z); }

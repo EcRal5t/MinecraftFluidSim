@@ -78,7 +78,7 @@ public final class FluidRegionManagerValidation {
 		require(manager.selected() == first, "first admitted region should remain selected");
 		require(manager.select(second.id()) && manager.selected() == second, "explicit selection failed");
 		require(manager.usage().equals(new RegionCatalog.BudgetUsage(2, 16L)), "budget usage mismatch");
-		RegionCatalog.AdmissionResult countLimit = manager.add(region(2, 2, 2));
+		RegionCatalog.AdmissionResult countLimit = manager.add(regionAt(8, 0, 0, 2, 2, 2));
 		require(!countLimit.accepted() && countLimit.failure().contains("region-count limit 2"),
 				"region-count rejection lacks its configured limit");
 		require(!manager.add(first).accepted(), "duplicate region id should be rejected");
@@ -160,11 +160,10 @@ public final class FluidRegionManagerValidation {
 		RegionCatalog.BudgetUsage before = manager.usage();
 		RegionCatalog.AdmissionResult preview = manager.previewAdd(overlapping);
 		require(!preview.accepted() && preview.reason() == RegionAvailabilityReason.OVERLAP
-				&& preview.failure().contains("overlaps existing region")
 				&& manager.usage().equals(before) && manager.selected() == first,
 				"complete add preview did not reject overlap without registering the candidate");
 		RegionCatalog.AdmissionResult rejection = manager.addAndSelect(overlapping);
-		require(!rejection.accepted() && rejection.failure().contains("overlaps existing region"),
+		require(!rejection.accepted() && rejection.reason() == RegionAvailabilityReason.OVERLAP,
 				"overlap rejection did not identify its cause");
 		require(manager.selected() == first && manager.regions().size() == 1,
 				"rejected overlapping add changed selection or registry");
@@ -243,8 +242,8 @@ public final class FluidRegionManagerValidation {
 		FluidRegion region = region(2, 2, 2);
 		HostFluidState original = region.editableHost();
 		original.sealDomainBoundary();
-		var before = original.bootstrapGasState(null);
-		require(!before.nodes().isEmpty(), "closed gas collision fixture has no finite inventory");
+		var before = original.captureAuthoritativeState().spatialGas();
+		require(before.cells().stream().anyMatch(gas -> !gas.isEmpty()), "closed gas collision fixture has no finite inventory");
 		long generation = region.solverGeneration();
 		byte[] masks = new byte[8];
 		java.util.Arrays.fill(masks, (byte) 255);
@@ -260,18 +259,16 @@ public final class FluidRegionManagerValidation {
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
 			require(original.solidMicroMask(x, y, z) == 0, "rejected collision changed live geometry");
 		}
-		var after = original.captureAuthoritativeState().gas();
-		require(before.nodes().equals(after.nodes()) && before.externalSource().equals(after.externalSource())
-				&& before.escapedSink().equals(after.escapedSink())
-				&& java.util.Arrays.equals(before.pieceNodeOrdinal(), after.pieceNodeOrdinal()),
-				"rejected collision changed closed gas inventory, audit or ownership");
+		var after = original.captureAuthoritativeState().spatialGas();
+		require(before.cells().equals(after.cells()) && before.externalSource().equals(after.externalSource())
+				&& before.escapedSink().equals(after.escapedSink()), "rejected collision changed closed gas inventory or audit");
 		// Removing the offending world block must allow a later refresh without repairing the live domain.
-		masks[0] = 0;
+		java.util.Arrays.fill(masks, (byte) 0);masks[0] = (byte) 255;
 		require(FluidRegionWorldInteraction.applyCapturedCollisions(region,
-				new CollisionField(2, 2, 2, masks), 2).changedCells() == 7,
+				new CollisionField(2, 2, 2, masks), 2).changedCells() == 1,
 				"a corrected collision capture could not be committed after rejection");
 		require(region.solverGeneration() == generation + 1
-				&& region.editableHost().captureAuthoritativeState().gas().nodes().equals(before.nodes()),
+				&& region.editableHost().gasBoundary().sealedInventory().equals(mmm.fluid.air.GasRegionAudit.aggregate(before.cells())),
 				"valid closed-gas compression changed the finite inventory");
 	}
 

@@ -17,8 +17,6 @@ public final class GpuLiquidGeometryBenchmark {
         Locale.setDefault(Locale.ROOT);
         int device = args.length > 0 ? Integer.parseInt(args[0]) : 0;
         int samples = args.length > 1 ? Integer.parseInt(args[1]) : 10;
-        boolean project = args.length > 2 && Boolean.parseBoolean(args[2]);
-        var parameters = new VulkanLiquidProjection.Parameters(.25f,.05f,9.81f,1e-5f,200);
         if (samples < 1) throw new IllegalArgumentException("At least one sample required");
         try (var context = new VulkanDeviceContext(device, true, true);
              var geometry = new VulkanLiquidGeometry(context);
@@ -26,23 +24,21 @@ public final class GpuLiquidGeometryBenchmark {
              var pressure = new VulkanPressureKernel(context,4096);
              var multigrid = new VulkanPressureMultigrid(context)) {
             System.out.println("Device: " + context.deviceName());
-            System.out.println(project ? "Resident geometry + ambient liquid projection: device gravity, physical CSR assembly, pressure, face response and PLIC swept flux preferences."
-                    : "Resident geometry only: mixed stocks -> cell totals -> coarse PLIC/micro geometry -> MAC face geometry.");
-            System.out.println("Includes generation copy/commit and status readback; authoritative inventory/momentum are retained. Transport, finite-gas coupling and thermochemistry are pending.");
-            if (project) System.out.println("Each solve starts from zero pressure; repeated identical warm-start solutions cannot hide solver cost.");
+            System.out.println("Resident geometry: mixed stocks -> cell totals -> coarse PLIC/micro geometry -> MAC face geometry.");
+            System.out.println("Includes generation copy/commit and status readback; authoritative inventory and momentum are retained.");
             System.out.println("scene,grid,stocks,median_ms,p95_ms,max_ms,gpu_mean_ms,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
-            for (int dimension : args.length>3?Arrays.stream(args[3].split(",")).mapToInt(Integer::parseInt).toArray():new int[]{16, 32, 64}) for (boolean cut : new boolean[]{false, true}) {
+            for (int dimension : args.length>2?Arrays.stream(args[2].split(",")).mapToInt(Integer::parseInt).toArray():new int[]{16, 32, 64}) for (boolean cut : new boolean[]{false, true}) {
                 var fixture = fixture(dimension, cut);
                 try (var region = new VulkanLiquidRegion(context, geometry, projection, pressure, multigrid, fixture.inventory, fixture.momentum,
                         fixture.fixed, fixture.occupied)) {
                     for (int warm = 0; warm < 5; warm++) {
-                        if(project)region.prepareMechanicalFields(parameters,true);else region.rebuildGeometry();
+                        region.rebuildGeometry();
                     }
                     var before = region.metrics();
                     long[] nanos = new long[samples];
                     for (int sample = 0; sample < samples; sample++) {
                         long start = System.nanoTime();
-                        if(project)region.prepareMechanicalFields(parameters,true);else region.rebuildGeometry();
+                        region.rebuildGeometry();
                         nanos[sample] = System.nanoTime() - start;
                     }
                     var after = region.metrics();
@@ -54,11 +50,7 @@ public final class GpuLiquidGeometryBenchmark {
                             (after.uploadBytes() - before.uploadBytes()) / samples,
                             (after.readbackBytes() - before.readbackBytes()) / samples,
                             after.deviceBytes() / 1048576.0, after.stagingBytes() / 1048576.0);
-                    if (project) {
-                        var diagnostics = region.pressureDiagnostics();
-                        System.out.printf("pressure_result scene=%s grid=%d iterations=%d rms=%.9g success=%s%n",
-                                cut?"cut-partial-mixture":"dam-mixture",dimension,(int)diagnostics[0],diagnostics[1],diagnostics[2]==1);
-                    }
+
                 }
             }
         }

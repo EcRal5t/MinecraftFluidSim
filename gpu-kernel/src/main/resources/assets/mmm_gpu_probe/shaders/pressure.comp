@@ -6,31 +6,23 @@ layout(binding=0,std430) readonly buffer Starts { int starts[]; };
 layout(binding=1,std430) readonly buffer Columns { int columns[]; };
 layout(binding=2,std430) readonly buffer Values { double values[]; };
 layout(binding=3,std430) readonly buffer Rows { int rows[]; };
-layout(binding=4,std430) readonly buffer ProductInput { double inputVector[]; };
-layout(binding=5,std430) buffer Pressure { precise double pressure[]; };
-layout(binding=6,std430) buffer Workspace { precise double work[]; };
-layout(binding=7,std430) buffer Metadata { int meta[]; };
-layout(binding=8,std430) readonly buffer Problem { double problem[]; };
-layout(binding=9,std430) buffer Control { double control[]; };
-layout(binding=10,std430) buffer Partials { double partials[]; };
-layout(binding=11,std430) buffer Completion { uint errors; };
-layout(binding=12,std430) buffer StageDispatch { uvec4 stageDispatch[]; };
-layout(binding=13,std430) buffer GasProductDispatch { uint gasProductDispatch[]; };
+layout(binding=4,std430) buffer Pressure { precise double pressure[]; };
+layout(binding=5,std430) buffer Workspace { precise double work[]; };
+layout(binding=6,std430) readonly buffer Problem { double problem[]; };
+layout(binding=7,std430) buffer Control { double control[]; };
+layout(binding=8,std430) buffer Partials { double partials[]; };
+layout(binding=9,std430) buffer Completion { uint errors; };
+layout(binding=10,std430) buffer StageDispatch { uvec4 stageDispatch[]; };
 layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; int liquidCount; int matrixFreeFromRow; } p;
 shared dvec4 scratch[256];
-int lane,n,gid,stride,group,ordinalCount,groupCount;
+int lane,n,gid,stride,group,groupCount;
 #define R(row) work[row]
 #define D(row) work[n+(row)]
 #define Q(row) work[2*n+(row)]
 #define Z(row) work[3*n+(row)]
 #define DIAG(row) work[4*n+(row)]
-#define ANCHOR_X(row) work[5*n+(row)]
-#define ANCHOR_R(row) work[6*n+(row)]
-#define BOUNDED(row) meta[row]
-#define FREE(row) meta[n+(row)]
 #define RHS(row) problem[row]
-#define LOWER(row) problem[n+(row)]
-#define TARGET problem[3*n]
+#define TARGET problem[2*n]
 #define ITER control[CONTROL_ITERATION]
 #define RMS control[CONTROL_RESIDUAL_RMS]
 #define SUCCESS control[CONTROL_SUCCESS]
@@ -39,256 +31,128 @@ int lane,n,gid,stride,group,ordinalCount,groupCount;
 #define ALPHA control[CONTROL_STEP_LENGTH]
 #define RESTART control[CONTROL_RESTART]
 #define REFRESH control[CONTROL_REFRESH]
-#define CONSTRAINT_TRIALS control[CONTROL_CONSTRAINT_TRIALS]
 #define BETA control[CONTROL_DIRECTION_SCALE]
 #define TOLERANCE control[CONTROL_TOLERANCE]
 #define PMAX control[CONTROL_MAX_PRESSURE]
-#define PHASE control[CONTROL_PHASE]
-#define ACTIVE_SET_UPDATES control[CONTROL_ACTIVE_SET_UPDATES]
 #define RESIDUAL_REFRESHES control[CONTROL_RESIDUAL_REFRESHES]
-// 0/1/2 are inner/init/final residuals. Higher phases suspend the MG application.
-// Inner CG locks FREE and permits infeasible iterates. Only converged subproblems
-// enter the outer policy update. RZ/BETA/ALPHA then hold trial norm/length/kind.
-const double OUTER_PREP=3.0, TRIAL_PENDING=4.0, TRIAL_REFRESH=5.0,
-             GRADIENT_PREP=6.0, POLICY_PREP=7.0, POLICY_PENDING=8.0,
-             POLICY_REFRESH=9.0, DONE=10.0;
-void syncAll() { memoryBarrierBuffer(); barrier(); }
-bool finite(double value) { return !isnan(value) && !isinf(value); }
-double hypotStable(double a,double b) {
+void syncAll(){memoryBarrierBuffer();barrier();}
+bool finite(double value){return !isnan(value)&&!isinf(value);}
+double hypotStable(double a,double b){
     double high=max(abs(a),abs(b)),low=min(abs(a),abs(b));
     if(isinf(high))return high;if(high==0.0)return 0.0;
     precise double ratio=low/high;return high*sqrt(1.0+ratio*ratio);
 }
-double combine(double a,double b,int operation) {
-    if(operation==0)return a+b;
-    if(operation==1)return max(a,b);
-    if(operation==2)return min(a,b);
-    return hypotStable(a,b);
-}
-dvec4 reduceStats(dvec4 value,int operationB,int operationC) {
+dvec4 reduceStats(dvec4 value){
     scratch[lane]=value;barrier();
-    for(int offset=128;offset>0;offset/=2) {
-        if(lane<offset) {
-            dvec4 a=scratch[lane],b=scratch[lane+offset];
-            scratch[lane]=dvec4(a.x+b.x,combine(a.y,b.y,operationB),combine(a.z,b.z,operationC),max(a.w,b.w));
-        }
-        barrier();
-    }
+    for(int offset=128;offset>0;offset/=2){if(lane<offset){dvec4 a=scratch[lane],b=scratch[lane+offset];
+        scratch[lane]=dvec4(a.x+b.x,a.y+b.y,hypotStable(a.z,b.z),max(a.w,b.w));}barrier();}
     dvec4 answer=scratch[0];barrier();return answer;
 }
-void saveStats(double a,double b,double c,double d,int operationB,int operationC) {
-    dvec4 result=reduceStats(dvec4(a,b,c,d),operationB,operationC);
+void saveStats(double a,double b,double c,double d){
+    dvec4 result=reduceStats(dvec4(a,b,c,d));
     if(lane==0)for(int column=0;column<4;column++)partials[4*group+column]=result[column];
 }
-// The final workgroup reduces block results in parallel; no single lane walks the full grid.
-dvec4 collectStats(int operationB,int operationC) {
+dvec4 collectStats(){
     if(groupCount==1)return dvec4(partials[0],partials[1],partials[2],partials[3]);
-    precise dvec4 value=dvec4(0.0,operationB==2?1.7976931348623157e308LF:0.0,
-                            operationC==2?1.7976931348623157e308LF:0.0,0.0);
-    for(int block=lane;block<groupCount;block+=256) {
-        dvec4 next=dvec4(partials[4*block],partials[4*block+1],partials[4*block+2],partials[4*block+3]);
-        value=dvec4(value.x+next.x,combine(value.y,next.y,operationB),combine(value.z,next.z,operationC),max(value.w,next.w));
-    }
-    return reduceStats(value,operationB,operationC);
+    precise dvec4 value=dvec4(0.0);
+    for(int block=lane;block<groupCount;block+=256){dvec4 next=dvec4(partials[4*block],partials[4*block+1],partials[4*block+2],partials[4*block+3]);
+        value=dvec4(value.x+next.x,value.y+next.y,hypotStable(value.z,next.z),max(value.w,next.w));}
+    return reduceStats(value);
 }
-void initializeRows() {
-    // Initialize every physical slot once: MG and matrix products can read inactive columns.
-    // Later vector stages visit only the compact enabled row list.
-    for(int row=gid;row<n;row+=stride) {
-        pressure[row]=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];
-        FREE(row)=1;R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
-        ANCHOR_X(row)=pressure[row];ANCHOR_R(row)=0.0;
+void initializeRows(){
+    for(int row=gid;row<n;row+=stride){
+        pressure[row]=problem[n+row];R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
         double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal+=values[edge];DIAG(row)=diagonal;
     }
-    double maximum=0.0;for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row>=0)maximum=max(maximum,abs(pressure[row]));}
-    saveStats(0.0,0.0,0.0,maximum,0,0);
+    double maximum=0.0;for(int row=gid;row<p.count;row+=stride)if(rows[row]>=0)maximum=max(maximum,abs(pressure[rows[row]]));
+    saveStats(0.0,0.0,0.0,maximum);
 }
-void initializeControl() {
-    dvec4 stats=collectStats(0,0);if(gid!=0)return;
+void initializeControl(){
+    dvec4 stats=collectStats();if(gid!=0)return;
     ITER=0.0;SUCCESS=0.0;RUN=1.0;RZ=0.0;ALPHA=0.0;RESTART=1.0;REFRESH=1.0;BETA=0.0;
-    TOLERANCE=TARGET;PMAX=stats.w;PHASE=1.0;
-    CONSTRAINT_TRIALS=0.0;ACTIVE_SET_UPDATES=0.0;RESIDUAL_REFRESHES=0.0;
+    TOLERANCE=TARGET;PMAX=stats.w;RESIDUAL_REFRESHES=0.0;
 }
-void refreshResidual() {
+void refreshResidual(){
     if(REFRESH==0.0)return;
-    bool trial=PHASE==TRIAL_REFRESH,finalResidual=PHASE==2.0;
-    precise double sum=0.0;double equations=0.0,extra=0.0,kkt=0.0;
-    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride) {
+    precise double sum=0.0;double equations=0.0,boundNorm=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
         int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
         if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
-        R(row)=RHS(row)-product;double value=R(row);
-        if(PHASE==1.0)ANCHOR_R(row)=value;
-        if(finalResidual)FREE(row)=(BOUNDED(row)==0||pressure[row]+value/DIAG(row)>LOWER(row))?1:0;
-        // The maximum reduction carries either an active dual violation or a
-        // primal-infeasibility marker; both prevent accepting the inner solution.
-        if(BOUNDED(row)!=0&&pressure[row]<LOWER(row))kkt=1.7976931348623157e308LF;
-        if(trial)extra-=0.5*(pressure[row]-ANCHOR_X(row))*(ANCHOR_R(row)+value);
-        else if(!finalResidual&&FREE(row)==0)kkt=max(kkt,value);
-        bool included=trial||finalResidual?(BOUNDED(row)==0||pressure[row]>LOWER(row)||value>0.0):FREE(row)!=0;
-        if(!included)continue;
-        equations+=1.0;sum+=value*value;
-        if(!trial){precise double bound=abs(RHS(row))+2.0*DIAG(row)*PMAX;extra=hypotStable(extra,bound);}
+        double value=RHS(row)-product;R(row)=value;equations+=1.0;sum+=value*value;
+        boundNorm=hypotStable(boundNorm,abs(RHS(row))+2.0*DIAG(row)*PMAX);
     }
-    saveStats(sum,equations,extra,kkt,0,trial?0:3);
+    saveStats(sum,equations,boundNorm,0.0);
 }
-void finishRefresh() {
-    if(REFRESH==0.0)return;
-    bool trial=PHASE==TRIAL_REFRESH,finalResidual=PHASE==2.0;
-    dvec4 stats=collectStats(0,trial?0:3);if(gid!=0)return;
+void finishRefresh(){
+    if(REFRESH==0.0)return;dvec4 stats=collectStats();if(gid!=0)return;
     RESIDUAL_REFRESHES+=1.0;RMS=sqrt(stats.x/max(1.0,stats.y));RESTART=1.0;REFRESH=0.0;
-    if(!trial){
-        precise double floorValue=(stats.y+8.0)*2.220446049250313e-16*0.5*stats.z/sqrt(max(1.0,stats.y));
-        TOLERANCE=finite(floorValue)?max(TARGET,floorValue):TARGET;
-    }
-    if(finalResidual){SUCCESS=(stats.w<=0.0&&finite(RMS)&&RMS<=TOLERANCE)?1.0:0.0;RUN=0.0;return;}
-    if(trial){
-        bool accepted=finite(stats.z)&&stats.z<=-0.25*RZ/BETA;
-        if(accepted){if(RUN==0.0||(stats.w<=0.0&&RMS<=TARGET)){PHASE=DONE;RUN=0.0;}else PHASE=POLICY_PREP;}
-        else{BETA=ALPHA==0.0?0.5:0.5*BETA;PHASE=GRADIENT_PREP;}
-        return;
-    }
-    // One true residual certifies both a solved free subproblem and, when feasible,
-    // the full KKT conditions. No outer matrix product is needed in that common case.
-    if(RMS<=TOLERANCE){
-        if(stats.w<=TOLERANCE){PHASE=DONE;RUN=0.0;}
-        else PHASE=OUTER_PREP;
-    }else PHASE=0.0;
+    precise double floorValue=(stats.y+8.0)*2.220446049250313e-16*0.5*stats.z/sqrt(max(1.0,stats.y));
+    TOLERANCE=finite(floorValue)?max(TARGET,floorValue):TARGET;
+    if(RMS<=TOLERANCE){SUCCESS=1.0;RUN=0.0;}
 }
-void precondition() {
-    if(RUN==0.0){
-        if(PHASE!=DONE){
-            double maximum=0.0;
-            for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
-                pressure[row]=ANCHOR_X(row);R(row)=ANCHOR_R(row);maximum=max(maximum,abs(pressure[row]));
-                FREE(row)=(BOUNDED(row)==0||pressure[row]+R(row)/DIAG(row)>LOWER(row))?1:0;}
-            saveStats(0.0,0.0,0.0,maximum,0,0);
-        }
-        return;
-    }
-    if(PHASE==OUTER_PREP||PHASE==GRADIENT_PREP||PHASE==POLICY_PREP){
-        precise double norm=0.0;double changed=0.0,maximum=0.0;
-        for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
-            int row=rows[ordinal];if(row<0)continue;
-            if(PHASE==POLICY_PREP){
-                ANCHOR_X(row)=pressure[row];ANCHOR_R(row)=R(row);
-                int enabled=(BOUNDED(row)==0||pressure[row]+R(row)/DIAG(row)>LOWER(row))?1:0;
-                if(enabled!=FREE(row))changed=1.0;FREE(row)=enabled;
-                if(enabled==0)pressure[row]=LOWER(row);
-            }else{
-                double origin=ANCHOR_X(row),gradient=origin+(PHASE==OUTER_PREP?0.5:BETA)*ANCHOR_R(row)/DIAG(row);
-                if(BOUNDED(row)!=0)gradient=max(LOWER(row),gradient);
-                double displacement=gradient-origin;norm+=DIAG(row)*displacement*displacement;
-                pressure[row]=PHASE==OUTER_PREP?(BOUNDED(row)!=0?max(LOWER(row),pressure[row]):pressure[row]):gradient;
-            }
-            maximum=max(maximum,abs(pressure[row]));
-        }
-        saveStats(norm,0.0,changed,maximum,0,1);return;
-    }
-    precise double sum=0.0;
-    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
-        int row=rows[ordinal];if(row<0)continue;
-        int preconditioner=p.externalPreconditioner&3;
-        if(preconditioner==0||(preconditioner==1&&row>=p.liquidCount))Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
-        if(RESTART!=0.0)D(row)=Z(row);
-        if(FREE(row)!=0)sum+=R(row)*Z(row);
-    }
-    saveStats(sum,0.0,0.0,0.0,0,0);
+void precondition(){
+    if(RUN==0.0)return;precise double sum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+        if(p.externalPreconditioner==0||row>=p.liquidCount)Z(row)=R(row)/DIAG(row);
+        if(RESTART!=0.0)D(row)=Z(row);sum+=R(row)*Z(row);}
+    saveStats(sum,0.0,0.0,0.0);
 }
-void finishPrecondition() {
-    if(RUN==0.0){if(PHASE!=DONE){dvec4 restored=collectStats(0,0);if(gid==0)PMAX=restored.w;}return;}
-    bool outer=PHASE>=3.0;dvec4 stats=collectStats(0,outer?1:0);if(gid!=0)return;
-    if(outer){
-        PMAX=stats.w;
-        if(PHASE==POLICY_PREP){if(stats.z!=0.0)ACTIVE_SET_UPDATES+=1.0;PHASE=POLICY_PENDING;}
-        else{RZ=stats.x;if(PHASE==OUTER_PREP){BETA=0.5;ALPHA=0.0;}else ALPHA=1.0;PHASE=TRIAL_PENDING;}
-        return;
-    }
-    double nextRz=stats.x;BETA=RESTART!=0.0?0.0:nextRz/RZ;RZ=nextRz;
+void finishPrecondition(){
+    if(RUN==0.0)return;dvec4 stats=collectStats();if(gid!=0)return;
+    double next=stats.x;BETA=RESTART!=0.0?0.0:next/RZ;RZ=next;
 }
-void updateDirection() {
-    if(RUN==0.0||PHASE>=3.0||RESTART!=0.0)return;
-    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
+void updateDirection(){
+    if(RUN==0.0||RESTART!=0.0)return;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row>=0)D(row)=Z(row)+BETA*D(row);}
 }
-void directionProduct() {
-    if(RUN==0.0||PHASE>=3.0)return;
-    precise double sum=0.0;
-    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
-        int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
-        if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
-        if(FREE(row)!=0)sum+=D(row)*product;
-    }
-    saveStats(sum,0.0,0.0,0.0,0,0);
+void directionProduct(){
+    if(RUN==0.0)return;precise double sum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+        precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
+        if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);
+        Q(row)=product;sum+=D(row)*product;}
+    saveStats(sum,0.0,0.0,0.0);
 }
-void finishProduct() {
-    if(RUN==0.0||PHASE>=3.0)return;
-    dvec4 stats=collectStats(0,0);if(gid!=0)return;
-    double denominator=stats.x;
-    if(!(denominator>0.0&&finite(denominator)&&RZ>0.0&&finite(RZ))){RUN=0.0;return;}
+void finishProduct(){
+    if(RUN==0.0)return;dvec4 stats=collectStats();if(gid!=0)return;double denominator=stats.x;
+    if(!(denominator>0.0&&finite(denominator)&&RZ>0.0&&finite(RZ))){atomicOr(errors,4u);RUN=0.0;return;}
     ALPHA=RZ/denominator;
 }
-void updateSolution() {
-    if(RUN==0.0||PHASE>=3.0)return;
-    precise double sum=0.0;double equations=0.0,maximum=0.0;
-    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
-        int row=rows[ordinal];if(row<0)continue;
-        if(FREE(row)!=0)pressure[row]+=ALPHA*D(row);
-        R(row)-=ALPHA*Q(row);maximum=max(maximum,abs(pressure[row]));
-        if(FREE(row)!=0){equations+=1.0;sum+=R(row)*R(row);}
-    }
-    saveStats(sum,equations,0.0,maximum,0,0);
+void updateSolution(){
+    if(RUN==0.0)return;precise double sum=0.0;double equations=0.0,maximum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+        pressure[row]+=ALPHA*D(row);R(row)-=ALPHA*Q(row);maximum=max(maximum,abs(pressure[row]));
+        equations+=1.0;sum+=R(row)*R(row);}
+    saveStats(sum,equations,0.0,maximum);
 }
-void finishUpdate() {
-    if(RUN==0.0)return;
-    dvec4 stats=collectStats(0,0);if(gid!=0)return;
-    ITER+=1.0;
-    if(PHASE==TRIAL_PENDING){PHASE=TRIAL_REFRESH;REFRESH=1.0;RESTART=1.0;CONSTRAINT_TRIALS+=1.0;}
-    else if(PHASE==POLICY_PENDING){PHASE=POLICY_REFRESH;REFRESH=1.0;RESTART=1.0;}
-    else{RMS=sqrt(stats.x/max(1.0,stats.y));PMAX=stats.w;PHASE=0.0;RESTART=0.0;REFRESH=RMS<=TARGET?1.0:0.0;}
+void finishUpdate(){
+    if(RUN==0.0)return;dvec4 stats=collectStats();if(gid!=0)return;
+    ITER+=1.0;RMS=sqrt(stats.x/max(1.0,stats.y));PMAX=stats.w;RESTART=0.0;REFRESH=RMS<=TARGET?1.0:0.0;
     if(ITER>=double(p.maximumIterations)){RUN=0.0;REFRESH=1.0;}
 }
-void finalizeControl(){if(gid==0){REFRESH=1.0;PHASE=2.0;}}
-void originalMaximum(){
-    double maximum=0.0;
-    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row>=0)maximum=max(maximum,abs(pressure[row]));}
-    saveStats(0.0,0.0,0.0,maximum,0,0);
-}
-void executeStage(int stage) {
-    if(stage==STAGE_INITIALIZE_ROWS)initializeRows();else if(stage==STAGE_INITIALIZE_CONTROL)initializeControl();else if(stage==STAGE_REFRESH_RESIDUAL)refreshResidual();
-    else if(stage==STAGE_FINISH_REFRESH)finishRefresh();else if(stage==STAGE_PRECONDITION)precondition();else if(stage==STAGE_FINISH_PRECONDITION)finishPrecondition();
-    else if(stage==STAGE_UPDATE_DIRECTION)updateDirection();else if(stage==STAGE_DIRECTION_PRODUCT)directionProduct();else if(stage==STAGE_FINISH_PRODUCT)finishProduct();
-    else if(stage==STAGE_UPDATE_SOLUTION)updateSolution();else if(stage==STAGE_FINISH_UPDATE)finishUpdate();else if(stage==STAGE_FINALIZE_CONTROL)finalizeControl();
+void executeStage(int stage){
+    if(stage==STAGE_INITIALIZE_ROWS)initializeRows();else if(stage==STAGE_INITIALIZE_CONTROL)initializeControl();
+    else if(stage==STAGE_REFRESH_RESIDUAL)refreshResidual();else if(stage==STAGE_FINISH_REFRESH)finishRefresh();
+    else if(stage==STAGE_PRECONDITION)precondition();else if(stage==STAGE_FINISH_PRECONDITION)finishPrecondition();
+    else if(stage==STAGE_UPDATE_DIRECTION)updateDirection();else if(stage==STAGE_DIRECTION_PRODUCT)directionProduct();
+    else if(stage==STAGE_FINISH_PRODUCT)finishProduct();else if(stage==STAGE_UPDATE_SOLUTION)updateSolution();
+    else if(stage==STAGE_FINISH_UPDATE)finishUpdate();else if(stage==STAGE_FINALIZE_CONTROL&&gid==0){REFRESH=1.0;SUCCESS=0.0;}
     else if(stage==STAGE_CHECK_SUCCESS&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
-    else if(stage==STAGE_ORIGINAL_MAXIMUM)originalMaximum();
-    else if(stage==STAGE_FINISH_ORIGINAL_MAXIMUM){dvec4 stats=collectStats(0,0);if(gid==0)PMAX=stats.w;}
+    else if(stage==STAGE_CHECK_MECHANICAL){for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];
+        if(row>=0&&(!finite(pressure[row])||!finite(RHS(row))||(row<p.matrixFreeFromRow&&(!(DIAG(row)>0.0)||!finite(DIAG(row))))))atomicOr(errors,4u);}
+        if(gid==0&&!finite(RMS))atomicOr(errors,4u);}
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
-void publishDispatches() {
-    if(gid!=0)return;
-    if((p.externalPreconditioner&8)!=0){
-        bool direction=RUN!=0.0&&PHASE<3.0,refresh=REFRESH!=0.0;
-        for(int i=0;i<3;i++){
-            int source=i==0?3:i==1?6:30;
-            for(int mode=0;mode<2;mode++){
-                int target=3*((mode==0?4:7)+i);bool enabled=mode==0?direction:refresh;
-                gasProductDispatch[target]=enabled?gasProductDispatch[source]:0u;
-                gasProductDispatch[target+1]=enabled?gasProductDispatch[source+1]:1u;
-                gasProductDispatch[target+2]=1u;
-            }
-        }
-    }
-    uint groups=uint(groupCount);
+void publishDispatches(){
+    if(gid!=0)return;uint groups=uint(groupCount);
     stageDispatch[STAGE_REFRESH_RESIDUAL]=uvec4(REFRESH!=0.0?groups:0u,1u,1u,0u);
-    stageDispatch[STAGE_PRECONDITION]=uvec4(RUN!=0.0||PHASE!=DONE?groups:0u,1u,1u,0u);
-    stageDispatch[STAGE_UPDATE_DIRECTION]=uvec4(RUN!=0.0&&PHASE<3.0&&RESTART==0.0?groups:0u,1u,1u,0u);
-    stageDispatch[STAGE_DIRECTION_PRODUCT]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
-    stageDispatch[STAGE_UPDATE_SOLUTION]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_PRECONDITION]=uvec4(RUN!=0.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_UPDATE_DIRECTION]=uvec4(RUN!=0.0&&RESTART==0.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_DIRECTION_PRODUCT]=uvec4(RUN!=0.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_UPDATE_SOLUTION]=uvec4(RUN!=0.0?groups:0u,1u,1u,0u);
 }
-void main() {
-    // Compact row selection is independent of the preconditioner; physical strides stay fixed.
-    bool compact=(p.externalPreconditioner&4)!=0;
-    ordinalCount=compact?int(control[CONTROL_SOLVE_ROW_COUNT]):p.count;
-    groupCount=compact?max(1,(ordinalCount+255)/256):p.groups;
-    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=(p.stage==STAGE_INITIALIZE_ROWS?p.groups:groupCount)*256;
+void main(){
+    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);groupCount=p.groups;gid=group*256+lane;stride=groupCount*256;
     if(p.stage>=0){executeStage(p.stage);if(p.stage==STAGE_INITIALIZE_CONTROL||p.stage==STAGE_FINISH_REFRESH||p.stage==STAGE_FINISH_PRECONDITION||p.stage==STAGE_FINISH_PRODUCT||p.stage==STAGE_FINISH_UPDATE||p.stage==STAGE_FINALIZE_CONTROL)publishDispatches();return;}
     for(int stage=STAGE_INITIALIZE_ROWS;stage<=STAGE_UPDATE_DIRECTION;stage++)singleStage(stage);
     while(RUN!=0.0&&ITER<double(p.maximumIterations)){

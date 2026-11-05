@@ -95,7 +95,8 @@ final class VulkanThermalContacts implements AutoCloseable {
         PLIC_PLANES(148),
         PLIC_CELLS(149),
         CONDUCTION_HEADER(151),
-        ACTIVITY_CELLS(152);
+        ACTIVITY_CELLS(152), LIQUID_SPECIES_OFFSETS(153), LIQUID_SPECIES_HANDLES(154),
+        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -108,7 +109,7 @@ final class VulkanThermalContacts implements AutoCloseable {
 
     private static final int WORK_FIELDS = 48;
     private static String shaderLayout() {
-        return headerDefines() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values())
+        return headerDefines() + "#define ETHANOL_CONDUCTIVITY " + mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_CONDUCTIVITY_W_M_K + "LF\n" + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values())
             + "#define CONDUCTION_FIELDS " + VulkanThermalConduction.WORK_FIELDS + "\n"
             + VulkanShaderLayout.fields("CONDUCTION_", VulkanThermalConduction.Field.values());
     }
@@ -173,6 +174,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         final int width;Field(int width){this.width=width;}}
     static final class Layout{
         final Inputs input;final Materials materials;final VulkanThermalConduction.Layout conduction;
+        int wallGeometryWord=-1;
         final int owners,samples,cells;final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
         Layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long a){
             this.input=input;this.materials=materials;this.conduction=conduction;owners=input.owners();samples=input.samples();cells=input.liquid().cellCount();
@@ -215,6 +217,12 @@ final class VulkanThermalContacts implements AutoCloseable {
             d[Header.PLIC_PLANES.word]=input.plicPlanesWord();d[Header.PLIC_CELLS.word]=input.plicCellsWord();
             d[Header.CONDUCTION_HEADER.word]=conduction.headerWordOffset();
             d[Header.ACTIVITY_CELLS.word]=input.activityCellWord();
+            d[Header.LIQUID_SPECIES_OFFSETS.word]=lw(l,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS);
+            d[Header.LIQUID_SPECIES_HANDLES.word]=lw(l,VulkanLiquidStateLayout.Field.SPECIES_HANDLES);
+            d[Header.LIQUID_SPECIES_AMOUNTS.word]=lw(l,VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS);
+            d[Header.AQUEOUS_MATERIAL.word]=input.liquidThermal().tables().aqueousMaterial();
+            d[Header.ETHANOL_SPECIES.word]=input.liquidThermal().tables().ethanolSpecies();
+            d[Header.PLIC_WALL_GEOMETRY.word]=wallGeometryWord;
             for(Field f:Field.values())d[WORK_FIELDS+f.ordinal()]=word(f);
             var fields=new VulkanThermalConduction.Field[]{VulkanThermalConduction.Field.COUNTS,VulkanThermalConduction.Field.OWNER_ENERGY,VulkanThermalConduction.Field.OWNER_INITIAL_T,VulkanThermalConduction.Field.TERM_OFFSETS,VulkanThermalConduction.Field.TERM_MATERIAL,VulkanThermalConduction.Field.TERM_MASS,VulkanThermalConduction.Field.CONTACT_A,VulkanThermalConduction.Field.CONTACT_B,VulkanThermalConduction.Field.CONTACT_G,VulkanThermalConduction.Field.CONTACT_BATH_T};
             for(int i=0;i<fields.length;i++)d[Header.CONDUCTION_COUNTS.word+i]=conduction.word(fields[i]);d[Header.CONDUCTION_OWNER_CAPACITY.word]=conduction.owners;d[Header.CONDUCTION_TERM_CAPACITY.word]=conduction.terms;d[Header.CONDUCTION_CONTACT_CAPACITY.word]=conduction.contacts;

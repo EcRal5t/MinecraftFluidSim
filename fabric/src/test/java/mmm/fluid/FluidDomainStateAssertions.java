@@ -1,6 +1,5 @@
 package mmm.fluid;
 
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
 
 import java.util.Arrays;
@@ -73,7 +72,14 @@ public final class FluidDomainStateAssertions {
 			require((expected.granularDynamics() == null) == (actual.granularDynamics() == null),
 					context + ": granular scheduler presence changed");
 		}
-		compareGas(expected.gas(), actual.gas(), context);
+		var expectedGas=expected.spatialGas();var actualGas=actual.spatialGas();
+		require((expectedGas==null)==(actualGas==null),context+": gas presence changed");
+		if(expectedGas!=null){
+			require(expectedGas.cells().equals(actualGas.cells()) && expectedGas.externalSource().equals(actualGas.externalSource())
+					&& expectedGas.escapedSink().equals(actualGas.escapedSink()) && expectedGas.phaseSource().equals(actualGas.phaseSource())
+					&& expectedGas.phaseSink().equals(actualGas.phaseSink()),context+": gas inventory or audit changed");
+			requireRawDoubles(expectedGas.internalEnergy(),actualGas.internalEnergy(),context+" gas internal energy");
+		}
 		compareThermal(expected.thermalOwner(), actual.thermalOwner(), context);
 		comparePendingPhaseMotion(expected.pendingPhaseMotion(), actual.pendingPhaseMotion(), context);
 		if (includeTransient) {
@@ -118,23 +124,6 @@ public final class FluidDomainStateAssertions {
 				context + ": granular stable-age schedule changed");
 		require(Arrays.equals(expected.queuedColumns(), actual.queuedColumns()),
 				context + ": granular dirty queue changed");
-	}
-
-	private static void compareGas(GasStateSnapshot expected, GasStateSnapshot actual, String context) {
-		require((expected == null) == (actual == null), context + ": gas presence changed");
-		if (expected == null) return;
-		require(expected.sizeX() == actual.sizeX() && expected.sizeY() == actual.sizeY()
-						&& expected.sizeZ() == actual.sizeZ(),
-				context + ": gas grid changed");
-		require(expected.registryFingerprint().equals(actual.registryFingerprint()),
-				context + ": gas registry fingerprint changed");
-		require(expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint()),
-				context + ": gas chemical fingerprint changed");
-		require(expected.nodes().equals(actual.nodes()), context + ": gas nodes changed");
-		require(Arrays.equals(expected.pieceNodeOrdinal(), actual.pieceNodeOrdinal()),
-				context + ": gas microbox ownership changed");
-		require(expected.externalSource().equals(actual.externalSource()), context + ": gas source changed");
-		require(expected.escapedSink().equals(actual.escapedSink()), context + ": gas sink changed");
 	}
 
 	private static void compareThermal(mmm.thermal.ThermalOwnerSnapshot expected, mmm.thermal.ThermalOwnerSnapshot actual,

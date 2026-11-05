@@ -5,6 +5,7 @@ import mmm.chemistry.ChemicalMixtureRecord;
 import mmm.granular.GranularDisplaySnapshot;
 import mmm.granular.GranularStateSnapshot;
 import mmm.thermal.ThermalDisplaySnapshot;
+import mmm.fluid.air.GasRegistry;
 
 import java.util.ArrayList;
 
@@ -69,8 +70,7 @@ final class CarrierInventoryReader {
 		if (domain.thermalState == null) {
 			throw new IllegalStateException("Thermal particle handoff requires thermal state");
 		}
-		return FluidThermalBinding.capture(domain.thermalState, domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.config.cellSize(), domain.liquidCells.physicalSize());
+		return domain.captureAuthoritativeState().thermal();
 	}
 
 	GranularStateSnapshot exportGranularState() {
@@ -128,7 +128,19 @@ final class CarrierInventoryReader {
 
 	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
 		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
-		return domain.thermalState.displaySnapshot(domain.domainCapabilities.thermalMarkerContext(), domain.gasState.network);
+		var display=domain.thermalState.displaySnapshot(domain.domainCapabilities.thermalMarkerContext(), domain.gasState.network);
+		if(domain.gasState.spatial==null)return display;
+		var local=domain.gasState.spatial;long[] occupied=domain.occupiedSolidSvq();var model=domain.domainCapabilities.spatialGasModel();
+		var nodes=new ArrayList<ThermalDisplaySnapshot.GasNode>();
+		for(int cell=0;cell<domain.cellCount;cell++){
+			var gas=local.cells().get(cell);if(gas.isEmpty())continue;
+			double temperature=model.state(gas,local.energyAt(cell)).temperatureK();
+			double pressure=DomainGasInventory.mixture(domain,cell,gas,local.energyAt(cell),domain.liquidCells,occupied,null).absolutePressurePa()-GasRegistry.STANDARD_PRESSURE_PA;
+			int tq=(int)Math.clamp(Math.round(temperature*16),1,ThermalDisplaySnapshot.MAX_TEMPERATURE_Q);
+			int pq=(int)Math.clamp(Math.round(pressure/10),Integer.MIN_VALUE,Integer.MAX_VALUE);
+			nodes.add(new ThermalDisplaySnapshot.GasNode(cell+1,tq,pq));
+		}
+		return new ThermalDisplaySnapshot(display.cellTemperatureQ(),display.coherentFraction(),display.debugFlags(),nodes);
 	}
 
 	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */
@@ -136,17 +148,9 @@ final class CarrierInventoryReader {
 		domain.domainFlowFields.ensureInventoryGrid();
 		var registry = domain.materialRegistry == null ? new FluidMaterialRegistry(java.util.List.of(
 				new FluidMaterial("mmm:water", domain.config.density(), "mmm:aqueous", 0, Math.PI / 2))) : domain.materialRegistry;
-		PhaseOccupancyTransport.ensure(domain);
+		domain.pressureSystem.prepareGeometry();
 		var inventory = domain.liquidCells.snapshot();
-		var frame = domain.gasState.frame;
-		FlipPressurePhaseGeometry phase;
-		long[] occupied = domain.occupiedSolidSvq();
-		if (frame != null && frame.matchesCarrierInventory(domain, occupied)) phase = frame.phase();
-		else {
-			phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
-			phase.rebuildOccupancy(domain.phaseOccupancy, domain.geometry.cutCells,
-					PhaseOccupancyTransport.poreVolumes(domain, occupied, null), frame == null ? null : frame.phase());
-		}
+		var phase = domain.pressureSystem.phaseGeometry();
 		var geometry = FluidSurfaceProjection.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
 				registry, inventory, domain.geometry.cutCells.snapshot(), phase);
 		return FluidMaterialRenderSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),

@@ -16,7 +16,6 @@ const int FACE_VELOCITY = 1;
 const int FACE_OPEN_AREA = 2;
 const int FACE_WET_AREA = 3;
 const double MASS_UNIT_KG = 1e-10;
-const double FULL_CELL_VOLUME_TOLERANCE = 4e-5;
 const double SOLID_VOLUME_UNITS_PER_CELL = 16777216.0;
 layout(local_size_x = 128) in;
 layout(push_constant) uniform Metadata {
@@ -26,6 +25,8 @@ layout(push_constant) uniform Metadata {
     int stage;
     float h;
     float dt;
+    int sealedExterior;
+    float ambientCellMass;
 }
 pc;
 // HOST_LAYOUT
@@ -90,63 +91,6 @@ float sampleCellFill(ivec3 p, float fallback) {
     int c = cellIndex(p);
     return cells[c][CELL_PORE_VOLUME] > 0 ? float(cells[c][CELL_FILL]) : fallback;
 }
-// Analytic box-projection CDF, using the stable sorted-width expression of MicroBoxPlaneVolume.
-double boxVolume(dvec3 normal, double offset, int bit, double side) {
-    dvec3 origin = side * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1);
-    double scale = max(abs(normal.x), max(abs(normal.y), abs(normal.z)));
-    if (scale == 0)
-        return offset >= 0 ? side * side * side : 0;
-    dvec3 scaledNormal = normal / scale, widths = abs(scaledNormal) * side;
-    double distance = offset / scale - dot(scaledNormal, origin) - dot(min(scaledNormal, dvec3(0)), dvec3(side));
-    if (widths.x > widths.y) {
-        double temporaryWidth = widths.x;
-        widths.x = widths.y;
-        widths.y = temporaryWidth;
-    }
-    if (widths.y > widths.z) {
-        double temporaryWidth = widths.y;
-        widths.y = widths.z;
-        widths.z = temporaryWidth;
-    }
-    if (widths.x > widths.y) {
-        double temporaryWidth = widths.x;
-        widths.x = widths.y;
-        widths.y = temporaryWidth;
-    }
-    double total = widths.x + widths.y + widths.z;
-    if (distance <= 0)
-        return 0;
-    if (distance >= total)
-        return side * side * side;
-    bool complement = distance > total * .5;
-    if (complement)
-        distance = total - distance;
-    double smallWidth = widths.x, middleWidth = widths.y, largeWidth = widths.z, fraction;
-    if (middleWidth == 0)
-        fraction = distance / largeWidth;
-    else if (smallWidth == 0)
-        fraction = distance <= middleWidth ? (distance / middleWidth) * (distance / largeWidth) * .5 : (distance - .5 * middleWidth) / largeWidth;
-    else if (distance <= smallWidth)
-        fraction = (distance / smallWidth) * (distance / middleWidth) * (distance / largeWidth) / 6;
-    else if (distance <= middleWidth)
-        fraction = (3 * distance * (distance - smallWidth) + smallWidth * smallWidth) / (6 * middleWidth * largeWidth);
-    else if (distance >= smallWidth + middleWidth)
-        fraction = (distance - .5 * (smallWidth + middleWidth)) / largeWidth;
-    else {
-        double middleExcess = distance - middleWidth, largeExcess = max(0.0LF, distance - largeWidth);
-        fraction = (3 * distance * (distance - smallWidth) + smallWidth * smallWidth - (middleExcess * middleExcess * middleExcess + largeExcess * largeExcess * largeExcess) / smallWidth) / (6 * middleWidth * largeWidth);
-    }
-    return clamp(complement ? 1 - fraction : fraction, 0.0, 1.0) * side * side * side;
-}
-double selectedVolume(uint support, dvec3 normal, double offset) {
-    if (support == 255u)
-        return boxVolume(normal, offset, 0, 1);
-    double volume = 0;
-    for (int microcell = 0; microcell < 8; microcell++)
-        if ((support & (1u << microcell)) != 0)
-            volume += boxVolume(normal, offset, microcell, .5);
-    return volume;
-}
 void prepareCellTotals(int cell) {
     double liquidVolume = 0;
     int64_t massUnits = 0;
@@ -159,7 +103,7 @@ void prepareCellTotals(int cell) {
             massUnits += masses[j];
     }
     double poreVolume = double(bitCount((~masks[cell]) & 255u)) * .125 - double(occupied[cell]) / SOLID_VOLUME_UNITS_PER_CELL;
-    if (liquidVolume < 0 || poreVolume < 0 || massUnits < int64_t(0) || liquidVolume > poreVolume + FULL_CELL_VOLUME_TOLERANCE)
+    if (liquidVolume < 0 || poreVolume < 0 || massUnits < int64_t(0))
         atomicOr(errors, ERROR_LIQUID_GEOMETRY);
     cells[cell] = dvec4(liquidVolume, double(massUnits) * MASS_UNIT_KG, poreVolume, poreVolume > 0 ? clamp(liquidVolume / poreVolume, 0.0, 1.0) : 0);
 }
@@ -168,7 +112,7 @@ void prepareCellTotals(int cell) {
 bool solidMicro(ivec3 micro) {
     ivec3 extent = 2 * ivec3(pc.sx, pc.sy, pc.sz);
     if (any(lessThan(micro, ivec3(0))) || any(greaterThanEqual(micro, extent)))
-        return true;
+        return pc.sealedExterior != 0;
     ivec3 c = micro / 2, local = micro - 2 * c;
     int bit = local.x | (local.y << 1) | (local.z << 2);
     return (masks[cellIndex(c)] & (1u << bit)) != 0u;
@@ -180,7 +124,16 @@ void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
     }
     if (cells[cell][CELL_LIQUID_VOLUME] <= 0.0 || support == 0u)
         return;
-    ivec3 base = 2 * position(cell);
+    ivec3 cellPos = position(cell);
+    bool hasWall = support != 255u;
+    if (!hasWall) for (int axis = 0; axis < 3; axis++) for (int side = 0; side < 2; side++) {
+        ivec3 neighbor = cellPos; neighbor[axis] += 2 * side - 1;
+        uint low = axis == 0 ? 0x55u : axis == 1 ? 0x33u : 0x0fu;
+        uint face = side == 1 ? low : (low ^ 255u);
+        if (inside(neighbor) ? (masks[cellIndex(neighbor)] & face) != 0u : pc.sealedExterior != 0) hasWall = true;
+    }
+    if (!hasWall) return;
+    ivec3 base = 2 * cellPos;
     bool full = cells[cell][CELL_LIQUID_VOLUME] >= cells[cell][CELL_PORE_VOLUME];
     for (int bit = 0; bit < 8; bit++) {
         if ((support & (1u << bit)) == 0u)
@@ -221,95 +174,43 @@ void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
     }
 }
 void reconstructInterface(int cell) {
-    ivec3 cellPosition = position(cell);
-    double fill = cells[cell][CELL_FILL];
     uint support = (~masks[cell]) & 255u;
-    vec3 gradient = vec3(0);
-    for (int axis = 0; axis < 3; axis++) {
-        ivec3 axisStep = ivec3(0);
-        axisStep[axis] = 1;
-        gradient[axis] = -(sampleCellFill(cellPosition + axisStep, float(fill)) - sampleCellFill(cellPosition - axisStep, float(fill)));
-    }
-    if (dot(gradient, gradient) == 0)
-        gradient = vec3(0, 1, 0);
-    else
-        gradient /= sqrt(dot(gradient, gradient));
-    dvec3 normal = dvec3(gradient);
+    double fill = cells[cell][CELL_FILL], pore = cells[cell][CELL_PORE_VOLUME];
     double geometricCapacity = double(bitCount(support)) * .125LF;
-    double liquidVolume = cells[cell][CELL_LIQUID_VOLUME], poreVolume = cells[cell][CELL_PORE_VOLUME], gasVolume = max(0.0LF, poreVolume - liquidVolume);
-    double targetVolume = fill * geometricCapacity;
-    bool smallLiquid = liquidVolume <= gasVolume;
-    double smallVolume = poreVolume > 0 ? min(liquidVolume, gasVolume) / poreVolume * geometricCapacity : 0;
-    bool compactInterface = liquidVolume > 0 && gasVolume > 0 && smallVolume <= 4e-5LF;
-    // Gravity places a small liquid volume at the lower corner and a small gas pocket at the upper corner.
-    if (compactInterface)
-        normal = dvec3(gradient.x < 0 ? -1 : 1, 1, gradient.z < 0 ? -1 : 1);
-    double lower = 1e30LF, upper = -1e30LF;
-    for (int microcell = 0; microcell < 8; microcell++)
-        if ((support & (1u << microcell)) != 0) {
-            dvec3 microOrigin = .5LF * dvec3(microcell & 1, (microcell >> 1) & 1, (microcell >> 2) & 1);
-            lower = min(lower, dot(normal, microOrigin) + dot(min(normal, dvec3(0)), dvec3(.5LF)));
-            upper = max(upper, dot(normal, microOrigin) + dot(max(normal, dvec3(0)), dvec3(.5LF)));
+    double porosity = geometricCapacity > 0.0 ? pore / geometricCapacity : 0.0;
+    int axis = 1;
+    double sign = 1.0, cut = fill <= 0.0 ? 0.0 : 1.0;
+    if (fill > 0.0 && fill < 1.0 && support != 0u) {
+        ivec3 at = position(cell); vec3 gradient;
+        for (int a = 0; a < 3; a++) {
+            ivec3 step = ivec3(0); step[a] = 1;
+            gradient[a] = -(sampleCellFill(at + step, float(fill)) - sampleCellFill(at - step, float(fill)));
         }
-    if (fill <= 0)
-        upper = lower;
-    else if (fill >= 1)
-        lower = upper;
-    else if (!compactInterface)
-        for (int k = 0; k < 16; k++) {
-            double midpoint = .5LF * (lower + upper);
-            if (selectedVolume(support, normal, midpoint) < targetVolume)
-                lower = midpoint;
-            else
-                upper = midpoint;
-        }
-    double offset = support == 0u ? 0 : .5LF * (lower + upper);
-    if (compactInterface) {
-        dvec3 smallNormal = smallLiquid ? normal : -normal;
-        double extreme = smallLiquid ? lower : -upper;
-        int corners = 0;
-        for (int microcell = 0; microcell < 8; microcell++)
-            if ((support & (1u << microcell)) != 0) {
-                dvec3 microOrigin = .5LF * dvec3(microcell & 1, (microcell >> 1) & 1, (microcell >> 2) & 1);
-                double corner = dot(smallNormal, microOrigin) + dot(min(smallNormal, dvec3(0)), dvec3(.5LF));
-                if (corner == extreme)
-                    corners++;
-            }
-        double cornerVolumeFactor = 6.0LF * smallVolume / double(corners);
-        double width = double(pow(float(cornerVolumeFactor * 1e30LF), 1.0 / 3.0)) * 1e-10LF;
-        for (int k = 0; k < 2; k++)
-            width = (2.0LF * width + cornerVolumeFactor / (width * width)) / 3.0LF;
-        offset = smallLiquid ? extreme + width : -(extreme + width);
+        if (abs(gradient.x) > abs(gradient.y)) axis = 0;
+        if (abs(gradient.z) > abs(gradient[axis])) axis = 2;
+        sign = gradient[axis] < 0.0 ? -1.0 : 1.0;
+        uint lowBits = axis == 0 ? 0x55u : axis == 1 ? 0x33u : 0x0fu;
+        uint firstBits = sign > 0.0 ? lowBits : (lowBits ^ 255u);
+        int first = bitCount(support & firstBits), second = bitCount(support & (firstBits ^ 255u));
+        double target = fill * geometricCapacity, firstVolume = double(first) * .125LF;
+        double depth = target <= firstVolume && first > 0
+            ? target / (.25LF * double(first))
+            : .5LF + (second > 0 ? (target - firstVolume) / (.25LF * double(second)) : 0.0LF);
+        cut = sign > 0.0 ? depth : 1.0LF - depth;
     }
-    planes[cell] = dvec4(normal, offset);
-    double porosity = support == 0u ? 0 : cells[cell][CELL_PORE_VOLUME] / geometricCapacity;
-    for (int microcell = 0; microcell < 8; microcell++)
-        microVolume[8 * cell + microcell] = (support & (1u << microcell)) == 0 ? 0
-                                 : liquidVolume <= 0              ? 0
-                                 : gasVolume <= 0                 ? .125 * porosity
-                                                            : boxVolume(normal, offset, microcell, .5) * porosity;
+    dvec3 normal = dvec3(0.0); normal[axis] = sign;
+    planes[cell] = dvec4(normal, sign * cut);
+    for (int bit = 0; bit < 8; bit++) {
+        double amount = 0.0;
+        if ((support & (1u << bit)) != 0u) {
+            double origin = .5LF * double((bit >> axis) & 1);
+            double depth = sign > 0.0 ? clamp(cut - origin, 0.0LF, .5LF)
+                                      : clamp(origin + .5LF - cut, 0.0LF, .5LF);
+            amount = .25LF * depth * porosity;
+        }
+        microVolume[8 * cell + bit] = amount;
+    }
     prepareWetWalls(cell, support, porosity, planes[cell]);
-}
-int clip(inout dvec2 polygon[8], int count, dvec3 plane) {
-    if (count == 0)
-        return 0;
-    dvec2 clippedPolygon[8];
-    int outputCount = 0;
-    dvec2 previousPoint = polygon[count - 1];
-    double previousDistance = dot(plane.xy, previousPoint) - plane.z;
-    for (int k = 0; k < count; k++) {
-        dvec2 point = polygon[k];
-        double distance = dot(plane.xy, point) - plane.z;
-        if ((distance <= 0) != (previousDistance <= 0))
-            clippedPolygon[outputCount++] = mix(previousPoint, point, previousDistance / (previousDistance - distance));
-        if (distance <= 0)
-            clippedPolygon[outputCount++] = point;
-        previousPoint = point;
-        previousDistance = distance;
-    }
-    for (int k = 0; k < outputCount; k++)
-        polygon[k] = clippedPolygon[k];
-    return outputCount;
 }
 double portArea(double fill, dvec4 plane, int axis, int side, int firstPort, int secondPort) {
     if (fill <= 0)
@@ -333,8 +234,27 @@ void faceGeometry(int face) {
     ivec3 rightPosition = ivec3(localFace % faceShape.x, localFace / faceShape.x % faceShape.y, localFace / (faceShape.x * faceShape.y)), axisStep = ivec3(0);
     axisStep[axis] = 1;
     if (!inside(rightPosition) || !inside(rightPosition - axisStep)) {
-        double endpointMass = (inside(rightPosition) ? cells[cellIndex(rightPosition)][CELL_MASS] : 0) + (inside(rightPosition - axisStep) ? cells[cellIndex(rightPosition - axisStep)][CELL_MASS] : 0);
-        faces[face] = dvec4(.5 * endpointMass, 0, 0, 0);
+        bool interiorRight = inside(rightPosition);
+        int cell = cellIndex(interiorRight ? rightPosition : rightPosition - axisStep);
+        double endpointMass = cells[cell][CELL_MASS];
+        if (pc.sealedExterior != 0 || cells[cell][CELL_PORE_VOLUME] <= 0.0) {
+            faces[face] = dvec4(.5 * endpointMass, 0, 0, 0);
+            return;
+        }
+        int firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3;
+        int side = interiorRight ? 0 : 1;
+        double openArea = 0.0, wetArea = 0.0;
+        for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
+            int bit = (side << axis) | (a << firstTangent) | (b << secondTangent);
+            if ((masks[cell] & (1u << bit)) == 0u) {
+                openArea += .25;
+                wetArea += portArea(cells[cell][CELL_FILL], planes[cell], axis, side, a, b);
+            }
+        }
+        openArea = max(0.0LF, openArea - wetArea);
+        double mass = .5 * (endpointMass + double(pc.ambientCellMass));
+        double momentum = axis == 0 ? momentumX[localFace] : axis == 1 ? momentumY[localFace] : momentumZ[localFace];
+        faces[face] = dvec4(mass, openArea > 0.0 && mass > 0.0 ? momentum / mass : 0.0, openArea, 0.0LF);
         return;
     }
     int leftCell = cellIndex(rightPosition - axisStep), rightCell = cellIndex(rightPosition), firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3;
@@ -351,28 +271,12 @@ void faceGeometry(int face) {
             if (!plicOpenPort((~masks[leftCell]) & 255u, (~masks[rightCell]) & 255u, bit | (1 << axis), bit))
                 continue;
             openArea += .25;
-            double leftArea = portArea(leftFill, leftPlane, axis, 1, a, b), rightArea = portArea(rightFill, rightPlane, axis, 0, a, b);
-            if (leftFill <= 0 || rightFill <= 0) {
-                wetArea += min(leftArea + rightArea, .25 * (leftFill + rightFill));
-                continue;
-            }
-            dvec2 polygon[8];
-            polygon[0] = dvec2(a, b) * .5LF;
-            polygon[1] = polygon[0] + dvec2(.5, 0);
-            polygon[2] = polygon[0] + dvec2(.5, .5);
-            polygon[3] = polygon[0] + dvec2(0, .5);
-            int count = 4;
-            if (leftFill < 1)
-                count = clip(polygon, count, dvec3(leftPlane[firstTangent], leftPlane[secondTangent], leftPlane.w - leftPlane[axis]));
-            if (rightFill < 1)
-                count = clip(polygon, count, dvec3(rightPlane[firstTangent], rightPlane[secondTangent], rightPlane.w));
-            double area = 0;
-            for (int k = 1; k + 1 < count; k++) {
-                dvec2 firstEdge = polygon[k] - polygon[0], secondEdge = polygon[k + 1] - polygon[0];
-                area += firstEdge.x * secondEdge.y - firstEdge.y * secondEdge.x;
-            }
-            double geometricArea = clamp(leftArea + rightArea - abs(area) * .5LF, 0.0LF, .25LF);
-            wetArea += min(geometricArea, .25 * (leftFill + rightFill));
+            dvec2 lo, hi; plicPortBounds(axis, bit, lo, hi);
+            bool dry = leftFill < 1.0 && rightFill < 1.0;
+            if (dry && leftFill > 0.0) dry = plicPortRect(leftPlane, axis, 1.0LF, bit, false, lo, hi);
+            if (dry && rightFill > 0.0) dry = plicPortRect(rightPlane, axis, 0.0LF, bit, false, lo, hi);
+            double dryArea = dry ? (hi.x - lo.x) * (hi.y - lo.y) : 0.0;
+            wetArea += .25LF - dryArea;
         }
     double mass = .5 * (cells[leftCell][CELL_MASS] + cells[rightCell][CELL_MASS]), velocity = openArea > 0 && mass > 0 ? (axis == 0   ? momentumX[localFace]
                                                                                   : axis == 1 ? momentumY[localFace]
@@ -382,28 +286,7 @@ void faceGeometry(int face) {
     faces[face] = dvec4(mass, velocity, openArea, wetArea);
 }
 
-double slabLiquid(int source, int microcell, int axis, bool positive, double portion, double poreVolume) {
-    if (poreVolume <= 0.0)
-        return 0.0;
-    double fill = microVolume[8 * source + microcell] / poreVolume;
-    if (fill <= 0.0)
-        return 0.0;
-    if (fill >= 1.0)
-        return portion;
-    double width = clamp(portion / poreVolume, 0.0LF, 1.0LF);
-    dvec3 lowerCorner = dvec3(0), extent = dvec3(1);
-    extent[axis] = width;
-    if (positive)
-        lowerCorner[axis] = 1.0 - width;
-    dvec4 plane = planes[source];
-    dvec3 normal = .5LF * plane.xyz;
-    dvec3 microOrigin = dvec3(microcell & 1, (microcell >> 1) & 1, (microcell >> 2) & 1);
-    double offset = plane.w - dot(normal, microOrigin) - dot(normal, lowerCorner);
-    double fraction = boxVolume(normal * extent, offset, 0, 1.0);
-    return clamp(poreVolume * width * fraction, 0.0LF, portion);
-}
-
-// Signed total and liquid volume preferences. Capacity, materials and gas allocation decide accepted transfers.
+// Signed swept volume through the donor's open microboxes and its axis-aligned liquid plane.
 void transportPreference(int face) {
     faceFlux[face] = dvec2(0);
     int xCount = (pc.sx + 1) * pc.sy * pc.sz, yCount = pc.sx * (pc.sy + 1) * pc.sz;
@@ -419,8 +302,9 @@ void transportPreference(int face) {
     left[axis]--;
     if (!inside(left) || !inside(right))
         return;
-    double totalFlux = faces[face][FACE_OPEN_AREA] * faces[face][FACE_VELOCITY] * double(pc.dt) / double(pc.h);
-    if (totalFlux == 0.0)
+    double faceSpeed=faces[face][FACE_VELOCITY],openArea=faces[face][FACE_OPEN_AREA];
+    double depth=min(1.0LF,abs(faceSpeed)*double(pc.dt)/double(pc.h));
+    if (depth == 0.0 || openArea <= 0.0)
         return;
     int leftCell = cellIndex(left), rightCell = cellIndex(right), firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3, openPorts = 0;
     for (int port = 0; port < 4; port++) {
@@ -430,16 +314,28 @@ void transportPreference(int face) {
     }
     if (openPorts == 0)
         return;
-    bool positive = totalFlux > 0.0;
+    bool positive = faceSpeed > 0.0;
     int source = positive ? leftCell : rightCell;
-    double portion = abs(totalFlux) / double(bitCount(openPorts));
-    double microPoreVolume = cells[source][CELL_PORE_VOLUME] / double(bitCount((~masks[source]) & 255u)), liquidFlux = 0.0;
-    for (int port = 0; port < 4; port++)
-        if ((openPorts & (1 << port)) != 0) {
-            int microcell = ((port & 1) << firstTangent) | ((port >> 1) << secondTangent) | (positive ? 1 << axis : 0);
-            liquidFlux += slabLiquid(source, microcell, axis, positive, portion, microPoreVolume);
+    double low=positive?1.0LF-depth:0.0LF,high=positive?1.0LF:depth,openVolume=0.0LF,liquidVolume=0.0LF;
+    dvec4 plane=planes[source];uint support=(~masks[source])&255u;
+    for(int port=0;port<4;port++)if((openPorts&(1<<port))!=0){
+        int tangentBits=((port&1)<<firstTangent)|((port>>1)<<secondTangent);
+        for(int layer=0;layer<2;layer++){
+            int bit=tangentBits|(layer<<axis);if((support&(1u<<bit))==0u)continue;
+            double a=max(low,.5LF*double(layer)),b=min(high,.5LF*double(layer+1));if(b<=a)continue;
+            openVolume+=.25LF*(b-a);
+            if(cells[source][CELL_FILL]>=1.0LF){liquidVolume+=.25LF*(b-a);continue;}
+            if(cells[source][CELL_FILL]<=0.0LF)continue;
+            if(abs(plane[axis])>.5LF){
+                double cut=plane.w/plane[axis];
+                double wetDepth=plane[axis]>0.0LF?max(0.0LF,min(b,cut)-a):max(0.0LF,b-max(a,cut));
+                liquidVolume+=.25LF*wetDepth;
+            }else liquidVolume+=plicWetPort(plane,axis,.5LF*(a+b),tangentBits)*(b-a);
         }
-    faceFlux[face] = dvec2(totalFlux, positive ? liquidFlux : -liquidFlux);
+    }
+    double geometricArea=.25LF*double(bitCount(openPorts)),factor=openArea/geometricArea;
+    double sign=positive?1.0LF:-1.0LF,totalFlux=sign*openVolume*factor,liquidFlux=sign*liquidVolume*factor;
+    faceFlux[face]=dvec2(totalFlux,liquidFlux);
 }
 
 // Face mass and openings belong to the completed geometry; MAC momentum is current.
@@ -454,9 +350,8 @@ void refreshVelocity(int face) {
     ivec3 dims = ivec3(pc.sx, pc.sy, pc.sz);
     dims[axis]++;
     ivec3 at = ivec3(local % dims.x, local / dims.x % dims.y, local / (dims.x * dims.y));
-    bool internal = at[axis] > 0 && at[axis] < ivec3(pc.sx, pc.sy, pc.sz)[axis];
     double mass = faces[face][FACE_MASS];
-    faces[face][FACE_VELOCITY] = internal && faces[face][FACE_OPEN_AREA] > 0.0 && mass > 0.0 ? (axis == 0   ? momentumX[local]
+    faces[face][FACE_VELOCITY] = faces[face][FACE_OPEN_AREA] > 0.0 && mass > 0.0 ? (axis == 0   ? momentumX[local]
                                                                      : axis == 1 ? momentumY[local]
                                                                                  : momentumZ[local]) /
                                                                         mass

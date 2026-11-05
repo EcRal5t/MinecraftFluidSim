@@ -35,7 +35,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         LIQUID_SPECIES_CAPACITY(12),
         SOLID_SPECIES_CAPACITY(13),
         LIQUID_LIMB_CAPACITY(14),
-        PROPOSAL_CAPACITY(15),
+        PROPOSAL_CAPACITY(15), PENDING_CAPACITY(180),
         VOLUME_SIGNIFICAND(160),
         VOLUME_EXPONENT(162),
         FACE_GEOMETRY(163),
@@ -47,7 +47,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         PRECIPITATION_ENABLED(171),
         PHASE_ROWS_HEADER(172),
         ACTIVITY_CELLS(173),
-        ACTIVITY_FACES(174);
+        ACTIVITY_FACES(174), GAS_MASS(175), GAS_COMPONENTS(176), AMBIENT_MASS(178);
         final int word;
         Header(int word) {
             this.word = word;
@@ -110,7 +110,9 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         CELL_OLD_PE(8),
         CELL_NEW_PE(8),
         SOLID_SOURCE_MASS(8),
-        SOLID_WITHDRAWN_MASS(8);
+        SOLID_WITHDRAWN_MASS(8),
+        MATERIAL_DIAMETER(8),
+        PENDING_SLOTS(4);
         final int width;
         Field(int width) {
             this.width = width;
@@ -118,6 +120,8 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
     }
     static final class Layout {
         int activityCellsWord = -1, activityFacesWord = -1;
+        VulkanGasStateLayout gas; long ambientMassUnits;
+        void configureGas(VulkanGasStateLayout gas, long ambientMassUnits) { this.gas = gas; this.ambientMassUnits = ambientMassUnits; }
         final VulkanLiquidStateLayout liquid;
         final VulkanGranularStateLayout solid;
         final VulkanReactionDefinitions.Layout definitions;
@@ -126,6 +130,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         final VulkanLiquidPhaseRows.Layout phaseRows;
         final int species, faces, faceGeometryWord;
         final int[] phases, porosities;
+        final double[] diameters;
         final double cellSize, gravity;
         final boolean precipitationEnabled;
         final SignedDyadic volumeUnit;
@@ -177,11 +182,14 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                     if (fluid.material(m).id().equals(chemical.phases().get(p).materialId()))
                         phases[m] = p;
             porosities = new int[solid.definitions().materialIds().size()];
-            for (int m = 0; m < porosities.length; m++)
+            diameters = new double[porosities.length];
+            for (int m = 0; m < porosities.length; m++) {
                 porosities[m] = Float.floatToRawIntBits(
                     (float) granular.material(granular.materialHandle(solid.definitions().materialIds().get(m)))
                         .restPorosityQ()
                     / mmm.granular.GranularLimits.POROSITY_SCALE);
+                diameters[m]=granular.material(granular.materialHandle(solid.definitions().materialIds().get(m))).primaryGrainDiameterMeters();
+            }
             for (int s = 0; s < species; s++)
                 if (!solid.definitions().speciesIds().get(s).equals(chemical.species(s).id()))
                     throw new IllegalArgumentException("Solid/liquid species handles differ");
@@ -204,12 +212,14 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                     case HEADER -> 192;
                     case PHASES -> phases.length;
                     case POROSITIES -> porosities.length;
+                    case MATERIAL_DIAMETER -> diameters.length;
+                    case PENDING_SLOTS -> Math.multiplyExact(Math.multiplyExact(liquid.cellCount(),liquid.materialCount()),definitions.identity().rules().size());
                     case HEAD, CELL_OLD_MASS, CELL_NEW_MASS, POTENTIAL_WORK, PROPOSAL_HEAD, CELL_OLD_PE, CELL_NEW_PE ->
                         liquid.cellCount();
                     case NEXT, CELL, SOLID_OLD_ENERGY, SOLID_NEW_ENERGY, SOLID_COUNTS, SOLID_OLD_K, SOLID_NEW_K,
                         SOLID_SOURCE_MASS, SOLID_WITHDRAWN_MASS ->
                         solid.rowCapacity();
-                    case PROPOSAL_NEXT -> progress.proposalCapacity();
+                    case PROPOSAL_NEXT -> progress.solidProposalCapacity();
                     case FACE_MOMENTUM, FACE_OLD_K, FACE_NEW_K -> faces;
                     case FACE_HEAT -> Math.multiplyExact(2, faces);
                     case WALL_IMPULSE -> Math.multiplyExact(3, liquid.cellCount());
@@ -258,7 +268,8 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             h[Header.LIQUID_SPECIES_CAPACITY.word] = liquid.speciesCapacity();
             h[Header.SOLID_SPECIES_CAPACITY.word] = solid.speciesCapacity();
             h[Header.LIQUID_LIMB_CAPACITY.word] = liquid.limbCapacity();
-            h[Header.PROPOSAL_CAPACITY.word] = progress.proposalCapacity();
+            h[Header.PROPOSAL_CAPACITY.word] = progress.solidProposalCapacity();
+            h[Header.PENDING_CAPACITY.word] = progress.pendingCapacity();
             for (var f : Field.values())
                 h[WORK_FIELDS + f.ordinal()] = word(f);
             for (var f : VulkanLiquidStateLayout.Field.values())
@@ -275,8 +286,11 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             h[Header.FACE_COUNT.word] = faces;
             h[Header.ACTIVITY_CELLS.word] = activityCellsWord;
             h[Header.ACTIVITY_FACES.word] = activityFacesWord;
+            h[Header.GAS_MASS.word] = gas == null ? -1 : Math.toIntExact(gas.column(VulkanGasStateLayout.Field.MASS_UNITS).offset() / 4);
+            h[Header.GAS_COMPONENTS.word] = gas == null ? 0 : gas.definitions().componentIds().size();
             for (int i = 0; i < h.length; i++)
                 out.putInt(4 * i, h[i]);
+            out.putLong(4 * Header.AMBIENT_MASS.word, ambientMassUnits);
             out.putLong(4 * Header.VOLUME_SIGNIFICAND.word, volumeUnit.significand().longValueExact())
                 .putInt(4 * Header.VOLUME_EXPONENT.word, volumeUnit.exponent())
                 .putDouble(4 * Header.CELL_SIZE.word, cellSize)
@@ -286,12 +300,15 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         List<VulkanGasThermodynamics.TableChunk> tableChunks() {
             var a = ByteBuffer.allocateDirect(4 * phases.length).order(ByteOrder.LITTLE_ENDIAN);
             var b = ByteBuffer.allocateDirect(4 * porosities.length).order(ByteOrder.LITTLE_ENDIAN);
+            var d = ByteBuffer.allocateDirect(8 * diameters.length).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i < phases.length; i++)
                 a.putInt(4 * i, phases[i]);
             for (int i = 0; i < porosities.length; i++)
                 b.putInt(4 * i, porosities[i]);
+            for (int i = 0; i < diameters.length; i++) d.putDouble(8*i,diameters[i]);
             return List.of(new VulkanGasThermodynamics.TableChunk(column(Field.PHASES).offset(), a),
-                new VulkanGasThermodynamics.TableChunk(column(Field.POROSITIES).offset(), b));
+                new VulkanGasThermodynamics.TableChunk(column(Field.POROSITIES).offset(), b),
+                new VulkanGasThermodynamics.TableChunk(column(Field.MATERIAL_DIAMETER).offset(), d));
         }
         void initialize(ByteBuffer arena) {
             phaseRows.initializeHeader(arena);
@@ -321,7 +338,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             resource("solid-liquid-reactions.comp")
                 .replace("// HOST_LAYOUT", shaderLayout())
                 .replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")),
-            12);
+            24);
         try {
             scan = new VulkanPrefixScan(context);
         } catch (RuntimeException | LinkageError e) {
@@ -342,13 +359,15 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         phaseKernel.rebindRanges(arena, errors);
     }
     /** The caller first copies granular owners to its transition layout's private source. */
-    void recordPrepare(VkCommandBuffer command, Layout l) {
-        stage(command, l, 0,
-            Math.max(l.progress.proposalCapacity(),
-                Math.max(1, Math.max(l.liquid.cellCount(), Math.max(l.liquid.slotCount(), l.solid.rowCapacity())))));
+    void recordPrepare(VkCommandBuffer command, Layout l, double duration) {
+        int initialCount=Math.max(l.liquid.cellCount(),Math.max(l.liquid.slotCount(),l.solid.rowCapacity()));
+        initialCount=Math.max(initialCount,l.progress.pendingCapacity());
+        initialCount=Math.max(initialCount,l.column(Field.PENDING_SLOTS).count());
+        stage(command,l,0,initialCount);
+        stage(command,l,12,l.progress.pendingCapacity());
         phaseKernel.recordImport(command, l.phaseRows);
         stage(command, l, 1, Math.max(l.liquid.slotCount(), l.solid.rowCapacity()));
-        stage(command, l, 2, l.liquid.cellCount());
+        stage(command, l, 2, l.liquid.cellCount(),duration);
         stage(command, l, 3, Math.max(l.liquid.slotCount(), l.solid.rowCapacity()));
         scan.record(command, l.solid.rowCapacity(), l.word(Field.SOLID_COUNTS), l.word(Field.SOLID_OFFSETS),
             l.word(Field.SCAN));
@@ -367,12 +386,15 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         stage(command, l, 7, Math.max(l.faces, Math.max(l.solid.rowCapacity() + 1, l.solid.speciesCapacity())));
     }
     private void stage(VkCommandBuffer command, Layout l, int stage, int n) {
+        stage(command,l,stage,n,0);
+    }
+    private void stage(VkCommandBuffer command, Layout l, int stage, int n,double duration) {
         if (n == 0)
             return;
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                stack.ints(l.word(Field.HEADER), stage, n));
+                stack.malloc(24).putInt(l.word(Field.HEADER)).putInt(stage).putInt(n).putInt(0).putDouble(duration).flip());
             int g = (n + 127) / 128;
             vkCmdDispatch(command, Math.min(g, 65535), (g + 65534) / 65535, 1);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,

@@ -28,54 +28,6 @@ final class PhaseOccupancyTransport {
 		domain.phaseOccupancy=state;domain.phaseOccupancyDirty=false;
 	}
 
-	/** Reconstructs external edits and their gas source shares before publication. */
-	static GasVolumeAllocation prepareEdit(HostFluidState domain, LiquidCellInventory future, long[] occupied, byte[] masks) {
-		ensure(domain);
-		var cut=domain.geometry.cutCells;
-		if(masks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
-		var old=domain.gasState.frame;
-		var capacity=GasComponentCapacity.prepare(cut,occupied,future.snapshot(),old==null?null:old.geometry().actualCapacity());
-		FlipPressurePhaseGeometry rebuilt;
-		if(old!=null&&capacity==old.geometry().actualCapacity())rebuilt=old.phase();
-		else{
-			rebuilt=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
-			rebuilt.rebuildInventory(cut,future.snapshot(),capacity,old==null?null:old.phase());
-		}
-		var prepared=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
-				masks,rebuilt.occupancyState(),rebuilt,null,capacity);
-		var sources=new PhaseSourceColumns(prepared.nodeCount()+1);
-		if(domain.gasState.frame!=null) {
-			var geometry=prepared.geometry();var topology=prepared.topology();
-			var components=geometry.actualCapacity().components;
-			double[] targetVolumes=new double[prepared.nodeCount()+1];
-			for(int i=0;i<components.size();i++) {
-				var component=components.get(i);
-				if(component.availableVolumeNormalized().signum()==0)continue;
-				int target=topology.nodeOfComponent(component.cell(),component.supportMask());
-				if(target<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
-				targetVolumes[target]+=component.availableVolumeNormalized().toDouble();
-				// A coarse pore retains its gas even when its rebuilt plane moves every
-				// dry micro piece. Source identity belongs to the whole fixed support.
-				for(int support:CellRemapMicroTopology.components(old.geometry().collisionMask(component.cell()))) {
-					var previousComponent=old.geometry().component(component.cell(),support);if(previousComponent==null)continue;
-					int overlap=previousComponent.dryMicroMask()&component.supportMask();if(overlap==0)continue;
-					double amount=0;
-					if(overlap==previousComponent.dryMicroMask())amount=previousComponent.normalizedVolume();
-					else for(int bits=overlap;bits!=0;bits&=bits-1)
-						amount+=old.geometry().pieceNormalizedVolume(8*component.cell()+Integer.numberOfTrailingZeros(bits));
-					int previous=old.topology().nodeOfComponent(component.cell(),support);
-					if(previous>=0)sources.add(target,previous,amount);
-				}
-			}
-			// Coarse supports in one future chamber share its source proportions.
-			for(int target=0;target<targetVolumes.length;target++)if(targetVolumes[target]>0){
-				if(sources.first(target)<0)sources.appendUnique(target,target==0?0:-1,targetVolumes[target]);
-				else sources.scale(target,targetVolumes[target]);
-			}
-		}
-		return GasVolumeAllocation.fromTargetSources(domain,future,prepared,sources);
-	}
-
 	static void requireCurrentGeometry(HostFluidState domain, PhaseOccupancyState state) {
 		if (state == null || state.cellCount() != domain.cellCount) throw new IllegalArgumentException("Phase occupation dimensions differ from domain");
 		domain.domainFlowFields.ensureInventoryGrid();
@@ -101,8 +53,9 @@ final class PhaseOccupancyTransport {
 					capacity += pore[8 * cell + micro];
 				}
 				double expected = componentLiquid(domain, cell, support).toDouble();
+				if(domain.gasState.spatial!=null){var gas=domain.gasState.spatial;expected*=DomainGasInventory.mixture(domain,cell,gas.cells().get(cell),gas.energyAt(cell),domain.liquidCells,occupied,null).liquidScale();}
 				error += PhaseOccupancyState.VOLUME_RESOLUTION;
-				if (Math.abs(amount - expected)> error) throw new IllegalArgumentException("Restored phase occupation differs from liquid stock at cell " + cell + " support " + support);
+				if (Math.abs(amount - expected)> error) throw new IllegalArgumentException("Restored phase occupation differs from liquid stock at cell " + cell + " support " + support + ": occupation=" + amount + ", inventory=" + expected + ", tolerance=" + error);
 			}
 		}
 	}
@@ -136,12 +89,15 @@ final class PhaseOccupancyTransport {
 	/** One coarse component PLIC supplies all eight micro views. */
 	static double[] reconstruct(HostFluidState domain, LiquidCellInventory inventory, double[] pore, byte[] masks, FlipPressurePhaseGeometry workspace) {
 		double[] liquid = new double[pore.length];
+		long[] occupied=domain.gasState.spatial==null?null:domain.occupiedSolidSvq();
 		for (int cell = 0; cell<domain.cellCount; cell++) {
 			int mask = masks == null ? domain.geometry.cutCells.mask(cell) : Byte.toUnsignedInt(masks[cell]);
+			double scale=1;
+			if(domain.gasState.spatial!=null){var gas=domain.gasState.spatial;scale=DomainGasInventory.mixture(domain,cell,gas.cells().get(cell),gas.energyAt(cell),inventory,occupied,masks).liquidScale();}
 			for (int support : CellRemapMicroTopology.components(mask)) {
 				double capacity = 0, amount = 0;
 				for (int m = 0; m<8; m++) if ((support & 1 << m) != 0) capacity += pore[8 * cell + m];
-				for (var stock : inventory.stocksInCell(cell)) if (stock.key().supportMask() == support) amount += stock.volumeFraction();
+				for (var stock : inventory.stocksInCell(cell)) if (stock.key().supportMask() == support) amount += stock.volumeFraction()*scale;
 				double fraction = capacity> 0 ? Math.clamp(amount / capacity, 0, 1) : 0;
 				for (int m = 0; m<8; m++) if ((support & 1 << m) != 0) liquid[8 * cell + m] = fraction * pore[8 * cell + m];
 			}

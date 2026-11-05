@@ -40,6 +40,7 @@ public final class DebugScenarioInitialization {
 		if(materials!=null) for(int z=0;z<domain.sizeZ();z++) for(int y=0;y<domain.sizeY();y++) for(int x=0;x<domain.sizeX();x++)
 			materials[(z*domain.sizeY()+y)*domain.sizeX()+x]=y+.5F>=fillY/2.0F?1:0;
 		domain.setVolumes(volumes,materials);
+		domain.resetAmbientGas();
 	}
 
 	public static void assignChemistry(HostFluidState domain) {
@@ -65,7 +66,7 @@ public final class DebugScenarioInitialization {
 		}
 	}
 
-	/** Presets the closed chamber above the water in the U-tube scaffold. */
+	/** Sets every local gas inventory in the closed left arm to the chosen pressure. */
 	public static int presetAirPressure(HostFluidState domain, boolean vacuum) {
 		return presetAirPressure(domain, vacuum ? AirPressure.VACUUM : AirPressure.PRESSURE);
 	}
@@ -81,7 +82,12 @@ public final class DebugScenarioInitialization {
 			case AMBIENT -> 1.0;
 			case VACUUM -> 0.88;
 		};
-		domain.setGasNodeStandardVolume(node, gas.availableVolume(node) * factor);
+		int leftArmLimit = 3 * FluidRegionFactory.CELLS_PER_BLOCK;
+		for (int localNode : gas.nodeIds()) {
+			int cell = localNode - 1;
+			if (cell % domain.sizeX() < leftArmLimit)
+				domain.setGasNodeStandardVolume(localNode, gas.availableVolume(localNode) * factor);
+		}
 		return node;
 	}
 
@@ -92,6 +98,7 @@ public final class DebugScenarioInitialization {
 			for (int x = 0; x < domain.sizeX(); x++) if (!domain.isSolid(x,y,z))
 				volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = 1.0F;
 		domain.setVolumes(volumes);
+		domain.resetAmbientGas();
 	}
 
 
@@ -111,6 +118,7 @@ public final class DebugScenarioInitialization {
 		for(int z=0;z<sz;z++) for(int y=2;y<sy;y++) for(int x=0;x<sx;x++)
 			if (!domain.isSolid(x, y, z)) volumes[(z*sy+y)*sx+x]=(float)sphericalCapFraction(x,y,z,cellSize,centerX,centerY,centerZ,radius,wallY);
 		domain.setVolumes(volumes);
+		domain.resetAmbientGas();
 	}
 
 	private static double sphericalCapFraction(int x, int y, int z, double cellSize,

@@ -26,7 +26,8 @@ final class VulkanBodyObservation implements AutoCloseable {
     VulkanBodyObservation(VulkanDeviceContext context){resources=new FlipGpuResources(context);
         try{scheduler=new GpuStepScheduler(context,resources,4096);
             try(var in=getClass().getResourceAsStream("/assets/mmm_gpu_probe/shaders/body-observation.comp")){
-                if(in==null)throw new IllegalStateException("Body observation shader missing");bindings=new FlipKernelBindings(context,2,new String(in.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", VulkanShaderLayout.fields("H_", Header.values())),16);
+                if(in==null)throw new IllegalStateException("Body observation shader missing");bindings=new FlipKernelBindings(context,2,new String(in.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", VulkanShaderLayout.fields("H_", Header.values()))
+                        .replace("// FULL_CELL_VOLUME_TOLERANCE", "const double FULL_CELL_VOLUME_TOLERANCE = "+mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION+"LF;"),16);
             }catch(java.io.IOException failure){throw new IllegalStateException(failure);}
         }catch(RuntimeException|Error failure){resources.close();throw failure;}}
     synchronized mmm.fluid.FluidDomainContracts.BodyFluidSample capture(VulkanLiquidRegion.Capture capture,
@@ -43,7 +44,7 @@ final class VulkanBodyObservation implements AutoCloseable {
         words[Header.PLANES.ordinal()]=word(in.geometry().get(VulkanLiquidRegion.GeometryField.PLANES));words[Header.FACES.ordinal()]=word(in.geometry().get(VulkanLiquidRegion.GeometryField.FACES));
         words[Header.CELL_OFFSETS.ordinal()]=word(liquid.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS));words[Header.VOLUMES.ordinal()]=word(liquid.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES));
         words[Header.MATERIALS.ordinal()]=word(liquid.column(VulkanLiquidStateLayout.Field.MATERIALS));words[Header.MASS_UNITS.ordinal()]=word(liquid.column(VulkanLiquidStateLayout.Field.MASS_UNITS));words[Header.WATER_MATERIAL.ordinal()]=waterMaterial;
-        words[Header.GAS_PRESSURE.ordinal()]=in.gasPressure()==null?-1:in.gasPressure().word(VulkanGasPressure.Field.CELL_PHYSICAL_PRESSURE);
+        words[Header.GAS_PRESSURE.ordinal()]=in.mixture()==null?-1:in.mixture().statesWord();
         words[Header.GAS_THERMAL.ordinal()]=in.gasThermal()==null?-1:word(in.gasThermal().states());words[Header.GAS_CELL_NODES.ordinal()]=in.gasGeometry()==null?-1:word(in.gasGeometry().cellNodes());
         for(int i=0;i<words.length;i++)header.putInt(4*i,words[i]);
         for(int axis=0;axis<3;axis++){header.putDouble(128+8*axis,low[axis]/cellSize);header.putDouble(152+8*axis,high[axis]/cellSize);}

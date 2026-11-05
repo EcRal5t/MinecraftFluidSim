@@ -268,8 +268,7 @@
   "screen.mmm.demos.reset": "重置",
   "screen.mmm.demos.remove": "移除",
   "screen.mmm.demos.paused": "已暂停",
-  "screen.mmm.demos.running": "运行中"
+  "screen.mmm.demos.running": "运行中",
+  "block.mmm.mechanical_driver": "机械驱动器",
+  "block.mmm.mechanical_driver.tooltip": "装在区域外壳，空手点击启动；潜行点击停止。"
 }
-
-
-

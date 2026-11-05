@@ -44,7 +44,8 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         SPECIES_AMOUNTS(29),
         SECONDARY_BEGIN(40),
         SECONDARY_COUNTS(41),
-        MINIMUM_TEMPERATURE(44);
+        MINIMUM_TEMPERATURE(44),
+        AQUEOUS_MATERIAL(46), ETHANOL_SPECIES(47);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -52,7 +53,17 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         var result = new StringBuilder();
         for (var field : Header.values())
             result.append("#define CAL_").append(field.name()).append(' ').append(field.word).append('\n');
+        result.append("#define CAL_ETHANOL_CP ").append(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K).append("LF\n");
+        result.append("double caloricEthanolMass(double mass,double quanta){return min(mass,quanta*1e-6LF*.046LF);}\n");
+        result.append("double caloricCapacity(double mass,double ethanolMass,double pureCp){return (mass-ethanolMass)*pureCp+ethanolMass*CAL_ETHANOL_CP;}\n");
         return result.toString();
+    }
+
+    static String shaderStateFunction() {
+        try (var input = VulkanLiquidThermodynamics.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/liquid-caloric-state.glsl")) {
+            if (input == null) throw new IllegalStateException("Liquid caloric state shader missing");
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException failure) { throw new IllegalStateException("Liquid caloric state shader unavailable", failure); }
     }
 
     /** Both live ranges exclude reserved rows and source/sink audit inventories. */
@@ -77,7 +88,15 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                 layout.word(VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_OFFSETS),
                 layout.word(VulkanThermalDeviceLayout.Field.SPECIES_HANDLES),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_AMOUNTS));}
     }
-    record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible) { }
+    record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible,
+                  int aqueousMaterial,int ethanolSpecies) {
+        Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible) {
+            this(offsets,upper,capacity,referenceTemperature,coldSensible,-1,-1);
+        }
+        Tables withAqueous(int material,int species) {
+            return new Tables(offsets,upper,capacity,referenceTemperature,coldSensible,material,species);
+        }
+    }
     static Tables tables(FluidMaterialRegistry fluid,ThermalRegistry thermal) {
         var materials=new ArrayList<ThermalMaterialDefinition>();
         for(int i=0;i<fluid.materials().size();i++)materials.add(thermal.material(thermal.materialHandle(
@@ -119,6 +138,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
             data[Header.MASSES.word]=inventory.massesWord();data[Header.ENERGIES.word]=inventory.energiesWord();data[Header.SPECIES_OFFSETS.word]=inventory.speciesOffsetsWord();
             data[Header.SPECIES_HANDLES.word]=inventory.speciesHandlesWord();data[Header.SPECIES_AMOUNTS.word]=inventory.speciesAmountsWord();
             data[Header.SECONDARY_BEGIN.word]=inventory.secondaryBegin();data[Header.SECONDARY_COUNTS.word]=inventory.secondaryCountsWord();
+            data[Header.AQUEOUS_MATERIAL.word]=tables.aqueousMaterial();data[Header.ETHANOL_SPECIES.word]=tables.ethanolSpecies();
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4 * Header.MINIMUM_TEMPERATURE.word,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);return out;
         }
         void initializeHeaderAndTables(ByteBuffer destination) {
@@ -189,7 +209,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
     }
     private static String shader(){
         try(var input=VulkanLiquidThermodynamics.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/liquid-thermodynamics.comp")){
-            if(input==null)throw new IllegalStateException("Liquid thermodynamics shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout());
+            if(input==null)throw new IllegalStateException("Liquid thermodynamics shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout() + shaderStateFunction());
         }catch(IOException failure){throw new IllegalStateException("Liquid thermodynamics shader unavailable",failure);}
     }
     @Override public void close(){bindings.close();}

@@ -8,9 +8,9 @@ import java.util.ArrayList;
 /** Four ideal-gas components with one dry-air mole recipe and optional water partial pressure. */
 public final class BuiltinGasDefinitions {
 	public static final String NITROGEN = "mmm:nitrogen", OXYGEN = "mmm:oxygen";
-	public static final String WATER_VAPOR = "mmm:water_vapor", CO2 = "mmm:co2";
+	public static final String WATER_VAPOR = "mmm:water_vapor", ETHANOL_VAPOR = "mmm:ethanol_vapor", CO2 = "mmm:co2";
 	public static final double NITROGEN_MOLAR_MASS = .028, OXYGEN_MOLAR_MASS = .032;
-	public static final double WATER_MOLAR_MASS = .018, CO2_MOLAR_MASS = .044;
+	public static final double WATER_MOLAR_MASS = .018, ETHANOL_MOLAR_MASS = .046, CO2_MOLAR_MASS = .044;
 	public static final double WATER_VAPOR_STANDARD_DENSITY = standardDensity(WATER_MOLAR_MASS);
 	public static final double CO2_STANDARD_DENSITY = standardDensity(CO2_MOLAR_MASS);
 	private static final List<GasRegistry.AmbientFraction> DRY_AIR = List.of(
@@ -42,6 +42,7 @@ public final class BuiltinGasDefinitions {
 		return new GasRegistry(List.of(pure(NITROGEN, BuiltinChemicalDefinitions.N2, NITROGEN_MOLAR_MASS, 280),
 				pure(OXYGEN, BuiltinChemicalDefinitions.O2, OXYGEN_MOLAR_MASS, 320),
 				pure(WATER_VAPOR, BuiltinChemicalDefinitions.H2O, WATER_MOLAR_MASS, 180),
+				pure(ETHANOL_VAPOR, BuiltinChemicalDefinitions.ETHANOL, ETHANOL_MOLAR_MASS, 460),
 				pure(CO2, BuiltinChemicalDefinitions.CO2, CO2_MOLAR_MASS, 440)), DRY_AIR);
 	}
 }

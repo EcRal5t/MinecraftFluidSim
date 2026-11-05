@@ -27,7 +27,7 @@ public final class LiquidEnergyColumn {
 	private ChemicalMixtureRecord[] cachedMixture;
 	private double[] cachedTemperature;
 	private long[] cachedEnergyBits;
-	private record CaloricState(int material, long mass, long base, long energy, double temperature) { }
+	private record CaloricState(int material, long mass, long base, long energy, ChemicalMixtureRecord mixture, double temperature) { }
 	private volatile CaloricState commonState;
 	private ChemicalRegistry cachedChemistry;
 
@@ -76,11 +76,11 @@ public final class LiquidEnergyColumn {
 			double physicalMass = unitScale.kilograms(markers.mass(marker));
 			ChemicalMixtureRecord mixture = markers.mixture(marker);
 			double base = baseEnergy(thermalHandle, physicalMass, mixture, markers.chemicalRegistry());
-			double energy = ThermalCaloricInversion.energyAt(registry.material(thermalHandle), physicalMass, base, insertionTemperatureK);
+			double energy = ThermalCaloricInversion.energyAt(stateFunction.materialForComposition(thermalHandle,physicalMass,mixture,markers.chemicalRegistry()), physicalMass, base, insertionTemperatureK);
 			if (!Double.isFinite(energy)) {
 				throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 			}
-			ThermalCaloricInversion.owner(registry.material(thermalHandle), physicalMass,
+			ThermalCaloricInversion.owner(stateFunction.materialForComposition(thermalHandle,physicalMass,mixture,markers.chemicalRegistry()), physicalMass,
 					energy, base);
 			initialEnergy[marker] = energy;
 		}
@@ -151,10 +151,10 @@ public final class LiquidEnergyColumn {
 		CaloricState common = commonState;
 		double temperature;
 		if (common != null && common.material() == cachedMaterial[marker] && common.mass() == mass
-				&& common.base() == baseBits && common.energy() == energy) temperature = common.temperature();
+				&& common.base() == baseBits && common.energy() == energy && Objects.equals(common.mixture(),cachedMixture[marker])) temperature = common.temperature();
 		else {
 			temperature = ThermalCaloricInversion.owner(material, Double.longBitsToDouble(mass), energy(marker), base).temperatureK();
-			commonState = new CaloricState(cachedMaterial[marker], mass, baseBits, energy, temperature);
+			commonState = new CaloricState(cachedMaterial[marker], mass, baseBits, energy, cachedMixture[marker], temperature);
 		}
 		cachedTemperature[marker] = temperature; cachedEnergyBits[marker] = energy;
 		return temperature;
@@ -179,7 +179,7 @@ public final class LiquidEnergyColumn {
 		private final ChemicalRegistry chemistry;
 		private CaloricInventory(int handle, double mass, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
 			this.handle = handle; this.mass = mass; this.mixture = mixture; this.chemistry = chemistry;
-			material = registry.material(handle); base = baseEnergy(handle, mass, mixture, chemistry);
+			material = stateFunction.materialForComposition(handle,mass,mixture,chemistry); base = baseEnergy(handle, mass, mixture, chemistry);
 		}
 		public double energy(double temperature) {
 			double value = ThermalCaloricInversion.energyAt(material, mass, base, temperature);
@@ -208,7 +208,7 @@ public final class LiquidEnergyColumn {
 		double physicalMass = unitScale.kilograms(mass);
 		if (!(Double.isFinite(physicalMass) && physicalMass > 0 && Double.isFinite(energy)))
 			throw new IllegalArgumentException("Prospective liquid energy or mass is invalid");
-		return ThermalCaloricInversion.owner(registry.material(handle), physicalMass, energy,
+		return ThermalCaloricInversion.owner(stateFunction.materialForComposition(handle,physicalMass,mixture,chemistry), physicalMass, energy,
 				baseEnergy(handle, physicalMass, mixture, chemistry)).temperatureK();
 	}
 
@@ -217,7 +217,7 @@ public final class LiquidEnergyColumn {
 			double temperature, ChemicalRegistry chemistry) {
 		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
 		double physicalMass = unitScale.kilograms(mass);
-		var material = registry.material(handle);
+		var material = stateFunction.materialForComposition(handle,physicalMass,mixture,chemistry);
 		double base = baseEnergy(handle, physicalMass, mixture, chemistry);
 		return stateFunction.baseEnergyRoundoff(handle, physicalMass, mixture, chemistry)
 				+ ThermalCaloricInversion.modeledRoundoff(material, physicalMass, base, temperature);
@@ -226,9 +226,9 @@ public final class LiquidEnergyColumn {
 	public void requireReactionState(
 			int marker, ChemicalMixtureRecord candidateMixture, double candidateMass, ThermalCarrierContext markers
 	) {
-		ThermalMaterialDefinition material = material(marker, markers);
 		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 		double physicalMass = unitScale.kilograms(candidateMass);
+		ThermalMaterialDefinition material = stateFunction.materialForComposition(thermalHandle,physicalMass,candidateMixture,markers.chemicalRegistry());
 		double base = baseEnergy(
 				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
 		ThermalCaloricInversion.owner(material, physicalMass, energy(marker), base);
@@ -352,8 +352,8 @@ public final class LiquidEnergyColumn {
 			ChemicalRegistry chemicalRegistry
 	) {
 		int thermalHandle = materialByFluidHandle[fluidMaterialHandle];
-		ThermalMaterialDefinition material = registry.material(thermalHandle);
 		double physicalMass = unitScale.kilograms(mass);
+		ThermalMaterialDefinition material = stateFunction.materialForComposition(thermalHandle,physicalMass,mixture,chemicalRegistry);
 		double base = baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
 		double energy = ThermalCaloricInversion.energyAt(material, physicalMass, base, temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
@@ -386,7 +386,8 @@ public final class LiquidEnergyColumn {
 	}
 
 	private ThermalMaterialDefinition material(int marker, ThermalCarrierContext markers) {
-		return registry.material(materialByFluidHandle[markers.fluidMaterialHandle(marker)]);
+		return stateFunction.materialForComposition(materialByFluidHandle[markers.fluidMaterialHandle(marker)],
+				unitScale.kilograms(markers.mass(marker)),markers.mixture(marker),markers.chemicalRegistry());
 	}
 
 	public record Truncation(double newEnergy, double removedEnergy) {

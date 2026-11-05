@@ -289,7 +289,7 @@ final class RegionRepositoryAdapter {
 		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks candidate staging: " + ownershipLock);
 		FluidRegion candidate = region.lifecycleCandidate(candidateDomain, operatorPaused);
 		RegionGenerationStore.PreparedGeneration prepared = files.prepare(
-				captureForFeatureGate(candidate, targetGeneration, true), (point, path) -> { });
+				captureForFeatureGate(candidate, targetGeneration), (point, path) -> { });
 		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
 	}
 
@@ -557,11 +557,11 @@ final class RegionRepositoryAdapter {
 	}
 
 	RegionState capture(FluidRegion region, long generation) throws IOException {
-		return captureForFeatureGate(region, generation, true);
+		return captureForFeatureGate(region, generation);
 	}
 
 	private RegionState captureForFeatureGate(
-			FluidRegion region, long generation, boolean synchronizeGasTopology
+			FluidRegion region, long generation
 	) throws IOException {
 		HostFluidState host = region.deviceResident() ? region.hostSnapshot() : region.editableHost();
 		if (host.hasMaterialState() && !host.authoritativeLayout()
@@ -589,15 +589,6 @@ final class RegionRepositoryAdapter {
 			}
 			if (!host.hasThermalState()) {
 				throw new IOException("Thermal state is unavailable for the active feature layout");
-			}
-			if (synchronizeGasTopology) {
-				try {
-					host.synchronizeGasTopologyForPersistence();
-				} catch (RuntimeException invalidTopology) {
-					throw new IOException("Current carrier geometry cannot be joined to gas/thermal truth: "
-							+ invalidTopology.getMessage() + "; previous HEAD remains authoritative",
-							invalidTopology);
-				}
 			}
 			return new RegionState(RegionCheckpointAssembler.captureThermal(source, generation));
 		}

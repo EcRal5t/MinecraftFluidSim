@@ -302,37 +302,6 @@ public final class ThermalDomainState {
 		liquidEnergy.commitExternalLiquidInsertions(firstOrdinal, plan);
 	}
 
-	/** Validates explicit liquid source, energy rounding and gas work in their publication order. */
-	public void requireGasRemapAfterExternalLiquidInsertion(
-			LiquidEnergyColumn.ExternalLiquidInsertionPlan liquid, GasEnergyStore.GasRemapPlan gas) {
-		var after = liquidEnergy.requireExternalInsertionCurrent(liquid);
-		gasState.requireCanCommitRemap(gas);
-		after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
-				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
-	}
-
-	/** Checks each external truncation, container rounding and gas work in their publication order. */
-	public void requireCanCommitLiquidExtraction(List<SignedDyadic> removedEnergy, Double itemEnergy,
-	                                           GasEnergyStore.GasRemapPlan gas) {
-		if (removedEnergy == null || itemEnergy != null && !Double.isFinite(itemEnergy))
-			throw new IllegalArgumentException("Liquid extraction energy is invalid");
-		var after = auditState.ledger();
-		SignedDyadic removed = SignedDyadic.ZERO;
-		for (var energy : removedEnergy) {
-			after = after.withExternalSinkEnergy(energy); after.expectedInventory();
-			removed = removed.add(energy);
-		}
-		if (itemEnergy != null) {
-			var delta = SignedDyadic.of(itemEnergy).subtract(removed);
-			after = after.withExternalSinkEnergy(delta).withRoundoff(delta); after.expectedInventory();
-		}
-		if (gas != null) {
-			gasState.requireCanCommitRemap(gas);
-			after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
-					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
-		}
-	}
-
 	public void removeExternalAndSwap(int index, int last) { liquidEnergy.removeExternalAndSwap(index, last); }
 	public void addInternalMarker(int marker, double energy) { liquidEnergy.addInternalMarker(marker, energy); }
 	public double removeInternalAndSwap(int index, int last) { return liquidEnergy.removeInternalAndSwap(index, last); }
@@ -370,71 +339,6 @@ public final class ThermalDomainState {
 	public boolean hasGasEnergy(int nodeCount) { return gasState.hasGasEnergy(nodeCount); }
 	public boolean gasModelBound() { return gasState.gasModelBound(); }
 	public double gasNodeEnergy(int nodeId, AirNetwork network) { return gasState.nodeEnergy(nodeId, network); }
-	public double gasTemperature(int nodeId, AirNetwork network) { return gasState.temperature(nodeId, network); }
-	public GasEnergyStore.PhaseState gasPhaseState(int nodeId,AirNetwork network) { return gasState.phaseState(nodeId,network); }
-	public double gasGaugePressure(int nodeId, AirNetwork network) { return gasState.gaugePressure(nodeId, network); }
-	public AirNetwork.NodeThermodynamics gasThermodynamics(AirNetwork network) { return gasState.thermodynamics(network); }
-	public double gasDensity(int nodeId, AirNetwork network) { return gasState.density(nodeId, network); }
-	public GasThermalModel.HydrodynamicState gasHydrodynamicState(int nodeId, AirNetwork network) {
-		return gasState.hydrodynamicState(nodeId, network);
-	}
-
-	public double requireGasNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
-		return gasState.requireNodeState(nodeId, inventory, energy, network);
-	}
-
-	public void commitGasNodeEnergy(int nodeId, double energy) { gasState.commitNodeEnergy(nodeId, energy); }
-
-	public double[] partitionGasNodeEnergy(int nodeId, List<GasInventory> children, AirNetwork network) {
-		return gasState.partitionNodeEnergy(nodeId, children, network);
-	}
-
-	public double ambientGasEnergy(GasInventory inventory) { return gasState.ambientGasEnergy(inventory); }
-	public double gasEnergyAtTemperature(GasInventory inventory, double temperatureK) {
-		return gasState.energyAtTemperature(inventory, temperatureK);
-	}
-	/** External fixed-volume gas edits prepare inventory, energy and source/sink audit together. */
-	public GasEnergyStore.InventoryEnergyPlan planExternalGasInventoryEnergy(AirNetwork network,
-			List<Integer> nodes, List<GasInventory> inventories, double[] energies,
-			SignedDyadic source, SignedDyadic sink) {
-		return gasState.planInventoryEnergy(network, nodes, inventories, energies, source, sink, SignedDyadic.ZERO);
-	}
-	public void commitExternalGasInventoryEnergy(GasEnergyStore.InventoryEnergyPlan plan) {
-		gasState.commitInventoryEnergy(plan);
-	}
-
-	public GasEnergyStore.GasRemapPlan planGasRemap(
-			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
-			double[] mixedEnergy, double[] inheritedAvailableVolumes,
-			SignedDyadic sourceEnergy, SignedDyadic sinkEnergy
-	) {
-		return gasState.planRemap(oldNetwork, inventories, availableVolumes, mixedEnergy,
-				inheritedAvailableVolumes, sourceEnergy, sinkEnergy);
-	}
-	public GasEnergyStore.GasRemapPlan planGasRemapWithSourceWork(AirNetwork old,List<GasInventory> stocks,
-			double[] volumes,double[] mixed,SignedDyadic source,SignedDyadic sink,SignedDyadic work){
-		return gasState.planRemapWithSourceWork(old,stocks,volumes,mixed,source,sink,work);
-	}
-
-	/** Plans the topology successor against the complete prepared phase energy and audit. */
-	public GasEnergyStore.GasRemapPlan planGasRemapAfterPhase(PhaseCellEnergyPlan phase, int node, double energy,
-			AirNetwork network, List<GasInventory> inventories, double[] volumes, double[] mixed,
-			double[] inherited, SignedDyadic source, SignedDyadic sink) {
-		requirePhaseCellEnergyCurrent(phase);
-		return gasState.planRemapAfterPhase(network, node, energy, phase.assignment.afterAudit(),
-				inventories, volumes, mixed, inherited, source, sink);
-	}
-
-	public void requireGasRemapAfterPhaseCurrent(GasEnergyStore.GasRemapPlan remap, PhaseCellEnergyPlan phase) {
-		requirePhaseCellEnergyCurrent(phase);
-		gasState.requireRemapAfterPhaseCurrent(remap, phase.assignment.afterAudit());
-	}
-
-	public void requireCanCommitGasRemap(GasEnergyStore.GasRemapPlan plan) {
-		gasState.requireCanCommitRemap(plan);
-	}
-
-	public void commitGasRemap(GasEnergyStore.GasRemapPlan plan) { gasState.commitRemap(plan); }
 
 	/**
 	 * Validates the complete operator-clear audit chain against one thermal generation.
@@ -443,7 +347,7 @@ public final class ThermalDomainState {
 	 */
 	public void requireCanCommitOperatorClear(
 			Revision baseRevision, SignedDyadic liquidEnergy, SignedDyadic coherentEnergy,
-			SignedDyadic granularEnergy, GasEnergyStore.GasRemapPlan gasPlan
+			SignedDyadic granularEnergy
 	) {
 		if (!thermalRevision().equals(baseRevision)) {
 			throw new IllegalStateException("Thermal inventory changed after operator clear planning");
@@ -455,52 +359,7 @@ public final class ThermalDomainState {
 				.withExternalSinkEnergy(liquidEnergy)
 				.withExternalSinkEnergy(coherentEnergy)
 				.withExternalSinkEnergy(granularEnergy);
-		if (gasPlan != null) {
-			gasState.requireCanCommitRemap(gasPlan);
-			candidate = candidate.withExternalSourceEnergy(gasPlan.sourceEnergy())
-					.withExternalSinkEnergy(gasPlan.sinkEnergy())
-					.withMechanicalWork(gasPlan.mechanicalWork())
-					.withRoundoff(gasPlan.roundoff());
-		}
-	}
 
-	/** Prevalidates removal of every sealed-node energy as one external sink against the joint inventory. */
-	public GasEnergyStore.GasVentPlan planGasVent(AirNetwork network, int markerCount) {
-		if (!hasGasEnergy(network.nodeCount()) || !auditState.ledger().acceptsInventory(exactEnergy(markerCount))) {
-			throw new IllegalStateException("Gas energy is not bound to a closed thermal inventory");
-		}
-		return gasState.planVent();
-	}
-	public void requireCanCommitGasVent(GasEnergyStore.GasVentPlan plan) {
-		gasState.requireCanCommitVent(plan);
-	}
-
-	/** Publishes an already validated all-node gas-energy removal using assignments only. */
-	public void commitGasVent(GasEnergyStore.GasVentPlan plan) { gasState.commitVent(plan); }
-
-	public GasEnergyStore.InventoryEnergyPlan planGasInventoryEnergy(AirNetwork network, List<Integer> nodes,
-	                                                              List<GasInventory> inventories, double[] energies,
-	                                                              SignedDyadic internalTransfer) {
-		return gasState.planPhaseInventoryEnergy(network, nodes, inventories, energies, internalTransfer);
-	}
-	public void requireGasInventoryEnergyCurrent(GasEnergyStore.InventoryEnergyPlan plan, AirNetwork network) {
-		gasState.requireInventoryEnergyCurrent(plan, network);
-	}
-	public void commitGasInventoryEnergyValues(GasEnergyStore.InventoryEnergyPlan plan) {
-		gasState.commitInventoryEnergyValues(plan);
-	}
-	public GasEnergyStore.GasRemapPlan planGasRemapAfterBatch(AirNetwork network,
-			GasEnergyStore.InventoryEnergyPlan gasPhase, PhaseBatchEnergyPlan cells,
-			List<GasInventory> inventories, double[] volumes, double[] mixed, double[] inherited,
-			SignedDyadic source, SignedDyadic sink) {
-		requirePhaseBatchEnergyCurrent(cells);
-		return gasState.planRemapAfterInventoryBatch(network, gasPhase, cells.assignment.afterAudit(),
-				inventories, volumes, mixed, inherited, source, sink);
-	}
-	public void requireGasRemapAfterBatchCurrent(GasEnergyStore.GasRemapPlan remap,
-			GasEnergyStore.InventoryEnergyPlan gasPhase, PhaseBatchEnergyPlan cells, AirNetwork network) {
-		requirePhaseBatchEnergyCurrent(cells);
-		gasState.requireRemapAfterInventoryBatchCurrent(remap, gasPhase, network, cells.assignment.afterAudit());
 	}
 
 	// ---- granular/coherent pass-throughs ----
@@ -944,6 +803,9 @@ public final class ThermalDomainState {
 				gasState.nodeEnergies(),granularState.coherentPhases().snapshot(),auditState.ledger());
 	}
 	public void restoreOwnerState(ThermalOwnerSnapshot snapshot, ThermalCarrierContext owners, AirNetwork network) {
+		restoreOwnerState(snapshot,owners,network,SignedDyadic.ZERO);
+	}
+	public void restoreOwnerState(ThermalOwnerSnapshot snapshot, ThermalCarrierContext owners, AirNetwork network, SignedDyadic spatialGasEnergy) {
 		if (!snapshot.registryFingerprint().equals(registry.fingerprint()) || snapshot.insertionTemperatureK() != insertionTemperatureK)
 			throw new IllegalArgumentException("Thermal owner registry or insertion state differs");
 		if (!snapshot.prepared()) for (var group : snapshot.coherentGroups()) {
@@ -967,7 +829,7 @@ public final class ThermalDomainState {
 			restoreGasEnergies(network,snapshot.copyGasNodeEnergy());
 		}
 		restoreAuditLedger(snapshot.audit());
-		if (!snapshot.prepared() && !snapshot.audit().acceptsInventory(exactEnergy(owners.markerCount())))
+		if (!snapshot.prepared() && !snapshot.audit().acceptsInventory(exactEnergy(owners.markerCount()).add(spatialGasEnergy)))
 			throw new IllegalArgumentException("Thermal restored owners do not close the shared inventory");
 	}
 

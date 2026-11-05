@@ -29,7 +29,7 @@
   - 代码入口：[MaterialRegistryCodec](../../fabric/src/main/java/mmm/fluid/MaterialRegistryCodec.java)
   - 测试选择器：`region-state`
 
-执行方式见 [验证指南](../maintenance/validation.md#cpu)。
+执行方式见 [验证指南](../maintenance/validation.md#host)。
 
 ## 本文内容
 
@@ -82,26 +82,16 @@ handle 用于数组索引。checkpoint 保存 canonical material palette，容�
 - 共享通量联合交接体积、整数质量、组成和内能；实际整数质量通量同时推进 MAC 动量。
 - 单一纯水域必须退化为同一机械求解路径，不额外引入材料修正源汇。
 
-库存观察的格内组成密度从实际单元记录推导：
+库存观察的格内密度由实际整数质量和共同状态方程给出的实际液体体积求得：
 
 ```text
-rho_cell = sum(stock_mass_kg) / (h^3 * sum(stock_normalized_volume))
-
-mass_kg   = massUnits / Mass.UNITS_PER_KILOGRAM
-solver_mass = mass_kg / cellSize^3
-volume_m3 = stock_normalized_volume * cellSize^3
+mass_kg = massUnits / Mass.UNITS_PER_KILOGRAM
+rho_liquid = sum(mass_kg) / actual_liquid_volume_m3
 ```
 
-热区域的压力与颗粒载体物性使用连续组成密度 `rho_i = sum(w_pi*m_p)/sum(w_pi*V_p)`。权重与热浮力共用 cell-center 三线性支撑，限制在完全开放、连通且属于同一 pressure phase 的有液体单元；
-外壳附近归一化，partial cut-cell 和含多相单元保留所属单元采样。该字段按载体位置与热状态代次重建，保持所有质量和体积库存原样。
-无热状态的压力密度沿用所属单元的组成密度。
+化学单元记录的整数闭合式为 `massUnits = speciesMassUnits + massResidualUnits`；溶质改变实际质量和体积后，密度由同一库存求值。盐水黏度和水—乙醇组成物性采用声明范围内的混合近似，详见[化学状态](chemistry-state.md)；温度相关热容与参考能由各载体的热状态函数求值。
 
-化学单元记录的整数闭合式为 `massUnits = speciesMassUnits + massResidualUnits`；
-溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
-
-pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率及压力矩阵系数使用 binary64，投影结果最终写入 binary32 MAC 速度。热膨胀浮力项从相同支撑上的逐载体温度和实际质量推导热密度变化，并沿相同的两段界面距离积分；库存密度、压力惯性和热密度修正各自保存明确的派生含义。
-
-同温盐水分层由溶解的 Na⁺/Cl⁻ 的实际质量得到。`LiquidStratificationValidation` 检查盐水下层静水、反置翻转、同组成温差分层及热盐竞争，并逐步核对体积、材料质量、species 和内能；热修正有效范围见[热浮力](thermal-state.md#热浮力)。
+共同压力使用两侧液气质量形成的 MAC 面惯性；重力与温度相关浮力使用同代物质状态。热浮力的适用范围见[热浮力](thermal-state.md#热浮力)。
 
 同一互溶组的材料共享物相与速度场，各材料保留独立单元库存。
 实际体积决定格内比例，不可互溶材料保留相分区并共享统一力学主干。
@@ -129,8 +119,8 @@ pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率
 `setVolumes(float[])` 在一次事务中替换整域目标体积；数组按 x、y、z 递增的单元索引排列。
 单格 `setVolume` 共用同一准备过程，体积按固定碰撞开放量减去实际固体占容裁剪；默认材料为 handle 0，可选材料数组为初始化提供逐格材料身份。
 旧库存的物种、质量与内能记外部 sink，新库存按目标材料密度、默认组成和注入温度记 external source。
-MAC 按实际质量变化移走对应动量或混合静止注入质量，明确的混合动能损失记局部热；库存、热账和气腔全部预检后一次发布。
-原版水采集、普通水池、气腔水池、分层与球冠演示先收集目标体积，再调用同一批入口；准备工作按格数与现有库存记录数线性遍历。
+MAC 按实际质量变化移走对应动量或混合静止注入质量，明确的混合动能损失记局部热；库存、热账和逐格气体后继共同准备后一次发布。
+原版水采集、普通水池、分层与球冠演示先收集目标体积，再调用同一批入口；准备工作按格数与现有库存记录数线性遍历。
 材料 palette 通过 `bindMaterialRegistry` 直接绑定，保留已有 Stock 与 MAC 状态。
 
 材料混合物注入先规划目标单元记录，按体积份额分配整数质量并保留守恒余数。
