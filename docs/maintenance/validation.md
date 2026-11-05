@@ -95,7 +95,7 @@
 
 本轮补充验证：`lifecycle,protocol` 通过；生命周期实际写入世界能力包及演示记录后再次启动。`tank 120` 和 `controller 20` 通过，控制器从未标注温度的原版水桶开始，经真实计划、WAL、HEAD、恢复及创造模式取水，核对物质与内能。`ContainerTransferStoreValidation --journal-thermal` 通过，覆盖带独立来源库存的日志与公共转移回执。完整 `containers` 选择器在日志及恢复用例通过后进入较长的 CPU 物理矩阵，本轮终止该部分，未计为全套通过。
 
-水流及小型 U 管常压、加压、低压场景各连续 500 步通过，包含实体交互、暂停单步、导出恢复及编辑后续算。U 管加压与低压的液位变化方向相反，常压两臂保持接近；质量按环境交换后的整数收支闭合。记录 `build/final-pressure-flow.log`、`build/final-pressure-air.log`、`build/final-pressure-ambient.log` 和 `build/final-pressure-vacuum.log`。
+水流及小型 U 管常压、加压、低压场景各连续 500 步通过，包含实体交互、暂停单步、导出恢复及编辑后续算。U 管加压与低压的液位变化方向相反，常压两臂保持接近；质量按环境交换后的整数收支闭合。气体物性增量更新后水流 500 步通过，记录 `build/gas-caloric-formal-flow.log`；U 管记录 `build/final-pressure-air.log`、`build/final-pressure-ambient.log` 和 `build/final-pressure-vacuum.log`。
 
 真实方块写入、鼠标命中、字体排版及图形绘制由图形客户端观察。入口为 `/mmm demo`：清水开始后切到油水和酸碱，切换显色，暂停、单步、重置、移除，再切换水流池及三种气压预设。带光影包和资源重载的观察仍单独保留。
 
@@ -152,20 +152,20 @@ S1 的针对性入口：
 
 该入口执行有限墙加热、CO₂ 吸收脱除、晶种结晶、双挥发冷凝、碱液碳化及规定运动驱动，均通过容器事务完成投料与取样，并在 checkpoint 恢复后续算。普通场景按 20 个 0.05 s 步推进；驱动至少 40 步，冷凝运行 1200 步。冷凝从热池底部接口经 15 次实际容器事务连续投入同配方液体，热池保留自由高度，并使用抽气后的气道和 285 K 普通金属干冷壁，从固定冷壁接触格取样。
 
-2026-11-05，六条组合工艺完成实际投料、取样、checkpoint 恢复及续算。干冷壁样品为 4.611 mL，乙醇摩尔分率为 0.34155，原料为 0.23591。吸收脱除使用 1 mol/m³ 稀碳酸水，气体抽除后继续推进，液相无机碳减少且气相 CO₂ 增加。记录 `build/final-pressure-process-all.log`；实体关闭格处理更新后的规定运动驱动复验记录 `build/final-pressure-drive-final.log`。
+2026-11-05，六条组合工艺完成实际投料、取样、checkpoint 恢复及续算。干冷壁样品为 4.287 mL，乙醇摩尔分率为 0.34626，原料为 0.23591。吸收脱除使用 1 mol/m³ 稀碳酸水，气体抽除后继续推进，液相无机碳减少且气相 CO₂ 增加。记录 `build/gas-caloric-formal-process-all.log`；实体关闭格处理更新后的规定运动驱动复验记录 `build/final-pressure-drive-final.log`。
 
 该组小型区域的每次 `motion.step` 墙钟时间如下，包含冷导入首步；投料 WAL、采样、存档与实际绘制在计时外。
 
 | 工艺 | 步数 | 中位数 ms | P95 ms | 最大 ms |
 | --- | ---: | ---: | ---: | ---: |
-| 加热 | 20 | 15.712 | 48.354 | 190.176 |
-| 吸收与脱除 | 40 | 12.913 | 69.262 | 115.221 |
-| 结晶 | 20 | 26.627 | 85.498 | 113.985 |
-| 蒸发与冷凝 | 1200 | 11.173 | 13.126 | 185.377 |
-| 碳化 | 20 | 11.620 | 51.003 | 97.926 |
-| 规定运动驱动 | 40 | 11.105 | 16.681 | 94.100 |
+| 加热 | 20 | 19.319 | 36.366 | 211.009 |
+| 吸收与脱除 | 40 | 17.379 | 29.596 | 120.248 |
+| 结晶 | 20 | 39.677 | 68.846 | 114.223 |
+| 蒸发与冷凝 | 1200 | 12.303 | 16.572 | 1541.264 |
+| 碳化 | 20 | 17.786 | 38.819 | 117.214 |
+| 规定运动驱动 | 40 | 12.825 | 19.192 | 104.837 |
 
-共同压力下，完整水流 120 步、实体交互、暂停单步、checkpoint 恢复、库存编辑与续算通过；119 个非冷导入步中位数 16.088 ms、P95 23.953 ms、最大 40.922 ms，末态水温 293.145146 K。记录 `build/pressure-csr-flow120.log`。`assemble verifyArchitecture :fabric:compileTestJava :gpu-kernel:compileTestJava` 通过，架构检查扫描 601 个生产源，记录 `build/s1-s7-integrated-build.log`。
+完整水流 500 步、实体交互、暂停单步、checkpoint 恢复、库存编辑与续算通过，记录 `build/gas-caloric-formal-flow.log`。当前交付 `assemble` 通过，记录 `build/pause-delivery-assemble.log`；架构检查及测试源码编译证据见 `build/s1-s7-integrated-build.log`，气体物性更新的针对性编译及运行记录见 `build/gas-caloric-cache-phase.log`。
 
 64³ 全能力设备预算使用同一切格几何、两相体积分数与初始速度，按正式支持的 0.5 m 格长加载生产物性、逐格气体、热、扩散、反应、相变及固态布局，并执行候选提交：
 
@@ -173,7 +173,7 @@ S1 的针对性入口：
 ./gradlew.bat :gpu-kernel:runGpuLiquidMechanicalBenchmark -PgpuMechanicalGrids=64 -PgpuMechanicalScene=cut -PgpuMechanicalGas=true -PgpuMechanicalThermal=true -PgpuMechanicalProduction=true -PgpuMechanicalWarmup=5 -PgpuMechanicalSamples=10 --offline --no-daemon --console=plain --max-workers=1
 ```
 
-该后端预算输入超出默认区域登记规模；相对原 0.25 m 切格机械输入，其边长加倍、物理库存按格容增至 8 倍，分别记录结果。它覆盖设备候选及提交，Minecraft 世界交互与绘制另计。2026-11-05，关闭阶段诊断、预热 5 步并测量 10 步：生产 64³ 中位 136.088 ms、最大 192.170 ms，GPU 均值 91.035 ms，单 bank 工作区为 3,715,820,224 B；测量步实际子步数为 `[1,1,1,1,1,2,2,2,2,2]`，记录 `build/final-pressure-production64-final.log`。原 64³ 切格机械场景中位 204.619 ms、最大 228.557 ms，记录 `build/final-pressure-mechanical64-final.log`；32³／256 颗粒场景中位 149.753 ms、最大 297.675 ms，记录 `build/debug-granular32.log`。当前耗时高于 50 ms 目标，后续继续优化。
+该后端预算输入超出默认区域登记规模；相对原 0.25 m 切格机械输入，其边长加倍、物理库存按格容增至 8 倍，分别记录结果。它覆盖设备候选及提交，Minecraft 世界交互与绘制另计。2026-11-05，关闭阶段诊断、预热 5 步并测量 10 步：生产 64³ 中位 99.928 ms、最大 175.604 ms，GPU 均值 74.344 ms，单 bank 工作区为 3,713,109,520 B；测量步实际子步数为 `[1,1,1,1,1,2,2,2,2,2]`，记录 `build/gas-caloric-formal-production64.log`。原 64³ 切格机械场景中位 140.351 ms、最大 191.693 ms，记录 `build/gas-caloric-formal-mechanical64.log`；32³／256 颗粒场景中位 157.254 ms、最大 200.338 ms，记录 `build/gas-caloric-formal-mechanical32.log`。当前耗时高于 50 ms 目标，后续继续优化。
 
 气体及相变 13 个场景与有限墙通过，记录 `build/final-pressure-phase.log`、`build/final-pressure-walls.log`。纯真空实体关闭与重开、有库存实体对齐关闭通过，记录 `build/entity-vacuum-closure.log`、`build/aligned-body-check.log`。
 

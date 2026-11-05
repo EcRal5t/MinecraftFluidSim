@@ -147,8 +147,8 @@ final class VulkanLiquidWorkspace {
             if(region.kernels==null)region.kernel.recordTotals(command,sx,sy,sz);
             else region.kernels.timed(command,"source-liquid-totals",()->region.kernel.recordTotals(command,sx,sy,sz));
             if(transport!=null&&transport.gas!=null){
-                if(reuseGeometry)transport.gas.recordThermodynamics(command,output,errors,duration);
-                else transport.gas.recordSource(command,output,errors,duration,region.kernel);
+                if(reuseGeometry)transport.gas.recordThermodynamics(command,output,errors,duration,false);
+                else transport.gas.recordSource(command,output,errors,duration,region.kernel,false);
             } else {
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                 region.mixtureKernel.record(command,mixture,region.requestCellSize,duration);
@@ -405,14 +405,14 @@ final class VulkanLiquidWorkspace {
                             };
                             if(error==0&&(!finalRequest||transport.thermal==null&&transport.reactions==null))error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,(command,input,output,errors,staging,stack)->{
                                 finishTransport.record(command,input,output,errors,staging,stack);
-                                if(finalRequest||transport.entity==null)thermalStages.recordLocalState(command,output,errors,parameters.duration());
+                                if(finalRequest||transport.entity==null)thermalStages.recordLocalState(command,output,errors,parameters.duration(),true);
                                 transport.recordLedgers(command,accumulateLedger?source.transport:null,finalRequest,output,errors);
                                 if(migrating)writeHeaders(command,output,stableHeaders,stack);
                             });
                             else if(error==0){
                                 boolean react=transport.reactions!=null&&(region.activeInputs==null||!region.activeInputs.pendingPhaseSettlementOnly());
                                 VulkanRegionStorage.ComputeCommands finishLedgers=(command,input,output,errors,staging,stack)-> {
-                                    thermalStages.recordLocalState(command,output,errors,parameters.duration());
+                                    thermalStages.recordLocalState(command,output,errors,parameters.duration(),!react);
                                     transport.recordLedgers(command,accumulateLedger?source.transport:null,finalRequest,output,errors);if(migrating)writeHeaders(command,output,stableHeaders,stack);
                                 };
                                 if(transport.thermal==null)error=candidate.continueBatch(finishTransport,0,0).error();
@@ -830,10 +830,10 @@ final class VulkanLiquidWorkspace {
             region.kernels.timed(command,"momentum-transport",()->region.kernels.momentumKernel.recordTransport(command,momentum));
             region.kernels.timed(command,"future-liquid-totals",()->region.kernels.futureGeometry.recordTotals(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
             if(gas!=null){
-                gas.recordThermodynamics(command,output,errors,parameters.duration());
+                gas.recordThermodynamics(command,output,errors,parameters.duration(),false);
                 gas.recordPressureWork(command,output,errors);
                 region.kernels.timed(command,"future-liquid-totals",()->region.kernels.futureGeometry.recordTotals(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
-                gas.recordSource(command,output,errors,parameters.duration(),region.kernels.futureGeometry);
+                gas.recordSource(command,output,errors,parameters.duration(),region.kernels.futureGeometry,true);
             }else{
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                 region.mixtureKernel.record(command,mixture,region.requestCellSize,parameters.duration());
@@ -843,7 +843,7 @@ final class VulkanLiquidWorkspace {
             region.kernels.timed(command,"mixing-heat",()->region.kernels.momentumKernel.recordHeatPosting(command,momentum));
             if(gas!=null){
                 region.kernels.gasThermo.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                region.kernels.timed(command,"post-mixing-gas-caloric",()->region.kernels.gasThermo.recordCaloric(command,gas.thermo));
+                region.kernels.timed(command,"post-mixing-gas-caloric",()->region.kernels.gasThermo.recordEnergy(command,gas.thermo));
             }
             region.kernels.timed(command,"body-init",()->region.kernels.bodiesKernel.recordInitialize(command,bodies));
             region.kernels.timed(command,"body-connectivity",()->region.kernels.bodiesKernel.recordConnectivity(command,bodies));
@@ -855,7 +855,7 @@ final class VulkanLiquidWorkspace {
             region.kernels.timed(command,"common-energy",()->region.kernels.energyKernel.record(command,energy,parameters.cellSize(),parameters.gravity()));
             if(dynamics!=null)region.kernels.transitionKernel.recordRefreshAfterEnergy(command,dynamics.transitions,parameters.cellSize(),parameters.duration(),parameters.gravity());
             region.kernels.timed(command,"future-liquid-totals",()->region.kernels.futureGeometry.recordTotals(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
-            if(gas!=null)gas.recordThermodynamics(command,output,errors,parameters.duration());
+            if(gas!=null)gas.recordThermodynamics(command,output,errors,parameters.duration(),true);
             else {
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                 region.mixtureKernel.record(command,mixture,region.requestCellSize,parameters.duration());

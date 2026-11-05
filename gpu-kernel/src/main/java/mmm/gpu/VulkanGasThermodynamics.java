@@ -31,6 +31,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         ANCHOR_ENERGY(7),
         SPECIES_REFERENCE(8),
         STATES(9),
+        CALORIC_CACHE(10),
         STANDARD_TEMPERATURE(32),
         MINIMUM_TEMPERATURE(34),
         PRESSURE_FACTOR(36),
@@ -93,7 +94,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column segmentOffsets,
                   VulkanLiquidStateLayout.Column segmentUpper, VulkanLiquidStateLayout.Column segmentHeatCapacity,
                   VulkanLiquidStateLayout.Column specificAnchorEnergy, VulkanLiquidStateLayout.Column speciesReference,
-                  VulkanLiquidStateLayout.Column states, long endOffset) {
+                  VulkanLiquidStateLayout.Column states, VulkanLiquidStateLayout.Column caloricCache, long endOffset) {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
         long stateOffset(int node, Quantity quantity) {
@@ -109,7 +110,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
             data[Header.NODE_CAPACITY.word] = gas.nodeCapacity(); data[Header.COMPONENT_COUNT.word] = tables.specificAnchorEnergy().length;
             data[Header.SPECIES_STRIDE.word] = tables.definitions().speciesIds().size(); data[Header.NODE_VOLUMES.word] = nodeVolumesWordOffset;
             data[Header.SEGMENT_OFFSETS.word] = word(segmentOffsets); data[Header.SEGMENT_UPPER.word] = word(segmentUpper); data[Header.SEGMENT_CAPACITY.word] = word(segmentHeatCapacity);
-            data[Header.ANCHOR_ENERGY.word] = word(specificAnchorEnergy); data[Header.SPECIES_REFERENCE.word] = word(speciesReference); data[Header.STATES.word] = word(states);
+            data[Header.ANCHOR_ENERGY.word] = word(specificAnchorEnergy); data[Header.SPECIES_REFERENCE.word] = word(speciesReference); data[Header.STATES.word] = word(states); data[Header.CALORIC_CACHE.word] = word(caloricCache);
             for (var field : VulkanGasStateLayout.Field.values()) data[GAS_FIELDS + field.ordinal()] = Math.toIntExact(gas.column(field).offset() / 4);
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * Header.STANDARD_TEMPERATURE.word, GasRegistry.STANDARD_TEMPERATURE_K);
@@ -155,7 +156,8 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         var anchor = column(cursor, tables.specificAnchorEnergy().length, 8, alignment);
         var species = column(cursor, tables.speciesReference().length, 8, alignment);
         var states = column(cursor, Math.multiplyExact(gas.nodeCapacity(), STATE_WIDTH), 8, alignment);
-        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states, align(cursor[0], alignment));
+        var cache = column(cursor, Math.multiplyExact(gas.nodeCapacity(), 4), 8, alignment);
+        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states, cache, align(cursor[0], alignment));
     }
     private final FlipKernelBindings bindings;
     VulkanGasThermodynamics(VulkanDeviceContext context) { bindings = new FlipKernelBindings(context, 2, shader(), 32); }
@@ -165,6 +167,8 @@ final class VulkanGasThermodynamics implements AutoCloseable {
     void record(VkCommandBuffer command, Layout layout) { stage(command, layout, 1); }
     /** Derive temperature and caloric properties at unit volume before mixture closure. */
     void recordCaloric(VkCommandBuffer command, Layout layout) { stage(command, layout, 5); }
+    /** Update caloric state after energy changes with unchanged gas composition. */
+    void recordEnergy(VkCommandBuffer command, Layout layout) { stage(command, layout, 6); }
     private void stage(VkCommandBuffer command, Layout layout, int stage) {
         int count = layout.gas().nodeCapacity();if (count == 0) return;
         int groups = (int) (((long) count + 127) / 128);

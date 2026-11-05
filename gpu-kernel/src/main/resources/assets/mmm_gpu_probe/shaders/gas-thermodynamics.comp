@@ -157,10 +157,62 @@ double capacityAndBoundary(int first, int last, double temperature, bool heating
     }
     return capacity;
 }
+void segmentBounds(int first,int last,double temperature,out double lower,out double upper){
+    lower=readDouble(p.header+GAS_H_MINIMUM_TEMPERATURE);
+    upper=packDouble2x32(uvec2(0u,0x7ff00000u));
+    for(int component=first;component<last;component++){
+        if(readInt64(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component)==int64_t(0))continue;
+        int handle=int(words[gasField(GAS_COMPONENT_HANDLES)+component]);
+        int begin=int(words[headerWord(GAS_H_SEGMENT_OFFSETS)+handle]);
+        int end=int(words[headerWord(GAS_H_SEGMENT_OFFSETS)+handle+1]),segment=begin;
+        while(segment+1<end && temperature>=readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*segment))segment++;
+        if(segment>begin)lower=max(lower,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*(segment-1)));
+        if(segment+1<end)upper=min(upper,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*segment));
+    }
+}
+void publishCaloric(int outputOffset,double volume,double temperature,double mass,double r,double capacity){
+    double pressure = GAS_MIXTURE_LIMIT * r * temperature / (GAS_MIXTURE_BULK * volume + r * temperature), density = mass / volume,
+           gamma = headerWord(GAS_H_ISOTHERMAL) != 0 ? 1.0 : 1.0 + r / capacity;
+    double gasScale=GAS_MIXTURE_BULK*volume/(GAS_MIXTURE_BULK*volume+r*temperature);
+    double bulk=pressure*gasScale*(1.0LF+(gamma-1.0LF)*gasScale*GAS_MIXTURE_LIMIT/GAS_MIXTURE_BULK);
+    double sound = sqrt(bulk / density), compliance = 1.0 / bulk;
+    if (!(isFinite(pressure) && pressure > 0.0 && isFinite(density) && density > 0.0 && isFinite(capacity) &&
+          capacity > 0.0 && isFinite(r) && r > 0.0 && isFinite(gamma) && gamma >= 1.0 && isFinite(bulk) && bulk > 0.0 &&
+          isFinite(sound) && sound > 0.0 && isFinite(compliance) && compliance > 0.0)) {
+        reportInvalid();
+        return;
+    }
+    writeDouble(outputOffset, temperature);
+    writeDouble(outputOffset + 2, pressure);
+    writeDouble(outputOffset + 4, density);
+    writeDouble(outputOffset + 6, capacity);
+    writeDouble(outputOffset + 8, r);
+    writeDouble(outputOffset + 10, gamma);
+    writeDouble(outputOffset + 12, bulk);
+    writeDouble(outputOffset + 14, sound);
+    writeDouble(outputOffset + 16, compliance);
+}
+bool updateEnergy(int node){
+    int cache=headerWord(GAS_H_CALORIC_CACHE)+8*node,outAt=headerWord(GAS_H_STATES)+18*node;
+    double oldEnergy=readDouble(cache),mass=readDouble(cache+2),lower=readDouble(cache+4),upper=readDouble(cache+6);
+    double capacity=readDouble(outAt+6),constant=readDouble(outAt+8),temperature=readDouble(outAt);
+    if(!(mass>0.0LF&&capacity>0.0LF&&constant>0.0LF))return false;
+    int target=gasField(GAS_INTERNAL_ENERGY)+2*node;
+    double energy=readDouble(target);
+    if(!isFinite(energy)){reportInvalid();return true;}
+    if(headerWord(GAS_H_ISOTHERMAL)!=0){energy=oldEnergy;writeDouble(target,energy);}
+    else temperature+=(energy-oldEnergy)/capacity;
+    if(!(isFinite(temperature)&&temperature>=lower&&temperature<upper))return false;
+    writeDouble(cache,energy);
+    publishCaloric(outAt,1.0LF,temperature,mass,constant,capacity);
+    return true;
+}
 void derive(int node) {
     if (node >= p.count)
         return;
     int outputOffset = headerWord(GAS_H_STATES) + 18 * node;
+    if(p.stage==6 && errors==0u && node<int(words[gasField(GAS_COUNTS)]) && updateEnergy(node))return;
+    int cache=headerWord(GAS_H_CALORIC_CACHE)+8*node;writeDouble(cache+2,0.0LF);
     for (int i = 0; i < 9; i++)
         writeDouble(outputOffset + 2 * i, 0.0);
     if (errors != 0u)
@@ -172,7 +224,7 @@ void derive(int node) {
     }
     if (node >= actual)
         return;
-    double volume = p.stage == 5 ? 1.0LF : readDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node), energy = readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node);
+    double volume = p.stage >= 5 ? 1.0LF : readDouble(headerWord(GAS_H_NODE_VOLUMES) + 2 * node), energy = readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node);
     if (!isFinite(volume) || volume < 0.0 || !isFinite(energy)) {
         reportInvalid();
         return;
@@ -233,26 +285,13 @@ void derive(int node) {
         reportInvalid();
         return;
     }
-    double pressure = GAS_MIXTURE_LIMIT * r * temperature / (GAS_MIXTURE_BULK * volume + r * temperature), density = mass / volume,
-           gamma = headerWord(GAS_H_ISOTHERMAL) != 0 ? 1.0 : 1.0 + r / capacity;
-    double gasScale=GAS_MIXTURE_BULK*volume/(GAS_MIXTURE_BULK*volume+r*temperature);
-    double bulk=pressure*gasScale*(1.0LF+(gamma-1.0LF)*gasScale*GAS_MIXTURE_LIMIT/GAS_MIXTURE_BULK);
-    double sound = sqrt(bulk / density), compliance = 1.0 / bulk;
-    if (!(isFinite(pressure) && pressure > 0.0 && isFinite(density) && density > 0.0 && isFinite(capacity) &&
-          capacity > 0.0 && isFinite(r) && r > 0.0 && isFinite(gamma) && gamma >= 1.0 && isFinite(bulk) && bulk > 0.0 &&
-          isFinite(sound) && sound > 0.0 && isFinite(compliance) && compliance > 0.0)) {
-        reportInvalid();
-        return;
-    }
-    writeDouble(outputOffset, temperature);
-    writeDouble(outputOffset + 2, pressure);
-    writeDouble(outputOffset + 4, density);
-    writeDouble(outputOffset + 6, capacity);
-    writeDouble(outputOffset + 8, r);
-    writeDouble(outputOffset + 10, gamma);
-    writeDouble(outputOffset + 12, bulk);
-    writeDouble(outputOffset + 14, sound);
-    writeDouble(outputOffset + 16, compliance);
+    double standard=readDouble(p.header+GAS_H_STANDARD_TEMPERATURE),lower,upper;
+    if(temperature>=coldBoundary && temperature<hotBoundary){
+        lower=temperature>=standard?standard:coldBoundary;
+        upper=temperature>=standard?hotBoundary:standard;
+    } else segmentBounds(first,last,temperature,lower,upper);
+    writeDouble(cache,energy);writeDouble(cache+2,mass);writeDouble(cache+4,lower);writeDouble(cache+6,upper);
+    publishCaloric(outputOffset,volume,temperature,mass,r,capacity);
 }
 void main() {
     int item=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);

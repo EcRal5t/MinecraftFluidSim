@@ -38,7 +38,7 @@ final class VulkanLiquidThermalStages {
     int executeReactions(VulkanRegionStorage.Candidate candidate, VulkanGasThermodynamics.Layout sourceEOS,
                          VulkanGasGeometry.Layout previousGeometry, double duration) {
         var activity = candidate.continueBatch((command,input,output,errors,staging,stack)-> {
-            recordLocalState(command,output,errors,duration);
+            recordLocalState(command,output,errors,duration,true);
             region.kernels.reactionKernel.recordLiquidActivity(command,transport.reactions,output,errors);
         },transport.reactions.progress().column(VulkanReactionProgressLayout.Field.CONTROL).offset()+28,4);
         int error=activity.error();
@@ -58,11 +58,11 @@ final class VulkanLiquidThermalStages {
         },0,0).error();
     }
 
-    void recordLocalState(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double duration){
+    void recordLocalState(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double duration,boolean energyOnly){
         var occupied=transport.entity==null?workspace.occupied():transport.entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ);
         region.kernel.rebindRanges(workspace.geometryRanges(output,errors,geometry.get(GeometryField.FACES),occupied));
         region.kernel.recordTotals(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
-        if(transport.gas!=null)transport.gas.recordSource(command,output,errors,duration,region.kernel);
+        if(transport.gas!=null)transport.gas.recordSource(command,output,errors,duration,region.kernel,energyOnly);
         else {
             region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
             region.mixtureKernel.record(command,workspace.mixture,region.requestCellSize,duration);
@@ -94,7 +94,7 @@ final class VulkanLiquidThermalStages {
             if(reuseGeometry){
                 region.kernel.rebindRanges(workspace.geometryRanges(output,errors,geometry.get(GeometryField.FACES)));
                 workspace.recordMixtureGeometry(command,output,errors,duration,true);
-            } else recordLocalState(command,output,errors,duration);
+            } else recordLocalState(command,output,errors,duration,false);
             region.kernels.ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
         }, 0, 0);
         if (status.error() != 0) return status.error();
@@ -103,7 +103,8 @@ final class VulkanLiquidThermalStages {
                 source.transport.devices == null ? null : source.transport.devices.state,
                 transport.devices == null ? null : transport.devices.settlement, false);
         if (error != 0) return error;
-        if (transport.reactions != null && (region.activeInputs == null || !region.activeInputs.pendingPhaseSettlementOnly())) {
+        boolean react=transport.reactions != null && (region.activeInputs == null || !region.activeInputs.pendingPhaseSettlementOnly());
+        if (react) {
             error = executeReactions(candidate, transport.gas == null ? null : transport.gas.thermo,
                     transport.gas == null ? null : transport.gas.geometry, duration);
             if (error != 0) return error;
@@ -111,7 +112,7 @@ final class VulkanLiquidThermalStages {
 
         var stableHeader = new HeaderWrite(transport.thermal.contacts().header.offset(), transport.thermal.contacts().headerBytes());
         return candidate.finishBatch(stableHeader.bytes().remaining(), (command, input, output, errors, staging, stack) -> {
-            recordLocalState(command,output,errors,duration);
+            recordLocalState(command,output,errors,duration,!react);
             region.kernels.ledger.record(command, thermal.reservoir());
             region.kernels.ledger.record(command, transport.thermalOnlyRoundoff);
             region.kernels.ledger.record(command, transport.thermalOnlyMechanical);

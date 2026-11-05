@@ -164,21 +164,21 @@ final class VulkanLiquidWorkspaceSections {
                 new HeaderWrite(transport.column(VulkanLocalGasTransport.Field.HEADER).offset(),transport.headerBytes()),
                 new HeaderWrite(transport.column(VulkanLocalGasTransport.Field.AMBIENT_DATA).offset(),transport.ambientBytes()),
                 new HeaderWrite(transport.column(VulkanLocalGasTransport.Field.SPECIES_MASS).offset(),transport.speciesMassBytes()));}
-        void recordSource(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double dt,VulkanLiquidGeometry geometryKernel){
+        void recordSource(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double dt,VulkanLiquidGeometry geometryKernel,boolean energyOnly){
             String phase=geometryKernel==region.kernel?"source":"future";
-            recordThermodynamics(command,output,errors,dt,phase);
+            recordThermodynamics(command,output,errors,dt,phase,energyOnly);
             var arena=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
             region.kernels.timed(command,phase+"-liquid-shapes",()->geometryKernel.recordShapes(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
             region.kernels.gasGeometry.rebindRanges(arena,err);
             region.kernels.timed(command,phase+"-gas-geometry",()->region.kernels.gasGeometry.recordLocalGeometry(command,geometry));
         }
-        void recordThermodynamics(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double dt){
-            recordThermodynamics(command,output,errors,dt,"future");
+        void recordThermodynamics(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double dt,boolean energyOnly){
+            recordThermodynamics(command,output,errors,dt,"future",energyOnly);
         }
-        private void recordThermodynamics(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double dt,String phase){
+        private void recordThermodynamics(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double dt,String phase,boolean energyOnly){
             var arena=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
             region.kernels.gasThermo.rebindRanges(arena,err);
-            region.kernels.timed(command,phase+"-gas-caloric",()->region.kernels.gasThermo.recordCaloric(command,thermo));
+            region.kernels.timed(command,phase+"-gas-caloric",()->{if(energyOnly)region.kernels.gasThermo.recordEnergy(command,thermo);else region.kernels.gasThermo.recordCaloric(command,thermo);});
             region.mixtureKernel.rebindRanges(arena,err);
             region.kernels.timed(command,phase+"-mixture",()->region.mixtureKernel.record(command,mixture,region.requestCellSize,dt));
         }
