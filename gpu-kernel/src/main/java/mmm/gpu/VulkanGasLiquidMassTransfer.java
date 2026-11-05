@@ -88,12 +88,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_TIME(8),
         PENDING_RESIDUAL(8),
         PENDING_SLOT(4),
-        SOURCE_ENERGY(8),
-        SINK_ENERGY(8),
-        AMBIENT_SOURCE_SPECIES(8),
-        AMBIENT_SINK_SPECIES(8),
-        SOURCE_MASS(8),
-        SINK_MASS(8),
         ORPHAN_ENERGY(8),
         ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4);
         final int width;
@@ -146,10 +140,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 var molar = config.chemistry().species().get(species).molarMassKgPerMol().divide(
                     mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL);
                 long mass = mmm.units.Mass.exactUnits(molar.numerator(), molar.denominator());
-                double fraction = 0;
-                for (var a : config.gas().ambient())
-                    if (a.componentId().equals(r.gasComponentId()))
-                        fraction = a.fraction().toDouble();
                 ruleBytes.putInt(material)
                     .putInt(component)
                     .putInt(species)
@@ -157,7 +147,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     .putLong(mass);
                 for (double v : new double[] {r.referenceTemperatureK(), r.henrySolubilityMolPerM3Pa(),
                          r.temperatureSlopeK(), r.liquidFilmVelocityMPerS(), r.gasFilmVelocityMPerS(),
-                         r.minimumTemperatureK(), r.maximumTemperatureK(), fraction * 101325.0, 0})
+                         r.minimumTemperatureK(), r.maximumTemperatureK(), 0, 0})
                     ruleBytes.putDouble(v);
                 for(int i=0;i<4;i++)ruleBytes.putLong(0);
             }
@@ -178,7 +168,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 ruleBytes.putInt(1).putInt(0).putLong(quantum).putLong(1).putLong(0).putLong(0);
             }
             ruleBytes.flip();
-            groups = Math.addExact(inputs.gas().gas().nodeCapacity(), 1);
+            groups = inputs.gas().gas().nodeCapacity();
             long cursor = base;
             for (var f : Field.values()) {
                 int count = switch (f) {
@@ -195,9 +185,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case WALL_RESERVATION -> wallDevices;
                     case WALL_DELTA -> Math.multiplyExact(2,wallDevices);
                     case WALL_PENDING -> dryProposals==0?0:Math.multiplyExact(cells,rules);
-                    case AMBIENT_SOURCE_SPECIES, AMBIENT_SINK_SPECIES ->
-                        Math.multiplyExact(rows.source.materialCount(), rows.species);
-                    case SOURCE_MASS, SINK_MASS -> rows.source.materialCount();
                     default -> cells;
                 };
                 var col = new VulkanLiquidStateLayout.Column(align(cursor, alignment), count, f.width);
@@ -275,10 +262,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         List<VulkanGasThermodynamics.TableChunk> tables() {
             return List.of(new VulkanGasThermodynamics.TableChunk(column(Field.RULES).offset(), ruleBytes.duplicate()));
         }
-        List<VulkanLiquidStateLayout.Column> stateColumns() {
-            return List.of(column(Field.AMBIENT_SOURCE_SPECIES), column(Field.AMBIENT_SINK_SPECIES),
-                column(Field.SOURCE_MASS), column(Field.SINK_MASS));
-        }
         List<VulkanEnergyLedger.Stream> roundoffStreams() {
             var a = new ArrayList<>(rows.energyChangeStreams());
             if(wallDevices>0)a.add(stream(Field.WALL_DELTA,1));
@@ -287,18 +270,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             a.add(stream(Field.NEW_K, 1));
             a.add(stream(Field.OLD_K, -1));
             a.add(stream(Field.PE_WORK, -1));
-            a.add(stream(Field.SOURCE_ENERGY, -1));
-            a.add(stream(Field.SINK_ENERGY, 1));
             return List.copyOf(a);
         }
         List<VulkanEnergyLedger.Stream> mechanicalWorkStreams() {
             return List.of(stream(Field.OLD_K, 1), stream(Field.NEW_K, -1), stream(Field.PE_WORK, 1));
-        }
-        List<VulkanEnergyLedger.Stream> sourceStreams() {
-            return List.of(stream(Field.SOURCE_ENERGY, 1));
-        }
-        List<VulkanEnergyLedger.Stream> sinkStreams() {
-            return List.of(stream(Field.SINK_ENERGY, 1));
         }
         private VulkanEnergyLedger.Stream stream(Field f, int sign) {
             return new VulkanEnergyLedger.Stream(1, word(f), column(f).count(), 2, sign);

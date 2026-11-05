@@ -313,21 +313,6 @@ final class VulkanLiquidRegion implements AutoCloseable {
             return ints(state.column(VulkanGranularStateLayout.Field.SUPPORT_CELLS),8*count);
         }
         RequestInputs requestInputs(){return inputs;}
-        mmm.chemistry.ChemicalTransferLedger filmExternalExchange(boolean incoming){
-            var t=layout.transport;if(t==null||t.reactions==null||t.reactions.massTransfer()==null)return mmm.chemistry.ChemicalTransferLedger.EMPTY;
-            var film=t.reactions.massTransfer();var speciesColumn=film.column(incoming?VulkanGasLiquidMassTransfer.Field.AMBIENT_SOURCE_SPECIES:VulkanGasLiquidMassTransfer.Field.AMBIENT_SINK_SPECIES);
-            var massColumn=film.column(incoming?VulkanGasLiquidMassTransfer.Field.SOURCE_MASS:VulkanGasLiquidMassTransfer.Field.SINK_MASS);
-            var species=read(speciesColumn.offset(),speciesColumn.bytes());var mass=read(massColumn.offset(),massColumn.bytes());
-            var groups=new ArrayList<mmm.chemistry.ChemicalTransferLedger.Group>();var chemistry=reactionConfiguration.chemistry();int count=chemistry.species().size();
-            for(int material=0;material<layout.liquid.materialCount();material++){
-                var amounts=new java.util.TreeMap<String,Long>();long resolved=0;
-                for(int sp=0;sp<count;sp++){long q=species.getLong(8*(material*count+sp));if(q==0)continue;amounts.put(chemistry.species(sp).id(),q);
-                    var unit=chemistry.species(sp).molarMassKgPerMol().divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL);
-                    resolved=Math.addExact(resolved,Math.multiplyExact(q,mmm.units.Mass.exactUnits(unit.numerator(),unit.denominator())));}
-                long total=mass.getLong(8*material);if(total!=0||!amounts.isEmpty())groups.add(new mmm.chemistry.ChemicalTransferLedger.Group(reactionConfiguration.fluids().material(material).id(),0,total,total-resolved,amounts));
-            }
-            return new mmm.chemistry.ChemicalTransferLedger(groups);
-        }
         VulkanReactionProgressLayout.State reactionProgress(){var t=layout.transport;return t==null||t.reactions==null?VulkanReactionProgressLayout.State.empty():t.reactions.progress().export(c->read(c.offset(),c.bytes()));}
         boolean hasPendingPhaseMotion(){var t=layout.transport;return t!=null&&t.reactions!=null&&read(t.reactions.progress().column(VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY).offset(),4).getInt(0)!=0;}
         boolean hasPendingPhaseMotion(boolean[] activeCells){

@@ -339,8 +339,7 @@ final class VulkanFluidStateCodec {
             template.sealedDomainBoundary(), liquid.inventory().decode(),
             capture.generation() == 0 ? template.phaseOccupancy() : capture.occupancy(), liquid.momentum(),
             template.fixedGeometry(), capture.entityBodies(), template.materialPalette(), template.chemicalRegistry(),
-            template.chemicalSource().plus(capture.filmExternalExchange(true)),
-            template.chemicalSink().plus(capture.filmExternalExchange(false)),
+            template.chemicalSource(), template.chemicalSink(),
             template.chemicalRegistry() == null ? null
                 : capture.generation() == 0     ? template.copyChemicalDirtyCells()
                                                 : progress.dirtyCells(),

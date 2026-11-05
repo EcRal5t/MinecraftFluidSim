@@ -717,7 +717,6 @@ final class VulkanLiquidWorkspace {
             var incoming=new ArrayList<VulkanEnergyLedger.Stream>();var outgoing=new ArrayList<VulkanEnergyLedger.Stream>();
             if(gas!=null){incoming.add(stream(gas.transport.column(VulkanLocalGasTransport.Field.EXTERNAL_SOURCE_ENERGY),1));
                 outgoing.add(stream(gas.transport.column(VulkanLocalGasTransport.Field.EXTERNAL_SINK_ENERGY),1));}
-            if(reactions!=null){incoming.addAll(reactions.sourceStreams());outgoing.addAll(reactions.sinkStreams());}
             sourcePosting=VulkanEnergyLedger.layout(incoming,mechanicalPosting.endOffset(),liquid.alignment());sinkPosting=VulkanEnergyLedger.layout(outgoing,sourcePosting.endOffset(),liquid.alignment());
             var inventory=new ArrayList<VulkanEnergyLedger.Stream>();inventory.add(new VulkanEnergyLedger.Stream(1,word(liquid.column(ENERGY_BITS)),liquid.stockCapacity(),2,1,word(liquid.column(COUNTS))));
             if(gas!=null)inventory.add(new VulkanEnergyLedger.Stream(1,Math.toIntExact(gas.state.column(VulkanGasStateLayout.Field.INTERNAL_ENERGY).offset()/4),gas.state.nodeCapacity(),2,1,Math.toIntExact(gas.state.column(VulkanGasStateLayout.Field.COUNTS).offset()/4)));

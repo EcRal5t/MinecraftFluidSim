@@ -125,18 +125,10 @@ final class VulkanRegionReactions implements AutoCloseable {
             if (diffusion != null) result.addAll(diffusion.mechanicalWorkStreams());
             return List.copyOf(result);
         }
-        List<VulkanEnergyLedger.Stream> sourceStreams() {
-            return massTransfer == null ? List.of() : massTransfer.sourceStreams();
-        }
-        List<VulkanEnergyLedger.Stream> sinkStreams() {
-            return massTransfer == null ? List.of() : massTransfer.sinkStreams();
-        }
         List<VulkanLiquidStateLayout.Column> postingColumns() {
             var ranges = new ArrayList<long[]>();
             var streams = new ArrayList<>(roundoffStreams());
             streams.addAll(mechanicalWorkStreams());
-            streams.addAll(sourceStreams());
-            streams.addAll(sinkStreams());
             for (var stream : streams)
                 if (stream.count() > 0) {
                     if (stream.bank() != 1)
@@ -174,8 +166,6 @@ final class VulkanRegionReactions implements AutoCloseable {
                     || f == VulkanReactionProgressLayout.Field.PHASE_MOTION_CELLS
                     || f == VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY)
                     result.add(progress.column(f));
-            if (massTransfer != null)
-                result.addAll(massTransfer.stateColumns());
             return result;
         }
         List<VulkanLiquidStateLayout.Column> persistentColumns() {
