@@ -405,7 +405,7 @@ final class VulkanLiquidWorkspace {
                             };
                             if(error==0&&(!finalRequest||transport.thermal==null&&transport.reactions==null))error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,(command,input,output,errors,staging,stack)->{
                                 finishTransport.record(command,input,output,errors,staging,stack);
-                                thermalStages.recordLocalState(command,output,errors,parameters.duration());
+                                if(finalRequest||transport.entity==null)thermalStages.recordLocalState(command,output,errors,parameters.duration());
                                 transport.recordLedgers(command,accumulateLedger?source.transport:null,finalRequest,output,errors);
                                 if(migrating)writeHeaders(command,output,stableHeaders,stack);
                             });
@@ -864,7 +864,7 @@ final class VulkanLiquidWorkspace {
         void recordLedgers(org.lwjgl.vulkan.VkCommandBuffer command,Transport previous,boolean finalRequest,GpuBuffer output,GpuBuffer errors) {
             region.kernels.timed(command,"roundoff-ledger",()->region.kernels.ledger.record(command,roundoff));region.kernels.timed(command,"heat-ledger",()->region.kernels.ledger.record(command,heat));
             if(previous!=null){region.kernels.ledger.recordAccumulate(command,roundoff,word(previous.roundoff.result()));region.kernels.ledger.recordAccumulate(command,heat,word(previous.heat.result()));}
-            region.kernels.ledger.record(command,inventoryPosting);region.kernels.ledger.record(command,mechanicalPosting);region.kernels.ledger.record(command,sourcePosting);region.kernels.ledger.record(command,sinkPosting);
+            if(finalRequest)region.kernels.ledger.record(command,inventoryPosting);region.kernels.ledger.record(command,mechanicalPosting);region.kernels.ledger.record(command,sourcePosting);region.kernels.ledger.record(command,sinkPosting);
             if(previous!=null){region.kernels.ledger.recordAccumulate(command,mechanicalPosting,word(previous.mechanicalPosting.result()));region.kernels.ledger.recordAccumulate(command,sourcePosting,word(previous.sourcePosting.result()));region.kernels.ledger.recordAccumulate(command,sinkPosting,word(previous.sinkPosting.result()));}
             if(finalRequest){
                 if(thermal!=null)region.kernels.ledger.record(command,thermal.reservoir());

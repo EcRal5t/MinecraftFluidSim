@@ -24,6 +24,7 @@ bool activeCell(int cell);
 bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
 // HOST_LAYOUT
+// SERIES_CONDUCTANCE_LIBRARY
 // PLIC_FACE_LIBRARY
 const uint ERROR_INVALID_STATE = 67108864u;
 const int STAGE_INITIALIZE = 0;
@@ -177,15 +178,6 @@ int contactNode(int c, int pass) {
     other[axis] += (q[axis] & 1) == parity ? 1 : -1;
     return cell(other);
 }
-bool clipPort(inout dvec2 lo,inout dvec2 hi,dvec3 normal,double threshold,int axis,double coordinate,int a,int b,bool wet){
-    if(!wet){normal=-normal;threshold=-threshold;}
-    if(normal[axis]!=0.0LF)return normal[axis]*coordinate<=threshold;
-    int tangent=normal[a]!=0.0LF?0:1;double n=tangent==0?normal[a]:normal[b];
-    if(n==0.0LF)return 0.0LF<=threshold;
-    double cut=threshold/n;
-    if(n>0.0LF)hi[tangent]=min(hi[tangent],cut);else lo[tangent]=max(lo[tangent],cut);
-    return hi.x>lo.x && hi.y>lo.y;
-}
 double contactArea(int c, int node, int pass, int lr) {
     if(pass==0)return internalArea(c,lr);
     int gc=geometryHeaderWord(GEO_H_CELLS);
@@ -204,8 +196,8 @@ double contactArea(int c, int node, int pass, int lr) {
         int side=positive?1:0, bit=(side<<axis)|(i<<a)|(j<<b),opposite=bit^(1<<axis);
         if((cm&(1<<bit))!=0||(nm&(1<<opposite))!=0||(support&(1<<bit))==0)continue;
         dvec2 lo=dvec2(.5LF*double(i),.5LF*double(j)),hi=lo+dvec2(.5LF);
-        if(cf<1.0LF && !clipPort(lo,hi,cn,ct,axis,positive?1.0LF:0.0LF,a,b,true))continue;
-        if(nf>0.0LF && !clipPort(lo,hi,nn,nt,axis,positive?0.0LF:1.0LF,a,b,false))continue;
+        if(cf<1.0LF && !plicContactRect(dvec4(cn,ct),axis,positive?1.0LF:0.0LF,true,lo,hi))continue;
+        if(nf>0.0LF && !plicContactRect(dvec4(nn,nt),axis,positive?0.0LF:1.0LF,false,lo,hi))continue;
         area+=max(0.0LF,hi.x-lo.x)*max(0.0LF,hi.y-lo.y);
     }
     return area;
@@ -388,10 +380,10 @@ void propose(int c) {
                                                   addNanos,liquidChange,double(quantum)*1e-6LF),area=interfaceArea;
                     if(area==0.0LF && node==c && gasVolume==0.0LF && equilibrium>partial)area=1.0LF;
                     double conductance=readDouble(r+10)*area*h*h,rt=8.31446261815324LF*liquidTemperature;
-                    transfer=seconds*conductance*(partial-equilibrium)/rt/(1.0LF+seconds*conductance*response/rt)+readDouble(workField(FIELD_PENDING_RESIDUAL)+2*at);
+                    transfer=seconds*conductance*(partial-equilibrium)/(rt+seconds*conductance*response)+readDouble(workField(FIELD_PENDING_RESIDUAL)+2*at);
                 }else{
                 double henry = readDouble(r + 8) * exp(float(readDouble(r + 10) * (1.0LF / liquidTemperature - 1.0LF / readDouble(r + 6))));
-                double film = 1.0LF / (1.0LF / readDouble(r + 12) + henry * 8.31446261815324LF * liquidTemperature / readDouble(r + 14));
+                double film = seriesConductance(1.0LF,readDouble(r + 12),1.0LF,readDouble(r + 14),henry * 8.31446261815324LF * liquidTemperature);
                 double partialPressure = double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * component(node, int(words[r + 1])))) * 1e-9LF *
                                                (101325.0LF / 293.15LF) * gasTemperature / gasVolume;
                 if(totalLiquid<0.0LF){totalLiquid=0.0LF;for(int material=0;material<materials;material++)totalLiquid+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),row(c,material));}
@@ -465,7 +457,7 @@ double dryWallArea(int c,int direction){
         int bit=(side<<axis)|(i<<a)|(j<<b);
         if((open&(1<<bit))==0 || (dry&(1<<bit))==0)continue;
         dvec2 lo=dvec2(.5LF*double(i),.5LF*double(j)),hi=lo+dvec2(.5LF);
-        if(fill>0.0LF && !clipPort(lo,hi,normal,threshold,axis,double(side),a,b,false))continue;
+        if(fill>0.0LF && !plicContactRect(dvec4(normal,threshold),axis,double(side),false,lo,hi))continue;
         area+=max(0.0LF,hi.x-lo.x)*max(0.0LF,hi.y-lo.y);
     }
     return area*porosity;
@@ -521,7 +513,7 @@ void proposeDryWall(int index){
                                   -min(reference,1.0LF/134217728.0LF),double(quantum)*1e-6LF);
     double seconds=readDouble(p.header+H_DURATION);
     double conductance=readDouble(r+10)*area*h*h,rt=8.31446261815324LF*temperature;
-    double rate=conductance*(partial-equilibrium)/rt/(1.0LF+seconds*conductance*response/rt);
+    double rate=conductance*(partial-equilibrium)/(rt+seconds*conductance*response);
     if(!(isFinite(rate)&&rate>0.0LF))return;
     writeDouble(workField(FIELD_KG)+2*index,rate);
     writeDouble(workField(FIELD_TEMP)+2*index,temperature);

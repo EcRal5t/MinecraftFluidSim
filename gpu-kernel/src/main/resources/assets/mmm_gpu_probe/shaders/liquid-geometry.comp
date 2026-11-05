@@ -327,7 +327,7 @@ void transportPreference(int face) {
             if(cells[source][CELL_FILL]>=1.0LF){liquidVolume+=.25LF*(b-a);continue;}
             if(cells[source][CELL_FILL]<=0.0LF)continue;
             if(abs(plane[axis])>.5LF){
-                double cut=plane.w/plane[axis];
+                double cut=plane.w*plane[axis];
                 double wetDepth=plane[axis]>0.0LF?max(0.0LF,min(b,cut)-a):max(0.0LF,b-max(a,cut));
                 liquidVolume+=.25LF*wetDepth;
             }else liquidVolume+=plicWetPort(plane,axis,.5LF*(a+b),tangentBits)*(b-a);

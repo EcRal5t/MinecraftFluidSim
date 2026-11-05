@@ -9,6 +9,7 @@ layout(binding=1,std430)buffer Errors{uint errors;};
 layout(binding=2,std430)buffer FrozenConductance{double frozenG[];};
 layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
 // HOST_LAYOUT
+// SERIES_CONDUCTANCE_LIBRARY
 // PLIC_FACE_LIBRARY
 const uint ERROR_INVALID_STATE = 2097152u;
 const int STAGE_CLEAR = 0;
@@ -152,7 +153,7 @@ void coverage(int cell){double sums[32];for(int i=0;i<32;i++)sums[i]=0.0;
   int port=int(words[workField(FIELD_PORT_ROWS)+at]);for(int i=0;i<24;i++)writeDouble(workField(FIELD_COVERAGE)+2*(8*headerWord(H_CELL_COUNT)+24*port+i),sums[8+i]);
  }
 }
-double harmonic(double a,double b){if(a==0.0||b==0.0)return 0.0;double lo=min(a,b),hi=max(a,b);return lo*(2.0LF/(1.0LF+lo/hi));}
+double harmonic(double a,double b){return a==0.0LF||b==0.0LF?0.0LF:seriesConductance(2.0LF,a,1.0LF,b,1.0LF);}
 ivec3 shape(){return ivec3(headerWord(H_SIZE_X),headerWord(H_SIZE_Y),headerWord(H_SIZE_Z));}ivec3 xyz(int cell){ivec3 s=shape();return ivec3(cell%s.x,cell/s.x%s.y,cell/(s.x*s.y));}
 int neighbor(int cell,int axis,int side){ivec3 q=xyz(cell),s=shape();q[axis]+=side==0?-1:1;if(any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s)))return -1;return (q.z*s.y+q.y)*s.x+q.x;}
 int macFace(int cell,int axis,int side){
@@ -189,12 +190,12 @@ double sameConductance(int point,int q){
    if(covered>0.0LF)area+=.25LF*portion/covered;
   }
   if(area<=0.0LF)return 0.0LF;
-  int axis=plane.x!=0.0LF?0:plane.y!=0.0LF?1:2;double cut=plane.w/plane[axis];
+  int axis=plane.x!=0.0LF?0:plane.y!=0.0LF?1:2;double cut=plane.w*plane[axis];
   double depth=plane[axis]>0.0LF?cut:1.0LF-cut;
   double kl=readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+liquid]));
   double kg=readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+gas]));
   if(kl<=0.0LF||kg<=0.0LF)return 0.0LF;
-  return 2.0LF*cellSize()*area/(depth/kl+(1.0LF-depth)/kg);
+  return seriesConductance(2.0LF*cellSize()*area,kl,depth,kg,1.0LF-depth);
  }
  if(overlap==0)return 0.0;double fp=fraction(point),fq=fraction(q);
  float radius=uintBitsToFloat(words[workField(FIELD_MF_POW)+(fp<=fq?point:q)]);
@@ -256,7 +257,7 @@ double deviceConductance(int point,int port){
    film=min(.5LF*cellSize(),.5LF*cellSize()*volume/area);
   }
  }
- precise double conductance=cellSize()*cellSize()*area/(readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port)/readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port)+film/k);return conductance;
+ precise double conductance=seriesConductance(cellSize()*cellSize()*area,readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port),readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port),k,film);return conductance;
 }
 // Port weights are geometry alone. The material conductivity and finite owner temperatures
 // remain in the one canonical pair evaluator used by both explicit and implicit conduction.

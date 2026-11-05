@@ -599,7 +599,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             try{
                 long sequence=ordinal==1?requestGeneration:Long.rotateLeft(requestGeneration,17)^ordinal;
                 int error=target.execute(source,sourceGeometryValid,candidate,parameters,sequence,previous,end==1.0,requestDuration);
-                if(error==0)return new PreparedInterval(target,candidate,parameters!=null&&target.transport!=null,parameters!=null,parameters!=null,1,parameters==null?0:parameters.duration(),
+                if(error==0)return new PreparedInterval(target,candidate,parameters!=null&&target.transport!=null&&(end==1.0||target.transport.entity==null),parameters!=null,parameters!=null,1,parameters==null?0:parameters.duration(),
                         parameters==null?mmm.world.MovingBodyFluidCoupling.Result.NONE:target.bodyResult(candidate));
                 if(error==64&&target.transport!=null)required=target.transport.requirements(candidate);
                 else throw target.failure(candidate,error,parameters);

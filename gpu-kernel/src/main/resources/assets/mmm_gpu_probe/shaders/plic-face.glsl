@@ -3,7 +3,7 @@
 bool plicPortRect(dvec4 plane, int faceAxis, double coordinate, int bit, bool liquid,
                   inout dvec2 lo, inout dvec2 hi) {
     int axis = plane.x != 0.0 ? 0 : plane.y != 0.0 ? 1 : 2;
-    double normal = plane[axis], cut = plane.w / normal;
+    double normal = plane[axis], cut = plane.w * normal;
     if (axis == faceAxis) {
         bool wet = normal * coordinate <= plane.w;
         return liquid ? wet : !wet;
@@ -14,6 +14,13 @@ bool plicPortRect(dvec4 plane, int faceAxis, double coordinate, int bit, bool li
     if (below) hi[component] = min(hi[component], cut);
     else lo[component] = max(lo[component], cut);
     return hi.x > lo.x && hi.y > lo.y;
+}
+// Contact includes the interface itself when it coincides with the queried face.
+bool plicContactRect(dvec4 plane, int faceAxis, double coordinate, bool liquid,
+                     inout dvec2 lo, inout dvec2 hi) {
+    if (!liquid && plane[faceAxis] != 0.0LF)
+        return plane[faceAxis] * coordinate >= plane.w;
+    return plicPortRect(plane, faceAxis, coordinate, 0, liquid, lo, hi);
 }
 void plicPortBounds(int faceAxis, int bit, out dvec2 lo, out dvec2 hi) {
     int a = (faceAxis + 1) % 3, b = (faceAxis + 2) % 3;
@@ -32,7 +39,7 @@ uint plicInternalInterfaceBoxes(dvec4 plane, uint solidMask, uint liquidSupport)
     int axis = plane.x != 0.0LF ? 0 : plane.y != 0.0LF ? 1 : 2;
     double normal = plane[axis];
     if (normal == 0.0LF) return 0u;
-    double cut = plane.w / normal;
+    double cut = plane.w * normal;
     if (!(cut > 0.0LF && cut < 1.0LF)) return 0u;
     int a = (axis + 1) % 3, b = (axis + 2) % 3;
     uint boxes = 0u;

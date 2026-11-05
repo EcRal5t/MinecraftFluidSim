@@ -21,6 +21,7 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+// SERIES_CONDUCTANCE_LIBRARY
 const int GEOMETRY_RECORD_STRIDE = 4;
 const int VISCOSITY_SEGMENT_STRIDE = 4;
 const int SEGMENT_MIN_TEMPERATURE = 0;
@@ -132,8 +133,7 @@ bool enabled(int f) {
     return f >= 0 && faceValue(f, FACE_MASS) > 0.0 && faceValue(f, FACE_OPEN_AREA) > 0.0 && (headerWord(H_ACTIVITY) < 0 || words[headerWord(H_ACTIVITY) + f] != 0u);
 }
 double harmonic(double a, double b) {
-    double lo = min(a, b), hi = max(a, b);
-    return lo / (.5 + .5 * lo / hi);
+    return a == 0.0LF || b == 0.0LF ? 0.0LF : seriesConductance(2.0LF,a,1.0LF,b,1.0LF);
 }
 // Exact local exponential damping, evaluated in double precision without float exp.
 double blend(double x) {
