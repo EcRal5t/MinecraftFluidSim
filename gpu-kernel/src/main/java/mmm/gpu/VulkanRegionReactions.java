@@ -290,7 +290,6 @@ final class VulkanRegionReactions implements AutoCloseable {
     private final VulkanLiquidDiffusion diffusionKernel;
     private final VulkanLiquidThermodynamics caloric;
     private final VulkanGasLiquidMassTransfer massTransferKernel;
-    private final VulkanGasThermodynamics gasCaloric;
     private final VulkanCondensedPhaseChange condensedKernel;
     private final VulkanSolidLiquidReactions exchange;
     private final VulkanGranularTransitions transitions;
@@ -304,7 +303,6 @@ final class VulkanRegionReactions implements AutoCloseable {
             transitions = own(allocated, new VulkanGranularTransitions(context));
             condensedKernel = own(allocated, new VulkanCondensedPhaseChange(context));
             massTransferKernel = own(allocated, new VulkanGasLiquidMassTransfer(context));
-            gasCaloric = own(allocated, new VulkanGasThermodynamics(context));
         } catch (RuntimeException | Error failure) {
             for (var resource : allocated.reversed())
                 try {
@@ -466,9 +464,6 @@ final class VulkanRegionReactions implements AutoCloseable {
                             (command, input, output, errors, staging, stack)
                                 -> {
                                 caloric.record(command, layout.liquid().caloric());
-                                gasCaloric.rebindRanges(new FlipKernelBindings.BufferRange(output),
-                                    new FlipKernelBindings.BufferRange(errors));
-                                gasCaloric.recordCaloric(command, eos);
                                 if(inspectCondensed)condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors);
                             },
                             inspectCondensed?layout.condensedPhase().feedbackOffset():0, inspectCondensed?4:0);
@@ -491,7 +486,6 @@ final class VulkanRegionReactions implements AutoCloseable {
                         .continueBatch(
                             (command, input, output, errors, staging, stack)
                                 -> {
-                                caloric.record(command, layout.liquid().caloric());
                                 caloric.record(command, layout.condensedPhase().input.coherentCaloric());
                             },
                             0, 0)
@@ -508,23 +502,18 @@ final class VulkanRegionReactions implements AutoCloseable {
             stage=stageTime("condensed-phase",stage);
             if (error != 0)
                 return error;
+            var finalStatus = candidate.continueBatch((command,input,output,errors,staging,stack)-> {
+                caloric.record(command, layout.liquid().caloric());
+                caloric.record(command, layout.condensedPhase().input.coherentCaloric());
+            },0,0);
+            stageTime("final-caloric",stage);
+            return finalStatus.error();
         }
-        var finalStatus = candidate
-            .continueBatch(
-                (command, input, output, errors, staging, stack)
-                    -> {
-                    caloric.record(command, layout.liquid().caloric());
-                    if (layout.condensedPhase() != null)
-                        caloric.record(command, layout.condensedPhase().input.coherentCaloric());
-                },
-                0, 0);
-        stageTime("final-caloric",stage);
-        return finalStatus.error();
+        return 0;
     }
     @Override
     public void close() {
         diffusionKernel.close();
-        gasCaloric.close();
         massTransferKernel.close();
         condensedKernel.close();
         try {

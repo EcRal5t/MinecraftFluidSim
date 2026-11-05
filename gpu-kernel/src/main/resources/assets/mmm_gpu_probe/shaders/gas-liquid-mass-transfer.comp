@@ -311,10 +311,36 @@ void importPending(int i) {
     writeDouble(workField(FIELD_PENDING_TIME) + 2 * at, readDouble(headerWord(H_PENDING_SECONDS) + 2 * i));
     writeDouble(workField(FIELD_PENDING_RESIDUAL) + 2 * at, readDouble(headerWord(H_RESIDUAL_MOLES) + 2 * i));
 }
+void clearUnavailablePending(int c) {
+    for(int k=0;k<headerWord(H_RULE_COUNT);k++){
+        int at=c*headerWord(H_RULE_COUNT)+k;
+        if(readDouble(workField(FIELD_PENDING_TIME)+2*at)==0.0LF &&
+           readDouble(workField(FIELD_PENDING_RESIDUAL)+2*at)==0.0LF)continue;
+        int r=workField(FIELD_RULES)+32*k,sp=int(words[r+2]);
+        bool vapor=words[r+22]!=0u;
+        if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_BATCHES)<=0))continue;
+        if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),row(c,int(words[r])),sp)>0l)continue;
+        bool available=false;
+        for(int pass=0;pass<7 && !available;pass++){
+            int other=contactNode(c,pass);
+            if(other<0 || !activeCell(other))continue;
+            int source=gasSpecies(component(other,int(words[r+1])),sp);
+            available=source>=0 && readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*source)>0l;
+        }
+        if(!available){
+            writeDouble(workField(FIELD_PENDING_TIME)+2*at,0.0LF);
+            writeDouble(workField(FIELD_PENDING_RESIDUAL)+2*at,0.0LF);
+        }
+    }
+}
 void propose(int c) {
     if (!activeCell(c)) return;
     int node=contactNode(c,p.maximum);
     if(node<0 || !activeCell(node))return;
+    if(p.maximum==6)clearUnavailablePending(c);
+    int geometry=geometryHeaderWord(GEO_H_CELLS);
+    double fill=readDouble(geometry+2*(4*c+3));
+    if(fill<=0.0LF || (p.maximum>0 && readDouble(geometry+2*(4*node+3))>=1.0LF))return;
     bool ambient=node==headerWord(H_GROUP_COUNT)-1;
     double gasTemperature=ambient?293.15LF:state(node,0);
     double gasVolume=ambient?1.0LF:readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*node+MIXTURE_GAS_VOLUME));
@@ -335,20 +361,6 @@ void propose(int c) {
             bool externalSupply=ambient && !vapor && readDouble(r+20)>0.0LF;
             if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)==0l && !externalSupply &&
                (gasAmount<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gasAmount)==0l)){
-                if(p.maximum==6 && (readDouble(workField(FIELD_PENDING_TIME)+2*at)!=0.0LF ||
-                                    readDouble(workField(FIELD_PENDING_RESIDUAL)+2*at)!=0.0LF)){
-                    bool available=externalSupply;
-                    for(int pass=0;pass<7 && !available;pass++){
-                        int other=contactNode(c,pass);
-                        if(other<0 || !activeCell(other))continue;
-                        int source=gasSpecies(component(other,int(words[r+1])),sp);
-                        available=source>=0 && readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*source)>0l;
-                    }
-                    if(!available){
-                        writeDouble(workField(FIELD_PENDING_TIME)+2*at,0.0LF);
-                        writeDouble(workField(FIELD_PENDING_RESIDUAL)+2*at,0.0LF);
-                    }
-                }
                 continue;
             }
             if(interfaceArea<0.0LF)interfaceArea=contactArea(c,node,p.maximum,lr);
@@ -629,12 +641,14 @@ void commitWall(int device){
 // Each gas cell grants proposals against live stocks; face batches keep liquid writers disjoint.
 uvec4 exchange(int node) {
     uvec4 counts=uvec4(0u);
+    int first=int(words[workField(FIELD_HEAD)+node]);
+    if(first<0)return counts;
     bool ambient = node == headerWord(H_GROUP_COUNT) - 1;
     if (!ambient && node >= int(words[gasField(GAS_COUNTS)]))
         return counts;
     double energy = ambient ? 0.0LF : readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node);
     int receiver = ambient ? -1 : int(words[workField(FIELD_ORPHAN_RECEIVER)+node]);
-    for (int at = int(words[workField(FIELD_HEAD) + node]); at >= 0; at = int(words[workField(FIELD_NEXT) + at])) {
+    for (int at = first; at >= 0; at = int(words[workField(FIELD_NEXT) + at])) {
         bool wall=p.maximum==7;
         int port=wall?at/headerWord(H_RULE_COUNT):-1;
         int c=wall?int(words[headerWord(H_WALL_PORT_CELL)+port]):at/headerWord(H_RULE_COUNT);

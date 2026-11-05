@@ -14,6 +14,9 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Resident liquid/gas mechanical candidates, with replaceable layouts and shared native pipelines. */
 final class VulkanLiquidRegion implements AutoCloseable {
     int previousPressureIterations;
+    private float previousMechanicalLeafDuration;
+    private int previousMechanicalSubsteps;
+    private int successfulMechanicalSchedules;
     enum GeometryField { FIXED_MASKS, OCCUPIED_SOLID, CELLS, PLANES, LIQUID_MICRO, WALL_GEOMETRY, FACES, FLUXES }
     enum PressureField { STARTS, COLUMNS, VALUES, ROWS, PRESSURE, WORK, PROBLEM, CONTROL, PARTIALS }
     final VulkanDeviceContext context;
@@ -361,12 +364,22 @@ final class VulkanLiquidRegion implements AutoCloseable {
         private VulkanFluidStateCodec.ImportData imported;
         private mmm.units.SignedDyadic importedRoundoff;
         private VulkanRegionThermal.Configuration updatedHeat;
+        private long mechanicalAttempts;
+        private float mechanicalDuration;
         private Prepared(Capture source,PreparedInterval result,java.util.Set<VulkanLiquidWorkspace> allocated){this.source=source;this.result=result;this.allocated=allocated;this.inputs=activeInputs==null?source.inputs:activeInputs;}
         mmm.world.MovingBodyFluidCoupling.Result bodyCoupling(){return result.bodyResult;}
         mmm.units.SignedDyadic importRoundoff(){return importedRoundoff==null?mmm.units.SignedDyadic.ZERO:importedRoundoff;}
         Capture captureState(){synchronized(VulkanLiquidRegion.this){if(closed)throw new IllegalStateException("Prepared region is closed");return new Capture(result.candidate.captureCompleted(),result.workspace,result.geometryValid,result.gasNodesValid,result.mechanicalObservation,inputs);}}
         int substeps(){return result.substeps;}
         long commit(){synchronized(VulkanLiquidRegion.this){if(closed)throw new IllegalStateException("Prepared region is closed");long generation=result.candidate.commit(source.capture);workspace=result.workspace;currentGeometryValid=result.geometryValid;currentGasNodesValid=result.gasNodesValid;currentMechanicalObservation=result.mechanicalObservation;currentInputs=inputs;
+            if(result.mechanicalObservation){
+                previousMechanicalLeafDuration=result.lastLeafDuration;previousMechanicalSubsteps=result.substeps;
+                successfulMechanicalSchedules=mechanicalAttempts==result.substeps?successfulMechanicalSchedules+1:0;
+                if(successfulMechanicalSchedules>=8&&result.substeps>1){
+                    previousMechanicalLeafDuration=Math.min(mechanicalDuration,result.lastLeafDuration*2);
+                    previousMechanicalSubsteps=Math.max(1,result.substeps/2);successfulMechanicalSchedules=0;
+                }
+            }
             if(imported!=null){gasConfiguration=imported.gas();granularConfiguration=imported.granular();thermalConfiguration=imported.heat();coherentConfiguration=imported.coherent();deviceConfiguration=imported.device();reactionConfiguration=enabledReactions(imported.reactions());importRoundoff=importedRoundoff;workspace.sourceBodyState=inputs.bodies();}
             if(updatedHeat!=null)thermalConfiguration=updatedHeat;
             return generation;}}
@@ -400,7 +413,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 }
             });
             if(error!=0)throw new IllegalStateException("Thermal boundary candidate failed: status="+error);
-            var prepared=new Prepared(pin,new PreparedInterval(workspace,candidate,source.geometryValid,source.gasNodesValid,false,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
+            var prepared=new Prepared(pin,new PreparedInterval(workspace,candidate,source.geometryValid,source.gasNodesValid,false,0,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
             prepared.updatedHeat=new VulkanRegionThermal.Configuration(thermalConfiguration.tables(),thermalConfiguration.materials(),
                     thermalConfiguration.cellSize(),values,thermalConfiguration.contactCapacity());
             return prepared;
@@ -421,7 +434,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             candidate=storage.prepareInitial(pin.capture,target.bytes,target==pin.layout);
             int error=target.prepareInitialGeometry(pin.layout,candidate,bodyConfiguration(bodies));
             if(error!=0)throw new IllegalStateException("Resident initial geometry error="+error);
-            return new Prepared(pin,new PreparedInterval(target,candidate,true,true,false,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
+            return new Prepared(pin,new PreparedInterval(target,candidate,true,true,false,0,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
         } catch(RuntimeException|Error failure) {
             if(candidate!=null)candidate.close();
             pin.close();
@@ -446,7 +459,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var previous=activeInputs;
             try {
                 activeInputs=new RequestInputs(data.bodies(),false,0);
-                var prepared=new Prepared(pin,new PreparedInterval(workspace,candidate,true,true,false,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
+                var prepared=new Prepared(pin,new PreparedInterval(workspace,candidate,true,true,false,0,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
                 prepared.imported=data;prepared.importedRoundoff=roundoff[0];
                 return prepared;
             } finally { activeInputs=previous; }
@@ -516,7 +529,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
     private synchronized Prepared prepareMechanicalCandidate(Capture source,VulkanLiquidProjection.Parameters parameters){
         if(!source.capture.isCurrent()||source.layout!=workspace)throw new IllegalStateException("Mechanical request uses a stale region capture");
         var pin=source.retain();var allocated=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<VulkanLiquidWorkspace,Boolean>());allocated.add(workspace);
-        try{return new Prepared(pin,prepareInterval(pin.capture,pin.layout,pin.geometryValid,parameters,pin.generation()+1,1,0,false,new long[1],allocated),allocated);}
+        try{var spent=new long[1];var result=prepareInterval(pin.capture,pin.layout,pin.geometryValid,parameters,pin.generation()+1,1,0,false,spent,allocated);
+            var prepared=new Prepared(pin,result,allocated);prepared.mechanicalAttempts=spent[0];prepared.mechanicalDuration=parameters==null?0:parameters.duration();return prepared;}
         catch(RuntimeException|Error failure){pin.close();for(var w:allocated)if(w!=workspace)w.templates.close();throw failure;}
     }
     long advanceThermal(double duration){try(var source=captureState();var prepared=prepareThermal(source,duration)){return prepared.commit();}}
@@ -527,13 +541,13 @@ final class VulkanLiquidRegion implements AutoCloseable {
         var pin=source.retain();var allocated=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<VulkanLiquidWorkspace,Boolean>());allocated.add(workspace);VulkanLiquidWorkspace target=workspace;
         try{requestCellSize=thermalConfiguration.cellSize();target=bodyWorkspace(target,pin.inputs.bodies(),allocated);while(true){var candidate=storage.prepareReallocated(pin.capture,target.bytes);
             try{int error=target.executeThermal(pin.layout,pin.geometryValid,candidate,duration);if(error!=0)throw new IllegalStateException("Resident thermal candidate error="+error);
-                return new Prepared(pin,new PreparedInterval(target,candidate,true,true,false,1,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
+                return new Prepared(pin,new PreparedInterval(target,candidate,true,true,false,1,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
             }catch(VulkanRegionThermal.ContactCapacityGrowth growth){candidate.close();target=target.growThermalContacts(growth.required,growth.baths);allocated.add(target);}
             catch(VulkanRegionReactions.CapacityGrowth growth){candidate.close();target=target.growReactions(growth);allocated.add(target);}
             catch(RuntimeException|Error failure){candidate.close();throw failure;}
         }}catch(RuntimeException|Error failure){pin.close();for(var w:allocated)if(w!=workspace)w.templates.close();throw failure;}
     }
-    private record PreparedInterval(VulkanLiquidWorkspace workspace,VulkanRegionStorage.Candidate candidate,boolean geometryValid,boolean gasNodesValid,boolean mechanicalObservation,int substeps,mmm.world.MovingBodyFluidCoupling.Result bodyResult) implements AutoCloseable{
+    private record PreparedInterval(VulkanLiquidWorkspace workspace,VulkanRegionStorage.Candidate candidate,boolean geometryValid,boolean gasNodesValid,boolean mechanicalObservation,int substeps,float lastLeafDuration,mmm.world.MovingBodyFluidCoupling.Result bodyResult) implements AutoCloseable{
         @Override public void close(){candidate.close();}
     }
     static final class MotionTimeRefinement extends IllegalStateException{MotionTimeRefinement(String reason){super(reason);}}
@@ -576,11 +590,19 @@ final class VulkanLiquidRegion implements AutoCloseable {
             long requestGeneration,long ordinal,int depth,boolean previous,
             long[] spent,java.util.Set<VulkanLiquidWorkspace> allocated){
         var old=currentInputs.bodies();var target=requestedBodies();
-        return prepareBodyInterval(capture,source,sourceGeometryValid,parameters,requestGeneration,ordinal,depth,previous,spent,allocated,old,target,old,target,0.0,1.0);
+        int plannedDepth=0;
+        if(parameters!=null&&previousMechanicalLeafDuration>0){
+            float interval=parameters.duration();
+            while(plannedDepth<mmm.fluid.FluidStepBudget.MAXIMUM_TIME_REFINEMENTS
+                    &&(1L<<(plannedDepth+1))<=previousMechanicalSubsteps
+                    &&interval*.5f>=previousMechanicalLeafDuration){interval*=.5f;plannedDepth++;}
+        }
+        return prepareBodyInterval(capture,source,sourceGeometryValid,parameters,requestGeneration,ordinal,depth,plannedDepth,previous,spent,allocated,old,target,old,target,0.0,1.0,parameters==null?0.0:parameters.duration());
     }
     private PreparedInterval prepareBodyInterval(VulkanRegionStorage.Capture capture,VulkanLiquidWorkspace source,boolean sourceGeometryValid,VulkanLiquidProjection.Parameters parameters,
-            long requestGeneration,long ordinal,int depth,boolean previous,long[] spent,java.util.Set<VulkanLiquidWorkspace> allocated,mmm.fluid.EntityBodyState sourceBodies,mmm.fluid.EntityBodyState targetBodies,
-            mmm.fluid.EntityBodyState originalSource,mmm.fluid.EntityBodyState originalTarget,double start,double end){
+            long requestGeneration,long ordinal,int depth,int plannedDepth,boolean previous,long[] spent,java.util.Set<VulkanLiquidWorkspace> allocated,mmm.fluid.EntityBodyState sourceBodies,mmm.fluid.EntityBodyState targetBodies,
+            mmm.fluid.EntityBodyState originalSource,mmm.fluid.EntityBodyState originalTarget,double start,double end,double requestDuration){
+        if(depth<plannedDepth)return splitBodyInterval(capture,source,sourceGeometryValid,parameters,requestGeneration,ordinal,depth,plannedDepth,previous,spent,allocated,sourceBodies,targetBodies,originalSource,originalTarget,start,end,requestDuration);
         if(parameters!=null)requestCellSize=parameters.cellSize();
         VulkanLiquidWorkspace target=bodyWorkspace(source,sourceBodies,targetBodies,allocated);
         while(true){
@@ -591,8 +613,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var candidate=storage.prepareReallocated(capture,target.bytes);int[] required=null,granularRequired=null;VulkanRegionReactions.CapacityGrowth reactionGrowth=null;int contactRequired=0,thermalRequired=0,thermalBathRequired=0;
             try{
                 long sequence=ordinal==1?requestGeneration:Long.rotateLeft(requestGeneration,17)^ordinal;
-                int error=target.execute(source,sourceGeometryValid,candidate,parameters,sequence,previous);
-                if(error==0)return new PreparedInterval(target,candidate,parameters!=null&&target.transport!=null,parameters!=null,parameters!=null,1,
+                int error=target.execute(source,sourceGeometryValid,candidate,parameters,sequence,previous,end==1.0,requestDuration);
+                if(error==0)return new PreparedInterval(target,candidate,parameters!=null&&target.transport!=null,parameters!=null,parameters!=null,1,parameters==null?0:parameters.duration(),
                         parameters==null?mmm.world.MovingBodyFluidCoupling.Result.NONE:target.bodyResult(candidate));
                 if(error==64&&target.transport!=null)required=target.transport.requirements(candidate);
                 else throw target.failure(candidate,error,parameters);
@@ -603,19 +625,25 @@ final class VulkanLiquidRegion implements AutoCloseable {
             catch(MotionTimeRefinement finer){
                 candidate.close();
                 if(parameters==null||depth>=mmm.fluid.FluidStepBudget.MAXIMUM_TIME_REFINEMENTS)throw finer;
-                float half=parameters.duration()*.5f;if(!(half>0&&half<parameters.duration()))throw finer;
-                var p=new VulkanLiquidProjection.Parameters(parameters.cellSize(),half,parameters.gravity(),parameters.tolerance(),parameters.iterations());
-                double midpoint=(start+end)*.5;var middle=interpolateBodies(originalSource,originalTarget,midpoint);
-                try(var first=prepareBodyInterval(capture,source,sourceGeometryValid,p,requestGeneration,2*ordinal,depth+1,previous,spent,allocated,sourceBodies,middle,originalSource,originalTarget,start,midpoint);
-                    var intermediate=first.candidate.captureCompleted()){
-                    var second=new VulkanLiquidProjection.Parameters(parameters.cellSize(),parameters.duration()-half,parameters.gravity(),parameters.tolerance(),parameters.iterations());
-                    var tail=prepareBodyInterval(intermediate,first.workspace,first.geometryValid,second,requestGeneration,2*ordinal+1,depth+1,true,spent,allocated,middle,targetBodies,originalSource,originalTarget,midpoint,end);
-                    return new PreparedInterval(tail.workspace,tail.candidate,tail.geometryValid,tail.gasNodesValid,tail.mechanicalObservation,first.substeps+tail.substeps,combineBodyResults(first.bodyResult,tail.bodyResult));
-                }
+                return splitBodyInterval(capture,source,sourceGeometryValid,parameters,requestGeneration,ordinal,depth,plannedDepth,previous,spent,allocated,sourceBodies,targetBodies,originalSource,originalTarget,start,end,requestDuration);
             }catch(RuntimeException|Error failure){candidate.close();throw failure;}
             candidate.close();VulkanLiquidWorkspace larger=reactionGrowth!=null?target.growReactions(reactionGrowth):granularRequired!=null?target.growGranular(granularRequired):thermalRequired>0||thermalBathRequired>0?target.growThermalContacts(thermalRequired,thermalBathRequired):contactRequired>0?target.growContacts(contactRequired):target.grow(required);allocated.add(larger);
             if(growths!=null)growths.add(new Growth(requestGeneration,target.capacityStage,target.capacities(),larger.capacities(),reactionGrowth!=null?new int[]{reactionGrowth.species,reactionGrowth.limbs,reactionGrowth.particles,reactionGrowth.deposits,reactionGrowth.solidSpecies,reactionGrowth.coherentGroups,reactionGrowth.coherentSpecies}:granularRequired!=null?granularRequired:thermalRequired>0||thermalBathRequired>0?new int[]{thermalRequired,thermalBathRequired}:contactRequired>0?new int[]{contactRequired}:required.clone()));
             target=larger;
+        }
+    }
+    private PreparedInterval splitBodyInterval(VulkanRegionStorage.Capture capture,VulkanLiquidWorkspace source,boolean sourceGeometryValid,VulkanLiquidProjection.Parameters parameters,
+            long requestGeneration,long ordinal,int depth,int plannedDepth,boolean previous,long[] spent,java.util.Set<VulkanLiquidWorkspace> allocated,mmm.fluid.EntityBodyState sourceBodies,mmm.fluid.EntityBodyState targetBodies,
+            mmm.fluid.EntityBodyState originalSource,mmm.fluid.EntityBodyState originalTarget,double start,double end,double requestDuration){
+        float half=parameters.duration()*.5f;
+        if(!(half>0&&half<parameters.duration()))throw new MotionTimeRefinement("Mechanical interval cannot be refined further");
+        var firstParameters=new VulkanLiquidProjection.Parameters(parameters.cellSize(),half,parameters.gravity(),parameters.tolerance(),parameters.iterations());
+        double midpoint=(start+end)*.5;var middle=interpolateBodies(originalSource,originalTarget,midpoint);
+        try(var first=prepareBodyInterval(capture,source,sourceGeometryValid,firstParameters,requestGeneration,2*ordinal,depth+1,plannedDepth,previous,spent,allocated,sourceBodies,middle,originalSource,originalTarget,start,midpoint,requestDuration);
+            var intermediate=first.candidate.captureCompleted()){
+            var secondParameters=new VulkanLiquidProjection.Parameters(parameters.cellSize(),parameters.duration()-half,parameters.gravity(),parameters.tolerance(),parameters.iterations());
+            var tail=prepareBodyInterval(intermediate,first.workspace,first.geometryValid,secondParameters,requestGeneration,2*ordinal+1,depth+1,plannedDepth,true,spent,allocated,middle,targetBodies,originalSource,originalTarget,midpoint,end,requestDuration);
+            return new PreparedInterval(tail.workspace,tail.candidate,tail.geometryValid,tail.gasNodesValid,tail.mechanicalObservation,first.substeps+tail.substeps,tail.lastLeafDuration,combineBodyResults(first.bodyResult,tail.bodyResult));
         }
     }
     synchronized List<mmm.thermal.CoherentPhaseStore.Group> checkpointCoherent(){

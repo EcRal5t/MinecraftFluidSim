@@ -198,7 +198,7 @@ final class VulkanLiquidWorkspace {
             return thermalStages.executeThermal(source, sourceGeometryValid, candidate, duration);
         }
         int execute(VulkanLiquidWorkspace source,boolean sourceGeometryValid,VulkanRegionStorage.Candidate candidate,VulkanLiquidProjection.Parameters parameters,
-                    long step,boolean accumulateLedger) {
+                    long step,boolean accumulateLedger,boolean finalRequest,double requestDuration) {
             boolean migrating=source!=this;
             boolean reuseGeometry=!migrating&&sourceGeometryValid&&transport!=null&&transport.entity==null;
             if(parameters!=null && transport==null)throw new IllegalStateException("Mechanical pressure requires resident transport");
@@ -403,29 +403,29 @@ final class VulkanLiquidWorkspace {
                                 transport.recordEnergy(command,output,errors,parameters);
                                 if(transport.reactions!=null)region.kernels.activityPending.record(command,output,activityCells,transport.reactions.progress().column(VulkanReactionProgressLayout.Field.PHASE_MOTION_CELLS),transport.reactions.progress().column(VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY));
                             };
-                            if(error==0&&transport.thermal==null&&transport.reactions==null)error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,(command,input,output,errors,staging,stack)->{
+                            if(error==0&&(!finalRequest||transport.thermal==null&&transport.reactions==null))error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,(command,input,output,errors,staging,stack)->{
                                 finishTransport.record(command,input,output,errors,staging,stack);
                                 thermalStages.recordLocalState(command,output,errors,parameters.duration());
-                                transport.recordLedgers(command,accumulateLedger?source.transport:null);
+                                transport.recordLedgers(command,accumulateLedger?source.transport:null,finalRequest,output,errors);
                                 if(migrating)writeHeaders(command,output,stableHeaders,stack);
                             });
                             else if(error==0){
                                 boolean react=transport.reactions!=null&&(region.activeInputs==null||!region.activeInputs.pendingPhaseSettlementOnly());
                                 VulkanRegionStorage.ComputeCommands finishLedgers=(command,input,output,errors,staging,stack)-> {
                                     thermalStages.recordLocalState(command,output,errors,parameters.duration());
-                                    transport.recordLedgers(command,accumulateLedger?source.transport:null);if(migrating)writeHeaders(command,output,stableHeaders,stack);
+                                    transport.recordLedgers(command,accumulateLedger?source.transport:null,finalRequest,output,errors);if(migrating)writeHeaders(command,output,stableHeaders,stack);
                                 };
                                 if(transport.thermal==null)error=candidate.continueBatch(finishTransport,0,0).error();
                                 traceStage("transport-energy",stageMark);
                                 boolean thermalFinishes=transport.thermal!=null&&!react;
                                 if(error==0&&transport.thermal!=null){capacityStage="thermal contacts/conduction";
-                                    error=region.kernels.thermalKernel.execute(candidate,transport.thermal,parameters.duration(),
-                                            source.transport.devices==null?null:source.transport.devices.state,transport.devices==null?null:transport.devices.settlement,accumulateLedger,
+                                    error=region.kernels.thermalKernel.execute(candidate,transport.thermal,requestDuration,
+                                            source.transport.devices==null?null:source.transport.devices.state,transport.devices==null?null:transport.devices.settlement,false,
                                             finishTransport,thermalFinishes?finishLedgers:null,
                                             thermalFinishes?(migrating?headerBytes(stableHeaders):0):-1);
                                 }
                                 traceStage("thermal-contacts-conduction",stageMark);
-                                if(error==0&&react){capacityStage="liquid reactions";error=executeReactions(candidate,transport.gas==null?null:transport.gas.thermo,transport.gas==null?null:transport.gas.geometry,parameters.duration());}
+                                if(error==0&&react){capacityStage="liquid reactions";error=executeReactions(candidate,transport.gas==null?null:transport.gas.thermo,transport.gas==null?null:transport.gas.geometry,requestDuration);}
                                 if(error==0&&!thermalFinishes)error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,finishLedgers);
                             }
                         }
@@ -702,7 +702,6 @@ final class VulkanLiquidWorkspace {
             if(gas!=null)roundoffStreams.add(stream(gas.transport.column(VulkanLocalGasTransport.Field.GATHER_ROUNDOFF),1));
             roundoffStreams.addAll(energy.roundoffStreams());
             if(dynamics!=null){roundoffStreams.addAll(dynamics.contacts.externalWorkRoundoffStreams());roundoffStreams.addAll(dynamics.transitions.roundoffStreams());}
-            if(thermal!=null)roundoffStreams.addAll(thermal.roundoffStreams());if(reactions!=null)roundoffStreams.addAll(reactions.roundoffStreams());
             roundoff=VulkanEnergyLedger.layout(roundoffStreams,thermalBase,liquid.alignment());
             heat=VulkanEnergyLedger.layout(java.util.List.of(stream(momentum.cellHeat(),1)),roundoff.endOffset(),liquid.alignment());
             var work=new ArrayList<VulkanEnergyLedger.Stream>(List.of(stream(momentum.cellHeat(),1),stream(energy.faceTerms(),1),stream(energy.potentialTerms(),1)));
@@ -710,7 +709,6 @@ final class VulkanLiquidWorkspace {
             else work.add(stream(entity.column(VulkanEntityBodyCoupling.Field.SOURCE_WORK),1));
             if(dynamics!=null){work.add(stream(energy.granularTerms(),1));work.add(stream(dynamics.contacts.column(VulkanGranularContacts.Field.FIXED_WORK),1));work.add(stream(dynamics.transitions.column(VulkanGranularTransitions.Field.HEAT),1));
                 for(int i=0;i<17;i++)work.add(new VulkanEnergyLedger.Stream(1,dynamics.transitions.word(VulkanGranularTransitions.Field.LIFT_TERMS)+2*i,dynamics.transitions.inputRows,34,i<8?1:-1));}
-            if(reactions!=null)work.addAll(reactions.mechanicalWorkStreams());
             if(gas!=null){work.add(stream(energy.gasEnergy().potential(),1));work.add(stream(gas.transport.column(VulkanLocalGasTransport.Field.EXTERNAL_PRESSURE_WORK),1));}
             int elastic=2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
             work.add(new VulkanEnergyLedger.Stream(1,word(sourceMixture)+elastic,cells,14,1));
@@ -864,12 +862,18 @@ final class VulkanLiquidWorkspace {
                 region.mixtureKernel.record(command,mixture,region.requestCellSize,parameters.duration());
             }
         }
-        void recordLedgers(org.lwjgl.vulkan.VkCommandBuffer command,Transport previous) {
+        void recordLedgers(org.lwjgl.vulkan.VkCommandBuffer command,Transport previous,boolean finalRequest,GpuBuffer output,GpuBuffer errors) {
             region.kernels.timed(command,"roundoff-ledger",()->region.kernels.ledger.record(command,roundoff));region.kernels.timed(command,"heat-ledger",()->region.kernels.ledger.record(command,heat));
             if(previous!=null){region.kernels.ledger.recordAccumulate(command,roundoff,word(previous.roundoff.result()));region.kernels.ledger.recordAccumulate(command,heat,word(previous.heat.result()));}
             region.kernels.ledger.record(command,inventoryPosting);region.kernels.ledger.record(command,mechanicalPosting);region.kernels.ledger.record(command,sourcePosting);region.kernels.ledger.record(command,sinkPosting);
             if(previous!=null){region.kernels.ledger.recordAccumulate(command,mechanicalPosting,word(previous.mechanicalPosting.result()));region.kernels.ledger.recordAccumulate(command,sourcePosting,word(previous.sourcePosting.result()));region.kernels.ledger.recordAccumulate(command,sinkPosting,word(previous.sinkPosting.result()));}
-            if(thermal!=null){region.kernels.ledger.record(command,thermal.reservoir());if(previous!=null)region.kernels.ledger.recordAccumulate(command,thermal.reservoir(),word(previous.thermal.reservoir().result()));}
+            if(finalRequest){
+                if(thermal!=null)region.kernels.ledger.record(command,thermal.reservoir());
+                region.kernels.ledger.record(command,thermalOnlyRoundoff);region.kernels.ledger.record(command,thermalOnlyMechanical);
+                var arena=new FlipKernelBindings.BufferRange(output);region.kernels.ledger.rebindRanges(arena,arena,new FlipKernelBindings.BufferRange(errors));
+                region.kernels.ledger.recordAccumulate(command,roundoff,word(thermalOnlyRoundoff.result()));
+                region.kernels.ledger.recordAccumulate(command,mechanicalPosting,word(thermalOnlyMechanical.result()));
+            }
         }
         int[] requirements(VulkanRegionStorage.Candidate candidate) {
             var columns=new VulkanLiquidStateLayout.Column[]{volumes.totalOffsets(),accepted.volumeOffsets(),materials.reserveOffsets(),
