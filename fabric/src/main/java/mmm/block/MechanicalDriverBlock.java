@@ -19,7 +19,7 @@ final class MechanicalDriverBlock extends Block {
         if(level.isClientSide())return InteractionResult.SUCCESS;
         if(!(player instanceof ServerPlayer serverPlayer))return InteractionResult.PASS;
         var operations=MmmRuntimeRegistry.require(serverPlayer.level().getServer()).processes();
-        String message=player.isShiftKeyDown()?operations.stopDrive(serverPlayer):operations.startDriveFromBlock(serverPlayer,position,hit.getDirection());
+        String message=player.isShiftKeyDown()?operations.stopDriveFromBlock(serverPlayer,position):operations.startDriveFromBlock(serverPlayer,position,hit.getDirection());
         serverPlayer.sendSystemMessage(Component.literal(message));
         return InteractionResult.SUCCESS;
     }

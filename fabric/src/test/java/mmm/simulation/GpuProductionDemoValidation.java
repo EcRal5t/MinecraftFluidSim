@@ -548,7 +548,8 @@ public final class GpuProductionDemoValidation {
 		require(MinecraftRegionOperatorActions.setPaused(region, true, () -> true), "Manual-step pause rejected");
 		prepareAvailability(region);
 		long before = region.solverGeneration();
-		MinecraftRegionOperatorActions.stepRegion(region, 2, motion);
+		region.wakeForActivity();
+		for (int i = 0; i < 2; i++) motion.step(region, List.of());
 		require(region.solverGeneration() == before + 2 && region.paused(), "Manual steps did not preserve pause intent");
 		var paused = new RegionRuntime(1, 1, 0, 0, region.canStep(), region.canStepThermal());
 		require(ticks.plan(paused).axis() == RegionTickUseCase.Axis.NONE, "Manual steps resumed scheduled ticking");

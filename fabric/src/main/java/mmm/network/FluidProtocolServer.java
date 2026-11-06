@@ -9,6 +9,8 @@ import net.fabricmc.fabric.api.networking.v1.ServerConfigurationConnectionEvents
 import net.fabricmc.fabric.api.networking.v1.ServerConfigurationNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityLevelChangeEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.MinecraftServer;
@@ -84,6 +86,8 @@ public final class FluidProtocolServer {
 			runtime.containerRecovery().retryPlayer(listener.player.getUUID());
 			runtime.regionObservation().sendAllTo(listener.player);
 		});
+		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, origin, destination) -> sendCurrentRegions(player));
+		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> sendCurrentRegions(newPlayer));
 		ServerPlayConnectionEvents.DISCONNECT.register((listener, server) -> {
 			MmmRuntime runtime = MmmRuntimeRegistry.find(server);
 			if (runtime != null) runtime.controllerConsole().forgetInteractiveViewer(listener.player.getUUID());
@@ -259,6 +263,13 @@ public final class FluidProtocolServer {
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId) {
 		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
 		return runtime != null && runtime.protocolSessions().isNegotiated(playerId);
+	}
+
+	private static void sendCurrentRegions(ServerPlayer player) {
+		MinecraftServer server = player.level().getServer();
+		if (!isNegotiated(server, player.getUUID())) return;
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		if (runtime != null) runtime.regionObservation().sendAllTo(player);
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId, FluidProtocol.Layout layout) {

@@ -96,14 +96,14 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 设备代分别记录几何缓存可复用性、气体活动摘要有效性和机械阶段观察有效性。反应后的同代气体摘要可继续划分活动组；气流和颗粒事件从实际执行阶段读取。宿主规划按当前几何重建相关分组，全加载快照也保留组间隔离。
 
 1. 启动恢复世界能力包及未完成事务，组装设备后端和区域服务。设备创建与预热共用初始化故障处理；失败释放设备并记录原因，世界保留不可推进的区域运行时。
-2. 世界输入采集碰撞、热接触与实体状态；`RegionTickUseCase` 按暂停、休眠与节拍选择机械步或独立热步。
+2. 世界输入采集碰撞、热接触与实体状态；`RegionTickUseCase` 按暂停、休眠与节拍选择机械步或独立热步。游戏内手动单步复用当前实体占位、活动组与提交后响应流程；连续单步使用零规定速度并保留已配置驱动的当前姿态，服务器 tick 保持原值。
 3. 请求捕获已提交代与输入，Vulkan 在私有状态执行计算，生成完整设备候选与统计。
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
 5. 日常查询与展示读取设备观察；checkpoint 和宿主编辑显式导出所需代次。
 
 普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇；同一墙只归一个区域，显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。
 
-管理员可用 `/mmm process feed <间隔tick>` 周期性执行主手容器事务，用 `/mmm process drive <秒数>` 启动对准格的有限时长往复驱动；`stop` 停止两者，`sample` 读取格内液体、气体和固体库存。周期投料按加载状态、玩家运行意图与区域可用性调度，静水休眠时继续接受到期投料；容器事务唤醒物理计算。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击停止。驱动使用规定运动的共同压力、黏性和外功结算。工艺配置按区域保存，区域移除时清除；物理状态由常规 checkpoint 恢复。
+管理员可用 `/mmm process feed <间隔tick>` 周期性执行主手容器事务，用 `/mmm process drive <秒数>` 启动对准格的有限时长往复驱动；`stop` 停止两者，`sample` 读取格内液体、气体和固体库存。周期投料按加载状态、玩家运行意图与区域可用性调度，静水休眠时继续接受到期投料；容器事务唤醒物理计算。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击按当前维度与方块位置停止对应驱动。驱动使用规定运动的共同压力、黏性和外功结算。工艺配置按区域保存，区域移除时清除；物理状态由常规 checkpoint 恢复。
 
 区域按同代物理连通关系划分活动组：开放格面、局部气体、颗粒接触范围、实体扫掠范围和有限热设备端口共同决定分组。缺失区块使关联组暂停，其余组沿同一设备候选继续推进；暂停组保留库存、内能、动量和未决相变任务。详见[运行时](runtime-and-lifecycle.md)和[实施计划](../roadmap/solver-consolidation-plan.md#gpu-执行链主线化)。
 
@@ -116,7 +116,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)：区块可用性、碰撞和实体输入。
 - [OrdinaryThermalWalls](../../fabric/src/main/java/mmm/simulation/OrdinaryThermalWalls.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
 - [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：周期投料、规定运动、取样及工艺配置恢复。
-- [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交。
+- [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交；[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 的 `manualStep` 负责原生单步输入和实体响应，失败采用共同暂停分类。
 - [FluidRegion](../../fabric/src/main/java/mmm/simulation/FluidRegion.java)：已提交代、`hostSnapshot`、`beginHostEdit/commitHostEdit` 和设备候选采用。
 - [VulkanFluidSolverBackend](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidSolverBackend.java)、[VulkanFluidStateCodec](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidStateCodec.java)：设备请求、导入与导出。
 
@@ -168,14 +168,14 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。公开转移的持久化收据在 WAL 扫描完整且缺少对应日志时归类为未提交；扫描存在存储问题时保持待恢复状态。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
 
 - [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)：捕获与恢复。
-- [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)：区域生命周期与持久化协调。
+- [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)：区域生命周期与持久化协调；卸载区域的运行意图由 `setUnloadedRunIntent` 同步读取完整 checkpoint、提交新代并释放宿主状态，保留原有可用性，未完成事务先执行恢复。
 - [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)、[PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)：公开转移收据分类与持久结果，启动时由 `reconcilePendingReceipts` 对照 WAL 索引。
 - 验证入口：`region-state,containers,ownership,lifecycle`，以及 `runGpuResidentStateValidation`。
 
 <a id="client"></a>
 ## 查询与展示
 
-区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。查询不改变设备代。容器与接口使用实际接受量及同代库存，比较器按固定开放容量展示液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
+区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。登录、切换维度及复活时向玩家补发当前维度的已加载区域快照，暂停和休眠区域也参与补发。查询不改变设备代。容器与接口使用实际接受量及同代库存，比较器按固定开放容量展示液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
 
 <a id="gameplay"></a>
 ## 游戏入口

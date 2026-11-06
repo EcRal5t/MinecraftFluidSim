@@ -84,6 +84,24 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		creationLocked = true;
 	}
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
+	/** Persist an operator intent changed while the region has no live solver. */
+	void setUnloadedRunIntent(FluidRegion region, boolean paused) throws IOException {
+		if (region.solverLoaded()) throw new IllegalArgumentException("Region is already loaded");
+		boolean previous = region.paused();
+		var reason = region.availabilityReason();
+		var failure = region.availabilityFailure();
+		long generation = region.checkpointGeneration();
+		try {
+			persistence.restore(region);
+			if (!region.solverLoaded()) throw new IOException("Region checkpoint did not restore");
+			region.setPaused(paused);
+			persistence.checkpoint(region);
+		} finally {
+			if (region.checkpointGeneration() == generation) region.setPaused(previous);
+			if (region.solverLoaded()) region.releaseSolverAfterCheckpoint(region.checkpointGeneration());
+			if (failure != null) region.setAvailabilityFailure(reason, failure);
+		}
+	}
 	long committedGeneration(UUID regionId) throws IOException { return persistence.committedGeneration(regionId); }
 	long committedManifestChecksum(UUID regionId) throws IOException { return persistence.committedManifestChecksum(regionId); }
 	void adoptCommittedContainerCheckpoint(FluidRegion region, long baseGeneration, long targetGeneration)

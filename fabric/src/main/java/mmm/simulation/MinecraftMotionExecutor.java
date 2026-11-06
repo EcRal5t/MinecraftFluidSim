@@ -32,6 +32,10 @@ final class MinecraftMotionExecutor {
 		return step(region, movingBodies, phaseChange);
 	}
 
+	MotionStepResult stepCaptured(FluidRegion region, List<MovingBodyFluidCoupling.Request> movingBodies, boolean[] active) {
+		return execute(region, movingBodies, registries.hasCapability(WorldCapability.PHASECHANGE), active);
+	}
+
 	/** Settles pending phase work with one authoritative mechanical projection. */
 	MotionStepResult settlePendingPhaseWork(FluidRegion region) {
 		boolean[] active = region.activityForBodies(region.entityBodyState().bodies());
@@ -54,6 +58,11 @@ final class MinecraftMotionExecutor {
 	) {
 		boolean[] active = region.activityForBodies(movingBodies);
 		if (active != null) movingBodies = MinecraftRegionInputs.retainBlockedBodies(region, movingBodies);
+		return execute(region, movingBodies, phaseChange, active);
+	}
+
+	private MotionStepResult execute(FluidRegion region, List<MovingBodyFluidCoupling.Request> movingBodies,
+			boolean phaseChange, boolean[] active) {
 		long start = System.nanoTime();
 		MotionStepResult result = application.stepMotion(new MotionStepCommand(
 				region.id(), region.solverGeneration(), movingBodies, phaseChange,

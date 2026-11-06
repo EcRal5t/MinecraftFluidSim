@@ -68,6 +68,28 @@ final class MinecraftRegionTick {
 	void finishServerTick() { inputs.finishServerTick(); }
 	void discardEntityResponse(FluidRegion region) { inputs.discardEntityResponse(region); }
 
+	/** A manual motion step uses the same world observations and accepted entity response as a tick. */
+	void manualStep(ServerLevel level, FluidRegion region, MinecraftMotionExecutor motion) {
+		inputs.discardEntityResponse(region);
+		try {
+			activityConnections.accept(region);
+			MinecraftRegionInputs.TickInputs captured;
+			try { captured = inputs.captureManualStep(level, region, profile.hasCapability(WorldCapability.THERMAL)); }
+			catch (RuntimeException failure) {
+				throw new RegionRepository.StateCaptureRejectedException(
+						"Manual-step input capture failed: " + failure.getMessage(), failure);
+			}
+			var result = motion.stepCaptured(region, captured.movingBodies(), captured.activeCells());
+			inputs.commitEntityResponse(level, region, result.movingBodyCoupling());
+			var coupling = result.movingBodyCoupling();
+			region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(captured.affectedEntities(),
+					coupling.impulseXKilogramMetresPerSecond(), coupling.impulseYKilogramMetresPerSecond(),
+					coupling.impulseZKilogramMetresPerSecond()));
+		} finally {
+			inputs.discardEntityResponse(region);
+		}
+	}
+
 	void tickAvailable(ServerLevel level, FluidRegion region) {
 		inputs.discardEntityResponse(region);
 		long tick = region.incrementTick();

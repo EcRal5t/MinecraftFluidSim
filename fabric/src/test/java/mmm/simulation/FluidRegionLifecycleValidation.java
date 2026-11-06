@@ -385,6 +385,23 @@ public final class FluidRegionLifecycleValidation {
 		var numerical = queries.query(new ControllerSummaryCommand(player, region.id())).summary();
 		require(numerical.availability().reason() == RegionAvailabilityReason.NUMERICAL_PAUSE,
 				"performance retry cleared a distinct numerical failure");
+		long beforeUnload = operations.checkpoint(region);
+		require(region.releaseSolverAfterCheckpoint(beforeUnload), "controller fixture did not unload");
+		region.setAvailabilityFailure(RegionAvailabilityReason.BOUNDARY_OPEN, "shell is open");
+		operations.setUnloadedRunIntent(region, true);
+		require(!region.solverLoaded() && region.paused()
+				&& region.availabilityReason() == RegionAvailabilityReason.BOUNDARY_OPEN,
+				"unloaded pause changed availability or retained a solver");
+		var reopenedManager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
+		var reopened = new FluidRegionOperations(root, reopenedManager, false, true, profile, null, null, null, null,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, TestProfiles.materialRegistry());
+		var restored = reopenedManager.region(region.id());
+		require(restored != null && restored.paused(), "unloaded pause was lost after metadata reload");
+		reopened.setUnloadedRunIntent(restored, false);
+		var finalManager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
+		new FluidRegionOperations(root, finalManager, false, true, profile, null, null, null, null,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, TestProfiles.materialRegistry());
+		require(!finalManager.region(region.id()).paused(), "unloaded resume was lost after metadata reload");
 		try (var paths = java.nio.file.Files.walk(root)) {
 			for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) java.nio.file.Files.deleteIfExists(path);
 		}

@@ -58,10 +58,17 @@ public final class MinecraftProcessOperations {
         long start=region.tick();setDrive(region.id(),new Drive(start,Math.addExact(start,200),cell[0],cell[1],cell[2],region.solverConfig().cellSize(),axis,position.asLong()));
         region.wakeForActivity();return "驱动方块已启动 10 秒，实际外功记入机械账";
     }
-    public String stopDrive(ServerPlayer player){
-        var region=selected(player);if(region==null)return "请选择玩家所在维度的已加载区域";
+    public String stopDriveFromBlock(ServerPlayer player,net.minecraft.core.BlockPos position){
         if(!startup.authoritativeWritesReady())return "世界状态尚未允许写入";
-        drives.remove(region.id());save();return "已停止机械驱动";
+        return stopDriveAt(player.level().dimension(),position)?"已停止机械驱动":"该驱动方块未运行";
+    }
+    boolean stopDriveAt(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,net.minecraft.core.BlockPos position){
+        for(var region:regions.regions()){
+            var drive=drives.get(region.id());
+            if(!region.dimension().equals(dimension)||drive==null||!Objects.equals(drive.anchor(),position.asLong()))continue;
+            drives.remove(region.id());save();return true;
+        }
+        return false;
     }
     public String stop(ServerPlayer player){
         var region=selected(player);if(region==null)return "请选择玩家所在维度的已加载区域";
@@ -112,6 +119,14 @@ public final class MinecraftProcessOperations {
     static boolean feedDue(FluidRegion region,int interval){
         return region.solverLoaded()&&!region.paused()&&region.availabilityFailure()==null&&region.tick()%interval==0;
     }
+    List<MovingBodyFluidCoupling.Request> manualBodies(UUID regionId,List<MovingBodyFluidCoupling.Request> previous){
+        if(!drives.containsKey(regionId))return List.of();
+        UUID driveId=driveId(regionId);
+        for(var body:previous)if(body.bodyId().equals(driveId))
+            return List.of(new MovingBodyFluidCoupling.Request(body.bodyId(),body.bounds(),0,0,0));
+        return List.of();
+    }
+    private static UUID driveId(UUID regionId){return UUID.nameUUIDFromBytes(("mmm:drive:"+regionId).getBytes(java.nio.charset.StandardCharsets.UTF_8));}
     List<MovingBodyFluidCoupling.Request> bodies(FluidRegion region,long tick){
         var drive=drives.get(region.id());if(drive==null)return List.of();
         if(!region.canStep()){
@@ -125,7 +140,7 @@ public final class MinecraftProcessOperations {
         center[drive.axis()]+=amp*Math.sin(phase);double r=.2*h;
         double[] velocity={0,0,0};velocity[drive.axis()]=amp*Math.PI*Math.cos(phase);
         var bounds=new MovingBodyFluidCoupling.Bounds(center[0]-r,center[1]-r,center[2]-r,center[0]+r,center[1]+r,center[2]+r);
-        return List.of(new MovingBodyFluidCoupling.Request(UUID.nameUUIDFromBytes(("mmm:drive:"+region.id()).getBytes(java.nio.charset.StandardCharsets.UTF_8)),bounds,velocity[0],velocity[1],velocity[2]));
+        return List.of(new MovingBodyFluidCoupling.Request(driveId(region.id()),bounds,velocity[0],velocity[1],velocity[2]));
     }
     Feed feed(UUID regionId){return feeds.get(regionId);}
     Drive drive(UUID regionId){return drives.get(regionId);}

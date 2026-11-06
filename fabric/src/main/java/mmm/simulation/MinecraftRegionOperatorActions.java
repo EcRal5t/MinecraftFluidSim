@@ -3,14 +3,11 @@ package mmm.simulation;
 import mmm.fluid.FluidDomainContracts;
 
 import mmm.fluid.HostFluidState;
-import mmm.fluid.GasTopologyBlockedException;
-import mmm.granular.GranularMechanics;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
-import java.util.List;
 import java.util.Objects;
 
 /** Administrator-only writes against the selected live region. */
@@ -63,6 +60,16 @@ public final class MinecraftRegionOperatorActions {
 
 	public boolean setPaused(boolean paused, ServerLevel level) {
 		FluidRegion region = activeRegion();
+		if (region != null && availability.hasPending(region.id())) return false;
+		if (region != null && paused && !region.solverLoaded() && region.controllerManaged()) {
+			if (!startup.authoritativeWritesReady()) return false;
+			if (region.paused()) return true;
+			try { operations.setUnloadedRunIntent(region, true); return true; }
+			catch (java.io.IOException | RuntimeException failure) {
+				mmm.MmmMod.LOGGER.error("Could not persist run intent for unloaded region {}", region.id(), failure);
+				return false;
+			}
+		}
 		return setPaused(region, paused, () -> availability.ensure(level, region));
 	}
 
@@ -93,33 +100,14 @@ public final class MinecraftRegionOperatorActions {
 		clearPerformancePauseForExplicitRetry(region);
 		if (!availability.ensure(level, region)) return -1;
 		try {
-			stepRegion(region, count, motion);
-		} catch (FluidDomainContracts.PressureSolveBlockedException blocked) {
-			regionTick.blockNumerical(level, region, blocked);
-			return -1;
-		} catch (GasTopologyBlockedException blocked) {
-			regionTick.blockGasTopology(level, region, blocked);
-			return -1;
-		} catch (FluidDomainContracts.ThermalTransportBlockedException blocked) {
-			regionTick.blockThermal(level, region, "thermal-transport PAUSED：" + blocked.getMessage(), blocked);
-			return -1;
-		} catch (FluidDomainContracts.GasThermalBlockedException blocked) {
-			regionTick.blockThermal(level, region, "gas-thermal PAUSED：" + blocked.getMessage(), blocked);
-			return -1;
-		} catch (FluidDomainContracts.ThermalPhaseBlockedException blocked) {
-			regionTick.blockThermal(level, region, "phase-change PAUSED：" + blocked.getMessage(), blocked);
-			return -1;
-		} catch (GranularMechanics.ValidityExceededException invalid) {
-			region.blockGranular("granular-validity-blocked PAUSED：" + invalid.getMessage());
+			region.wakeForActivity();
+			for (int i = 0; i < count; i++) regionTick.manualStep(level, region, motion);
+		} catch (RuntimeException failure) {
+			if (!regionTick.blockStepFailure(level, region, failure)) throw failure;
 			return -1;
 		}
 		sendSnapshot(level);
 		return count;
-	}
-
-	static void stepRegion(FluidRegion region, int count, MinecraftMotionExecutor motion) {
-		region.wakeForActivity();
-		for (int i = 0; i < count; i++) motion.step(region, List.of());
 	}
 
 	/** Explicit run/step retries clear only wall-time evidence, never physical or transaction failures. */

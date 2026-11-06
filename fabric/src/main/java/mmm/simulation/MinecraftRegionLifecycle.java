@@ -75,6 +75,16 @@ public final class MinecraftRegionLifecycle {
 			case UNCHANGED -> Component.translatable("message.mmm.controller.intent_changed");
 			case ACCEPTED -> throw new IllegalStateException("Accepted run intent entered failure mapping");
 		};
+		if (availability.hasPending(region.id()))
+			return Component.literal("存在未完成的区域事务，请先完成恢复");
+		if (!region.solverLoaded() && region.controllerManaged()) {
+			try { operations.setUnloadedRunIntent(region, pause); }
+			catch (IOException | RuntimeException failure) {
+				return Component.literal("保存区域运行状态失败：" + failure.getMessage());
+			}
+			if (!pause) MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(region);
+			return null;
+		}
 		if (!pause) MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(region);
 		region.setPaused(pause);
 		if (!pause && region.solverLoaded()) region.wakeForActivity();

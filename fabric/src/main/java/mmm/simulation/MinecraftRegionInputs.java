@@ -30,6 +30,8 @@ final class MinecraftRegionInputs {
 	private final OrdinaryThermalWalls ordinaryWalls;
 	private java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> prescribedBodies = (region,tick) -> List.of();
 	void prescribedBodies(java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> source) { prescribedBodies=java.util.Objects.requireNonNull(source); }
+	private java.util.function.Function<FluidRegion,List<MovingBodyFluidCoupling.Request>> manualPrescribedBodies = region -> List.of();
+	void manualPrescribedBodies(java.util.function.Function<FluidRegion,List<MovingBodyFluidCoupling.Request>> source) { manualPrescribedBodies=java.util.Objects.requireNonNull(source); }
 
 	MinecraftRegionInputs(ThermalRegistry thermalRegistry, int cellsPerBlock) {
 		if (cellsPerBlock <= 0) throw new IllegalArgumentException("cells per block must be positive");
@@ -63,13 +65,22 @@ final class MinecraftRegionInputs {
 	}
 
 	TickInputs captureTick(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled) {
+		return capture(level, region, tick, thermalEnabled, false);
+	}
+
+	TickInputs captureManualStep(ServerLevel level, FluidRegion region, boolean thermalEnabled) {
+		return capture(level, region, region.tick(), thermalEnabled, true);
+	}
+
+	private TickInputs capture(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled, boolean manual) {
 		MinecraftGroupAvailability.prepare(level, region);
 		List<Observation> observations = region.entityPhysicsEnabled() ? captureEntities(level, region) : List.of();
 		List<BodyMotion> motions = new ArrayList<>();
 		for (var observation : observations) if (canAffect(observation.entity()))
 			motions.add(new BodyMotion(observation.entity().getUUID(), observation.bounds(), 0, observation.displacement()));
-		List<MovingBodyFluidCoupling.Request> requestedBodies = new ArrayList<>(bodyObservations(motions));
-		requestedBodies.addAll(prescribedBodies.apply(region, tick));
+		List<MovingBodyFluidCoupling.Request> requestedBodies = new ArrayList<>(manual
+				? manualBodies(motions, manualPrescribedBodies.apply(region)) : bodyObservations(motions));
+		if (!manual) requestedBodies.addAll(prescribedBodies.apply(region, tick));
 		boolean[] activeCells = region.activityForBodies(requestedBodies);
 		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
 		checkBodyBudget(requestedBodies);
@@ -199,6 +210,15 @@ final class MinecraftRegionInputs {
 					displacement.x * TICKS_PER_SECOND, displacement.y * TICKS_PER_SECOND,
 					displacement.z * TICKS_PER_SECOND));
 		}
+		return List.copyOf(requests);
+	}
+
+	static List<MovingBodyFluidCoupling.Request> manualBodies(List<BodyMotion> observations,
+			List<MovingBodyFluidCoupling.Request> prescribed) {
+		var requests = new ArrayList<MovingBodyFluidCoupling.Request>();
+		for (var observation : observations)
+			requests.add(new MovingBodyFluidCoupling.Request(observation.bodyId(), observation.bounds(), 0, 0, 0));
+		requests.addAll(prescribed);
 		return List.copyOf(requests);
 	}
 

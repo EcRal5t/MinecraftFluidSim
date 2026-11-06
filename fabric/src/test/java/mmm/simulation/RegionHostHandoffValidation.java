@@ -14,6 +14,7 @@ final class RegionHostHandoffValidation {
         ordinaryWallContactsSpanBothSides();
         processSettingsSurviveRestartAndStop();
         periodicFeedRemainsDueDuringSleep();
+        driverStopUsesClickedBlock();
         hostEditsRespectCurrentActivity();
         fullyLoadedPlannerGroupsRemainIndependent();
     }
@@ -51,6 +52,39 @@ final class RegionHostHandoffValidation {
         region.setAvailabilityFailure(null);
         require(region.recordPublishedCheckpoint(1)&&region.releaseSolverAfterCheckpoint(1),"Feed fixture unload failed");
         require(!MinecraftProcessOperations.feedDue(region,12),"Unloaded region allowed scheduled feed");
+    }
+
+    private static void driverStopUsesClickedBlock() throws Exception {
+        var config=new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f);
+        var first=region(new HostFluidState(2,2,2,config));
+        var second=new FluidRegion(UUID.randomUUID(),first.dimension(),new BlockPos(10,0,0),new HostFluidState(2,2,2,config));
+        var manager=new FluidRegionManager(new mmm.application.RegionCatalog.Limits(4,100,400));
+        require(manager.add(first).accepted()&&manager.addAndSelect(second).accepted(),"Drive regions were not admitted");
+        var root=java.nio.file.Files.createTempDirectory("mmm-driver-target-");
+        var processes=new MinecraftProcessOperations(root,manager,null,null,null);
+        var firstAnchor=new BlockPos(-1,0,0);var secondAnchor=new BlockPos(9,0,0);
+        var firstDrive=new MinecraftProcessOperations.Drive(0,200,0,0,0,.5,0,firstAnchor.asLong());
+        var secondDrive=new MinecraftProcessOperations.Drive(0,200,0,0,0,.5,0,secondAnchor.asLong());
+        processes.setDrive(first.id(),firstDrive);processes.setDrive(second.id(),secondDrive);
+		var driveId=UUID.nameUUIDFromBytes(("mmm:drive:"+first.id()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		var bounds=new mmm.world.MovingBodyFluidCoupling.Bounds(.1,.1,.1,.2,.2,.2);
+		var prior=List.of(new mmm.world.MovingBodyFluidCoupling.Request(driveId,bounds,1,0,0));
+		require(processes.manualBodies(first.id(),prior).size()==1
+				&& processes.manualBodies(first.id(),prior).getFirst().velocityXMetresPerSecond()==0,
+				"Paused manual step lost the configured drive pose");
+        var feed=new MinecraftProcessOperations.Feed(UUID.randomUUID(),12);processes.setFeed(first.id(),feed);
+        var dimensions=net.minecraft.resources.ResourceKey.<Level>createRegistryKey(
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","handoff_dimensions"));
+        var otherDimension=net.minecraft.resources.ResourceKey.create(dimensions,
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","driver_other_dimension"));
+        require(!processes.stopDriveAt(otherDimension,firstAnchor)
+                &&!processes.stopDriveAt(first.dimension(),BlockPos.ZERO),"Foreign dimension or inactive block stopped a drive");
+        require(processes.stopDriveAt(first.dimension(),firstAnchor)&&manager.selected()==second
+                &&processes.drive(first.id())==null&&secondDrive.equals(processes.drive(second.id()))
+                &&feed.equals(processes.feed(first.id())),"Clicked drive stop changed the selected region or another process");
+		require(processes.manualBodies(first.id(),prior).isEmpty(),"Stopped drive retained occupancy on manual step");
+        var restored=new MinecraftProcessOperations(root,manager,null,null,null);
+        require(restored.drive(first.id())==null&&secondDrive.equals(restored.drive(second.id())),"Clicked drive stop did not survive restart");
     }
 
     private static void ordinaryWallContactsSpanBothSides() throws Exception {

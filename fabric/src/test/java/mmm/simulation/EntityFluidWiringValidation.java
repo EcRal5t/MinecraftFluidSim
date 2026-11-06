@@ -24,6 +24,7 @@ public final class EntityFluidWiringValidation {
 		movingBodyRequestsHonourTheDocumentedBudget();
 		bodySweepIntoUnavailableGroupRetainsPreviousPose();
 		pausedObservationsDoNotExhaustBodyBudget();
+		manualStepRetainsObservedBodiesAndDrive();
 		System.out.println("Entity fluid wiring passed");
 	}
 
@@ -46,6 +47,20 @@ public final class EntityFluidWiringValidation {
 		tracker.rotate();
 		require(tracker.displacementSincePreviousTick(BODY, walked) == null,
 				"a body missed for one tick still reported a stale displacement");
+	}
+
+	private static void manualStepRetainsObservedBodiesAndDrive() {
+		UUID drive = new UUID(7, 9);
+		var pose = bounds(1, 1, 1);
+		var drivePose = bounds(2, 1, 1);
+		var observed = List.of(new MinecraftRegionInputs.BodyMotion(BODY, pose, 0, new Vec3(.2, 0, 0)));
+		var prescribed = List.of(new MovingBodyFluidCoupling.Request(drive, drivePose, 0, 0, 0));
+		var requests = MinecraftRegionInputs.manualBodies(observed, prescribed);
+		require(requests.size() == 2 && requests.get(0).bodyId().equals(BODY)
+				&& requests.get(0).bounds().equals(pose) && requests.get(0).velocityXMetresPerSecond() == 0
+				&& requests.get(1).bodyId().equals(drive) && requests.get(1).bounds().equals(drivePose)
+				&& requests.get(1).velocityXMetresPerSecond() == 0,
+				"manual step failed to retain stationary entity and drive occupancy");
 	}
 
 	private static void movingBodyRequestsCarryObservedDisplacement() {

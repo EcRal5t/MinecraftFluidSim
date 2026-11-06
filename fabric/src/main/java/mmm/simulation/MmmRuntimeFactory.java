@@ -167,6 +167,7 @@ public final class MmmRuntimeFactory {
 				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
 		MinecraftProcessOperations processes = new MinecraftProcessOperations(worldRoot, regionManager, targets, playerContainerTransfers, startup);
 		regionInputs.prescribedBodies(processes::bodies);
+		regionInputs.manualPrescribedBodies(region -> processes.manualBodies(region.id(), region.entityBodyState().bodies()));
 		regionManager.observeRemoval(processes::regionRemoved);
 		MinecraftRegionOperatorActions operatorActions = new MinecraftRegionOperatorActions(
 				startup, regionManager, targets, regionOperations, snapshots, takeover, debugFixtures,
