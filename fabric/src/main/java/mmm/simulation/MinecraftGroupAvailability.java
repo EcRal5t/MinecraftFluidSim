@@ -65,9 +65,9 @@ final class MinecraftGroupAvailability {
         int minX=Math.max(0,(int)Math.floor((box.minX-origin.getX())/h));
         int minY=Math.max(0,(int)Math.floor((box.minY-origin.getY())/h));
         int minZ=Math.max(0,(int)Math.floor((box.minZ-origin.getZ())/h));
-        int maxX=Math.min(region.sizeX()-1,(int)Math.floor((box.maxX-origin.getX())/h));
-        int maxY=Math.min(region.sizeY()-1,(int)Math.floor((box.maxY-origin.getY())/h));
-        int maxZ=Math.min(region.sizeZ()-1,(int)Math.floor((box.maxZ-origin.getZ())/h));
+        int maxX=Math.min(region.sizeX()-1,(int)Math.ceil((box.maxX-origin.getX())/h)-1);
+        int maxY=Math.min(region.sizeY()-1,(int)Math.ceil((box.maxY-origin.getY())/h)-1);
+        int maxZ=Math.min(region.sizeZ()-1,(int)Math.ceil((box.maxZ-origin.getZ())/h)-1);
         for(int z=minZ;z<=maxZ;z++) for(int y=minY;y<=maxY;y++) for(int x=minX;x<=maxX;x++)
             if(!region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x)) return false;
         return true;

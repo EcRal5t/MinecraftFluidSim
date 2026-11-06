@@ -4,9 +4,11 @@ import mmm.application.RegionRuntime;
 import mmm.thermal.ThermalRegistry;
 import mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -161,13 +163,13 @@ final class MinecraftRegionInputs {
 		List<Observation> observations = new ArrayList<>();
 		for (Entity entity : level.getEntities((Entity) null, regionBounds(region),
 				entity -> canAffect(entity) || entity.isAlive() && !entity.isRemoved() && entity.isOnFire())) {
-			motion.observe(entity.getUUID(), entity.position());
+			motion.observe(level.dimension(), entity.getUUID(), entity.position());
 			var box = entity.getBoundingBox();
 			var origin = region.origin();
 			var bounds = new MovingBodyFluidCoupling.Bounds(box.minX - origin.getX(), box.minY - origin.getY(),
 					box.minZ - origin.getZ(), box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ());
 			observations.add(new Observation(entity, bounds,
-					motion.displacementSincePreviousTick(entity.getUUID(), entity.position())));
+					motion.displacementSincePreviousTick(level.dimension(), entity.getUUID(), entity.position())));
 		}
 		return observations;
 	}
@@ -290,16 +292,19 @@ final class MinecraftRegionInputs {
 	 * the client-authoritative displacement of a walking player across server ticks.
 	 */
 	static final class MotionHistory {
-		private final Map<UUID, Vec3> committed = new HashMap<>();
-		private final Map<UUID, Vec3> observed = new HashMap<>();
+		private record Address(ResourceKey<Level> dimension, UUID body) { }
+		private final Map<Address, Vec3> committed = new HashMap<>();
+		private final Map<Address, Vec3> observed = new HashMap<>();
 
 		/** Returns null until the entity has been observed on the immediately preceding server tick. */
-		Vec3 displacementSincePreviousTick(UUID id, Vec3 currentPosition) {
-			Vec3 previous = committed.get(id);
+		Vec3 displacementSincePreviousTick(ResourceKey<Level> dimension, UUID id, Vec3 currentPosition) {
+			Vec3 previous = committed.get(new Address(dimension, id));
 			return previous == null ? null : currentPosition.subtract(previous);
 		}
 
-		void observe(UUID id, Vec3 currentPosition) { observed.put(id, currentPosition); }
+		void observe(ResourceKey<Level> dimension, UUID id, Vec3 currentPosition) {
+			observed.put(new Address(dimension, id), currentPosition);
+		}
 
 		void rotate() {
 			committed.clear();

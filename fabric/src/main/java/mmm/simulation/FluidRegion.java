@@ -621,9 +621,14 @@ public final class FluidRegion {
 		groupAvailability = null;
 	}
 
-	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
-	boolean hasFiniteThermalDevices() { var devices = currentFiniteDevices(); return devices != null && !devices.devices().isEmpty(); }
+	/** Fixed wall inventories remain in the final checkpoint and its removal quarantine. */
+	boolean hasRemovableThermalDevices() {
+		var devices = currentFiniteDevices();
+		return devices != null && devices.devices().stream()
+				.anyMatch(device -> !device.providerId().equals(OrdinaryThermalWalls.PROVIDER));
+	}
 
+	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
 	public FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint) {
 		FiniteThermalDeviceInventory current = residentState == null ? finiteThermalDevices : residentState.finiteThermalDevices();
 		if (current == null) return FiniteThermalDeviceInventory.empty(thermalRegistryFingerprint);

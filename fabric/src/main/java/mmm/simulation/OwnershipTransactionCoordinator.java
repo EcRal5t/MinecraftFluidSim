@@ -235,11 +235,15 @@ final class OwnershipTransactionCoordinator {
 				returnedPositions.add(block.packedPosition());
 			}
 		}
-		boolean empty = domain.totalVolumeExact() == 0 && domain.totalGranularSolidVolumeSvq() == 0
-				&& domain.totalCoherentSolidVolumeSvq() == 0 && MinecraftRegionLifecycle.gasInventoryEmpty(domain)
-				&& domain.exactInternalEnergy().signum() == 0 && !region.hasFiniteThermalDevices();
+		boolean empty = canRelinquishPool(region, domain);
 		if (empty) for (var block : owned.ownedBlocks()) returnedPositions.add(block.packedPosition());
 		return new PoolReturnPlan(region.ownershipCandidate(domain, region.footprint().withReturnedBlocks(returnedPositions)), List.copyOf(returned), empty);
+	}
+
+	static boolean canRelinquishPool(FluidRegion region, mmm.fluid.HostFluidState domain) {
+		return domain.totalVolumeExact() == 0 && domain.totalGranularSolidVolumeSvq() == 0
+				&& domain.totalCoherentSolidVolumeSvq() == 0 && MinecraftRegionLifecycle.gasInventoryEmpty(domain)
+				&& domain.exactInternalEnergy().signum() == 0 && !region.hasRemovableThermalDevices();
 	}
 
 	ReleaseAttempt returnPoolWater(MinecraftServer server, FluidRegion region) {

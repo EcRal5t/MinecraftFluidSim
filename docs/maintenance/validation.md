@@ -309,6 +309,8 @@ S1 的针对性入口：
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-11-07 深入逻辑复审：`:fabric:runHostValidation -PhostValidation=lifecycle,region-state` 通过（28 秒），记录 `build/logic-review-deep-final.log`。回归覆盖跨维度实体位移历史隔离、目标维度恢复连续运动、实体贴住暂停单元时保持可用且实际伸入时受阻；空池的普通固定墙允许解除归属，归还候选采用后保留墙体温度与热账，安装换热器继续阻止释放。现有热学存档场景增加普通墙，从 REMOVED 隔离 payload 读取完整热库存与审计。区域库存、MAC、实体、相变及能力包恢复验证通过；`assemble` 已生成 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-11-07 扩展逻辑复审：`:fabric:runHostValidation -PhostValidation=lifecycle,protocol` 通过（34 秒），记录 `build/logic-review-followup-validation.log`。新增回归覆盖卸载区域修改暂停／运行意图后的元数据重读、手动单步的实体与驱动占位及零规定速度、驱动停止后移除占位，以及按点击位置停止驱动时保留另一选中区域和周期投料。切换维度及复活后的快照补发复用正式协议会话和区域展示发送，服务端编译及既有协议、客户端表面与查询验证通过。主模组 `assemble` 已完成，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`；本轮沿现有支持范围检查区域管理、演示及世界交互，耗时参数保持原值。
 
 2026-11-07 逻辑复审：`runHostValidation -PhostValidation=lifecycle` 通过（32 秒），新增覆盖静水休眠时周期投料到期、间隔执行、玩家暂停、区块不可用及卸载状态，记录 `build/logic-review-lifecycle.log`。复用本次编译 classpath 执行 `ContainerTransferStoreValidation --public-transfers` 通过，覆盖 WAL 存储存在扫描问题时保留待恢复收据、健康索引缺少对应日志时归类未提交，以及既有持久收据与 actor 代次恢复，记录 `build/logic-review-public-transfers.log`。`assemble :fabric:testClasses` 通过（25 秒），记录 `build/logic-review-delivery.log`，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。

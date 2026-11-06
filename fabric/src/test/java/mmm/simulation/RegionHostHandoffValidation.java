@@ -15,6 +15,7 @@ final class RegionHostHandoffValidation {
         processSettingsSurviveRestartAndStop();
         periodicFeedRemainsDueDuringSleep();
         driverStopUsesClickedBlock();
+        touchingUnavailableCellKeepsBodyAvailable();
         hostEditsRespectCurrentActivity();
         fullyLoadedPlannerGroupsRemainIndependent();
     }
@@ -85,6 +86,20 @@ final class RegionHostHandoffValidation {
 		require(processes.manualBodies(first.id(),prior).isEmpty(),"Stopped drive retained occupancy on manual step");
         var restored=new MinecraftProcessOperations(root,manager,null,null,null);
         require(restored.drive(first.id())==null&&secondDrive.equals(restored.drive(second.id())),"Clicked drive stop did not survive restart");
+    }
+
+    private static void touchingUnavailableCellKeepsBodyAvailable() {
+        var host=new HostFluidState(6,2,2,new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        for(int z=0;z<2;z++)for(int y=0;y<2;y++)host.setSolid(2,y,z,true);
+        var region=region(host);region.solverBackend(new HandoffBackend());region.ensureDeviceResident();
+        var available=new boolean[24];java.util.Arrays.fill(available,true);
+        available[2]=false;
+        require(region.prepareGroupAvailability(available)&&region.groupAvailable(1)&&!region.groupAvailable(2),
+                "Body contact fixture lost the active side");
+        require(MinecraftGroupAvailability.boxAvailable(region,new net.minecraft.world.phys.AABB(.5,0,0,1,.5,.5)),
+                "Face contact included an unoccupied unavailable cell");
+        require(!MinecraftGroupAvailability.boxAvailable(region,new net.minecraft.world.phys.AABB(.5,0,0,1.01,.5,.5)),
+                "Positive overlap with an unavailable cell was accepted");
     }
 
     private static void ordinaryWallContactsSpanBothSides() throws Exception {

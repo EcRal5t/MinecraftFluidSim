@@ -278,6 +278,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		expectedDevices.requireCompatible(thermal);
 		var sourceBody=expectedDevices.devices().getFirst();
 		var ordinaryWall=new FiniteThermalDeviceState("mmm:ordinary_wall", "123@minecraft:stone", sourceBody.deviceTypeId(), sourceBody.body());
+		expectedDevices=expectedDevices.insertExternal(ordinaryWall);
 		var emptyWallAudit=FiniteThermalDeviceInventory.empty(thermal.fingerprint()).insertExternal(ordinaryWall)
 				.extractExternal(ordinaryWall.providerId(),ordinaryWall.objectId());
 		var deviceCodec=new FiniteThermalDeviceCodec();
@@ -369,6 +370,13 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				"published finite thermal device truth did not survive committed readback");
 		require(restorer(files.read(region.id())).reconstructPendingPhaseMotion().entries().equals(expectedPending.entries()),
 				"published pending phase motion did not survive committed readback");
+		var removal=files.prepareRemoval(region.id(),1L,state.manifest().checksum(),2L,UUID.randomUUID(),
+				"0".repeat(64),"0".repeat(64),10000L,64L*1024*1024);
+		files.commitRemoval(removal);
+		var quarantine=files.convergeRemovalQuarantine(region.id());
+		var archived=new ActiveGenerationStore(null,granular,thermal,gas).readSlot(quarantine.resolve("payload"));
+		require(restorer(archived).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
+				"Removed region quarantine lost fixed wall inventory or thermal audit");
 		expectIOException(() -> restorer(state).reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
 				List.of(BuiltinFluidMaterials.WATER)))), "foreign thermal registry was accepted");
 

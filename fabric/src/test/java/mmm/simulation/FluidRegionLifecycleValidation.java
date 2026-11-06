@@ -64,6 +64,7 @@ public final class FluidRegionLifecycleValidation {
 		EntityFluidWiringValidation.main(new String[0]);
 		validateDemoWorkbenchStore();
 		validateDemoWorldRestart();
+		validatePoolWallHandoff();
 		validateControllerComparatorObservation();
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
@@ -78,6 +79,43 @@ public final class FluidRegionLifecycleValidation {
 		validateControllerSummaryTracksRunAndRecovery();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validatePoolWallHandoff() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var thermal = registries.thermal();
+		var host = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+		host.sealDomainBoundary();
+		host.bindMaterialRegistry(registries.liquids());
+		host.bindGasRegistry(registries.gas());
+		host.bindThermal(thermal, registries.liquids(), 300);
+		host.commitOperatorVentSealedGas(host.planOperatorVentSealedGas());
+		var footprint = new mmm.simulation.controller.FluidRegionFootprint(BlockPos.ZERO, BlockPos.ZERO, BlockPos.ZERO,
+				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(new BlockPos(0,-1,0).asLong()),
+				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)),
+				mmm.model.region.RegionGeometry.RegionKind.POOL, java.util.Set.of());
+		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host, footprint);
+		var definition = thermal.finiteDevice("mmm:ordinary_stone_wall");
+		double energy = new ThermalStateFunction(thermal).internalEnergyAtTemperature(
+				thermal.materialHandle(definition.thermalMaterialId()), definition.bodyMassKilograms(), java.util.Map.of(), 350);
+		var wall = new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER, "1@minecraft:stone", definition.id(),
+				new FiniteThermalBodyState(0, thermal.fingerprint(), definition.thermalMaterialId(), definition.bodyMassUnits(), energy));
+		var walls = FiniteThermalDeviceInventory.empty(thermal.fingerprint()).insertExternal(wall);
+		region.restoreFiniteThermalDevices(walls, thermal, 0);
+		require(OwnershipTransactionCoordinator.canRelinquishPool(region, region.hostSnapshot()),
+				"Empty pool with fixed walls did not relinquish ownership");
+		var candidate = region.ownershipCandidate(region.beginHostEdit(), footprint.withReturnedBlocks(footprint.interiorBlocks()));
+		region.adoptOwnershipCandidate(candidate, 1);
+		require(region.finiteThermalDevices(thermal.fingerprint()).equals(walls),
+				"Pool return candidate changed wall energy or audit");
+		var heaterDefinition = thermal.finiteDevice("mmm:finite_heat_exchanger");
+		double heaterEnergy = new ThermalStateFunction(thermal).internalEnergyAtTemperature(
+				thermal.materialHandle(heaterDefinition.thermalMaterialId()), heaterDefinition.bodyMassKilograms(), java.util.Map.of(), 300);
+		var heater = new FiniteThermalDeviceState("mmm:finite_heat_exchanger", "test:heater", heaterDefinition.id(),
+				new FiniteThermalBodyState(0, thermal.fingerprint(), heaterDefinition.thermalMaterialId(), heaterDefinition.bodyMassUnits(), heaterEnergy));
+		region.replaceOrdinaryWallInventory(walls.insertExternal(heater), thermal);
+		require(region.hasRemovableThermalDevices() && !OwnershipTransactionCoordinator.canRelinquishPool(region, region.hostSnapshot()),
+				"Installed heat exchanger did not block pool relinquishment");
 	}
 
 	private static void validateBackendInitializationFailure() {

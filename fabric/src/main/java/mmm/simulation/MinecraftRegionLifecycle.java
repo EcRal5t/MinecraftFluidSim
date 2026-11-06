@@ -396,8 +396,7 @@ public final class MinecraftRegionLifecycle {
 				&& domain.totalGranularSolidVolumeSvq() == 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L;
 		boolean gasEmpty = gasInventoryEmpty(domain);
-		boolean devicesEmpty = thermalRegistry == null
-				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
+		boolean devicesEmpty = !region.hasRemovableThermalDevices();
 		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
 				&& !condensedEmpty) blockers.add(LifecycleOperationPreview.Blocker.CONDENSED_NOT_EMPTY);
 		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)

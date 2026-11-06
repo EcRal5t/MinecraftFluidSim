@@ -14,11 +14,14 @@ import java.util.UUID;
  */
 public final class EntityFluidWiringValidation {
 	private static final UUID BODY = new UUID(11L, 29L);
+	private static final net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> DIMENSION = dimension("first");
+	private static final net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> OTHER_DIMENSION = dimension("second");
 
 	private EntityFluidWiringValidation() { }
 
 	public static void main(String[] args) {
 		displacementObservationSpansConsecutiveTicks();
+		displacementObservationStartsOverAcrossDimensions();
 		movingBodyRequestsCarryObservedDisplacement();
 		movingBodyRequestsInitializeUnobservedBodies();
 		movingBodyRequestsHonourTheDocumentedBudget();
@@ -30,23 +33,46 @@ public final class EntityFluidWiringValidation {
 
 	private static void displacementObservationSpansConsecutiveTicks() {
 		MinecraftRegionInputs.MotionHistory tracker = new MinecraftRegionInputs.MotionHistory();
-		require(tracker.displacementSincePreviousTick(BODY, new Vec3(1.0, 2.0, 3.0)) == null,
+		require(tracker.displacementSincePreviousTick(DIMENSION, BODY, new Vec3(1.0, 2.0, 3.0)) == null,
 				"the first observation of a body reported a displacement");
-		tracker.observe(BODY, new Vec3(1.0, 2.0, 3.0));
+		tracker.observe(DIMENSION, BODY, new Vec3(1.0, 2.0, 3.0));
 		tracker.rotate();
 		Vec3 walked = new Vec3(1.2, 2.0, 3.0);
-		Vec3 displacement = tracker.displacementSincePreviousTick(BODY, walked);
+		Vec3 displacement = tracker.displacementSincePreviousTick(DIMENSION, BODY, walked);
 		require(displacement != null && Math.abs(displacement.x - 0.2) <= 1.0E-12
 						&& displacement.y == 0.0 && displacement.z == 0.0,
 				"consecutive observations did not report the walked displacement: " + displacement);
-		tracker.observe(BODY, walked);
+		tracker.observe(DIMENSION, BODY, walked);
 		tracker.rotate();
-		Vec3 resting = tracker.displacementSincePreviousTick(BODY, walked);
+		Vec3 resting = tracker.displacementSincePreviousTick(DIMENSION, BODY, walked);
 		require(resting != null && resting.lengthSqr() == 0.0,
 				"a resting body reported a non-zero displacement: " + resting);
 		tracker.rotate();
-		require(tracker.displacementSincePreviousTick(BODY, walked) == null,
+		require(tracker.displacementSincePreviousTick(DIMENSION, BODY, walked) == null,
 				"a body missed for one tick still reported a stale displacement");
+	}
+
+	private static void displacementObservationStartsOverAcrossDimensions() {
+		var tracker = new MinecraftRegionInputs.MotionHistory();
+		tracker.observe(DIMENSION, BODY, new Vec3(800, 64, 400));
+		tracker.rotate();
+		var arrival = new Vec3(100, 70, 50);
+		require(tracker.displacementSincePreviousTick(OTHER_DIMENSION, BODY, arrival) == null,
+				"Dimension transfer subtracted positions in different worlds");
+		tracker.observe(OTHER_DIMENSION, BODY, arrival);
+		tracker.rotate();
+		var displacement = tracker.displacementSincePreviousTick(OTHER_DIMENSION, BODY, arrival.add(.1, 0, 0));
+		require(displacement != null && Math.abs(displacement.x - .1) < 1e-12,
+				"Destination observations failed to resume normal motion");
+		require(tracker.displacementSincePreviousTick(DIMENSION, BODY, new Vec3(800, 64, 400)) == null,
+				"Destination observation retained a stale source-world pose");
+	}
+
+	private static net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension(String name) {
+		var registry = net.minecraft.resources.ResourceKey.<net.minecraft.world.level.Level>createRegistryKey(
+				net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm", "entity_validation_dimensions"));
+		return net.minecraft.resources.ResourceKey.create(registry,
+				net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm", name));
 	}
 
 	private static void manualStepRetainsObservedBodiesAndDrive() {
