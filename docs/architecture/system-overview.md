@@ -103,7 +103,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇；同一墙只归一个区域，显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。
 
-管理员可用 `/mmm process feed <间隔tick>` 周期性执行主手容器事务，用 `/mmm process drive <秒数>` 启动对准格的有限时长往复驱动；`stop` 停止两者，`sample` 读取格内液体、气体和固体库存。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击停止。驱动使用规定运动的共同压力、黏性和外功结算。工艺配置按区域保存，区域移除时清除；物理状态由常规 checkpoint 恢复。
+管理员可用 `/mmm process feed <间隔tick>` 周期性执行主手容器事务，用 `/mmm process drive <秒数>` 启动对准格的有限时长往复驱动；`stop` 停止两者，`sample` 读取格内液体、气体和固体库存。周期投料按加载状态、玩家运行意图与区域可用性调度，静水休眠时继续接受到期投料；容器事务唤醒物理计算。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击停止。驱动使用规定运动的共同压力、黏性和外功结算。工艺配置按区域保存，区域移除时清除；物理状态由常规 checkpoint 恢复。
 
 区域按同代物理连通关系划分活动组：开放格面、局部气体、颗粒接触范围、实体扫掠范围和有限热设备端口共同决定分组。缺失区块使关联组暂停，其余组沿同一设备候选继续推进；暂停组保留库存、内能、动量和未决相变任务。详见[运行时](runtime-and-lifecycle.md)和[实施计划](../roadmap/solver-consolidation-plan.md#gpu-执行链主线化)。
 
@@ -165,10 +165,11 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="persistence"></a>
 ## 保存和故障恢复
 
-保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
+保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。公开转移的持久化收据在 WAL 扫描完整且缺少对应日志时归类为未提交；扫描存在存储问题时保持待恢复状态。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
 
 - [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)：捕获与恢复。
 - [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)：区域生命周期与持久化协调。
+- [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)、[PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)：公开转移收据分类与持久结果，启动时由 `reconcilePendingReceipts` 对照 WAL 索引。
 - 验证入口：`region-state,containers,ownership,lifecycle`，以及 `runGpuResidentStateValidation`。
 
 <a id="client"></a>

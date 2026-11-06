@@ -132,7 +132,7 @@ public final class ContainerTransferStoreValidation {
 				&& MinecraftContainerActorAdapter.classifyInventory(after,new mmm.transfer.TransferActorState(UUID.randomUUID(),4),preview,false)==CrossDomainRecovery.ExternalTruth.THIRD,
 				"Old generation or replaced inventory was accepted as committed actor");
 		var wal=new ContainerJournalFileStore(root);long[] head={4};boolean[] afterSaved={false},failReceipt={true};int[] writes={0},events={0};
-		var recovery=new ContainerRecoveryCoordinator(wal,new ContainerRecoveryCoordinator.RecoveryPort() {
+		var recoveryPort=new ContainerRecoveryCoordinator.RecoveryPort() {
 			public void validate(ContainerTransferJournal journal)throws IOException { receipts.validate(journal); }
 			public long committedGeneration(UUID id) { return head[0]; }
 			public long committedManifestChecksum(UUID id) { return 1234; }
@@ -147,7 +147,8 @@ public final class ContainerTransferStoreValidation {
 			}
 			public void publishCommitted(ContainerTransferJournal journal) { events[0]++; }
 			public void report(ContainerRecoveryCoordinator.Report report,String detail,Throwable failure) { }
-		},java.util.Map.of(),Set.of());
+		};
+		var recovery=new ContainerRecoveryCoordinator(wal,recoveryPort,java.util.Map.of(),Set.of());
 		var coordinator=new mmm.application.ContainerTransferCoordinator(recovery,new mmm.application.ContainerTransferCoordinator.RegionPort() {
 			public mmm.application.ContainerTransferCoordinator.Execution execute(mmm.application.ContainerTransferUseCase.Command command) {
 				return new mmm.application.ContainerTransferCoordinator.Execution(true,after,"Partial transfer",250_000_000L,null);
@@ -181,6 +182,18 @@ public final class ContainerTransferStoreValidation {
 		var bounded=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
 		check(bounded.entry(operation)==null && bounded.entry(next).receipt().committed() && bounded.entries().size()==1,
 				"Latest receipt retention grew operation history or forgot the latest result");
+		var pendingId=UUID.randomUUID();
+		var pendingRequest=new mmm.api.transfer.TransferRequest(pendingId,ref,4,region,address.dimensionId(),2.25,3.25,4.25,request.direction(),request.quantity());
+		var pendingSettlement=new ContainerTransferJournal(pendingId,region,address.dimensionId(),5,6,ContainerTransferJournal.Operation.INSERT,250_000_000L,
+				actor2,after,after2,1235,ContainerTransferJournal.Phase.REGION_COMMITTED);
+		bounded.prepare(pendingRequest,binding,pendingSettlement);
+		var damagedRecovery=new ContainerRecoveryCoordinator(wal,recoveryPort,java.util.Map.of(),Set.of("unreadable container WAL"));
+		FabricTransferApi.reconcilePendingReceipts(bounded,damagedRecovery);
+		check(bounded.entry(pendingId).state()==mmm.simulation.persistence.PublicTransferReceiptStore.State.PENDING,
+				"Damaged WAL discovery misclassified a pending receipt");
+		FabricTransferApi.reconcilePendingReceipts(bounded,recovery);
+		check(bounded.entry(pendingId).state()==mmm.simulation.persistence.PublicTransferReceiptStore.State.NOT_COMMITTED,
+				"Healthy WAL discovery did not resolve an absent transaction");
 		var replacement=new mmm.simulation.persistence.PublicTransferReceiptStore.Binding(address.actorRef("replacement"),address,UUID.randomUUID());
 		bounded.bind(replacement);
 		check(bounded.binding(ref).equals(binding) && bounded.binding(replacement.actor()).equals(replacement),"New inventory rebound the old actor ref");

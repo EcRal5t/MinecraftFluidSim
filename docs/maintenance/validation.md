@@ -309,6 +309,8 @@ S1 的针对性入口：
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-11-07 逻辑复审：`runHostValidation -PhostValidation=lifecycle` 通过（32 秒），新增覆盖静水休眠时周期投料到期、间隔执行、玩家暂停、区块不可用及卸载状态，记录 `build/logic-review-lifecycle.log`。复用本次编译 classpath 执行 `ContainerTransferStoreValidation --public-transfers` 通过，覆盖 WAL 存储存在扫描问题时保留待恢复收据、健康索引缺少对应日志时归类未提交，以及既有持久收据与 actor 代次恢复，记录 `build/logic-review-public-transfers.log`。`assemble :fabric:testClasses` 通过（25 秒），记录 `build/logic-review-delivery.log`，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-10-30 S1 交接复审修复：`assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuResidentStateValidation :gpu-kernel:runGpuActivityMaskValidation :gpu-kernel:runGpuGranularTransitionsBenchmark` 通过，宿主选择 `lifecycle,containers,region-state,protocol`，记录 `build/review-s1-handoff.log`（45 秒）。回归覆盖全加载宿主规划的独立组和几何变更、化学／相变能力依赖、无热学颗粒的缺气腔冷导入与推进、反应布局机械／热候选后的部分可用性，以及同代非零颗粒和气流控制计数的观察。上下两层沉积床分别覆盖松弛和起动，并检查上层暂停时的质量、体积与内能保留。架构扫描 611 个生产源通过。
 
 同轮默认生产水流 120 步与七类热相变通过，记录 `build/review-s1-production.log`（32 秒）。覆盖保存恢复、暂停单步、编辑续算、整数质量和热账；本轮确认事件观察正确，未新增关于提前休眠的实测结论。构建产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。

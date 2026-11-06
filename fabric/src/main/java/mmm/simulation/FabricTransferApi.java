@@ -51,9 +51,17 @@ final class FabricTransferApi implements MmmTransferApi {
 		this.phaseWork=phaseWork;this.transactions=transactions;this.recovery=recovery;this.store=store;this.snapshots=snapshots;
 		providers.put("mmm:dispenser",DispenserAddress::fromObjectId);
 		try {
-			for(var entry:store.entries()) if(entry.state()==PublicTransferReceiptStore.State.PENDING
-					&& recovery.journal(entry.request().operationId()).isEmpty()) store.abortWithoutJournal(entry.request().operationId());
+			reconcilePendingReceipts(store, recovery);
 		} catch(IOException failure) { mmm.MmmMod.LOGGER.error("Public transfer startup receipts unavailable",failure); }
+	}
+	static void reconcilePendingReceipts(PublicTransferReceiptStore store, ContainerRecoveryCoordinator recovery) throws IOException {
+		if (recovery.hasStoreIssues()) return;
+		for (var entry : store.entries()) {
+			if (entry.state() == PublicTransferReceiptStore.State.PENDING
+					&& recovery.journal(entry.request().operationId()).isEmpty()) {
+				store.abortWithoutJournal(entry.request().operationId());
+			}
+		}
 	}
 	@Override public void registerActorProvider(String providerId,ActorProvider provider) {
 		if(!server.isSameThread()) throw new IllegalStateException("Transfer actor providers require the server thread");
@@ -168,14 +176,14 @@ final class FabricTransferApi implements MmmTransferApi {
 						return actual;
 					});
 			recovery.retryTransaction(request.operationId());
-			if(recovery.journal(request.operationId()).isEmpty() && store.entry(request.operationId()).state()==PublicTransferReceiptStore.State.PENDING)
+			if(!recovery.hasStoreIssues() && recovery.journal(request.operationId()).isEmpty() && store.entry(request.operationId()).state()==PublicTransferReceiptStore.State.PENDING)
 				store.abortWithoutJournal(request.operationId());
 			var result=receipt(request.operationId());
 			if(result.status()==TransferStatus.COMMITTED) snapshots.sendToLevel(actor.level(),region);
 			return result;
 		} catch(StaleActor stale) { return result(TransferStatus.STALE_ACTOR,detail(stale)); }
 		catch(IOException | RuntimeException failed) {
-			try { if(recovery.journal(request.operationId()).isEmpty()) store.abortWithoutJournal(request.operationId()); }
+			try { if(!recovery.hasStoreIssues() && recovery.journal(request.operationId()).isEmpty()) store.abortWithoutJournal(request.operationId()); }
 			catch(IOException preserved) { failed.addSuppressed(preserved); }
 			return result(TransferStatus.UNAVAILABLE,detail(failed));
 		}

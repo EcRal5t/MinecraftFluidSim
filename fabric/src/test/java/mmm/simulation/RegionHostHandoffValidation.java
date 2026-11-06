@@ -13,6 +13,7 @@ final class RegionHostHandoffValidation {
         finiteDeviceReloadUsesCheckpoint();
         ordinaryWallContactsSpanBothSides();
         processSettingsSurviveRestartAndStop();
+        periodicFeedRemainsDueDuringSleep();
         hostEditsRespectCurrentActivity();
         fullyLoadedPlannerGroupsRemainIndependent();
     }
@@ -30,6 +31,26 @@ final class RegionHostHandoffValidation {
         restored.clear(region);
         var stopped=new MinecraftProcessOperations(root,null,null,null,null);
         require(stopped.feed(region)==null && stopped.drive(region)==null,"Stopped process restarted after reload");
+    }
+
+    private static void periodicFeedRemainsDueDuringSleep() {
+        var region=region(new HostFluidState(2,2,2,new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f)));
+        region.setPaused(false);
+        for(int step=0;step<200;step++)region.lifecycle().observeCompletedStep(true,200);
+        require(region.lifecycle().state()==FluidRegionLifecycle.State.HYDROSTATIC_SLEEP&&!region.canStep(),
+                "Feed fixture did not enter hydrostatic sleep");
+        require(MinecraftProcessOperations.feedDue(region,12),"Hydrostatic sleep stopped scheduled feed");
+        region.incrementTick();
+        require(!MinecraftProcessOperations.feedDue(region,12),"Scheduled feed ignored its interval");
+        for(int tick=1;tick<12;tick++)region.incrementTick();
+        region.setPaused(true);
+        require(!MinecraftProcessOperations.feedDue(region,12),"Operator pause allowed scheduled feed");
+        region.setPaused(false);
+        region.setAvailabilityFailure(mmm.api.RegionAvailabilityReason.CHUNK_MISSING,"Waiting for chunks");
+        require(!MinecraftProcessOperations.feedDue(region,12),"Unavailable region allowed scheduled feed");
+        region.setAvailabilityFailure(null);
+        require(region.recordPublishedCheckpoint(1)&&region.releaseSolverAfterCheckpoint(1),"Feed fixture unload failed");
+        require(!MinecraftProcessOperations.feedDue(region,12),"Unloaded region allowed scheduled feed");
     }
 
     private static void ordinaryWallContactsSpanBothSides() throws Exception {

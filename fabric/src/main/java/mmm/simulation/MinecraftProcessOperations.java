@@ -89,7 +89,7 @@ public final class MinecraftProcessOperations {
             var region=regions.region(entry.getKey());var feed=entry.getValue();
             if(region==null)continue;
             var player=server.getPlayerList().getPlayer(feed.player());
-            if(player==null||!region.canStep()||!region.dimension().equals(player.level().dimension())||region.tick()%feed.interval()!=0)continue;
+            if(player==null||!feedDue(region,feed.interval())||!region.dimension().equals(player.level().dimension()))continue;
             var kind=MinecraftContainerTransferOperations.classify(player.getItemInHand(InteractionHand.MAIN_HAND));
             if(kind!=MinecraftContainerTransferOperations.TransferKind.POUR&&kind!=MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
                     &&kind!=MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)continue;
@@ -108,6 +108,9 @@ public final class MinecraftProcessOperations {
             }
         }
         if(changed)save();
+    }
+    static boolean feedDue(FluidRegion region,int interval){
+        return region.solverLoaded()&&!region.paused()&&region.availabilityFailure()==null&&region.tick()%interval==0;
     }
     List<MovingBodyFluidCoupling.Request> bodies(FluidRegion region,long tick){
         var drive=drives.get(region.id());if(drive==null)return List.of();
