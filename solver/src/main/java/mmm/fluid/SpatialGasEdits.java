@@ -73,7 +73,13 @@ final class SpatialGasEdits {
         for(int cell:changed)if(displaced[cell]){
             var source=state.cells().get(cell);double initialVolume=oldState[cell].gasVolumeM3();
             var receivers=connectivity.groups().get(connectivity.labels()[cell]);
-            int[] targets=receivers.targets();double[] areas=receivers.volumes();int count=targets.length;
+			var targetList=new java.util.ArrayList<Integer>();var areaList=new java.util.ArrayList<Double>();
+			for(int i=0;i<receivers.targets().length;i++)if(receivers.targets()[i]!=cell){
+				targetList.add(receivers.targets()[i]);areaList.add(receivers.volumes()[i]);
+			}
+			if(targetList.isEmpty()&&receivers.exterior()){targetList.add(-1);areaList.add(1.0);}
+			int[] targets=targetList.stream().mapToInt(Integer::intValue).toArray();
+			double[] areas=areaList.stream().mapToDouble(Double::doubleValue).toArray();int count=targets.length;
             if(count==0){
                 if(capacity(domain,cell,futureOccupied,futureMasks)<=0)
                     throw new GasTopologyBlockedException("Gas has no open neighboring cell or exterior at cell "+cell);
@@ -152,7 +158,7 @@ final class SpatialGasEdits {
         }
         return area;
     }
-    private record Receivers(int[] targets,double[] volumes) { }
+    private record Receivers(int[] targets,double[] volumes,boolean exterior) { }
     private record Connectivity(int[] labels,List<Receivers> groups) { }
     private static Connectivity connectedReceivers(HostFluidState domain,FlipPressurePhaseGeometry oldPhase,
             FlipPressurePhaseGeometry futurePhase,boolean[] displaced,double[] free,mmm.thermal.MixtureVolumeModel.State[] oldState){
@@ -171,13 +177,12 @@ final class SpatialGasEdits {
                     if(dryFace(domain,phase,nextPhase,cell,next,side)>0){labels[next]=group;queue[tail++]=next;}
                 }
             }
-            var targets=new java.util.ArrayList<Integer>();var volumes=new java.util.ArrayList<Double>();double selected=0;
-            if(demand>0)for(int i=0;i<tail && selected<demand;i++){
-                int cell=queue[i];if(displaced[cell]||!(free[cell]>0))continue;
-                targets.add(cell);volumes.add(free[cell]);selected+=free[cell];
+            var targets=new java.util.ArrayList<Integer>();var volumes=new java.util.ArrayList<Double>();
+            if(demand>0)for(int i=0;i<tail;i++){
+                int cell=queue[i];if(!(free[cell]>0))continue;
+                targets.add(cell);volumes.add(free[cell]);
             }
-            if(targets.isEmpty()&&exterior){targets.add(-1);volumes.add(Math.max(demand,1e-300));}
-            groups.add(new Receivers(targets.stream().mapToInt(Integer::intValue).toArray(),volumes.stream().mapToDouble(Double::doubleValue).toArray()));
+            groups.add(new Receivers(targets.stream().mapToInt(Integer::intValue).toArray(),volumes.stream().mapToDouble(Double::doubleValue).toArray(),exterior));
         }
         return new Connectivity(labels,List.copyOf(groups));
     }

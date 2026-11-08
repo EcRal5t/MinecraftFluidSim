@@ -86,7 +86,40 @@ public final class GpuEntityBodyCouplingBenchmark {
             if(result==null||result.impulseXKilogramMetresPerSecond()<=0||result.impulseYKilogramMetresPerSecond()>=0||Math.abs(result.coupledVolumeCubicMetres()-expectedUnion)>1e-12)
                 throw new IllegalStateException("Prescribed shear, buoyancy load or exact union did not complete");
             vacuumClosure(context);
+            ambientClosure(context);
             System.out.printf("Entity module complete: exactUnionSvq=%d externalWork=%.12g sourceWork=%.12g%n",exactVolume,result.externalWorkJoules(),sumWork);
+        }
+    }
+    private static void ambientClosure(VulkanDeviceContext context){
+        int faces=6;long alignment=Math.max(8,context.storageOffsetAlignment());long[] cursor={0};
+        var geometry=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);
+        var mixture=column(cursor,7,8,alignment);var masks=column(cursor,1,4,alignment);
+        var occupied=column(cursor,1,8,alignment);var gas=column(cursor,9,8,alignment);
+        try(var kernel=new VulkanMixtureFlux(context)){
+            for(boolean sealed:new boolean[]{false,true}){
+                var layout=new VulkanMixtureFlux.Layout(1,1,1,geometry,flux,true,mixture,masks,occupied,gas,sealed,cursor[0],alignment);
+                var initial=ByteBuffer.allocate(Math.toIntExact(layout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
+                initial.duplicate().position(Math.toIntExact(layout.header().offset())).put(layout.headerBytes());
+                initial.putDouble(Math.toIntExact(mixture.offset()+16),.125);
+                initial.putDouble(Math.toIntExact(gas.offset()+16),1.0);
+                initial.putLong(Math.toIntExact(occupied.offset()),16777216L);
+                int face=1;initial.putDouble(Math.toIntExact(geometry.offset()+8L*(4*face+1)),1.0);
+                initial.putDouble(Math.toIntExact(geometry.offset()+8L*(4*face+2)),1.0);
+                try(var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024)){
+                    storage.initialize(initial,0);
+                    try(var source=storage.capture();var candidate=storage.prepare(source)){
+                        int status=candidate.execute(0,(cmd,input,output,errors,staging,stack)->{
+                            kernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                            kernel.recordAnalyze(cmd,layout,.5,.05);
+                        });
+                        if(status!=(sealed?4096:0))throw new AssertionError("Ambient closure status="+status+" sealed="+sealed);
+                        if(!sealed){var accepted=ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
+                            candidate.read(flux.offset()+16L*face,accepted);
+                            if(Math.abs(accepted.getDouble(0)-1.0)>1e-12||accepted.getDouble(8)!=0.0)
+                                throw new AssertionError("Closing gas did not leave through the ambient face");}
+                    }
+                }
+            }
         }
     }
     private static void vacuumClosure(VulkanDeviceContext context){

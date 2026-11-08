@@ -582,6 +582,7 @@ public final class FluidRegion {
 		setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
 	}
 	void blockCollision(String failure) {
+		requireCollisionRefresh();
 		setAvailabilityFailure(RegionAvailabilityReason.BODY_OVERLAP,
 				Objects.requireNonNull(failure, "failure"));
 	}

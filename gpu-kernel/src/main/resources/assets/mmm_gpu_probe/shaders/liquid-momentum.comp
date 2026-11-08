@@ -337,7 +337,9 @@ void gatherHeat(int cellId) {
             double faceEnergy = getDouble(headerWord(H_FACE_HEAT) + 2 * faceId);
             int lowerCell = cellIndex(coordinates + (side == 0 ? -axisUnitVector(axis) : ivec3(0)));
             double lowerShare = faceEnergy * (double(cellMassUnits(lowerCell, true)) / double(dualMass));
-            heat += side == 0 ? faceEnergy - lowerShare : lowerShare;
+            heat += side == 0 && lowerCell < 0
+                        ? faceEnergy * (double(cellMassUnits(cellId, true)) / double(dualMass))
+                        : side == 0 ? faceEnergy - lowerShare : lowerShare;
         }
     putDouble(headerWord(H_CELL_HEAT) + 2 * cellId, headerWord(H_ACTIVITY_CELLS) >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cellId] == 0u ? 0.0 : heat);
 }

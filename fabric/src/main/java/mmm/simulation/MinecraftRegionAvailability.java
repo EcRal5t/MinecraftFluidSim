@@ -53,9 +53,17 @@ final class MinecraftRegionAvailability {
 			return false;
 		}
         if (region.pauseForUnavailableDevice()) return false;
-		boolean available = operations.ensureAvailable(
-				level, region, controllerFeatureEnabled.getAsBoolean(), regionTick::refreshRegionInputs,
-				snapshots::sendToLevel, snapshots::sendRemoval, inventoryDecrease);
+		boolean available;
+		try {
+			available = operations.ensureAvailable(
+					level, region, controllerFeatureEnabled.getAsBoolean(), regionTick::refreshRegionInputs,
+					snapshots::sendToLevel, snapshots::sendRemoval, inventoryDecrease);
+		} catch (mmm.fluid.FluidDomainContracts.CollisionEditBlockedException blocked) {
+			if (region.pauseForUnavailableDevice()) {
+				snapshots.sendRemoval(level.getServer(), region);
+			} else regionTick.blockCollisionEdit(level, region, blocked);
+			return false;
+		}
 		if (!available) return false;
 		try { region.ensureDeviceResident(); }
 		catch (RuntimeException failure) {

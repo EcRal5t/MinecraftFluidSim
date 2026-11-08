@@ -31,7 +31,8 @@ void cellScale(int cell){
         for(int side=0;side<6;side++){
             int face=localGasFace(cell,side,size),other=localGasNeighbor(cell,side,size);double sign=(side&1)==0?-1.0LF:1.0LF;
             if(sign*velocity(face)>0.0LF)putNumber(head(14)+2*face,0.0LF);
-            weights[side]=other>=0&&targetPore(other)>0l?max(0.0LF,sign*velocity(face))*faceValue(face,2):0.0LF;sum+=weights[side];
+            bool receiver=other>=0?targetPore(other)>0l:head(17)==0&&liquid==0.0LF;
+            weights[side]=receiver?max(0.0LF,sign*velocity(face))*faceValue(face,2):0.0LF;sum+=weights[side];
         }
         if(liquid+gas<=0.0LF){putNumber(head(13)+2*(2*cell),-1.0LF);putNumber(head(13)+2*(2*cell+1),0.0LF);return;}
         if(sum<=0.0LF){atomicOr(errors,4096u);return;}

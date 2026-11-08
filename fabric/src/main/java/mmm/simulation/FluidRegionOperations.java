@@ -287,6 +287,8 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				region.setAvailabilityFailure(RegionAvailabilityReason.SECTION_LOADING,
 						"加载期间 HEAD 已改变，下一 tick 重新读取：" + changed.getMessage());
 				return false;
+			} catch (mmm.fluid.FluidDomainContracts.CollisionEditBlockedException blocked) {
+				throw blocked;
 			} catch (IOException | RuntimeException exception) {
 				if (pauseForDeviceLoss(region, exception)) {
 					removalSender.send(level.getServer(), region);

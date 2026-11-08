@@ -27,7 +27,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         GRAIN_OFFSETS(99), GRAIN_ENTRIES(100), DEPOSIT_CELL(101), SOURCE_FACE_K(102),
         GAS_EXTERNAL_WORK(103), GAS_ENERGY(104), GAS_HEAT_CAPACITY(105), GAS_COLD_ENERGY(106),
         GAS_ENERGY_CHANGES(107), GAS_COUNTS(108), ROUTE_OFFSETS(109), ROUTE_MASKS(110),
-        ACTIVITY_CELLS(111), ACTIVITY_FACES(112), SOURCE_ELASTIC(113), TARGET_ELASTIC(114), GAS_STATES(115), GAS_POTENTIAL(116), GAS_ROUTE_MASS(117), GAS_COMPONENTS(118), GAS_EOS(119);
+        ACTIVITY_CELLS(111), ACTIVITY_FACES(112), SOURCE_ELASTIC(113), TARGET_ELASTIC(114), GAS_STATES(115), GAS_POTENTIAL(116), GAS_ROUTE_MASS(117), GAS_COMPONENTS(118), GAS_EOS(119), EXTERNAL_ENERGY(122);
         final int word; Header(int word) { this.word = word; }
     }
     private static String shaderLayout() {
@@ -40,7 +40,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                           int sourceHeatWordOffset,int externalWorkWordOffset) { }
     record LocalMixture(VulkanLiquidStateLayout.Column source,VulkanMixtureState.Layout target,
                         VulkanLocalGasTransport.ProductionLayout transport,VulkanGasThermodynamics.Layout eos,
-                        VulkanLiquidStateLayout.Column energyChanges,VulkanLiquidStateLayout.Column potential) { }
+                        VulkanLiquidStateLayout.Column energyChanges,VulkanLiquidStateLayout.Column potential,VulkanLiquidStateLayout.Column externalEnergy) { }
     record Layout(VulkanMechanicalBodies.Layout bodies,VulkanLiquidMomentum.Layout momentum,
                   VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,int sourceHeatWordOffset,int externalWorkWordOffset,
                   GranularEnergy granular,
@@ -57,10 +57,11 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             long alignment=momentum.source().alignment(),offset=align(endOffset,alignment);
             var changes=new VulkanLiquidStateLayout.Column(offset,transport==null?0:2*transport.cells,8);
             var potential=new VulkanLiquidStateLayout.Column(align(offset+changes.bindingBytes(),alignment),transport==null?0:2*transport.cells,8);
-            var local=new LocalMixture(source,target,transport,eos,changes,potential);
+            var external=column(new long[]{align(potential.offset()+potential.bindingBytes(),alignment)},Math.multiplyExact(2,bodies.vertices()),8,alignment);
+            var local=new LocalMixture(source,target,transport,eos,changes,potential,external);
             return new Layout(bodies,momentum,thermal,transport==null?-1:transport.word(VulkanLocalGasTransport.Field.WORK),sourceHeatWordOffset,externalWorkWordOffset,
                     granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,
-                    granularTerms,granularChanges,sourceFaceKWordOffset,transport==null?-1:transport.word(VulkanLocalGasTransport.Field.EXTERNAL_PRESSURE_WORK),local,align(potential.offset()+potential.bindingBytes(),alignment));
+                    granularTerms,granularChanges,sourceFaceKWordOffset,transport==null?-1:transport.word(VulkanLocalGasTransport.Field.EXTERNAL_PRESSURE_WORK),local,align(external.offset()+external.bindingBytes(),alignment));
         }
         ByteBuffer headerBytes(){return headerBytes(momentum.source());}
         ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
@@ -91,10 +92,11 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             }
             data[Header.SOURCE_FACE_K.word]=sourceFaceKWordOffset;
             data[Header.GAS_EXTERNAL_WORK.word]=gasExternalWorkWordOffset;
-            data[Header.GAS_POTENTIAL.word]=-1;data[Header.GAS_ENERGY.word]=-1;data[Header.SOURCE_ELASTIC.word]=-1;data[Header.TARGET_ELASTIC.word]=-1;
+            data[Header.GAS_POTENTIAL.word]=-1;data[Header.GAS_ROUTE_MASS.word]=-1;data[Header.GAS_ENERGY.word]=-1;data[Header.SOURCE_ELASTIC.word]=-1;data[Header.TARGET_ELASTIC.word]=-1;data[Header.EXTERNAL_ENERGY.word]=-1;
             if(gasEnergy!=null){
                 data[Header.SOURCE_ELASTIC.word]=word(gasEnergy.source())+2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
                 data[Header.TARGET_ELASTIC.word]=gasEnergy.target().statesWord()+2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
+                data[Header.EXTERNAL_ENERGY.word]=word(gasEnergy.externalEnergy());
                 if(gasEnergy.transport()!=null){var gas=gasEnergy.transport().source;
                     data[Header.GAS_ENERGY.word]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.INTERNAL_ENERGY).offset()/4);
                     data[Header.GAS_COUNTS.word]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
@@ -118,6 +120,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             if(externalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,externalWorkWordOffset,bodies.source().cellCount(),2,-1));
             if(gasExternalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasExternalWorkWordOffset,bodies.gasNodeCapacity(),2,-1));
             if(gasEnergy!=null){
+                streams.add(stream(gasEnergy.externalEnergy(),1));
                 if(gasEnergy.transport()!=null){streams.add(stream(gasEnergy.energyChanges(),1));streams.add(stream(gasEnergy.potential(),-1));}
                 int quantity=2*VulkanMixtureState.Quantity.ELASTIC_ENERGY.ordinal();
                 streams.add(new VulkanEnergyLedger.Stream(1,word(gasEnergy.source())+quantity,bodies.source().cellCount(),14,-1));

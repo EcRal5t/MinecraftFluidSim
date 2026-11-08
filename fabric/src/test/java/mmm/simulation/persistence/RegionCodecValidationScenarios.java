@@ -188,6 +188,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 					mmm.recovery.CrossDomainRecovery.JournalPhase.PREPARED, placing, drop,
 					new UUID(421, 431), operation == 1, new UUID(433, operation), placing ? body : "", body, fingerprint);
 			store.write(prepared);
+			Path temporary=root.resolve("mmm/device-transfer").resolve(prepared.operationId()+".nbt.tmp");
+			Files.writeString(temporary,"interrupted publication");
 			require(store.discover().equals(List.of(prepared)), "Prepared device WAL changed place/remove/drop identity");
 			var committed = prepared.committed(0x6789);
 			store.write(committed);
@@ -222,6 +224,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 					"Device recovery accepted a different committed HEAD");
 			store.delete(decoded.operationId());
 			require(store.discover().isEmpty(), "Completed device WAL was retained");
+			Files.writeString(temporary,"interrupted first publication");
+			require(store.discover().isEmpty(), "Unpublished device WAL locked recovery");
+			Files.delete(temporary);
 		}
 	}
 

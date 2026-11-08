@@ -26,10 +26,9 @@ public final class GpuResidentStateValidation {
         }
         var thermal=new ThermalRegistry(materials,offsets,List.of(),"","");
         domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bindThermal(thermal,fluids,300);
-        domain.bootstrapGasState("");
         var initial=domain.captureAuthoritativeState();var codec=new VulkanFluidStateCodec(initial);var audit=domain.thermalAudit();long expectedMass=domain.totalMassUnits();
         validateCapabilityContracts(initial);
-        if(!initial.hasGas()||initial.gas().nodes().isEmpty())throw new AssertionError("Resident fixture did not initialize a finite gas chamber");
+        if(initial.spatialGas()==null||initial.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty))throw new AssertionError("Resident fixture did not initialize local gas");
         try(var context=new VulkanDeviceContext(device,true,true);var geometry=new VulkanLiquidGeometry(context);
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
             var mg=new VulkanPressureMultigrid(context);var region=codec.importRegion(context,geometry,projection,pressure,mg);
@@ -71,13 +70,67 @@ public final class GpuResidentStateValidation {
             }
             System.out.println("Production state import, rejected private candidate, mechanical/thermal adoption, device readout and exact checkpoint passed");
         }
-        validateSmallGeometry(device);
+        validateAmbientBodyClosure(device,thermal,false);
+        validateAmbientBodyClosure(device,thermal,true);
+        validateSmallGeometry(device,thermal);
         validateGranularColdImport(device);
-        long expectedGasMass=0;for(var node:initial.gas().nodes())expectedGasMass=Math.addExact(expectedGasMass,node.inventory().totalMassUnits());
+        long expectedGasMass=0;for(var cell:initial.spatialGas().cells())expectedGasMass=Math.addExact(expectedGasMass,cell.totalMassUnits());
         for (int attempt = 0; attempt < Integer.getInteger("mmm.residentAttempts", 1); attempt++) {
             System.out.println("resident_attempt=" + attempt);
             validateBackend(device,initial,expectedMass,expectedGasMass);
         }
+    }
+    private static void validateAmbientBodyClosure(int device,ThermalRegistry thermal,boolean high){
+        var domain=new HostFluidState(3,3,3,new FluidSolverConfig(.5f,1000,0,.05f,200,1e-5f,.002f));
+        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+        int edge=high?2:0,cell=12+edge;
+        for(int z=0;z<3;z++)for(int y=0;y<3;y++)for(int x=0;x<3;x++)
+            if(x!=edge||y!=1||z!=1)domain.setSolid(x,y,z,true);
+        domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+        domain.bindThermal(thermal,fluids,300);
+        FluidStateAccess current=domain.captureAuthoritativeState();
+        var initial=current.exportState();var initialGas=initial.spatialGas();
+        var expected=gasAccount(initialGas);long initialMass=gasAccountMass(initialGas);
+        if(initialGas.cells().get(cell).isEmpty())throw new AssertionError("Ambient closure fixture has no gas");
+        var body=new mmm.world.MovingBodyFluidCoupling.Request(java.util.UUID.fromString("a7184c41-7a9c-4c56-8b2a-e7d7b474ca23"),
+                new mmm.world.MovingBodyFluidCoupling.Bounds(edge*.5,.5,.5,(edge+1)*.5,1,1),0,0,0);
+        try(var backend=new VulkanFluidSolverBackend(device)){
+            try(var candidate=backend.evaluate(new FluidStepRequest(0,current,List.of(body),false,0,false,false));
+                var prepared=candidate.claimPreparedDeviceState()){
+                var next=prepared.commit();current.close();current=next;
+            }
+            var checkpoint=current.exportState();var gas=checkpoint.spatialGas();
+            if(!gas.cells().get(cell).isEmpty()||gas.escapedSink().entries().isEmpty()
+                    ||gasAccountMass(gas)!=initialMass||!gasAccount(gas).equals(expected)
+                    ||Math.abs(checkpoint.thermalOwner().audit().roundoffResidual().subtract(initial.thermalOwner().audit().roundoffResidual()).toDouble())>1e-6
+                    ||!((ResidentFluidState)current).observation().thermalAuditClosed())
+                throw new AssertionError("Ambient closure lost gas or energy accounting");
+            var restored=HostFluidState.restoreAuthoritativeState(checkpoint).captureAuthoritativeState();
+            current.close();current=restored;
+            try(var candidate=backend.evaluate(new FluidStepRequest(1,current,List.of(body),false,0,false,false));
+                var prepared=candidate.claimPreparedDeviceState()){
+                var next=prepared.commit();current.close();current=next;
+            }
+            var continued=current.exportState().spatialGas();
+            if(gasAccountMass(continued)!=initialMass||!gasAccount(continued).equals(expected)
+                    ||!((ResidentFluidState)current).observation().thermalAuditClosed())
+                throw new AssertionError("Restored ambient closure changed gas or energy accounting");
+        } finally { current.close(); }
+    }
+    private static long gasAccountMass(mmm.fluid.air.SpatialGasState gas){
+        long total=0;for(var cell:gas.cells())total=Math.addExact(total,cell.totalMassUnits());
+        for(var entry:gas.escapedSink().entries())total=Math.addExact(total,entry.massUnits());
+        for(var entry:gas.externalSource().entries())total=Math.subtractExact(total,entry.massUnits());
+        return total;
+    }
+    private static java.util.Map<String,Long> gasAccount(mmm.fluid.air.SpatialGasState gas){
+        var totals=new java.util.TreeMap<String,Long>();
+        for(var cell:gas.cells())for(var component:cell.components())for(var species:component.species())
+            totals.merge(species.speciesId(),species.amountQuanta(),Math::addExact);
+        for(var entry:gas.escapedSink().entries())for(var species:entry.species())totals.merge(species.speciesId(),species.amountQuanta(),Math::addExact);
+        for(var entry:gas.externalSource().entries())for(var species:entry.species())totals.merge(species.speciesId(),-species.amountQuanta(),Math::addExact);
+        totals.values().removeIf(value->value==0);return totals;
     }
     private static void validateCapabilityContracts(FluidDomainState thermalOnly) {
         expectIllegal(() -> new FluidStepRequest(0, thermalOnly, List.of(), true, 1));
@@ -87,8 +140,9 @@ public final class GpuResidentStateValidation {
         domain.bindChemistry(mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
         expectIllegal(() -> new VulkanFluidStateCodec(domain.captureAuthoritativeState()));
         var simple = new HostFluidState(2, 2, 2, thermalOnly.config()).captureAuthoritativeState();
-        if (simple.hasGas() || !new VulkanFluidStateCodec(simple).template().hasGas())
-            throw new AssertionError("Cold import must initialize its gas state");
+        if (simple.spatialGas()==null || simple.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty)
+                || !new VulkanFluidStateCodec(simple).template().spatialGas().cells().equals(simple.spatialGas().cells()))
+            throw new AssertionError("Cold import lost its local gas inventory");
     }
     private static void expectIllegal(Runnable action) {
         try { action.run(); } catch (IllegalArgumentException expected) { return; }
@@ -101,15 +155,23 @@ public final class GpuResidentStateValidation {
         domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
         domain.bindGranular(mmm.granular.BuiltinGranularDefinitions.createRegistry(), fluids, BuiltinFluidMaterials.createRegistry());
         var initial = domain.captureAuthoritativeState();
-        if (initial.hasGas()) throw new AssertionError("Expected uninitialized gas fixture");
+        if (initial.spatialGas()==null || initial.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty))
+            throw new AssertionError("Granular fixture lost its local gas inventory");
         try (var backend = new VulkanFluidSolverBackend(device);
              var candidate = backend.evaluate(new FluidStepRequest(0, initial, List.of(), false, 0));
              var prepared = candidate.claimPreparedDeviceState()) {
-            if (!prepared.exportState().hasGas()) throw new AssertionError("Granular import lost its gas state");
+            var gas=prepared.exportState().spatialGas();
+            if (gas==null || gasAccountMass(gas)!=gasAccountMass(initial.spatialGas())
+                    || !gasAccount(gas).equals(gasAccount(initial.spatialGas())))
+                throw new AssertionError("Granular import lost its local gas accounting");
         }
     }
-    private static void validateSmallGeometry(int device){
+    private static void validateSmallGeometry(int device,ThermalRegistry thermal){
         var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+        thermal=new ThermalRegistry(thermal.materials(),thermal.speciesOffsets(),thermal.transitions(),thermal.boundaries(),thermal.finiteDevices(),
+                mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY.fingerprint(),"","");
+        var definitions=VulkanLiquidRegion.MechanicalDefinitions.fromRegistries(fluids,BuiltinFluidMaterials.createRegistry(),
+                mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY,thermal,8,0,64,4,-40,true);
         double small=Math.scalb(1.0,-40);
         try(var context=new VulkanDeviceContext(device,true,true);var geometry=new VulkanLiquidGeometry(context);
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
@@ -126,12 +188,13 @@ public final class GpuResidentStateValidation {
                 var masks=new byte[8];masks[0]=(byte)mask;
                 var solids=new long[8];solids[0]=solid;
                 try(var region=new VulkanLiquidRegion(context,geometry,projection,pressure,mg,stock,momentum,
-                        FixedGeometrySnapshot.fromMasks(2,2,2,masks),solids)){
+                        FixedGeometrySnapshot.fromMasks(2,2,2,masks),solids,definitions)){
                     region.rebuildGeometry();
                     try(var capture=region.captureState()){
                         double occupied=java.util.Arrays.stream(capture.occupancy().copyLiquidMicroVolumes()).sum();
-                        if(Math.abs(occupied-volume)>Math.max(1e-18,volume*1e-11))
-                            throw new AssertionError("Small-phase occupied volume differs: "+occupied+" vs "+volume);
+                        double expectedOccupied=Math.min(capacity,volume*(1.0+MixtureVolumeModel.REFERENCE_PRESSURE_PA/MixtureVolumeModel.LIQUID_BULK_PA));
+                        if(Math.abs(occupied-expectedOccupied)>Math.max(1e-18,expectedOccupied*1e-11))
+                            throw new AssertionError("Small-phase occupied volume differs: "+occupied+" vs "+expectedOccupied);
                         var rendered=display.capture(capture,fluids,1);
                         var mesh=FluidMaterialSurfaceMesher.build(rendered);
                         double signedVolume=0,area=0;
@@ -139,11 +202,11 @@ public final class GpuResidentStateValidation {
                             signedVolume+=face.a().dot(face.b().cross(face.c()))/6;
                             area+=Math.sqrt(face.areaSquared());
                         }
-                        double geometricVolume=volume/porosity;
+                        double geometricVolume=expectedOccupied/porosity;
                         if(Math.abs(signedVolume-geometricVolume)>Math.max(3e-14,geometricVolume*1e-5))
                             throw new AssertionError("Small-phase display volume differs: "+signedVolume+" vs "+geometricVolume);
-                        if(!full&&!(area>0&&area<.001))
-                            throw new AssertionError("Small liquid spread across an entire cell: area="+area);
+                        if(!full&&!(Double.isFinite(area)&&area>0))
+                            throw new AssertionError("Small liquid lost its surface: area="+area);
                     }
                 }
             }

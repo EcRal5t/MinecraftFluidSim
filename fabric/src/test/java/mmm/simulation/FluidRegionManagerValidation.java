@@ -42,6 +42,7 @@ public final class FluidRegionManagerValidation {
 		validateBlockedRegionDoesNotBlockPeer();
 		validateCollisionPublication();
 		validateClosedGasCollisionRejection();
+		validateSharedCompressedGasReceiver();
 		System.out.println("FluidRegionManager validation passed");
 	}
 
@@ -197,9 +198,11 @@ public final class FluidRegionManagerValidation {
 				&& blocked.availabilityReason() == RegionAvailabilityReason.CHUNK_MISSING,
 				"availability block advanced a partial step or overwrote running operator intent");
 		require(runnable.tick() == 1L && !runnable.paused(), "blocked region prevented its independent peer from advancing");
+		blocked.markCollisionRefreshed();
 		blocked.blockCollision("moving body overlaps the committed region");
-		require(!blocked.paused() && blocked.availabilityReason() == RegionAvailabilityReason.BODY_OVERLAP,
-				"runtime safety block overwrote operator intent or lost its closed reason");
+		require(!blocked.paused() && blocked.availabilityReason() == RegionAvailabilityReason.BODY_OVERLAP
+				&& blocked.collisionRefreshRequired(),
+				"collision block lost operator intent, failure reason or refresh request");
 	}
 
 	private static FluidRegionManager manager() {
@@ -270,6 +273,27 @@ public final class FluidRegionManagerValidation {
 		require(region.solverGeneration() == generation + 1
 				&& region.editableHost().gasBoundary().sealedInventory().equals(mmm.fluid.air.GasRegionAudit.aggregate(before.cells())),
 				"valid closed-gas compression changed the finite inventory");
+	}
+
+	private static void validateSharedCompressedGasReceiver() {
+		FluidRegion region = region(2, 2, 2);
+		HostFluidState host = region.editableHost();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
+			if (y != 0 || z != 0) host.setSolid(x, y, z, true);
+		host.sealDomainBoundary();
+		var before = host.captureAuthoritativeState().spatialGas();
+		var inventory = mmm.fluid.air.GasRegionAudit.aggregate(before.cells());
+		double energyBefore = java.util.Arrays.stream(before.internalEnergy()).sum();
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255);
+		masks[1] = 0x0f;
+		var stats = FluidRegionWorldInteraction.applyCapturedCollisions(region, new CollisionField(2, 2, 2, masks), 2);
+		var after = region.editableHost().captureAuthoritativeState().spatialGas();
+		require(stats.changedCells() == 2 && after.cells().get(0).isEmpty() && !after.cells().get(1).isEmpty(),
+				"closed source did not transfer its gas into the simultaneously compressed neighbor");
+		require(inventory.equals(mmm.fluid.air.GasRegionAudit.aggregate(after.cells()))
+				&& before.escapedSink().equals(after.escapedSink()), "compressed gas changed mass or species");
+		require(java.util.Arrays.stream(after.internalEnergy()).sum() > energyBefore,
+				"gas compression did not add mechanical work to internal energy");
 	}
 
 	private static FluidRegion region(int nx, int ny, int nz) {

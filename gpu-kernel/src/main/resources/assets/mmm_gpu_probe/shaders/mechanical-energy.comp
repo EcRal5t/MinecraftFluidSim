@@ -101,6 +101,7 @@ double gasAvailable(int gas){
     return max(0.0,readDouble(headerValue(H_GAS_ENERGY)+2*gas)-cold);
 }
 void computeVertexTerms(int index){
+    if(headerValue(H_EXTERNAL_ENERGY)>=0){writeDouble(headerValue(H_EXTERNAL_ENERGY)+4*index,0.0);writeDouble(headerValue(H_EXTERNAL_ENERGY)+4*index+2,0.0);}
     dvec2 exchange=dvec2(0.0);double heatCapacity=0.0,availableThermalEnergy=0.0;
     if(index<headerValue(H_CELLS)){
         if(headerValue(H_ACTIVITY_CELLS)>=0&&words[headerValue(H_ACTIVITY_CELLS)+index]==0u){writeEnergyTerms(headerValue(H_VERTEX_DATA),index,dvec4(0.0));int count=int(words[headerValue(H_BODY_COUNTS)+index]);words[headerValue(H_BLOCK_COUNTS)+index]=uint((count+127)/128);return;}
@@ -163,6 +164,18 @@ void reduceBlock(int block,int lane){
     for(int stride=64;stride>0;stride/=2){if(lane<stride)partial[lane]=combine(partial[lane],partial[lane+stride]);barrier();}
     if(lane==0&&block<blocks)writeEnergyTerms(headerValue(H_PARTIALS),block,partial[0]);
 }
+bool bodyEscapes(int root){
+    if(headerValue(H_GAS_ROUTE_MASS)<0)return false;
+    int begin=int(words[headerValue(H_BODY_OFFSETS)+root]),end=int(words[headerValue(H_BODY_OFFSETS)+root+1]);
+    for(int member=begin;member<end;member++){
+        int gas=int(words[headerValue(H_BODY_MEMBERS)+member])-headerValue(H_CELLS);
+        if(gas<0||gas>=headerValue(H_GAS_CAPACITY))continue;
+        for(int side=0;side<6;side++)if(localGasNeighbor(gas,side,shape())<0)
+            for(int component=0;component<headerValue(H_GAS_COMPONENTS);component++)
+                if(readMassUnits(headerValue(H_GAS_ROUTE_MASS)+2*localGasRouteIndex(gas,component,side,headerValue(H_CELLS),headerValue(H_GAS_COMPONENTS)))>int64_t(0))return true;
+    }
+    return false;
+}
 void reduceBody(int block,int lane){
     int blocks=int(words[headerValue(H_BLOCK_OFFSETS)+headerValue(H_VERTICES)]);if(block>=blocks)return;
     int root=int(words[headerValue(H_BLOCK_ROOTS)+block]);
@@ -186,7 +199,10 @@ void reduceBody(int block,int lane){
     if(lane==0){
         total=partial[0];total.zw+=weightErrors[0];writeEnergyTerms(headerValue(H_BODY_DATA),root,total);
         double work=total.x+total.y;
-        if((work!=0.0&&total.z<=0.0)||-work>total.w)atomicOr(errors,ERROR_MECHANICAL_ENERGY);
+        if(work!=0.0&&total.z<=0.0&&bodyEscapes(root)){
+            writeDouble(headerValue(H_EXTERNAL_ENERGY)+4*root,total.x);
+            writeDouble(headerValue(H_EXTERNAL_ENERGY)+4*root+2,total.y);
+        } else if((work!=0.0&&total.z<=0.0)||-work>total.w)atomicOr(errors,ERROR_MECHANICAL_ENERGY);
     }
 }
 void postCell(int index){

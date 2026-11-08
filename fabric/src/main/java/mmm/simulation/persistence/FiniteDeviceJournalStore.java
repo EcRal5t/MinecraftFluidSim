@@ -44,6 +44,8 @@ public final class FiniteDeviceJournalStore {
 		try (var paths = Files.list(directory)) {
 			for (var path : paths.sorted().toList()) {
 				String name = path.getFileName().toString();
+				// Only the atomically published WAL can precede a HEAD commit.
+				if (Files.isRegularFile(path) && name.endsWith(".nbt.tmp")) continue;
 				if (!Files.isRegularFile(path) || !name.endsWith(".nbt"))
 					throw new IOException("Unrecognized finite-device recovery evidence: " + path);
 				Journal journal = read(path);

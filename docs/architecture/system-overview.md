@@ -134,8 +134,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [VulkanLiquidWorkspace](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspace.java)、[VulkanLiquidWorkspaceSections](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspaceSections.java)、[VulkanLiquidThermalStages](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidThermalStages.java)：工作区布局、机械阶段及热学阶段录制。
 - [VulkanLiquidGeometry](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGeometry.java)、[VulkanMixtureState](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixtureState.java)、[VulkanMixturePressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixturePressure.java)、[VulkanCoupledPressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanCoupledPressure.java)：单轴界面几何、局部液气状态方程与共同压力装配；[VulkanPressureKernel](../../gpu-kernel/src/main/java/mmm/gpu/VulkanPressureKernel.java) 和 [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpu/VulkanPressureMultigrid.java) 按工程体积精度分批执行 PCG，压力和隐式导热复用同一迭代器。
 - [plic-face.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/plic-face.glsl)、[VulkanLiquidViscosity](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidViscosity.java)：共同单侧 PLIC 面积、湿壁有效距离、无滑移应力、反冲与耗散热；热接触复用相同单侧面积。验证入口为 `runGpuWetWallValidation`、`runGpuChannelFlowValidation` 和 `runGpuEntityBodyCouplingBenchmark`，公式及尺度见[液体黏性应力](fluid-solver.md#液体黏性应力)。
-- [VulkanMixtureFlux](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixtureFlux.java)、[mixture-flux.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/mixture-flux.comp)：按两相供体库存限定实际面量，并为关闭格沿开放面完成库存扫掠；速度、液气通量与实际交接使用同一结果。[VulkanLocalGasTransport](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLocalGasTransport.java) 保存逐格气体的实际面转移、外界源汇及环境压力功。
+- [VulkanMixtureFlux](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixtureFlux.java)、[mixture-flux.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/mixture-flux.comp)：按两相供体库存限定实际面量，并为关闭格沿开放面完成库存扫掠；纯气体关闭格可沿开放外界面排气，速度、液气通量与实际交接使用同一结果。[VulkanLocalGasTransport](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLocalGasTransport.java) 保存逐格气体的实际面转移、外界源汇及环境压力功。
 - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMaterialRoutes.java)、[VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGather.java)、[VulkanLiquidMomentum](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMomentum.java)：物质输运、归并及动量。
+- [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMechanicalEnergy.java)：液气与颗粒的共同机械能结算；外侧面混合热按实际质量分配，连通体沿真实外排气路完全排空后将剩余机械能记入环境交换。
 - [VulkanGranularMotion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularMotion.java)：颗粒运动；气体占容随共同局部状态更新。
 - [VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)、[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：热接触、导热与反应。
 - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidThermodynamics.java)、[liquid-caloric-state.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-caloric-state.glsl)：液体混合热容和分段温度反演，供库存与扩散携能共用。
@@ -152,7 +153,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 宿主初态捕获统一准备逐格气体库存，覆盖无热学液体和颗粒状态。世界化学能力要求热学，相变要求热学与化学；设备导入和步请求同步检查这组契约。宿主底层仍可保存独立化学状态。
 
-初始化器建立宿主状态和固定几何，再导入设备。冷导入和宿主编辑导入按同代库存计算各载体温度与热容，暂停时也可立即显示温度。运行态编辑捕获同代状态并在私有副本上规划接受量、后继库存与外部效果；设备候选采用后，容器、世界或设备事务按 WAL 和 HEAD 协议落实。相同布局的后继复用设备资源。容器投料和取样沿共享开放面按跨格路径选择附近库存或容积；当前格内按一个连通开放空间处理，非零范围可穿过开放气孔，局部取样限定选中格。宿主编辑读取逐格气体状态，按旧干口和未来接收干容转移受挤气体，联合交接库存、动量与热账。
+初始化器建立宿主状态和固定几何，再导入设备。冷导入和宿主编辑导入按同代库存计算各载体温度与热容，暂停时也可立即显示温度。运行态编辑捕获同代状态并在私有副本上规划接受量、后继库存与外部效果；设备候选采用后，容器、世界或设备事务按 WAL 和 HEAD 协议落实。相同布局的后继复用设备资源。容器投料和取样沿共享开放面按跨格路径选择附近库存或容积；当前格内按一个连通开放空间处理，非零范围可穿过开放气孔，局部取样限定选中格。宿主编辑读取逐格气体状态，按旧干口和未来接收干容转移受挤气体；同批缩容后仍有干容的格参与接收并结算压缩功，联合交接库存、动量与热账。
 
 - [HostFluidState](../../solver/src/main/java/mmm/fluid/HostFluidState.java)、[DomainInventory](../../solver/src/main/java/mmm/fluid/DomainInventory.java)、[DomainCollision](../../solver/src/main/java/mmm/fluid/DomainCollision.java)、[DomainPhaseInventory](../../solver/src/main/java/mmm/fluid/DomainPhaseInventory.java)：宿主状态与有限库存、几何编辑。
 - [HostMixtureEdit](../../solver/src/main/java/mmm/fluid/HostMixtureEdit.java)、[SpatialGasEdits](../../solver/src/main/java/mmm/fluid/SpatialGasEdits.java)、[CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：外部物料、碰撞及占容编辑共同准备液气库存、面动量和实际载体耗散热；开放外界面保留环境惯量。
@@ -165,7 +166,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="persistence"></a>
 ## 保存和故障恢复
 
-保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。公开转移的持久化收据在 WAL 扫描完整且缺少对应日志时归类为未提交；扫描存在存储问题时保持待恢复状态。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
+保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。碰撞刷新受阻按世界输入失败暂停，保留刷新请求，世界条件恢复后重新规划。有限设备恢复读取原子发布的正式 WAL，中断发布留下的普通临时文件保留在磁盘并跳过。公开转移的持久化收据在 WAL 扫描完整且缺少对应日志时归类为未提交；扫描存在存储问题时保持待恢复状态。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
 
 - [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)：捕获与恢复。
 - [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)：区域生命周期与持久化协调；卸载区域的运行意图由 `setUnloadedRunIntent` 同步读取完整 checkpoint、提交新代并释放宿主状态，保留原有可用性，未完成事务先执行恢复。

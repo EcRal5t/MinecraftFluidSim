@@ -309,6 +309,10 @@ S1 的针对性入口：
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-11-08 正常运行误暂停复审：宿主 `region-manager,lifecycle,region-state` 通过，记录 `build/pause-review-validation.log`；最终 `assemble`、`region-manager`、`runGpuEntityBodyCouplingBenchmark` 及生产水流 `flow 120 complete` 通过（47 秒），记录 `build/pause-review-delivery.log`。回归覆盖同批碰撞缩容后共用剩余干容接收气体、碰撞阻塞保留刷新请求，以及有限设备 WAL 中断发布的临时文件与正式日志共存和单独残留。水流完成实体交互、暂停单步、checkpoint 恢复、库存编辑与续算，质量及环境收支和热账通过。
+
+同轮 `runGpuResidentStateValidation` 通过（26 秒），记录 `build/pause-closure-final.log`。区域低侧与高侧分别执行实体完全关闭外侧纯气格、实际外排、候选提交、checkpoint 恢复及续算；整数气体质量、物种、环境能量与热账闭合，关闭步舍入账增量小于 1e-6 J。密封外侧的无出口拒绝由实体内核回归保留。极小液量、切格孔隙、设备候选拒绝与采用、热状态及驻留状态恢复继续通过。产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-11-07 深入逻辑复审：`:fabric:runHostValidation -PhostValidation=lifecycle,region-state` 通过（28 秒），记录 `build/logic-review-deep-final.log`。回归覆盖跨维度实体位移历史隔离、目标维度恢复连续运动、实体贴住暂停单元时保持可用且实际伸入时受阻；空池的普通固定墙允许解除归属，归还候选采用后保留墙体温度与热账，安装换热器继续阻止释放。现有热学存档场景增加普通墙，从 REMOVED 隔离 payload 读取完整热库存与审计。区域库存、MAC、实体、相变及能力包恢复验证通过；`assemble` 已生成 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 2026-11-07 扩展逻辑复审：`:fabric:runHostValidation -PhostValidation=lifecycle,protocol` 通过（34 秒），记录 `build/logic-review-followup-validation.log`。新增回归覆盖卸载区域修改暂停／运行意图后的元数据重读、手动单步的实体与驱动占位及零规定速度、驱动停止后移除占位，以及按点击位置停止驱动时保留另一选中区域和周期投料。切换维度及复活后的快照补发复用正式协议会话和区域展示发送，服务端编译及既有协议、客户端表面与查询验证通过。主模组 `assemble` 已完成，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`；本轮沿现有支持范围检查区域管理、演示及世界交互，耗时参数保持原值。
