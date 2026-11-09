@@ -11,10 +11,25 @@ public record ChemicalSpecies(
 		ExactRational molarMassKgPerMol,
 		int baseArgb,
 		Double diffusivityM2PerS,
-		Double effectiveVolumeM3PerMol
+		Double effectiveVolumeM3PerMol,
+		LiquidProperties liquidProperties
 ) {
+	public record LiquidProperties(double referenceDensityKgPerM3, double heatCapacityJPerKgK,
+	                               double conductivityWPerMK, double viscosityPaS) {
+		public LiquidProperties {
+			if (!(Double.isFinite(referenceDensityKgPerM3) && referenceDensityKgPerM3 > 0
+					&& Double.isFinite(heatCapacityJPerKgK) && heatCapacityJPerKgK > 0
+					&& Double.isFinite(conductivityWPerMK) && conductivityWPerMK >= 0
+					&& Double.isFinite(viscosityPaS) && viscosityPaS > 0))
+				throw new IllegalArgumentException("Liquid species properties are invalid");
+		}
+	}
 	public ChemicalSpecies(String id, Map<String,Integer> composition, int charge, ExactRational molarMassKgPerMol, int baseArgb) {
-		this(id,composition,charge,molarMassKgPerMol,baseArgb,null,null);
+		this(id,composition,charge,molarMassKgPerMol,baseArgb,null,null,null);
+	}
+	public ChemicalSpecies(String id, Map<String,Integer> composition, int charge, ExactRational molarMassKgPerMol,
+	                       int baseArgb, Double diffusivityM2PerS, Double effectiveVolumeM3PerMol) {
+		this(id,composition,charge,molarMassKgPerMol,baseArgb,diffusivityM2PerS,effectiveVolumeM3PerMol,null);
 	}
 	public ChemicalSpecies {
 		ChemicalIds.requireId(id, "species id");

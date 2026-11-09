@@ -10,7 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.MaterialRegistry;
-import mmm.thermal.LiquidThermalExpansion;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
 /** Material body forces use the same inventory, caloric state and dual face inertia as projection. */
@@ -47,7 +46,7 @@ final class VulkanLiquidForces implements AutoCloseable {
         for (int material = 0; material < fluids.size(); material++) {
             String id = fluids.material(material).id();
             var expansion =
-                definitions == null ? LiquidThermalExpansion.require(id) : definitions.entry(id).thermalExpansion();
+                definitions.entry(id).thermalExpansion();
             if (expansion == null)
                 throw new IllegalArgumentException("Liquid expansion definition missing for " + id);
             reference[material] = expansion.referenceTemperatureK();

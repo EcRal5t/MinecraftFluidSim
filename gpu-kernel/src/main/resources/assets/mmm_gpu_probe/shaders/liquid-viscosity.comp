@@ -21,6 +21,7 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+// SPATIAL_GRID
 // SERIES_CONDUCTANCE_LIBRARY
 const int GEOMETRY_RECORD_STRIDE = 4;
 const int VISCOSITY_SEGMENT_STRIDE = 4;
@@ -48,9 +49,6 @@ int stockField(int field) {
 }
 int cellCount() {
     return headerWord(H_CELL_COUNT);
-}
-ivec3 shape() {
-    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
 }
 
 double candidateDouble(int address) {
@@ -92,36 +90,20 @@ double faceValue(int faceIndex, int field) {
 void writeFaceVelocity(int faceIndex, double value) {
     writeCandidateDouble(headerWord(H_FACES) + 2 * (GEOMETRY_RECORD_STRIDE * faceIndex + FACE_VELOCITY), value);
 }
-bool inside(ivec3 c) {
-    return all(greaterThanEqual(c, ivec3(0))) && all(lessThan(c, shape()));
-}
 int cellIndex(ivec3 c) {
-    return inside(c) ? (c.z * headerWord(H_SIZE_Y) + c.y) * headerWord(H_SIZE_X) + c.x : -1;
+    return gridCell(c);
 }
 ivec3 cellPosition(int c) {
-    return ivec3(c % headerWord(H_SIZE_X), c / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y), c / (headerWord(H_SIZE_X) * headerWord(H_SIZE_Y)));
-}
-int xFaces() {
-    return (headerWord(H_SIZE_X) + 1) * headerWord(H_SIZE_Y) * headerWord(H_SIZE_Z);
-}
-int yFaces() {
-    return headerWord(H_SIZE_X) * (headerWord(H_SIZE_Y) + 1) * headerWord(H_SIZE_Z);
+    return gridPosition(c);
 }
 int axisOf(int f) {
-    return f < xFaces() ? 0 : f < xFaces() + yFaces() ? 1 : 2;
+    return gridFaceEndpoints(f).z;
 }
 int faceAt(ivec3 c, int axis) {
-    ivec3 dims = shape();
-    dims[axis]++;
-    return (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces()) + (c.z * dims.y + c.y) * dims.x + c.x;
+    return gridFaceAt(c,axis);
 }
 ivec2 faceCells(int f) {
-    int axis = axisOf(f), local = f - (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces());
-    ivec3 dims = shape();
-    dims[axis]++;
-    ivec3 b = ivec3(local % dims.x, local / dims.x % dims.y, local / (dims.x * dims.y)), a = b;
-    a[axis]--;
-    return ivec2(cellIndex(a), cellIndex(b));
+    return gridFaceEndpoints(f).xy;
 }
 bool liquidGeometry(int c) {
     return c >= 0 && (headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + c] != 0u) && cellValue(c, CELL_VOLUME) > 0.0;
@@ -221,14 +203,14 @@ void prepareCell(int c) {
             }
             if (known && sodium == chloride && (water > uint64_t(0) || (ethanol > uint64_t(0) && salt == uint64_t(0)))) {
                 double mass = double(uint64_t(source[massWord]) | (uint64_t(source[massWord + 1]) << 32)) * 1e-10LF;
-                double fraction = clamp(double(ethanol) * 1e-6LF * .046LF / mass, 0.0LF, 1.0LF);
-                viscosity = mix(viscosity, ETHANOL_VISCOSITY, fraction);
+                double fraction = clamp(double(ethanol) * 1e-6LF * candidateDouble(p.header+H_ETHANOL_MOLAR_MASS) / mass, 0.0LF, 1.0LF);
+                viscosity = mix(viscosity, candidateDouble(p.header+H_ETHANOL_VISCOSITY), fraction);
                 double saltMoles = (double(sodium) + double(salt)) * 1e-6;
-                double molality = water > uint64_t(0) ? saltMoles / (double(water) * 1e-6 * .018) : 0.0;
+                double molality = water > uint64_t(0) ? saltMoles / (double(water) * 1e-6 * candidateDouble(p.header+H_WATER_MOLAR_MASS)) : 0.0;
                 double molarity = saltMoles / (volume * p.h * p.h * p.h * 1000.0);
-                if (saltMoles > 0.0) {
-                    viscosity *= 1.0 + NACL_VISCOSITY_A * sqrt(molarity) + NACL_VISCOSITY_B * molarity;
-                    extrapolated = extrapolated || molality > NACL_MAX_MOLALITY || abs(temperature - NACL_REFERENCE_TEMPERATURE) > .01;
+                if (saltMoles > 0.0 && candidateDouble(p.header+H_SALT_MAX_MOLALITY)>0.0LF) {
+                    viscosity *= 1.0 + candidateDouble(p.header+H_SALT_A) * sqrt(molarity) + candidateDouble(p.header+H_SALT_B) * molarity;
+                    extrapolated = extrapolated || molality > candidateDouble(p.header+H_SALT_MAX_MOLALITY) || abs(temperature - candidateDouble(p.header+H_SALT_REFERENCE_TEMPERATURE)) > candidateDouble(p.header+H_SALT_TEMPERATURE_TOLERANCE);
                 }
             } else {
                 extrapolated = true;
@@ -497,12 +479,8 @@ void gather(int c) {
 // Each MAC face meets two normal strains and two shear strains per transverse axis.
 // Incidence is implicit in the grid; source rates remain immutable during the face update.
 void faceStrains(int f, out int rows[6], out double signs[6]) {
-    int axis = axisOf(f), local = f - (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces());
-    ivec3 dims = shape();
-    dims[axis]++;
-    ivec3 pos = ivec3(local % dims.x, local / dims.x % dims.y, local / (dims.x * dims.y)), left = pos;
-    left[axis]--;
-    int a = cellIndex(left), b = cellIndex(pos);
+    int axis = axisOf(f);ivec3 pos=gridFacePosition(f);
+    ivec2 adjacent=faceCells(f);int a=adjacent.x,b=adjacent.y;
     rows[0] = a < 0 ? -1 : 3 * a + axis;
     rows[1] = b < 0 ? -1 : 3 * b + axis;
     signs[0] = 1.0;

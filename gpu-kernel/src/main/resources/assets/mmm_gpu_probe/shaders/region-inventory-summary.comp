@@ -33,16 +33,16 @@ double temperature(int header,int row){
  double referenceEnergy=mass*readDouble(caloricField(header,CAL_MATERIAL_REFERENCE)+2*material),energy=readDouble(caloricField(header,CAL_ENERGIES)+2*row),ethanol=0.0;
  for(int item=int(words[caloricField(header,CAL_SPECIES_OFFSETS)+row]);item<int(words[caloricField(header,CAL_SPECIES_OFFSETS)+row+1]);item++){
   int species=int(words[caloricField(header,CAL_SPECIES_HANDLES)+item]);
-  if(material==caloricField(header,CAL_AQUEOUS_MATERIAL)&&species==caloricField(header,CAL_ETHANOL_SPECIES))ethanol=caloricEthanolMass(mass,double(readInventory(caloricField(header,CAL_SPECIES_AMOUNTS)+2*item)));
+  if(material==caloricField(header,CAL_AQUEOUS_MATERIAL)&&species==caloricField(header,CAL_ETHANOL_SPECIES))ethanol=caloricEthanolMass(mass,double(readInventory(caloricField(header,CAL_SPECIES_AMOUNTS)+2*item)),readDouble(header+CAL_ETHANOL_MOLAR_MASS));
   uint64_t amount=readInventory(caloricField(header,CAL_SPECIES_AMOUNTS)+2*item);
   if(amount!=uint64_t(0))referenceEnergy+=double(amount)*readDouble(caloricField(header,CAL_SPECIES_REFERENCE)+2*(material*caloricField(header,CAL_SPECIES_STRIDE)+species));
  }
  int first=int(words[caloricField(header,CAL_SEGMENT_OFFSETS)+material]),last=int(words[caloricField(header,CAL_SEGMENT_OFFSETS)+material+1])-1,segment=first;
  double temperatureK=readDouble(caloricField(header,CAL_REFERENCE_TEMPERATURE)+2*material),remainingEnergy=energy-referenceEnergy;
  while(segment<last&&temperatureK>=readDouble(caloricField(header,CAL_SEGMENT_UPPER)+2*segment))segment++;
- if(remainingEnergy>=0.0){for(;;segment++){double capacity=caloricCapacity(mass,ethanol,readDouble(caloricField(header,CAL_SEGMENT_CAPACITY)+2*segment)),upper=readDouble(caloricField(header,CAL_SEGMENT_UPPER)+2*segment),segmentEnergy=(upper-temperatureK)*capacity;
+ if(remainingEnergy>=0.0){for(;;segment++){double capacity=caloricCapacity(mass,ethanol,readDouble(caloricField(header,CAL_SEGMENT_CAPACITY)+2*segment),readDouble(header+CAL_ETHANOL_HEAT_CAPACITY)),upper=readDouble(caloricField(header,CAL_SEGMENT_UPPER)+2*segment),segmentEnergy=(upper-temperatureK)*capacity;
   if(segment==last||remainingEnergy<segmentEnergy){temperatureK+=remainingEnergy/capacity;break;}remainingEnergy-=segmentEnergy;temperatureK=upper;}}
- else{remainingEnergy=-remainingEnergy;for(;;segment--){double capacity=caloricCapacity(mass,ethanol,readDouble(caloricField(header,CAL_SEGMENT_CAPACITY)+2*segment)),lower=segment==first?0.0:readDouble(caloricField(header,CAL_SEGMENT_UPPER)+2*(segment-1)),segmentEnergy=(temperatureK-lower)*capacity;
+ else{remainingEnergy=-remainingEnergy;for(;;segment--){double capacity=caloricCapacity(mass,ethanol,readDouble(caloricField(header,CAL_SEGMENT_CAPACITY)+2*segment),readDouble(header+CAL_ETHANOL_HEAT_CAPACITY)),lower=segment==first?0.0:readDouble(caloricField(header,CAL_SEGMENT_UPPER)+2*(segment-1)),segmentEnergy=(temperatureK-lower)*capacity;
   if(segment==first||remainingEnergy<=segmentEnergy){temperatureK-=remainingEnergy/capacity;break;}remainingEnergy-=segmentEnergy;temperatureK=lower;}}
  if(isnan(temperatureK)||isinf(temperatureK)||temperatureK<=0.0)atomicOr(outWords[H_ERROR],ERROR_INVALID_TEMPERATURE);return temperatureK;
 }

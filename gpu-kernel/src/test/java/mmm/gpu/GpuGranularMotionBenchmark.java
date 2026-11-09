@@ -27,7 +27,7 @@ public final class GpuGranularMotionBenchmark {
                                 VulkanGranularGeometry geometry,int grid,int count,int warmup,int samples){
         if(count<1)throw new IllegalArgumentException("Empty granular benchmark");
         long alignment=Math.max(8,context.storageOffsetAlignment());
-        var state=new VulkanGranularStateLayout(grid,grid,grid,count,0,0,new VulkanGranularStateLayout.Definitions("fixture","fixture",List.of("sand"),List.of()),0,alignment);
+        var state=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),count,0,0,new VulkanGranularStateLayout.Definitions("fixture","fixture",List.of("sand"),List.of()),0,alignment);
         var finalK=new VulkanLiquidStateLayout.Column(state.endOffset(),count,8);
         var finalY=new VulkanLiquidStateLayout.Column(align(finalK.offset()+finalK.bytes(),alignment),count,8);
         var masks=new VulkanLiquidStateLayout.Column(align(finalY.offset()+finalY.bytes(),alignment),state.cells(),4);
@@ -49,7 +49,7 @@ public final class GpuGranularMotionBenchmark {
             particles.add(new VulkanGranularStateLayout.Particle(row,x,y,z,i%2==0?.05:-.05,-.1,.03,0,0,new int[8],new long[8]));
         }
         state.importState(initial,new VulkanGranularStateLayout.State(state.definitions(),particles,List.of(),List.of(),List.of()));
-        try(var storage=new VulkanRegionStorage(context,occupancy.endOffset(),1024*1024)){
+        try(var storage=new VulkanRegionStorage(context,occupancy.endOffset(),1024*1024,mmm.spatial.SpatialGrid.rectangular(grid,grid,grid))){
             storage.initialize(initial,0);long[] elapsed=new long[samples];long gpu=0,upload=0,readback=0;int actualContacts=0;
             try(var source=storage.capture()){
                 for(int sample=-warmup;sample<samples;sample++)try(var candidate=storage.prepare(source)){

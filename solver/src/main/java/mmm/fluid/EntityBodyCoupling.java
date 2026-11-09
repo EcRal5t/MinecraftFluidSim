@@ -41,7 +41,8 @@ final class EntityBodyCoupling {
       for (int z = firstZ; z <= lastZ; z++)
         for (int y = firstY; y <= lastY; y++)
           for (int x = firstX; x <= lastX; x++) {
-            int cell = x + domain.sizeX * (y + domain.sizeY * z);
+            int cell = domain.grid.cell(x,y,z);
+            if(cell<0)continue;
             double volume = 0;
             for (int micro = 0; micro < 8; micro++)
               if ((fixed.mask(cell) & 1 << micro) == 0) {
@@ -77,9 +78,7 @@ final class EntityBodyCoupling {
         occupied[cell] = Math.round(sum * (1L << 24));
         continue;
       }
-      int x = cell % domain.sizeX,
-          y = cell / domain.sizeX % domain.sizeY,
-          z = cell / (domain.sizeX * domain.sizeY);
+      int x = domain.grid.x(cell), y = domain.grid.y(cell), z = domain.grid.z(cell);
       double union = 0;
       for (int micro = 0; micro < 8; micro++)
         if ((fixed.mask(cell) & 1 << micro) == 0) {
@@ -162,19 +161,8 @@ final class EntityBodyCoupling {
       for (int cell = 0; cell < domain.cellCount; cell++) {
         double volume = bodyCells[b][cell];
         if (!(volume > 0)) continue;
-        int x = cell % domain.sizeX,
-            y = cell / domain.sizeX % domain.sizeY,
-            z = cell / (domain.sizeX * domain.sizeY);
         for (int axis = 0; axis < 3; axis++) {
-          int first =
-              graph.offsets[axis]
-                  + (axis == 0
-                      ? domain.domainFlowFields.xFaceIndex(x, y, z)
-                      : axis == 1
-                          ? domain.domainFlowFields.yFaceIndex(x, y, z)
-                          : domain.domainFlowFields.zFaceIndex(x, y, z));
-          int second =
-              first + (axis == 0 ? 1 : axis == 1 ? domain.sizeX : domain.sizeX * domain.sizeY);
+          int first=domain.grid.face(cell,2*axis),second=domain.grid.face(cell,2*axis+1);
           double a = domain.geometry.cutCells.openFaceField(axis)[graph.localFace[first]],
               c = domain.geometry.cutCells.openFaceField(axis)[graph.localFace[second]],
               sum = a + c;

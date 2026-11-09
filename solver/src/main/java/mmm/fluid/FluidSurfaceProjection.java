@@ -100,7 +100,7 @@ public final class FluidSurfaceProjection {
         }
       }
     }
-    return new FluidSurfaceInput(sx, sy, sz, h, pieces);
+    return new FluidSurfaceInput(fixed.grid(), h, pieces);
   }
 
   /** Display-only projection of float device fields; these values never become inventory. */

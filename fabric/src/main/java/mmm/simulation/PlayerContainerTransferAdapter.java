@@ -241,8 +241,7 @@ public final class PlayerContainerTransferAdapter {
 		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
 		double h = region.solverConfig().cellSize();
 		int cellX = (int) Math.floor(localX / h), cellY = (int) Math.floor(localY / h), cellZ = (int) Math.floor(localZ / h);
-		var carrierView = cellX < 0 || cellY < 0 || cellZ < 0 || cellX >= region.sizeX()
-				|| cellY >= region.sizeY() || cellZ >= region.sizeZ() ? null : region.observeCellCarriers(cellX, cellY, cellZ);
+		var carrierView = region.grid().cell(cellX,cellY,cellZ) < 0 ? null : region.observeCellCarriers(cellX, cellY, cellZ);
 		if (carrierView == null || carrierView.gas() == null || carrierView.gas().nodeId() <= 0) {
 			message(player, "外壳内侧接触处没有有限气腔，请对准气体空间");
 			return InteractionResult.FAIL;

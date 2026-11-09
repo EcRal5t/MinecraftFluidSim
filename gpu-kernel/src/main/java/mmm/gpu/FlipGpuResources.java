@@ -102,7 +102,20 @@ final class FlipGpuResources implements AutoCloseable {
 	}
 }
 
-record GpuBuffer(long handle, long memory, long mappedAddress, long size) {
+final class GpuBuffer {
+    private final long handle, memory, mappedAddress, size;
+    private mmm.spatial.SpatialGrid grid;
+    private GpuBuffer topology;
+    GpuBuffer(long handle,long memory,long mappedAddress,long size){
+        this.handle=handle;this.memory=memory;this.mappedAddress=mappedAddress;this.size=size;
+    }
+    long handle(){return handle;} long memory(){return memory;}
+    long mappedAddress(){return mappedAddress;} long size(){return size;}
+    void spatialGrid(mmm.spatial.SpatialGrid grid,GpuBuffer topology){
+        this.grid=grid;this.topology=topology;
+    }
+    mmm.spatial.SpatialGrid grid(){return grid;}
+    FlipKernelBindings.BufferRange gridRange(){return new FlipKernelBindings.BufferRange(topology);}
 	FloatBuffer floats(long byteCount) {
 		return MemoryUtil.memFloatBuffer(requireMapped(), Math.toIntExact(byteCount / Float.BYTES));
 	}

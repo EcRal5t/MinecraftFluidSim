@@ -43,7 +43,6 @@ public final class FluidProtocolServer {
 		PayloadTypeRegistry.serverboundConfiguration().register(
 				FluidProtocolResponsePayload.TYPE, FluidProtocolResponsePayload.CODEC
 		);
-		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPartPayload.TYPE, FluidSnapshotPartPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidMaterialSnapshotPayload.TYPE, FluidMaterialSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidChemicalSnapshotPayload.TYPE, FluidChemicalSnapshotPayload.CODEC);
@@ -93,13 +92,6 @@ public final class FluidProtocolServer {
 			if (runtime != null) runtime.controllerConsole().forgetInteractiveViewer(listener.player.getUUID());
 			removeSession(server, listener.player.getUUID());
 		});
-	}
-
-	public static boolean send(ServerPlayer player, FluidSnapshotPayload payload) {
-		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.PURE)
-				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPayload.TYPE)) return false;
-		ServerPlayNetworking.send(player, payload);
-		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidMaterialSnapshotPayload payload) {

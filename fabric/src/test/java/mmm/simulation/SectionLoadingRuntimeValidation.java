@@ -14,7 +14,9 @@ public final class SectionLoadingRuntimeValidation {
 	private SectionLoadingRuntimeValidation() { }
 
 	public static void validate(Path root, FluidRegion source) throws Exception {
-		var repository = new RegionRepositoryAdapter(root, TestProfiles.pure(), null, null, null, null, TestProfiles.materialRegistry());
+		var definitions=mmm.fluid.TestFluidDefinitions.load();
+		var repository = new RegionRepositoryAdapter(root,TestProfiles.pure(),definitions.chemistry(),definitions.granular(),
+				definitions.thermal(),definitions.gas(),definitions.material());
 		repository.checkpoint(source);
 		var expected = source.editableHost().captureAuthoritativeState();
 		var manager = manager();

@@ -86,14 +86,6 @@ public record RegionGeometry(
 					|| minimumInterior.y() > maximumInterior.y() || minimumInterior.z() > maximumInterior.z()) {
 				throw new IllegalArgumentException("Invalid controller footprint");
 			}
-			for (int chunkZ = minimumInterior.z() >> 4; chunkZ <= maximumInterior.z() >> 4; chunkZ++) {
-				for (int chunkX = minimumInterior.x() >> 4; chunkX <= maximumInterior.x() >> 4; chunkX++) {
-					long packedChunk = (long) chunkX & 0xffffffffL | ((long) chunkZ & 0xffffffffL) << 32;
-					if (!requiredChunks.contains(packedChunk)) {
-						throw new IllegalArgumentException("Required chunks must cover the complete dense solver bounds");
-					}
-				}
-			}
 		}
 
 		public int blockSizeX() { return Math.addExact(Math.subtractExact(maximumInterior.x(), minimumInterior.x()), 1); }

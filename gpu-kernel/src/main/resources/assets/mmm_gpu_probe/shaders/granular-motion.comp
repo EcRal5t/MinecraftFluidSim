@@ -40,6 +40,7 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+// SPATIAL_GRID
 int headerValue(int i) {
     return int(words[p.header + i]);
 }
@@ -74,7 +75,7 @@ ivec3 gridDimensions() {
     return ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z));
 }
 int cellIndex(ivec3 c) {
-    return (c.z * headerValue(H_SIZE_Y) + c.y) * headerValue(H_SIZE_X) + c.x;
+    return gridCell(c);
 }
 ivec3 cellCoordinates(dvec3 x) {
     return clamp(ivec3(floor(x / p.cellSize)), ivec3(0), gridDimensions() - 1);
@@ -89,7 +90,7 @@ bool microcellBox(ivec3 c, int bit, out dvec3 lo, out dvec3 hi) {
     lo = (dvec3(c) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize;
     hi = lo + .5 * p.cellSize;
     int q = cellIndex(c);
-    if ((words[headerValue(H_MASKS) + q] & (1u << bit)) != 0u)
+    if (q < 0 || (words[headerValue(H_MASKS) + q] & (1u << bit)) != 0u)
         return true;
     double top = readDouble(fieldOffset(FIELD_BED_HEIGHT) + 2 * q);
     hi.y = min(hi.y, top);
@@ -163,6 +164,7 @@ int enumerateContacts(int particle, bool writeContacts) {
                 if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, gridDimensions())))
                     continue;
                 int q = cellIndex(c);
+                if (q < 0) continue;
                 for (int e = int(words[fieldOffset(FIELD_OFFSETS) + q]); e < int(words[fieldOffset(FIELD_OFFSETS) + q + 1]); e++) {
                     int otherParticle = int(words[fieldOffset(FIELD_ENTRIES) + e]);
                     if (otherParticle <= particle)
@@ -197,7 +199,6 @@ int enumerateContacts(int particle, bool writeContacts) {
         for (int y = low.y; y <= high.y; y++)
             for (int a = low.x; a <= high.x; a++) {
                 ivec3 c = ivec3(a, y, z);
-                uint mask = words[headerValue(H_MASKS) + cellIndex(c)];
                 for (int bit = 0; bit < 8; bit++) {
                     dvec3 lo, hi;
                     if (!microcellBox(c, bit, lo, hi))
@@ -226,7 +227,6 @@ void computeTrialPosition(int particle) {
         for (int y = low.y; y <= high.y; y++)
             for (int a = low.x; a <= high.x; a++) {
                 ivec3 c = ivec3(a, y, z);
-                uint mask = words[headerValue(H_MASKS) + cellIndex(c)];
                 for (int bit = 0; bit < 8; bit++) {
                     dvec3 lo, hi;
                     if (!microcellBox(c, bit, lo, hi))
@@ -261,7 +261,6 @@ dvec3 fixedCorrection(dvec3 position, double radius) {
         for (int y = low.y; y <= high.y; y++)
             for (int a = low.x; a <= high.x; a++) {
                 ivec3 coordinateCorrection = ivec3(a, y, z);
-                uint mask = words[headerValue(H_MASKS) + cellIndex(coordinateCorrection)];
                 for (int bit = 0; bit < 8; bit++) {
                     dvec3 lo, hi;
                     if (!microcellBox(coordinateCorrection, bit, lo, hi))
@@ -310,6 +309,7 @@ void separateParticles(int particle) {
                 if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, gridDimensions())))
                     continue;
                 int q = cellIndex(c);
+                if (q < 0) continue;
                 for (int e = int(words[fieldOffset(FIELD_OFFSETS) + q]); e < int(words[fieldOffset(FIELD_OFFSETS) + q + 1]); e++) {
                     int other = int(words[fieldOffset(FIELD_ENTRIES) + e]);
                     if (other == particle)
@@ -357,7 +357,7 @@ void main() {
             return;
         }
         writeDouble(fieldOffset(FIELD_BED_HEIGHT) + 2 * id,
-               (double(id / headerValue(H_SIZE_X) % headerValue(H_SIZE_Y)) + clamp(height, 0.0, 1.0)) * p.cellSize);
+               (double(gridPosition(id).y) + clamp(height, 0.0, 1.0)) * p.cellSize);
         return;
     }
     if (p.stage == STAGE_INITIALIZE) {
@@ -396,7 +396,9 @@ void main() {
     }
     if (id >= particleCount())
         return;
-    if (headerValue(H_ACTIVITY_CELLS) >= 0 && words[headerValue(H_ACTIVITY_CELLS) + cellIndex(cellCoordinates(readVector(headerValue(H_POSITION), id)))] == 0u)
+    int centerCell = cellIndex(cellCoordinates(readVector(headerValue(H_POSITION), id)));
+    if (centerCell < 0) { reportInvalidState(); return; }
+    if (headerValue(H_ACTIVITY_CELLS) >= 0 && words[headerValue(H_ACTIVITY_CELLS) + centerCell] == 0u)
         return;
     if (p.stage == STAGE_COUNT_PARTICLES) {
         dvec3 x = readVector(headerValue(H_POSITION), id), v = readVector(headerValue(H_VELOCITY), id);
@@ -440,6 +442,7 @@ void main() {
                     if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, gridDimensions())))
                         continue;
                     int q = cellIndex(c);
+                    if (q < 0) continue;
                     for (int e = int(words[fieldOffset(FIELD_OFFSETS) + q]); e < int(words[fieldOffset(FIELD_OFFSETS) + q + 1]); e++) {
                         int other = int(words[fieldOffset(FIELD_ENTRIES) + e]);
                         if (other == id)

@@ -3,7 +3,6 @@ package mmm.fluid;
 import mmm.granular.GranularCarrier;
 import mmm.thermal.ThermalCarrierContext;
 import mmm.thermal.ThermalDomainState;
-import mmm.thermal.LiquidThermalExpansion;
 import java.util.Arrays;
 
 /**
@@ -70,7 +69,7 @@ final class LiquidCarrierProperties {
 			int cell=markers.cell(marker);double mass=markers.mass(marker);
 			if (!(mass > 0)) continue;
 			String id=materials.material(markers.fluidMaterialHandle(marker)).id();
-			var expansion=definitions==null?LiquidThermalExpansion.require(id):definitions.entry(id).thermalExpansion();
+			var expansion=definitions.entry(id).thermalExpansion();
 			if(expansion==null)throw new IllegalStateException("Liquid "+id+" has no committed thermal expansion definition");
 			relativeBuoyancy[cell]+=mass*expansion.relativeBuoyancy(temperatureK[cell]);
 			observationMass[cell]+=mass;

@@ -110,7 +110,7 @@ public final class ThermalStateFunction {
 	}
 
 	public ThermalMaterialDefinition materialForComposition(int handle,double mass,Map<String,Long> species) {
-		return mmm.chemistry.AqueousMixtureProperties.thermalMaterial(registry.material(handle),mass,species);
+		return mmm.chemistry.AqueousMixtureProperties.thermalMaterial(registry.material(handle),mass,species,registry.chemistry());
 	}
 	public ThermalMaterialDefinition materialForComposition(int handle,double mass,ChemicalMixtureRecord mixture,ChemicalRegistry chemistry) {
 		return materialForComposition(handle,mass,mixture==null||chemistry==null?Map.of():mixture.stableAmounts(chemistry));

@@ -114,8 +114,8 @@ public final class FluidBoundaryScannerValidation {
 		world.addShell(new BlockPos(-2, 0, 0), new BlockPos(0, 2, 2));
 		world.addShell(new BlockPos(0, 0, 0), new BlockPos(2, 2, 2));
 		FluidBoundaryScanner.ScanResult result = FluidBoundaryScanner.scan(controller, world, 32);
-		require(result.status() == FluidBoundaryScanner.Status.AMBIGUOUS_INTERIORS,
-				"controller touching two chambers did not fail as ambiguous: " + result.status());
+		require(result.succeeded() && result.footprint().interiorBlocks().size() == 2,
+				"controller did not combine the two closed chambers: " + result.status());
 	}
 
 	private static void validateScanBudget() {

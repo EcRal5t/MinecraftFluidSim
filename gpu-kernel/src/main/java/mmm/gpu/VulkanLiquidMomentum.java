@@ -142,7 +142,7 @@ final class VulkanLiquidMomentum implements AutoCloseable {
     static Layout layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout output,VulkanLiquidRouteLayout routes,
                          int projectedFacesWordOffset,int targetFacesWordOffset,int flagsWordOffset,
                          int activityCellsWordOffset,int activityFacesWordOffset,long scratchBase,long alignment) {
-        if(source.sizeX()!=output.sizeX()||source.sizeY()!=output.sizeY()||source.sizeZ()!=output.sizeZ()
+        if(!source.grid().equals(output.grid())
                 ||routes.sourceStockCapacity()<source.stockCapacity()||scratchBase<output.bytes()
                 ||scratchBase<routes.endOffset()||alignment<8||(alignment&(alignment-1))!=0)
             throw new IllegalArgumentException("Liquid momentum layouts differ or overlap");
@@ -188,8 +188,7 @@ final class VulkanLiquidMomentum implements AutoCloseable {
         int longest=Math.max(layout.output().sizeX(),Math.max(layout.output().sizeY(),layout.output().sizeZ()))+1;
         int parity=0;
         for(int span=1;span<longest;span*=2) { stage(command,layout,STAGE_JUMP_ROOT,layout.faces(),parity);parity^=1; }
-        int x=layout.output().sizeX(),y=layout.output().sizeY(),z=layout.output().sizeZ();
-        stage(command,layout,STAGE_ACCUMULATE_LINE,Math.addExact(Math.addExact(x*y,x*z),y*z),parity);
+        stage(command,layout,STAGE_ACCUMULATE_LINE,layout.faces(),parity);
         stage(command,layout,STAGE_FINALIZE_FACE,layout.faces(),parity);
         stage(command,layout,STAGE_GATHER_HEAT,layout.output().cellCount(),0);
     }

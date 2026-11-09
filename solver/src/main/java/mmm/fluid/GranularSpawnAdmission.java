@@ -7,6 +7,8 @@ import mmm.granular.GranularParcelStore;
 /** Private center-cell index for live parcels and accepted dry-pour positions. */
 final class GranularSpawnAdmission {
 	private final int sizeX, sizeY, sizeZ;
+	private final mmm.spatial.SpatialGrid grid;
+	private final int divisions;
 	private final float h;
 	private final double cellSize;
 	private final int[] head, next;
@@ -16,7 +18,10 @@ final class GranularSpawnAdmission {
 
 	GranularSpawnAdmission(int sizeX, int sizeY, int sizeZ, float h,
 	                       GranularParcelStore parcels, int additional) {
-		this(sizeX, sizeY, sizeZ, h, Math.addExact(parcels.count(), additional));
+		this(mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ),h,parcels,additional);
+	}
+	GranularSpawnAdmission(mmm.spatial.SpatialGrid grid,float h,GranularParcelStore parcels,int additional) {
+		this(grid,h,Math.addExact(parcels.count(), additional));
 		for (int i = 0; i < parcels.count(); i++) {
 			var parcel = parcels.parcel(i);
 			append(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
@@ -24,14 +29,15 @@ final class GranularSpawnAdmission {
 	}
 
 	GranularSpawnAdmission(int sizeX, int sizeY, int sizeZ, float h, int capacity) {
-		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		int divisions = FlipCutCellGeometry.MICRO_CELLS_PER_AXIS, factor = divisions * divisions * divisions;
-		long available = Runtime.getRuntime().maxMemory() - Runtime.getRuntime().totalMemory() + Runtime.getRuntime().freeMemory();
-		// Large diagnostic domains retain coarse addressing and its original allocation size.
-		if (cells > Integer.MAX_VALUE / factor || 4L * factor * cells + 16 > available / 2) divisions = 1;
+		this(mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ),h,capacity);
+	}
+	GranularSpawnAdmission(mmm.spatial.SpatialGrid grid,float h,int capacity) {
+		this.grid=grid;int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
+		int cells=grid.cellCount();divisions=FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
+		int factor=divisions*divisions*divisions;
 		this.sizeX = sizeX * divisions; this.sizeY = sizeY * divisions; this.sizeZ = sizeZ * divisions;
 		this.h = h; cellSize = h / (double) divisions;
-		head = new int[Math.multiplyExact(Math.multiplyExact(this.sizeX, this.sizeY), this.sizeZ)];
+		head = new int[Math.multiplyExact(cells,factor)];
 		Arrays.fill(head, -1);
 		next = new int[capacity]; x = new float[capacity]; y = new float[capacity];
 		z = new float[capacity]; radius = new float[capacity];
@@ -52,7 +58,7 @@ final class GranularSpawnAdmission {
 		for (int iz = loZ; iz <= hiZ; iz++)
 			for (int iy = loY; iy <= hiY; iy++)
 				for (int ix = loX; ix <= hiX; ix++)
-					for (int i = head[(iz * sizeY + iy) * sizeX + ix]; i >= 0; i = next[i]) {
+					for (int i = bucket(ix,iy,iz)<0?-1:head[bucket(ix,iy,iz)]; i >= 0; i = next[i]) {
 						visit.run();
 						if (interiorsOverlap(px, py, pz, r, x[i], y[i], z[i], radius[i])) return i;
 					}
@@ -60,7 +66,8 @@ final class GranularSpawnAdmission {
 	}
 
 	void append(float px, float py, float pz, long svq) {
-		int cell = (coordinate(pz, sizeZ) * sizeY + coordinate(py, sizeY)) * sizeX + coordinate(px, sizeX);
+		int cell = bucket(coordinate(px,sizeX),coordinate(py,sizeY),coordinate(pz,sizeZ));
+		if(cell<0)throw new IllegalArgumentException("Granular position is outside its spatial blocks");
 		x[count] = px; y[count] = py; z[count] = pz;
 		radius[count] = GranularMechanics.representativeRadius(svq, h);
 		largestRadius = Math.max(largestRadius, radius[count]);
@@ -82,5 +89,9 @@ final class GranularSpawnAdmission {
 
 	private int coordinate(double p, int size) {
 		return Math.max(0, Math.min(size - 1, (int) Math.floor(p / cellSize)));
+	}
+	private int bucket(int x,int y,int z) {
+		int cell=grid.cell(x/divisions,y/divisions,z/divisions);
+		return cell<0?-1:cell*divisions*divisions*divisions+(x%divisions)+divisions*((y%divisions)+divisions*(z%divisions));
 	}
 }

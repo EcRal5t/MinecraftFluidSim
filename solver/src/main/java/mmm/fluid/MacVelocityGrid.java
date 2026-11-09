@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.spatial.SpatialGrid;
+
 /**
  * Staggered liquid momentum and its derived velocity, inertia and extrapolation workspace.
  * Face momentum uses kg m/s; pressure and viscosity update the current velocity before the
@@ -12,7 +14,7 @@ final class MacVelocityGrid {
 	final double[] momentumX;
 	final double[] momentumY;
 	final double[] momentumZ;
-	private final int sizeX, sizeY, sizeZ;
+	private final SpatialGrid grid;
 	final float[] velocityX;
 	final float[] velocityY;
 	final float[] velocityZ;
@@ -30,10 +32,13 @@ final class MacVelocityGrid {
 
 
 	MacVelocityGrid(int sizeX, int sizeY, int sizeZ) {
-		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
-		this.velocityX = new float[(sizeX + 1) * sizeY * sizeZ];
-		this.velocityY = new float[sizeX * (sizeY + 1) * sizeZ];
-		this.velocityZ = new float[sizeX * sizeY * (sizeZ + 1)];
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ));
+	}
+	MacVelocityGrid(SpatialGrid grid) {
+		this.grid = grid;
+		this.velocityX = new float[grid.faceCount(0)];
+		this.velocityY = new float[grid.faceCount(1)];
+		this.velocityZ = new float[grid.faceCount(2)];
 		this.momentumX = new double[velocityX.length];
 		this.momentumY = new double[velocityY.length];
 		this.momentumZ = new double[velocityZ.length];
@@ -49,11 +54,11 @@ final class MacVelocityGrid {
 	}
 
 	MacMomentumState captureMomentum() {
-		return new MacMomentumState(sizeX, sizeY, sizeZ, momentumX, momentumY, momentumZ);
+		return new MacMomentumState(grid, momentumX, momentumY, momentumZ);
 	}
 
 	void restoreMomentum(MacMomentumState state) {
-		if (state.sizeX() != sizeX || state.sizeY() != sizeY || state.sizeZ() != sizeZ)
+		if (!state.grid().equals(grid))
 			throw new IllegalArgumentException("MAC momentum restore differs from its grid");
 		state.copyInto(momentumX, momentumY, momentumZ);
 		markMomentumChanged();

@@ -151,7 +151,11 @@ public final class FluidRegionManager {
 				region.origin().getX() + region.sizeX() * cellSize,
 				region.origin().getY() + region.sizeY() * cellSize,
 				region.origin().getZ() + region.sizeZ() * cellSize,
-				region.reservedCellCapacity());
+				region.reservedCellCapacity(), region.footprint() == null ? null : region.footprint().interiorBlocks().stream()
+                        .map(net.minecraft.core.BlockPos::of)
+                        .filter(region.footprint()::containsInterior)
+                        .map(block -> new RegionCatalog.Descriptor.Block(block.getX(), block.getY(), block.getZ()))
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet()));
 	}
 
 }

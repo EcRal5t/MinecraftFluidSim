@@ -277,31 +277,6 @@ public final class FluidDomainContracts {
 	public static final class CollisionEditBlockedException extends IllegalStateException {
 		public CollisionEditBlockedException(String message, Throwable cause) { super(message, cause); }
 	}
-	static final class RemovedMaterialLedger {
-		final double[] volume;
-		final long[] mass;
-		RemovedMaterialLedger(int materialCount) {
-			volume = new double[materialCount]; mass = new long[materialCount];
-		}
-		void add(int material, double addedVolume, long addedMass) {
-			volume[material] += addedVolume; mass[material] = Math.addExact(mass[material], addedMass);
-		}
-		List<MaterialPortion> build() {
-			ArrayList<MaterialPortion> result = new ArrayList<>();
-			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
-				if (mass[material] < 0L) {
-					throw new IllegalStateException("Displaced material has negative mass");
-				}
-				result.add(new MaterialPortion(material, volume[material], mass[material]));
-			}
-			return List.copyOf(result);
-		}
-	}
-	static final class RemovedThermalEnergy {
-		SignedDyadic value = SignedDyadic.ZERO;
-		void add(double energy) { value = value.add(SignedDyadic.of(energy)); }
-		SignedDyadic value() { return value; }
-	}
 	public record ExactVolumeTransfer(boolean transferred, double volume, long massUnits, double internalEnergy) {
 		public ExactVolumeTransfer(boolean transferred, double volume, long massUnits) {
 			this(transferred, volume, massUnits, 0.0);
@@ -317,10 +292,6 @@ public final class FluidDomainContracts {
 			this(transferred, ledger, 0.0);
 		}
 	}
-	public record ChemicalDisplacement(float volume, ChemicalTransferLedger ledger, double internalEnergy) {
-		public ChemicalDisplacement(float volume, ChemicalTransferLedger ledger) { this(volume, ledger, 0.0); }
-	}
-	public record MaterialDisplacement(float volume, List<MaterialPortion> portions, double internalEnergy) { }
 	public record MaterialPortion(int materialHandle, double volume, long massUnits) { }
 	/** A full cell face; direction is -X,+X,-Y,+Y,-Z,+Z. Contacts merge by linear cell index. */
 	public record ThermalPortRequest(int cellX, int cellY, int cellZ, int direction,

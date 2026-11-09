@@ -39,7 +39,7 @@ final class VulkanFluidStateCodec {
         this.devices = devices;
         this.ports = List.copyOf(ports);
         var palette = template.materialPalette().isEmpty()
-            ? List.of(new FluidMaterial("mmm:water", template.config().density(), "mmm:water", 0, Math.PI / 2))
+            ? List.of(template.definitions().material().entry("mmm:water").material())
             : template.materialPalette();
         var groups = new FluidMaterialRegistry(palette);
         var pairs = new ArrayList<FluidMaterialRegistry.LiquidPairTension>();
@@ -55,8 +55,8 @@ final class VulkanFluidStateCodec {
         if (template.thermalRegistry() != null && template.chemicalRegistry() != null) {
             var granular = template.granularRegistry();
             if (granular == null) {
-                var builtin = mmm.granular.BuiltinGranularDefinitions.createRegistry();
-                granular = new mmm.granular.GranularRegistry(builtin.materials(), builtin.carriers());
+                var world = template.definitions().granular();
+                granular = new mmm.granular.GranularRegistry(world.materials(), world.carriers());
             }
             reactionDefinitions = VulkanReactionDefinitions.fromRegistries(
                 template.chemicalRegistry(), granular, template.thermalRegistry(), template.gasRegistry());
@@ -107,7 +107,7 @@ final class VulkanFluidStateCodec {
         var thermal = template.thermalRegistry();
         var owner = template.thermalOwner();
         var chemistry = template.chemicalRegistry();
-        var gasChemistry = chemistry == null ? mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY : chemistry;
+        var gasChemistry = template.definitions().chemistry();
         var species = gasChemistry.species().stream().map(mmm.chemistry.ChemicalSpecies::id).toList();
         int stride = Math.max(1, chemistry == null ? 0 : chemistry.species().size()), materials = fluids.size();
         int[] phases = new int[materials];
@@ -120,47 +120,37 @@ final class VulkanFluidStateCodec {
         var liquidMaterials = new ArrayList<ThermalMaterialDefinition>();
         for (int m = 0; m < materials; m++) {
             phases[m] = fluids.phaseHandle(m);
-            if (thermal == null)
-                liquidMaterials.add(new ThermalMaterialDefinition("mmm:resident_isothermal_" + m,
-                    ThermalMaterialDefinition.CarrierKind.LIQUID, fluids.material(m).id(), 293.15, 0, 0,
-                    List.of(new ThermalMaterialDefinition.CaloricSegment(
-                        mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 100000, 4200))));
-            else {
-                int host =
-                    thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, fluids.material(m).id());
-                var definition = thermal.material(host);
-                liquidMaterials.add(definition);
-                reference[m] = definition.referenceSpecificEnergyJPerKg();
-                if (chemistry != null)
-                    for (int s = 0; s < stride; s++)
-                        if (thermal.hasSpeciesOffset(host, chemistry.species(s).id()))
-                            speciesReference[m * stride + s] = thermal.speciesOffset(host, chemistry.species(s).id())
-                                                                   .referenceInternalEnergyJPerMol()
-                                                                   .divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)
-                                                                   .toDouble();
+            var physics = template.definitions().thermal();
+            int host=physics.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,fluids.material(m).id());
+            var definition=physics.material(host);
+            liquidMaterials.add(definition);
+            if(thermal!=null) {
+                reference[m]=definition.referenceSpecificEnergyJPerKg();
+                if(chemistry!=null)for(int index=0;index<stride;index++)
+                    if(thermal.hasSpeciesOffset(host,chemistry.species(index).id()))
+                        speciesReference[m*stride+index]=thermal.speciesOffset(host,chemistry.species(index).id())
+                                .referenceInternalEnergyJPerMol().divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).toDouble();
             }
         }
-        var constitutive = template.materialDefinitions();
-        int[] zeroOffsets = new int[materials + 1];
-        double[] zeroSegments = new double[4 * materials];
-        for (int m = 0; m < materials; m++) {
-            zeroOffsets[m + 1] = m + 1;
-            zeroSegments[4 * m] = mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-            zeroSegments[4 * m + 1] = 100000;
-        }
-        var viscosity = constitutive == null ? new VulkanLiquidViscosity.Tables(zeroOffsets, zeroSegments)
-                                             : VulkanLiquidViscosity.tables(fluids, constitutive, chemistry);
+        var constitutive = template.definitions().material();
+        var viscosity = VulkanLiquidViscosity.tables(fluids, constitutive, chemistry);
         double[] temperatures = new double[materials];
         Arrays.fill(temperatures, 293.15);
-        var forces = thermal == null || constitutive == null
+        var forces = thermal == null
             ? new VulkanLiquidForces.Tables(temperatures, new double[materials])
             : VulkanLiquidForces.tables(fluids, constitutive);
         int cells = inventory.cellCount(), stocks = Math.max(1, inventory.stockCount());
+        var ethanol = chemistry != null && chemistry.hasSpecies(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)
+            ? chemistry.species(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)) : null;
+        var ethanolLiquid = ethanol == null ? null : ethanol.liquidProperties();
         var definitions = new VulkanLiquidRegion.MechanicalDefinitions(stocks, inventory.speciesHandles().length,
             Math.max(1, inventory.volumes().limbs().length), 4, -40, phases, speciesMass, reference, speciesReference,
             stride, VulkanLiquidThermodynamics.tables(liquidMaterials).withAqueous(
                 fluids.materials().stream().map(m -> m.id()).toList().indexOf("mmm:water"),
-                species.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)), viscosity, forces,
+                ethanolLiquid == null ? -1 : species.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL),
+                ethanolLiquid == null ? 0.0 : ethanol.molarMassKgPerMol().toDouble(),
+                ethanolLiquid == null ? 0.0 : ethanolLiquid.heatCapacityJPerKgK(),
+                ethanolLiquid == null ? 0.0 : ethanolLiquid.conductivityWPerMK()), viscosity, forces,
             VulkanSurfaceTension.tables(fluids), true);
         VulkanLiquidRegion.GasConfiguration gas = null;
         var gasMaterials = new ArrayList<ThermalMaterialDefinition>();
@@ -172,19 +162,10 @@ final class VulkanFluidStateCodec {
                 new VulkanGasStateLayout.Definitions(registry.fingerprint(), spatial == null ? snapshot.chemicalRegistryFingerprint() : spatial.chemicalRegistryFingerprint(),
                     registry.components().stream().map(mmm.fluid.air.GasComponentDefinition::id).toList(), species,
                     registry.components().stream().map(mmm.fluid.air.GasComponentDefinition::allowedSpecies).toList());
-            var tables = thermal == null
-                ? VulkanGasThermodynamics.Tables.isothermal(gasDefinitions)
-                : VulkanGasThermodynamics.tables(gasDefinitions, registry, thermal, gasChemistry);
+            var tables = VulkanGasThermodynamics.tables(gasDefinitions, registry, template.definitions().thermal(), gasChemistry);
+            if (thermal == null) tables = tables.asIsothermal();
             if (spatial == null) {
-                var gasThermal = thermal;
-                if (gasThermal == null) {
-                    var defaults = new ArrayList<ThermalMaterialDefinition>();
-                    for (String id : gasDefinitions.componentIds())
-                        defaults.add(new ThermalMaterialDefinition("mmm:isothermal_" + id.replace(':','_'),
-                            ThermalMaterialDefinition.CarrierKind.GAS, id, 293.15, 0, 0,
-                            List.of(new ThermalMaterialDefinition.CaloricSegment(mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,100000,1000))));
-                    gasThermal = new mmm.thermal.ThermalRegistry(defaults);
-                }
+                var gasThermal = template.definitions().thermal();
                 var gasModel = new mmm.thermal.GasThermalModel(gasThermal,registry);
                 double[] energy = owner == null ? new double[snapshot.nodes().size()] : owner.copyGasNodeEnergy();
                 if(owner==null)for(int node=0;node<energy.length;node++)energy[node]=gasModel.internalEnergyAtTemperature(snapshot.nodes().get(node).inventory(),293.15);
@@ -194,7 +175,7 @@ final class VulkanFluidStateCodec {
                 if(template.granular()!=null){
                     var grains=template.granular();
                     for(var deposit:grains.depositGroups())occupiedGas[deposit.cell()]=Math.addExact(occupiedGas[deposit.cell()],deposit.solidVolumeSvq());
-                    var kernel=new mmm.granular.GranularKernel(template.sizeX(),template.sizeY(),template.sizeZ(),template.config().cellSize());
+                    var kernel=new mmm.granular.GranularKernel(template.grid(),template.config().cellSize());
                     for(var parcel:grains.activeParcels()){
                         kernel.capture(parcel.x(),parcel.y(),parcel.z(),parcel.solidVolumeSvq());int mask=parcel.ceilMask();kernel.requireMask(mask);
                         for(int part=0;part<kernel.size();part++){int cell=kernel.cell(part);occupiedGas[cell]=Math.addExact(occupiedGas[cell],(mask&(1<<part))!=0?kernel.ceil(part):kernel.floor(part));}
@@ -231,11 +212,10 @@ final class VulkanFluidStateCodec {
                         template.config().cellSize())
                     .withDynamics(template.granularDynamics());
             if (thermal == null) {
-                for (String id : state.definitions().materialIds())
-                    granularMaterials.add(new ThermalMaterialDefinition(id,
-                        ThermalMaterialDefinition.CarrierKind.GRANULAR, id, 293.15, 0, 0,
-                        List.of(new ThermalMaterialDefinition.CaloricSegment(
-                            mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 100000, 800))));
+                for (String id : state.definitions().materialIds()) {
+                    var worldThermal=template.definitions().thermal();
+                    granularMaterials.add(worldThermal.material(worldThermal.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,id)));
+                }
                 granular = new VulkanGranularStateLayout.Configuration(state, template.granularRegistry(),
                     VulkanLiquidThermodynamics.tables(granularMaterials), new double[granularMaterials.size()],
                     new double[granularMaterials.size() * Math.max(1, species.size())], Math.max(1, species.size()),
@@ -330,12 +310,12 @@ final class VulkanFluidStateCodec {
             double[] energy =
                 Arrays.stream(liquid.inventory().energyBits()).mapToDouble(Double::longBitsToDouble).toArray();
             owners.requireClosed(
-                mmm.units.SignedDyadic.sum(energy).add(gas == null ? mmm.units.SignedDyadic.ZERO : mmm.units.SignedDyadic.sum(gas.internalEnergy())), template.sizeX() * template.sizeY() * template.sizeZ());
+                mmm.units.SignedDyadic.sum(energy).add(gas == null ? mmm.units.SignedDyadic.ZERO : mmm.units.SignedDyadic.sum(gas.internalEnergy())), template.grid().cellCount());
         }
         var physicalGranular = granular == null
             ? null
-            : granular.toSnapshot(template.sizeX(), template.sizeY(), template.sizeZ(), template.config().cellSize());
-        return new FluidDomainState(template.sizeX(), template.sizeY(), template.sizeZ(), template.config(),
+            : granular.toSnapshot(template.grid(), template.config().cellSize());
+        return new FluidDomainState(template.grid(), template.config(), template.definitions(),
             template.sealedDomainBoundary(), liquid.inventory().decode(),
             capture.generation() == 0 ? template.phaseOccupancy() : capture.occupancy(), liquid.momentum(),
             template.fixedGeometry(), capture.entityBodies(), template.materialPalette(), template.chemicalRegistry(),
@@ -346,7 +326,7 @@ final class VulkanFluidStateCodec {
             capture.generation() == 0 ? template.chemicalReactionCursor() : progress.cursor(),
             capture.generation() == 0 ? template.chemicalMassTransferPending() : pending, template.granularRegistry(),
             physicalGranular,
-            granular == null ? null : granular.schedulerState(template.sizeX(), template.sizeY(), template.sizeZ()),
+            granular == null ? null : granular.schedulerState(template.grid()),
             template.precipitationEnabled(), template.gasRegistry(),
             gas == null ? null : FluidDomainState.GasContinuation.spatial(gas), template.thermalRegistry(),
             owners, template.maximumThermalTransportSubsteps(),

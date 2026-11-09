@@ -1,5 +1,7 @@
 package mmm.granular;
 
+import mmm.spatial.SpatialGrid;
+
 /**
  * Persistent dirty-column and sleep scheduling state for granular inventories.
  */
@@ -47,6 +49,7 @@ public final class GranularDepositDynamics {
 
 	private final GranularDepositStore deposits;
 	private final int sizeX, sizeY, sizeZ, columnCount;
+	private final SpatialGrid grid;
 	private final int[] dirtyQueue, stableAge;
 	private final boolean[] queued;
 	private int queueHead, queueSize;
@@ -56,16 +59,24 @@ public final class GranularDepositDynamics {
 			GranularRegistry registry, GranularParcelStore parcels, GranularDepositStore deposits,
 			GranularInventory inventory, int sizeX, int sizeY, int sizeZ, float cellSize
 	) {
+		this(registry,parcels,deposits,inventory,SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize);
+	}
+	public GranularDepositDynamics(
+			GranularRegistry registry, GranularParcelStore parcels, GranularDepositStore deposits,
+			GranularInventory inventory, SpatialGrid grid, float cellSize
+	) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (registry == null || parcels == null || deposits == null || inventory == null) {
 			throw new IllegalArgumentException("Granular deposit dynamics dependencies are missing");
 		}
-		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || deposits.cellCount() != sizeX * sizeY * sizeZ
+		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || deposits.cellCount() != grid.cellCount()
 				|| !(Float.isFinite(cellSize) && cellSize > 0.0F)) {
 			throw new IllegalArgumentException("Granular deposit dynamics geometry is invalid");
 		}
 		this.deposits = deposits;
+		this.grid=grid;
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
-		this.columnCount = Math.multiplyExact(sizeX, sizeZ);
+		this.columnCount = grid.columnCount();
 		this.dirtyQueue = new int[columnCount]; this.stableAge = new int[columnCount];
 		this.queued = new boolean[columnCount];
 	}
@@ -73,7 +84,7 @@ public final class GranularDepositDynamics {
 	/** Marks only the affected surface column and its one-cell slope neighborhood. */
 	public void disturbCell(int cell) {
 		requireCell(cell);
-		int x = cell % sizeX, z = cell / (sizeX * sizeY);
+		int x = grid.x(cell), z = grid.z(cell);
 		disturbColumn(x, z);
 		for (int neighbor = 0; neighbor < NEIGHBOR_X.length; neighbor++) {
 			disturbColumn(x + NEIGHBOR_X[neighbor], z + NEIGHBOR_Z[neighbor]);
@@ -125,15 +136,15 @@ public final class GranularDepositDynamics {
 	}
 
 	private long columnBulkSvq(int column) {
-		int x = column % sizeX, z = column / sizeX;
+		int x = grid.columnX(column), z = grid.columnZ(column);
 		long total = 0L;
-		for (int y = 0; y < sizeY; y++) total = Math.addExact(total, deposits.cellBulkVolumeSvq(cell(x, y, z)));
+		for (int y = 0; y < sizeY; y++) {int cell=grid.cell(x,y,z);if(cell>=0)total = Math.addExact(total, deposits.cellBulkVolumeSvq(cell));}
 		return total;
 	}
 
 	private void disturbColumn(int x, int z) {
 		if (!insideColumn(x, z)) return;
-		int column = z * sizeX + x;
+		int column = grid.column(x,z);if(column<0)return;
 		stableAge[column] = 0;
 		enqueue(column);
 	}
@@ -146,7 +157,6 @@ public final class GranularDepositDynamics {
 	}
 
 	private boolean insideColumn(int x, int z) { return x >= 0 && x < sizeX && z >= 0 && z < sizeZ; }
-	private int cell(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	private void requireCell(int cell) {
 		if (cell < 0 || cell >= deposits.cellCount()) throw new IllegalArgumentException("Unknown granular cell " + cell);
 	}

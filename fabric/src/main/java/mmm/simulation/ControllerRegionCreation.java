@@ -15,17 +15,17 @@ final class ControllerRegionCreation {
     record Result(FluidRegion region, String failure, boolean retainShell) { }
 
     static Result create(FluidRegionManager regions, ResourceKey<Level> dimension, FluidRegionFootprint footprint,
-                         boolean entityPhysics, boolean overlays, Supplier<String> availability,
+                         boolean entityPhysics, boolean overlays, CommittedWorldRegistries world, Supplier<String> availability,
                          Consumer<FluidRegion> initialize, Persist persist) {
         long required;
-        try { required = Math.multiplyExact(footprint.denseBlockCapacity(), FluidRegionFactory.CELL_VOLUMES_PER_BLOCK); }
+        try { required = FluidRegionFactory.grid(footprint).cellCount(); }
         catch (ArithmeticException invalid) { return new Result(null, "控制器区域尺寸溢出资源计数", false); }
         var preview = regions.previewAdd(required);
         if (!preview.accepted()) return new Result(null, preview.failure(), false);
         String unavailable = availability.get();
         if (unavailable != null) return new Result(null, unavailable, false);
         FluidRegion candidate;
-        try { candidate = FluidRegionFactory.createControllerRegion(dimension, footprint); }
+        try { candidate = FluidRegionFactory.createControllerRegion(dimension, footprint, world); }
         catch (IllegalArgumentException | ArithmeticException invalid) {
             return new Result(null, "无法分配控制器区域：" + invalid.getMessage(), false);
         }

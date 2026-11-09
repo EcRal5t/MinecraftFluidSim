@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import mmm.spatial.SpatialGrid;
 
 import static mmm.gpu.VulkanRegionStorage.barrier;
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -13,11 +14,12 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Symmetric aggregation V-cycle over the resident liquid seven-point pressure operator. */
 final class VulkanPressureMultigrid implements AutoCloseable {
-    record Level(int sizeX, int sizeY, int sizeZ, int offset) {
-        int cells() { return Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ); }
+    record Level(SpatialGrid grid, int offset, int topologyOffset) {
+        int cells() { return grid.cellCount(); }
     }
 
-    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset, int applyDispatchOffset) {
+    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset, int applyDispatchOffset,
+                  int topologyOffset,int[] topologyData) {
         Layout { levels = List.copyOf(levels); }
         long workspaceBytes() { return Math.multiplyExact(8L, workspaceDoubles); }
     }
@@ -41,23 +43,38 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     }
 
     static Layout layout(int sx, int sy, int sz, int pressureStride) {
-        if (pressureStride < Math.multiplyExact(Math.multiplyExact(sx, sy), sz))
+        return layout(SpatialGrid.rectangular(sx,sy,sz),pressureStride);
+    }
+    static Layout layout(SpatialGrid grid,int pressureStride){
+        if (pressureStride < grid.cellCount())
             throw new IllegalArgumentException("Pressure stride is smaller than the liquid grid");
-        if (sx <= 0 || sy <= 0 || sz <= 0) throw new IllegalArgumentException("Invalid multigrid shape");
         var levels = new ArrayList<Level>();
         int cursor = 0;
         while (true) {
-            var level = new Level(sx, sy, sz, cursor);
+            var level = new Level(grid, cursor,0);
             levels.add(level);
             cursor = Math.addExact(cursor,Math.addExact(Math.multiplyExact(7,level.cells()),Math.addExact(Math.toIntExact((3L*level.cells()+1)/2),Math.toIntExact((level.cells()+2L)/2))));
-            if (Math.max(sx, Math.max(sy, sz)) <= 4) break;
-            sx = (sx + 1) / 2; sy = (sy + 1) / 2; sz = (sz + 1) / 2;
+            if (Math.max(grid.sizeX(), Math.max(grid.sizeY(), grid.sizeZ())) <= 4) break;
+            var members=new java.util.HashSet<SpatialGrid.Block>();
+            for(int slot=0;slot<grid.blockCount();slot++){
+                var block=grid.block(slot);members.add(new SpatialGrid.Block(block.x()/2,block.y()/2,block.z()/2));
+            }
+            grid=new SpatialGrid((grid.sizeX()+1)/2,(grid.sizeY()+1)/2,(grid.sizeZ()+1)/2,members);
         }
         int factor=cursor,coarse=levels.getLast().cells();
         int dense=Math.multiplyExact(coarse,coarse);
         cursor=Math.addExact(cursor,Math.addExact(dense,(dense+1)/2));
         int dispatch=cursor;cursor=Math.addExact(cursor,Math.multiplyExact(2,levels.size()));
-        return new Layout(levels, cursor, pressureStride,factor,dispatch);
+        int topology=2*cursor,words=2*levels.size();
+        for(var level:levels)words=Math.addExact(words,VulkanSpatialGrid.wordCount(level.grid()));
+        int[] data=new int[words];int next=2*levels.size();
+        for(int i=0;i<levels.size();i++){
+            var level=levels.get(i);data[2*i]=level.offset();data[2*i+1]=level.cells();
+            levels.set(i,new Level(level.grid(),level.offset(),topology+next));
+            int[] encoded=VulkanSpatialGrid.encode(level.grid());System.arraycopy(encoded,0,data,next,encoded.length);next+=encoded.length;
+        }
+        cursor=Math.addExact(cursor,(words+1)/2);
+        return new Layout(levels, cursor, pressureStride,factor,dispatch,topology,data);
     }
 
     /** Bind starts, columns, values, rows, pressure work, control and this workspace. */
@@ -107,8 +124,8 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     private void stage(VkCommandBuffer command, Layout layout, Level level, Level peer, int stage,int dispatchIndex) {
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(level.sizeX(), level.sizeY(), level.sizeZ(), stage,
-                            level.offset(), peer.offset(), peer.sizeX(), peer.sizeY(), peer.sizeZ(),
+                    stack.ints(level.topologyOffset(),layout.topologyOffset(),layout.levels().size(), stage,
+                            level.offset(), peer.offset(),peer.topologyOffset(),0,0,
                             layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset(),2*layout.applyDispatchOffset()));
             if(dispatchIndex>=0)vkCmdDispatchIndirect(command,workspace.buffer().handle(),workspace.offset()+8L*layout.applyDispatchOffset()+16L*dispatchIndex);
             else vkCmdDispatch(command, stage==9?level.cells():stage==4||stage==8||stage==10||stage==11?1:(level.cells()+127)/128,1,1);
@@ -121,7 +138,8 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     private static String shader() {
         try (var stream = VulkanPressureMultigrid.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/pressure-multigrid.comp")) {
             if (stream == null) throw new IllegalStateException("Pressure multigrid shader missing");
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8)
+                    .replace("// SPATIAL_ADDRESS",VulkanLiquidPhaseRows.resource("spatial-address.glsl"));
         } catch (IOException failure) { throw new IllegalStateException("Pressure multigrid shader unavailable", failure); }
     }
 

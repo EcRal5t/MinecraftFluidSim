@@ -23,6 +23,7 @@ public final class RegionCheckpointAssembler {
 
 	private static RegionCheckpoint captureCells(RegionCheckpointSource source,long generation) throws IOException {
 		var identity = source.identity(generation); var geometry = source.geometry(); var state = source.authoritativeState();
+		var grid=state.grid();
 		int nx=geometry.sizeX(),ny=geometry.sizeY(),nz=geometry.sizeZ(); float h=geometry.solverConfig().cellSize();
 		int cellsPerBlock = Math.round(1/h);
 		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock*h-1)>1e-6 || nx%cellsPerBlock!=0 || ny%cellsPerBlock!=0 || nz%cellsPerBlock!=0)
@@ -36,26 +37,33 @@ public final class RegionCheckpointAssembler {
 		var facesBySection = new HashMap<RegionSectionState.SectionKey,List<RegionSectionState.FaceMomentum>>();
 		double[][] momenta={state.momentum().copyX(),state.momentum().copyY(),state.momentum().copyZ()};
 		for(int axis=0;axis<3;axis++) {
-			int sx=nx+(axis==0?1:0),sy=ny+(axis==1?1:0),sz=nz+(axis==2?1:0);
-			for(int z=0;z<sz;z++)for(int y=0;y<sy;y++)for(int x=0;x<sx;x++) {
-				var key=sectionKey(geometry,(Math.min(x,nx-1)+.5F)*h,(Math.min(y,ny-1)+.5F)*h,(Math.min(z,nz-1)+.5F)*h);
-				int face=x+sx*(y+sy*z); facesBySection.computeIfAbsent(key,k->new ArrayList<>()).add(new RegionSectionState.FaceMomentum(axis,face,momenta[axis][face]));
+			for(int face=0;face<grid.faceCount(axis);face++) {
+				int global=grid.faceOffset(axis)+face;
+				int owner=grid.faceRight(global)>=0?grid.faceRight(global):grid.faceLeft(global);
+				var key=sectionOfCell(geometry,grid,owner);
+				facesBySection.computeIfAbsent(key,k->new ArrayList<>()).add(new RegionSectionState.FaceMomentum(axis,
+						grid.faceCoordinate(global,0),grid.faceCoordinate(global,1),grid.faceCoordinate(global,2),momenta[axis][face]));
 			}
 		}
+		for(var faces:facesBySection.values())faces.sort(Comparator.naturalOrder());
 		var sections = new ArrayList<RegionSectionState>();
-		int minX=Math.floorDiv(geometry.origin().x(),16),minY=Math.floorDiv(geometry.origin().y(),16),minZ=Math.floorDiv(geometry.origin().z(),16);
-		int maxX=Math.floorDiv(geometry.origin().x()+nx/cellsPerBlock-1,16),maxY=Math.floorDiv(geometry.origin().y()+ny/cellsPerBlock-1,16),maxZ=Math.floorDiv(geometry.origin().z()+nz/cellsPerBlock-1,16);
+		var sectionKeys=new java.util.TreeSet<RegionSectionState.SectionKey>();
+		for(int cell=0;cell<grid.cellCount();cell++)sectionKeys.add(sectionOfCell(geometry,grid,cell));
 		double[] activeU=thermal==null?new double[0]:thermal.copyActiveParcelEnergy(),depositU=thermal==null?new double[0]:thermal.copyDepositEnergy();
 		var thermalLedgers=new ArrayList<ThermalRegionStateCodec.SectionLedger>();
-		for(int secX=minX;secX<=maxX;secX++)for(int secY=minY;secY<=maxY;secY++)for(int secZ=minZ;secZ<=maxZ;secZ++) {
-			var key=new RegionSectionState.SectionKey(secX,secY,secZ);
+		for(var key:sectionKeys) {
+			int secX=key.x(),secY=key.y(),secZ=key.z();
 			int x0=Math.max(0,(16*secX-geometry.origin().x())*cellsPerBlock),y0=Math.max(0,(16*secY-geometry.origin().y())*cellsPerBlock),z0=Math.max(0,(16*secZ-geometry.origin().z())*cellsPerBlock);
 			int sx=Math.min(nx,((secX+1)*16-geometry.origin().x())*cellsPerBlock)-x0,sy=Math.min(ny,((secY+1)*16-geometry.origin().y())*cellsPerBlock)-y0,sz=Math.min(nz,((secZ+1)*16-geometry.origin().z())*cellsPerBlock)-z0;
 			var stocks=new ArrayList<LiquidCellInventory.Stock>(); byte[] mask=new byte[sx*sy*sz];
 			var localGas=new ArrayList<GasRegionStateCodec.SpatialEntry>();
 			double[] phaseSlice=new double[8*mask.length];
 			int local=0; for(int z=z0;z<z0+sz;z++)for(int y=y0;y<y0+sy;y++)for(int x=x0;x<x0+sx;x++) {
-				int cell=x+nx*(y+ny*z); stocks.addAll(state.liquid().rows().get(cell)); mask[local]=collision[cell];
+				int cell=grid.cell(x,y,z);if(cell<0){mask[local++]=(byte)255;continue;}
+				for(var stock:state.liquid().rows().get(cell))
+					stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(local,stock.key().material(),stock.key().supportMask()),
+							stock.volume(),stock.massUnits(),stock.mixture(),stock.internalEnergy()));
+				mask[local]=collision[cell];
 				System.arraycopy(phaseVolumes,8*cell,phaseSlice,8*local,8);
 				if(spatialGas!=null&&!spatialGas.cells().get(cell).isEmpty())localGas.add(new GasRegionStateCodec.SpatialEntry(local,spatialGas.cells().get(cell),spatialGas.energyAt(cell)));
 				local++;
@@ -70,15 +78,15 @@ public final class RegionCheckpointAssembler {
 				for(int i=0;i<granular.activeParcels().size();i++) { var parcel=granular.activeParcels().get(i);
 					if(sectionKey(geometry,parcel.x(),parcel.y(),parcel.z()).equals(key)) { active.add(new GranularRegionStateCodec.ActiveEntry(i,parcel)); if(thermal!=null)activeBits.add(Double.doubleToRawLongBits(activeU[i])); } }
 				for(int i=0;i<granular.depositGroups().size();i++) { var group=granular.depositGroups().get(i);
-					if(sectionOfCell(geometry,group.cell()).equals(key)) { deposits.add(group); if(thermal!=null)depositBits.add(Double.doubleToRawLongBits(depositU[i])); } }
-				extensions.add(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,new GranularRegionStateCodec().encodeSection(new GranularRegionStateCodec.SectionData(active,deposits))));
+					if(sectionOfCell(geometry,grid,group.cell()).equals(key)) { deposits.add(group); if(thermal!=null)depositBits.add(Double.doubleToRawLongBits(depositU[i])); } }
+				extensions.add(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,new GranularRegionStateCodec().encodeSection(new GranularRegionStateCodec.SectionData(active,deposits),grid)));
 			}
 			if(thermal!=null) {
-				for(var group:thermal.coherentGroups()) if(sectionOfCell(geometry,group.cell()).equals(key)) coherent.add(new ThermalRegionStateCodec.CoherentEntry(group.cell(),group.phaseId(),group.occupiedVolumeSvq(),group.massUnits(),group.composition(),Double.doubleToRawLongBits(group.internalEnergy())));
+				for(var group:thermal.coherentGroups()) if(sectionOfCell(geometry,grid,group.cell()).equals(key)) coherent.add(new ThermalRegionStateCodec.CoherentEntry(group.cell(),group.phaseId(),group.occupiedVolumeSvq(),group.massUnits(),group.composition(),Double.doubleToRawLongBits(group.internalEnergy())));
 				long[] au=activeBits.stream().mapToLong(Long::longValue).toArray(),du=depositBits.stream().mapToLong(Long::longValue).toArray();
 				SignedDyadic nonLiquid=energyBits(au).add(energyBits(du)); for(var group:coherent)nonLiquid=nonLiquid.add(SignedDyadic.of(group.internalEnergy()));
 				var data=new ThermalRegionStateCodec.SectionData(au,du,coherent,nonLiquid);
-				extensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,new ThermalRegionStateCodec().encodeSection(data)));
+				extensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,new ThermalRegionStateCodec().encodeSection(data,grid)));
 				SignedDyadic total=nonLiquid; for(var stock:stocks)total=total.add(SignedDyadic.of(stock.internalEnergy()));
 				thermalLedgers.add(new ThermalRegionStateCodec.SectionLedger(key,stocks.size(),active.size(),deposits.size(),coherent.size(),total));
 			}
@@ -98,7 +106,7 @@ public final class RegionCheckpointAssembler {
 					spatialGas.externalSource(),spatialGas.escapedSink(),spatialGas.phaseSource(),spatialGas.phaseSink(),SignedDyadic.sum(spatialGas.internalEnergy()));
 			extensions.add(new RegionExtension(GasRegionStateCodec.MANIFEST_EXTENSION,new GasRegionStateCodec().encodeSpatialManifest(data)));
 		}
-		if(granular!=null)extensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,new GranularRegionStateCodec().encodeManifest(granularManifest(granular,sections,state.chemicalRegistry()!=null))));
+		if(granular!=null)extensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,new GranularRegionStateCodec().encodeManifest(granularManifest(granular,sections,state.chemicalRegistry()!=null,grid))));
 		if(thermal!=null) {
 			if(spatialGas==null)throw new IOException("Thermal checkpoint requires local gas inventory");
 			SignedDyadic liquidU=SignedDyadic.ZERO;for(var stock:state.liquid().stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));
@@ -111,7 +119,7 @@ public final class RegionCheckpointAssembler {
 					thermal.coherentGroups().size(),0,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),actualU,thermal.audit(),thermalLedgers,new long[0]);
 			extensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,new ThermalRegionStateCodec().encodeManifest(data)));
 			extensions.add(new RegionExtension(ThermalBuoyancyCodec.MANIFEST_EXTENSION,new ThermalBuoyancyCodec().encodeCurrent()));
-			if(!state.pendingPhaseMotion().isEmpty())extensions.add(new RegionExtension(PendingPhaseMotionCodec.MANIFEST_EXTENSION,new PendingPhaseMotionCodec().encode(state.pendingPhaseMotion())));
+			if(!state.pendingPhaseMotion().isEmpty())extensions.add(new RegionExtension(PendingPhaseMotionCodec.MANIFEST_EXTENSION,new PendingPhaseMotionCodec().encode(state.pendingPhaseMotion(),grid)));
 			var devices=source.finiteThermalDevices(thermal.registryFingerprint());
 			extensions.add(new RegionExtension(FiniteThermalDeviceCodec.MANIFEST_EXTENSION,new FiniteThermalDeviceCodec().encode(devices)));
 		}
@@ -128,7 +136,9 @@ public final class RegionCheckpointAssembler {
 	}
 	static RegionSectionState withChecksum(RegionSectionState s) { return new RegionSectionState(s.layout(),s.regionId(),s.dimensionId(),s.checkpointGeneration(),s.sectionX(),s.sectionY(),s.sectionZ(),s.localStartX(),s.localStartY(),s.localStartZ(),s.sizeX(),s.sizeY(),s.sizeZ(),s.liquidStocks(),s.faceMomentum(),s.solidMask(),s.extensions(),RegionStateIntegrity.sectionChecksum(s)); }
 	private static SignedDyadic energyBits(long[] bits) {var sum=SignedDyadic.ZERO;for(long value:bits)sum=sum.add(SignedDyadic.of(Double.longBitsToDouble(value)));return sum;}
-	static RegionSectionState.SectionKey sectionOfCell(RegionGeometry geometry,int cell) {return sectionKey(geometry,(cell%geometry.sizeX()+.5F)*geometry.solverConfig().cellSize(),(cell/geometry.sizeX()%geometry.sizeY()+.5F)*geometry.solverConfig().cellSize(),(cell/(geometry.sizeX()*geometry.sizeY())+.5F)*geometry.solverConfig().cellSize());}
+	static RegionSectionState.SectionKey sectionOfCell(RegionGeometry geometry,mmm.spatial.SpatialGrid grid,int cell) {
+		float h=geometry.solverConfig().cellSize();return sectionKey(geometry,(grid.x(cell)+.5F)*h,(grid.y(cell)+.5F)*h,(grid.z(cell)+.5F)*h);
+	}
 	static RegionSectionState.SectionKey sectionKey(RegionGeometry g,float x,float y,float z) {
 		var block=g.worldBlockPosition(x,y,z);
 		return new RegionSectionState.SectionKey(Math.floorDiv(block.x(),16),Math.floorDiv(block.y(),16),Math.floorDiv(block.z(),16));
@@ -146,7 +156,7 @@ public final class RegionCheckpointAssembler {
 	}
 
 	private static GranularRegionStateCodec.ManifestData granularManifest(
-			GranularStateSnapshot snapshot, List<RegionSectionState> sections, boolean chemicalState
+			GranularStateSnapshot snapshot, List<RegionSectionState> sections, boolean chemicalState,mmm.spatial.SpatialGrid grid
 	) throws IOException {
 		int materials = snapshot.materialPalette().size();
 		int[] activeCounts = new int[materials], depositCounts = new int[materials];
@@ -178,7 +188,7 @@ public final class RegionCheckpointAssembler {
 		for (RegionSectionState section : sections) {
 			GranularRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
-					GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+					GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,grid);
 			long sectionActiveSvq = 0L, sectionDepositSvq = 0L;
 			long sectionActiveMass = 0, sectionDepositMass = 0;
 			int sectionDepositCells = 0, previousCell = -1;

@@ -12,7 +12,7 @@ public final class LiquidVolumeTransportValidation {
         System.out.println("Static liquid inventory edits and displacement passed");
     }
     private static HostFluidState domain(int x, int y, int z) {
-        return new HostFluidState(x, y, z, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F));
+        return new HostFluidState(x, y, z, new FluidSolverConfig(.5F, 0, .05F, 100, 1e-5F, .002F), mmm.fluid.TestFluidDefinitions.load());
     }
 	private static void externalQuantityTransactions() {
 		var d = domain(4,3,2); d.setVolume(1,1,1,.5F);

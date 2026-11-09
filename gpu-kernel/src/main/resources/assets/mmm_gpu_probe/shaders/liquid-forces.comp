@@ -4,6 +4,7 @@
 
 const int STAGE_PREPARE_BUOYANCY = 0;
 const uint ERROR_LIQUID_FORCES = 131072u;
+// SPATIAL_GRID
 // HOST_LAYOUT
 
 layout(local_size_x = 128) in;
@@ -60,18 +61,15 @@ void prepareCell(int cell) {
 
 // Add the thermal correction to the prepared vertical MAC velocity (m/s).
 void buoyancyFace(int localFace) {
-    int sizeX = header(H_SIZE_X), sizeY = header(H_SIZE_Y), sizeZ = header(H_SIZE_Z);
-    int x = localFace % sizeX;
-    int y = localFace / sizeX % (sizeY + 1);
-    int z = localFace / (sizeX * (sizeY + 1));
-    if (y == 0 || y == sizeY) return;
-    int face = (sizeX + 1) * sizeY * sizeZ + localFace;
+    int face=gridFaceOffset(1)+localFace;
+    ivec3 endpoints=gridFaceEndpoints(face);
+    if(endpoints.x<0||endpoints.y<0)return;
     int faceOffset = header(H_FACES) + 8 * face;
     if (header(H_ACTIVITY_FACES) >= 0 && words[header(H_ACTIVITY_FACES) + face] == 0u) return;
     if (header(H_FACE_FLAGS) >= 0 && (int(words[header(H_FACE_FLAGS) + face]) & 3) != 1) return;
     if (readDouble(faceOffset) <= 0.0 || readDouble(faceOffset + 4) <= 0.0 || readDouble(faceOffset + 6) <= 0.0) return;
-    int above = (z * sizeY + y) * sizeX + x;
-    int below = above - sizeX;
+    int above=endpoints.y;
+    int below=endpoints.x;
     double belowMass = readDouble(header(H_CELL_MASS) + 2 * below);
     double aboveMass = readDouble(header(H_CELL_MASS) + 2 * above);
     double totalMass = belowMass + aboveMass;
@@ -88,7 +86,7 @@ void main() {
     if (errors != 0u) return;
     if (p.stage == STAGE_PREPARE_BUOYANCY) {
         if (item < header(H_CELL_COUNT)) prepareCell(item);
-    } else if (item < header(H_SIZE_X) * (header(H_SIZE_Y) + 1) * header(H_SIZE_Z)) {
+    } else if (item < gridFaceCount(1)) {
         buoyancyFace(item);
     }
 }

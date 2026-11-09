@@ -31,6 +31,7 @@ layout(push_constant) uniform Params {
     double gravity;
 }
 p;
+// SPATIAL_GRID
 // HOST_LAYOUT
 int headerValue(int i) {
     return int(words[p.header + i]);
@@ -92,10 +93,10 @@ int actual() {
     return int(words[sh(GRANULAR_COUNTS)]);
 }
 int nx() {
-    return (headerValue(H_SIZE_X) + 1) * headerValue(H_SIZE_Y) * headerValue(H_SIZE_Z);
+    return gridFaceCount(0);
 }
 int ny() {
-    return headerValue(H_SIZE_X) * (headerValue(H_SIZE_Y) + 1) * headerValue(H_SIZE_Z);
+    return gridFaceCount(1);
 }
 bool activeCell(int c) {
     return headerValue(H_ACTIVITY_CELLS) < 0 || words[headerValue(H_ACTIVITY_CELLS) + c] != 0u;
@@ -107,21 +108,13 @@ bool activeParticle(int parcel) {
     dvec3 x = dvec3(readDouble(sh(GRANULAR_POSITION) + 6 * parcel), readDouble(sh(GRANULAR_POSITION) + 6 * parcel + 2),
                     readDouble(sh(GRANULAR_POSITION) + 6 * parcel + 4));
     ivec3 q = clamp(ivec3(floor(x / p.cellSize)), ivec3(0), ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z)) - 1);
-    return activeCell((q.z * headerValue(H_SIZE_Y) + q.y) * headerValue(H_SIZE_X) + q.x);
+    int c=gridCell(q);return c>=0&&activeCell(c);
 }
 ivec2 cellsOf(int f) {
-    int axis = f < nx() ? 0 : f < nx() + ny() ? 1 : 2, local = f - (axis == 0 ? 0 : axis == 1 ? nx() : nx() + ny());
-    ivec3 dims = ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z)), shape = dims;
-    shape[axis]++;
-    ivec3 c = ivec3(local % shape.x, local / shape.x % shape.y, local / (shape.x * shape.y));
-    int stride = axis == 0 ? 1 : axis == 1 ? dims.x : dims.x * dims.y;
-    int right = (c.z * dims.y + c.y) * dims.x + c.x;
-    return ivec2(c[axis] > 0 ? right - stride : -1, c[axis] < dims[axis] ? right : -1);
+    return gridFaceEndpoints(f).xy;
 }
 int faceAt(int axis, ivec3 c) {
-    ivec3 dims = ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z));
-    dims[axis]++;
-    return (axis == 0 ? 0 : axis == 1 ? nx() : nx() + ny()) + (c.z * dims.y + c.y) * dims.x + c.x;
+    return gridFaceAt(c,axis);
 }
 double mixture(int cell, int quantity) {
     return readDouble(headerValue(H_MIXTURE_STATES) + 2 * (7 * cell + quantity));
@@ -191,7 +184,7 @@ void particleFaces(int parcel) {
             ivec3 delta = ivec3(slot & 1, (slot >> 1) & 1, (slot >> 2) & 1), c = base + delta;
             if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, dims)))
                 continue;
-            int faceId = faceAt(axis, c);
+            int faceId = faceAt(axis, c);if(faceId<0)continue;
             dvec3 a = mix(1.0 - f, f, bvec3(delta));
             double weight = a.x * a.y * a.z * face(faceId, 2);
             if (weight <= 0.0)

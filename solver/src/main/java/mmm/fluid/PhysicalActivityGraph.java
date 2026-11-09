@@ -3,27 +3,30 @@ package mmm.fluid;
 import java.util.HashMap;
 import java.util.List;
 import mmm.world.MovingBodyFluidCoupling;
+import mmm.spatial.SpatialGrid;
 
 /** Connected physical activity in one immutable device generation. */
 public final class PhysicalActivityGraph {
     private final int sizeX, sizeY, sizeZ;
+    private final SpatialGrid grid;
     private final int[] parent;
 
     public PhysicalActivityGraph(int sizeX, int sizeY, int sizeZ, FixedGeometrySnapshot geometry,
             int[] gasNodes, int[] particleSupports, List<FluidStateAccess.DevicePort> ports,
             EntityBodyState bodies, double cellSize) {
         if (!geometry.matchesShape(sizeX, sizeY, sizeZ)) throw new IllegalArgumentException("Activity geometry differs");
+        this.grid=geometry.grid();
         this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
         int cells = geometry.cellCount();
         if (gasNodes != null && gasNodes.length != cells || particleSupports.length % 8 != 0)
             throw new IllegalArgumentException("Activity topology differs");
         parent = new int[cells];
         for (int cell = 0; cell < cells; cell++) parent[cell] = geometry.mask(cell) == 255 ? -1 : cell;
-        for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-            int cell = index(x, y, z);
-            if (x + 1 < sizeX && faceOpen(geometry.mask(cell), geometry.mask(cell + 1), 0)) join(cell, cell + 1);
-            if (y + 1 < sizeY && faceOpen(geometry.mask(cell), geometry.mask(cell + sizeX), 1)) join(cell, cell + sizeX);
-            if (z + 1 < sizeZ && faceOpen(geometry.mask(cell), geometry.mask(cell + sizeX * sizeY), 2)) join(cell, cell + sizeX * sizeY);
+        for (int cell=0;cell<cells;cell++) {
+            for(int axis=0;axis<3;axis++){
+                int next=grid.neighbor(cell,2*axis+1);
+                if(next>=0&&faceOpen(geometry.mask(cell),geometry.mask(next),axis))join(cell,next);
+            }
         }
         if (gasNodes != null) {
             var first = new HashMap<Integer, Integer>();
@@ -44,7 +47,7 @@ public final class PhysicalActivityGraph {
             if (anchor >= 0) for (int j = 0; j < 8; j++) {
                 int cell = particleSupports[i + j];
                 if (cell < 0 || cell >= cells) continue;
-                int cx = cell % sizeX, cy = cell / sizeX % sizeY, cz = cell / (sizeX * sizeY);
+                int cx = grid.x(cell), cy = grid.y(cell), cz = grid.z(cell);
                 for (int z = Math.max(0, cz - 1); z <= Math.min(sizeZ - 1, cz + 1); z++)
                     for (int y = Math.max(0, cy - 1); y <= Math.min(sizeY - 1, cy + 1); y++)
                         for (int x = Math.max(0, cx - 1); x <= Math.min(sizeX - 1, cx + 1); x++)
@@ -55,6 +58,7 @@ public final class PhysicalActivityGraph {
         for (var port : ports) {
             var contact = port.contact();
             int cell = index(contact.cellX(), contact.cellY(), contact.cellZ());
+            if(cell<0)continue;
             var id = List.of(port.providerId(), port.objectId());
             Integer anchor = devices.putIfAbsent(id, cell);
             if (anchor != null) join(anchor, cell);
@@ -73,7 +77,7 @@ public final class PhysicalActivityGraph {
         int anchor = -1;
         for (int z = minZ; z <= maxZ; z++) for (int y = minY; y <= maxY; y++) for (int x = minX; x <= maxX; x++) {
             int cell = index(x, y, z);
-            if (parent[cell] < 0) continue;
+            if (cell<0||parent[cell] < 0) continue;
             if (anchor < 0) anchor = cell; else join(anchor, cell);
         }
     }
@@ -107,7 +111,7 @@ public final class PhysicalActivityGraph {
         return available;
     }
 
-    private int index(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
+    private int index(int x, int y, int z) { return grid.cell(x,y,z); }
     private int root(int cell) {
         if (cell < 0 || cell >= parent.length || parent[cell] < 0) return -1;
         int root = cell;

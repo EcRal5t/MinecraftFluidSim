@@ -20,7 +20,7 @@ final class PhaseOccupancyTransport {
 			publish(domain,frame.occupancy());return;
 		}
 		double[] pore = poreVolumes(domain, occupied, null);
-		var phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
+		var phase=new FlipPressurePhaseGeometry(domain.grid);
 		reconstruct(domain,domain.liquidCells,pore,null,phase);
 		publish(domain,phase.occupancyState());
 	}
@@ -104,7 +104,7 @@ final class PhaseOccupancyTransport {
 		}
 		var cut = domain.geometry.cutCells;
 		if (masks != null) {
-			cut = new FlipCutCellGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
+			cut = new FlipCutCellGeometry(domain.grid);
 			cut.restoreMicroMasks(masks);
 		}
 		workspace.rebuildOccupancy(new PhaseOccupancyState(liquid), cut, pore,

@@ -14,7 +14,7 @@ final class FluidColorMapping {
 		return switch (view.mode()) {
 			case COMPOSITION -> composition(chemical, cell, materialArgb);
 			case PH -> {
-				int cells = state.sizeX() * state.sizeY() * state.sizeZ();
+				int cells = state.geometry().grid().cellCount();
 				int encoded = chemical == null ? ChemicalDisplaySnapshot.PH_NO_DATA
 						: Byte.toUnsignedInt(chemical.ph()[phase * cells + cell]);
 				yield encoded == ChemicalDisplaySnapshot.PH_NO_DATA ? NO_DATA

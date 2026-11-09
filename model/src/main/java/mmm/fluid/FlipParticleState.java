@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import java.util.List;
+import mmm.spatial.SpatialGrid;
 
 /**
  * Immutable in-memory marker state for CPU handoff. It is neither a save format nor a rendering payload.
@@ -12,6 +13,7 @@ public final class FlipParticleState {
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
+	private final SpatialGrid grid;
 	private final float cellSize;
 	private final int particleCount;
 	private final float totalVolume;
@@ -27,6 +29,12 @@ public final class FlipParticleState {
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
 	                         long[] massUnits, byte[] collisionMicroMasks) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize,particleCount,volumeLedger,positionVolume,particleVelocities,massUnits,collisionMicroMasks);
+	}
+	public FlipParticleState(SpatialGrid grid,float cellSize,int particleCount,
+	                         float volumeLedger,float[] positionVolume,float[] particleVelocities,
+	                         long[] massUnits,byte[] collisionMicroMasks) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F) || !Float.isFinite(cellSize)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
 		}
@@ -40,7 +48,7 @@ public final class FlipParticleState {
 		if (particleVelocities.length != Math.multiplyExact(particleCount, 3)) {
 			throw new IllegalArgumentException("Velocity size does not match particle count");
 		}
-		if (collisionMicroMasks.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
+		if (collisionMicroMasks.length != grid.cellCount()) {
 			throw new IllegalArgumentException("Collision mask size does not match particle-state grid");
 		}
 		if (!Float.isFinite(volumeLedger) || volumeLedger < 0.0F) {
@@ -66,7 +74,8 @@ public final class FlipParticleState {
 			}
 			int cellX = (int) Math.floor(x / cellSize), cellY = (int) Math.floor(y / cellSize);
 			int cellZ = (int) Math.floor(z / cellSize);
-			int cell = cellX + sizeX * (cellY + sizeY * cellZ);
+			int cell = grid.cell(cellX,cellY,cellZ);
+			if(cell<0)throw new IllegalArgumentException("Particle state contains a marker outside its spatial blocks");
 			int localX = Math.min(1, (int) Math.floor((x / cellSize - cellX) * 2.0F));
 			int localY = Math.min(1, (int) Math.floor((y / cellSize - cellY) * 2.0F));
 			int localZ = Math.min(1, (int) Math.floor((z / cellSize - cellZ) * 2.0F));
@@ -86,7 +95,7 @@ public final class FlipParticleState {
 			throw new IllegalArgumentException("Marker volume does not match the supplied particle ledger");
 		}
 
-		this.sizeX = sizeX;
+		this.grid=grid;this.sizeX = sizeX;
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
 		this.cellSize = cellSize;
@@ -104,6 +113,7 @@ public final class FlipParticleState {
 	}
 
 	public int sizeX() { return sizeX; }
+	public SpatialGrid grid() { return grid; }
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public float cellSize() { return cellSize; }

@@ -77,32 +77,19 @@ final class DomainCollision {
 		return setSolidMicroMask(x, y, z, value ? FlipCutCellGeometry.FULL_MASK : 0);
 	}
 	public float setSolidMicroMask(int x, int y, int z, int mask) {
-		ChemicalTransferLedger.Builder displaced = domain.chemistry == null ? null
-				: ChemicalTransferLedger.builder(domain.chemistry.registry());
-		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced, null, null);
-		if (displaced != null) domain.chemistry.recordEscapedSink(displaced.build());
+		return setSolidMicroMaskInternal(x, y, z, mask);
+	}
+	public float applyCollisionEdits(List<CollisionEdit> edits) {
+		var plan = planCollisionEdits(edits);
+		beginCollisionEdits(plan);
+		float volume = 0;
+		for (var edit : edits) volume += setSolidMicroMaskInternal(edit.x(), edit.y(), edit.z(), edit.mask());
 		return volume;
 	}
 	public FlipChemicalParticleState exportChemicalParticleState() { return domain.carriers.exportChemicalParticleState(); }
-	public ChemicalDisplacement setSolidMicroMaskChemical(int x, int y, int z, int mask) {
-		if (domain.chemistry == null) throw new IllegalStateException("Chemical collision transfer requires chemistry");
-		ChemicalTransferLedger.Builder displaced = ChemicalTransferLedger.builder(domain.chemistry.registry());
-		RemovedThermalEnergy energy = new RemovedThermalEnergy();
-		float volume = setSolidMicroMaskInternal(x, y, z, mask, displaced, null, energy);
-		return new ChemicalDisplacement(volume, displaced.build(), energy.value().toDouble());
-	}
-	public MaterialDisplacement setSolidMicroMaskMaterial(int x, int y, int z, int mask) {
-		if (domain.materialRegistry == null || domain.chemistry != null) {
-			throw new IllegalStateException("Material collision transfer requires non-chemical material state");
-		}
-		RemovedMaterialLedger material = new RemovedMaterialLedger(domain.materialRegistry.size());
-		RemovedThermalEnergy energy = new RemovedThermalEnergy();
-		float volume = setSolidMicroMaskInternal(x, y, z, mask, null, material, energy);
-		return new MaterialDisplacement(volume, material.build(), energy.value().toDouble());
-	}
 	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) {
 		if (edits == null || edits.isEmpty()) throw new IllegalArgumentException("Collision edit batch is missing or empty");
-		domain.domainFlowFields.ensureVelocityGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		ArrayList<CollisionEdit> canonical = new ArrayList<>(edits.size());
 		int[] previousMasks = new int[edits.size()];
 		boolean[] granularCells = domain.granularState == null ? null : new boolean[domain.cellCount];
@@ -163,7 +150,7 @@ final class DomainCollision {
 			var audit = domain.thermalState.auditLedger().withExternalSinkEnergy(
 					plan.granular == null ? SignedDyadic.ZERO : plan.granular.removedEnergy());
 			if(plan.liquid.localGas!=null)audit=plan.liquid.localGas.applyAudit(audit);
-			audit.withExternalSinkEnergy(plan.liquid.removedEnergy).withMechanicalWork(plan.liquid.inventory.mechanicalHeat())
+			audit.withMechanicalWork(plan.liquid.inventory.mechanicalHeat())
 					.withRoundoff(plan.liquid.energyRoundoff).expectedInventory();
 		}
 		domain.cellMacStage.publishMaterialChange(plan.liquid.inventory,
@@ -183,7 +170,6 @@ final class DomainCollision {
 		}
 		});
 		if (domain.thermalState != null) {
-			domain.thermalState.recordExternalSink(plan.liquid.removedEnergy);
 			domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger().withMechanicalWork(plan.liquid.inventory.mechanicalHeat()));
 			if(plan.liquid.localGas!=null)domain.thermalState.restoreAuditLedger(plan.liquid.localGas.applyAudit(domain.thermalState.auditLedger()));
 			domain.thermalState.recordRoundoff(plan.liquid.energyRoundoff);
@@ -192,10 +178,7 @@ final class DomainCollision {
 		domain.activeCollisionPlan = plan;
 		domain.activeCollisionEditIndex = 0;
 	}
-	float setSolidMicroMaskInternal(
-			int x, int y, int z, int mask, ChemicalTransferLedger.Builder chemicalDisplacement,
-			RemovedMaterialLedger materialDisplacement, RemovedThermalEnergy thermalDisplacement
-	) {
+	float setSolidMicroMaskInternal(int x, int y, int z, int mask) {
 		domain.domainFlowFields.cellIndexChecked(x, y, z);
 		if (domain.activeCollisionPlan == null) {
 			if (domain.geometry.cutCells.mask(domain.domainFlowFields.cellIndex(x, y, z)) == mask) return 0;
@@ -204,7 +187,7 @@ final class DomainCollision {
 		var expected = domain.activeCollisionPlan.edits.get(domain.activeCollisionEditIndex);
 		if (expected.x() != x || expected.y() != y || expected.z() != z || expected.mask() != mask)
 			throw new IllegalStateException("Collision edits differ from prepared batch order");
-		float displaced = domain.activeCollisionPlan.liquid.report(domain.activeCollisionEditIndex, domain, chemicalDisplacement, materialDisplacement, thermalDisplacement);
+		float displaced = domain.activeCollisionPlan.liquid.report(domain.activeCollisionEditIndex);
 		if (++domain.activeCollisionEditIndex == domain.activeCollisionPlan.edits.size()) { domain.activeCollisionPlan = null; domain.activeCollisionEditIndex = 0; }
 		return displaced;
 	}
@@ -384,7 +367,7 @@ final class DomainCollision {
 		double volume = 0, mass = 0, weightedY = 0;
 		for (var stock : domain.liquidCells.stocks()) if (stock.key().material() == materialHandle) {
 			volume += stock.volumeFraction(); mass += domain.unitScale.normalizedMass(stock.massUnits());
-			weightedY += (stock.key().cell() / domain.sizeX % domain.sizeY + .5) * stock.volumeFraction();
+			weightedY += (domain.grid.y(stock.key().cell()) + .5) * stock.volumeFraction();
 		}
 		return new MaterialInventory(volume, mass, volume == 0 ? Double.NaN : weightedY / volume);
 	}
@@ -435,11 +418,8 @@ final class DomainCollision {
 		// Equal ordered definitions give the same material and phase handles. Retain
 		// the bound registry and its runtime pair tensions across restored inputs.
 		if (domain.materialRegistry != null) return;
-		double defaultDensity = registry.material(0).referenceDensity();
-		double tolerance = Math.max(1.0E-9, Math.abs(domain.config.density()) * 1.0E-12);
-		if (Math.abs(defaultDensity - domain.config.density()) > tolerance) {
-			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
-		}
+		if (!registry.material(0).id().equals(BuiltinFluidMaterials.WATER))
+			throw new IllegalArgumentException("Material handle 0 must be water");
 		domain.materialRegistry = registry;
 	}
 	void assignMarkerMaterial(int ordinal, FluidMaterialRegistry registry, int materialHandle) { setMarkerMaterial(ordinal, registry, materialHandle); }

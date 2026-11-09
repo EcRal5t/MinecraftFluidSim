@@ -2,22 +2,16 @@ package mmm.simulation;
 
 import mmm.simulation.persistence.WorldCapabilityBundleStore;
 import mmm.simulation.persistence.WorldCapabilityStartup;
-import mmm.worldprofile.RegistryFingerprintSet;
-import mmm.worldprofile.WorldCapability;
 import mmm.worldprofile.WorldCapabilityProfile;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 
 /** Coordinates staged world startup without logging; typed decisions are consumed by the composition adapter. */
 public final class WorldStartupCoordinator {
-	private static final WorldCapabilityProfile UNPROVEN_PROFILE = WorldCapabilityProfile.of(
-			EnumSet.noneOf(WorldCapability.class), new RegistryFingerprintSet("", "", "", "", ""));
-
 	private WorldStartupCoordinator() { }
 
 	public static Result start(Path worldRoot, WorldCapabilityStartup.DefinitionSource definitions) {
@@ -134,7 +128,7 @@ public final class WorldStartupCoordinator {
 
 		public boolean profileProven() { return registries != null; }
 		public WorldCapabilityProfile profile() {
-			return registries == null ? UNPROVEN_PROFILE : registries.profile();
+			return registries == null ? null : registries.profile();
 		}
 		public boolean creationLocked() { return state != State.READY || !policyReadable; }
 		public boolean authoritativeWritesReady() {

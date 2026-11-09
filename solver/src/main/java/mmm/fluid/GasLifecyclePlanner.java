@@ -16,7 +16,7 @@ final class GasLifecyclePlanner {
         domain.domainCapabilities.initializeSpatialGas();
         var before=domain.gasState.spatial;var removed=GasRegionAudit.aggregate(before.cells());
         var energy=SignedDyadic.sum(before.internalEnergy());
-        var after=new SpatialGasState(before.sizeX(),before.sizeY(),before.sizeZ(),before.registryFingerprint(),before.chemicalRegistryFingerprint(),
+        var after=new SpatialGasState(before.grid(),before.registryFingerprint(),before.chemicalRegistryFingerprint(),
                 Collections.nCopies(domain.cellCount,GasInventory.EMPTY),new double[domain.cellCount],before.externalSource(),before.escapedSink().add(removed),before.phaseSource(),before.phaseSink());
         var gas=new SpatialGasEdits.Plan(before,after,SignedDyadic.ZERO,energy,SignedDyadic.ZERO,SpatialGasEdits.ventAll(before));
         var edit=HostMixtureEdit.prepare(domain,domain.liquidCells.planEdits(List.of()),gas,null);

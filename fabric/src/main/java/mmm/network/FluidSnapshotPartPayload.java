@@ -29,7 +29,7 @@ public record FluidSnapshotPartPayload(FluidProtocol.Layout layout, int totalByt
 	public FluidSnapshotPartPayload {
 		Objects.requireNonNull(layout, "layout");
 		data = Objects.requireNonNull(data, "data").clone();
-		if (layout == FluidProtocol.Layout.PURE || totalBytes <= 0 || totalBytes > MAX_SNAPSHOT_BYTES
+		if (totalBytes <= 0 || totalBytes > MAX_SNAPSHOT_BYTES
 				|| offset < 0 || data.length == 0 || data.length > MAX_PART_BYTES
 				|| (long) offset + data.length > totalBytes) {
 			throw new IllegalArgumentException("Invalid snapshot transport part");

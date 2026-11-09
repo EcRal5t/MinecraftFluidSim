@@ -197,11 +197,9 @@ final class DemoTankOperations {
 
     private static ChemicalContents reagent(CommittedWorldRegistries world, String species, long reagentQuanta) {
         var chemistry = world.chemicalRegistry();
-        var amounts = Map.of("mmm:h2o", 50_000_000_000L, species, reagentQuanta);
-        long mass = Mass.fromKilograms(1000.0);
-        var withoutResidual = ChemicalMixtureRecord.fromStableAmounts(chemistry, amounts, 0);
-        var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, amounts,
-                Math.subtractExact(mass, withoutResidual.speciesMassUnits(chemistry)));
+        long mass = Mass.fromKilograms(world.resolveMaterial("mmm:water").referenceDensity());
+        var mixture = ChemicalMixtureRecord.fromSolutesAndSolventMass(chemistry,
+                Map.of(species, reagentQuanta), "mmm:h2o", mass);
         var ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group("mmm:water", 1.0, mass,
                 mixture.massResidualUnits(), mixture.stableAmounts(chemistry))));
         return ChemicalContents.fromLedger(ledger, chemistry, ContainerFluidLedger.NANOS_PER_BLOCK);

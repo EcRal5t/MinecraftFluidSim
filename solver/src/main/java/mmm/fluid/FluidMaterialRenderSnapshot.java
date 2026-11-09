@@ -34,7 +34,7 @@ public final class FluidMaterialRenderSnapshot {
         || geometry.cellSize() != h)
       throw new IllegalArgumentException("Display geometry dimensions differ");
     this.geometry = geometry;
-    int cells = Math.multiplyExact(Math.multiplyExact(sx, sy), sz);
+    int cells = geometry.grid().cellCount();
     this.materialFractions = copyFields(materialFractions, materials.size(), cells);
     this.phaseFractions = copyFields(phaseFractions, phases.size(), cells);
     if(geometry.pieces() instanceof CompactFluidSurface compact)compact.validatePalette(materials.size(),phases.size(),null);
@@ -103,7 +103,7 @@ public final class FluidMaterialRenderSnapshot {
   }
 
   public int cellCount() {
-    return sizeX * sizeY * sizeZ;
+    return geometry.grid().cellCount();
   }
 
   public List<FluidMaterial> materials() {

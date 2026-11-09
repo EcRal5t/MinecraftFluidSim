@@ -33,7 +33,7 @@ final class RegionDeviceLossGuardValidation {
 			String stage = stages.get(failedStage);
 			int target = failedStage;
 			var backend = new LossBackend();
-			var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+			var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 			host.setVolume(0, 0, 0, .5F);
 			var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host);
 			region.setPaused(false);
@@ -61,9 +61,9 @@ final class RegionDeviceLossGuardValidation {
 		}
 		var sharedBackend = new LossBackend();
 		var first = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
-				new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults()));
+				new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load()));
 		var second = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
-				new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults()));
+				new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load()));
 		first.solverBackend(sharedBackend);
 		second.solverBackend(sharedBackend);
 		first.ensureDeviceResident();
@@ -80,7 +80,7 @@ final class RegionDeviceLossGuardValidation {
 				"Shared device loss did not remove the second region exactly once");
 
 		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
-				new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults()));
+				new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load()));
 		var unrelated = new IllegalStateException("unrelated failure");
 		try {
 			MinecraftSimulationLoop.runWithDeviceLossGuard(region, () -> { throw unrelated; }, failure -> {

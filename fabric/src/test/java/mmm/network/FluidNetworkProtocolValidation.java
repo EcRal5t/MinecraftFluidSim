@@ -46,8 +46,6 @@ public final class FluidNetworkProtocolValidation {
 		validateControllerConsoleCodecs();
 		validateDemoWorkbenchCodecs();
 		validateThermalReservoirCodecs();
-		validateSnapshotCodecAndOptionalSections();
-		validateGenerationAndSequenceOrdering();
 		validateMaterialSnapshot();
 		validateCompactSurface();
 		validateChemicalSnapshot();
@@ -320,37 +318,37 @@ public final class FluidNetworkProtocolValidation {
 		FluidProtocol.Offer offer = FluidProtocol.serverOffer();
 		require(FluidProtocol.serverOffer(TestProfiles.pure()).equals(FluidProtocol.materialServerOffer())
 				&& FluidProtocol.serverOffer(TestProfiles.materials()).equals(FluidProtocol.materialServerOffer())
-				&& FluidProtocol.serverOffer(TestProfiles.chemical(BuiltinChemicalDefinitions.REGISTRY))
+				&& FluidProtocol.serverOffer(TestProfiles.chemical(mmm.fluid.TestFluidDefinitions.load().chemistry()))
 						.equals(FluidProtocol.thermalServerOffer(true, false))
-				&& FluidProtocol.serverOffer(TestProfiles.granular(null, BuiltinGranularDefinitions.createRegistry()))
+				&& FluidProtocol.serverOffer(TestProfiles.granular(null, mmm.fluid.TestFluidDefinitions.load().granular()))
 						.equals(FluidProtocol.granularServerOffer(false))
-				&& FluidProtocol.serverOffer(TestProfiles.granular(BuiltinChemicalDefinitions.REGISTRY,
-						BuiltinGranularDefinitions.createRegistry())).equals(FluidProtocol.thermalServerOffer(true, true)),
+				&& FluidProtocol.serverOffer(TestProfiles.granular(mmm.fluid.TestFluidDefinitions.load().chemistry(),
+						mmm.fluid.TestFluidDefinitions.load().granular())).equals(FluidProtocol.thermalServerOffer(true, true)),
 				"world capability profiles did not select exact semantic server layouts");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
 		require((offer.requiredCapabilities() & FluidProtocol.CAP_DEMO_WORKBENCH) != 0
-				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
+				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
 						FluidProtocol.REQUIRED_CAPABILITIES & ~FluidProtocol.CAP_DEMO_WORKBENCH, "")).accepted(),
 				"demo workbench protocol must reject a client that lacks its capability");
 		require((offer.requiredCapabilities() & FluidProtocol.CAP_CONTROLLER_FAILURES) != 0
-				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
+				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
 						FluidProtocol.REQUIRED_CAPABILITIES & ~FluidProtocol.CAP_CONTROLLER_FAILURES, "")).accepted(),
 				"controller failure responses require a compatible client");
-		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.PURE
-				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
+		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.MATERIAL
+				&& accepted.capabilities() == (FluidProtocol.REQUIRED_CAPABILITIES | FluidProtocol.CAP_MATERIAL_SNAPSHOT),
 				"matching layout/capability offer was not selected exactly");
 		ProtocolSessions sessions = new ProtocolSessions();
 		UUID viewer = new UUID(41L, 43L);
 		sessions.accept(viewer, accepted);
-		require(sessions.isNegotiated(viewer) && sessions.isNegotiated(viewer, FluidProtocol.Layout.PURE)
-				&& !sessions.isNegotiated(viewer, FluidProtocol.Layout.MATERIAL),
+		require(sessions.isNegotiated(viewer) && sessions.isNegotiated(viewer, FluidProtocol.Layout.MATERIAL)
+				&& !sessions.isNegotiated(viewer, FluidProtocol.Layout.CHEMICAL),
 				"runtime-owned protocol session lost its negotiated layout");
 		sessions.remove(viewer);
 		require(!sessions.isNegotiated(viewer), "removed protocol session remained negotiated");
 
 		long unknown = 1L << 40;
 		FluidProtocol.Negotiation missingRequired = FluidProtocol.negotiate(
-				new FluidProtocol.Offer(FluidProtocol.Layout.PURE, unknown, 0L)
+				new FluidProtocol.Offer(FluidProtocol.Layout.MATERIAL, unknown, 0L)
 		);
 		require(!missingRequired.accepted() && missingRequired.failure().contains("0x"),
 				"unknown required capability was accepted");
@@ -361,27 +359,27 @@ public final class FluidNetworkProtocolValidation {
 			// expected
 		}
 		FluidProtocol.Negotiation ignoredOptional = FluidProtocol.negotiate(
-				new FluidProtocol.Offer(FluidProtocol.Layout.PURE, FluidProtocol.REQUIRED_CAPABILITIES, unknown)
+				new FluidProtocol.Offer(FluidProtocol.Layout.MATERIAL, FluidProtocol.REQUIRED_CAPABILITIES, unknown)
 		);
 		require(ignoredOptional.accepted() && (ignoredOptional.capabilities() & unknown) == 0L,
 				"unknown optional capability was not safely ignored");
 
 		FluidProtocol.Negotiation forgedLayout = FluidProtocol.validateResponse(
-				offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
+				offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.CHEMICAL,
 						FluidProtocol.REQUIRED_CAPABILITIES, "")
 		);
 		require(!forgedLayout.accepted(), "client-selected unoffered layout was accepted");
 		FluidProtocol.Negotiation missingResponseCapability = FluidProtocol.validateResponse(
-				offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
+				offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
 						FluidProtocol.CAP_REGION_IDENTITY, "")
 		);
 		require(!missingResponseCapability.accepted(), "response omitted a required capability");
 		FluidProtocol.Offer futureOptionalOffer = new FluidProtocol.Offer(
-				FluidProtocol.Layout.PURE, FluidProtocol.REQUIRED_CAPABILITIES, unknown
+				FluidProtocol.Layout.MATERIAL, FluidProtocol.REQUIRED_CAPABILITIES, unknown
 		);
 		FluidProtocol.Negotiation forgedOptionalCapability = FluidProtocol.validateResponse(
 				futureOptionalOffer,
-				new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
+				new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
 						FluidProtocol.REQUIRED_CAPABILITIES | unknown, "")
 		);
 		require(!forgedOptionalCapability.accepted(), "client selected a capability unsupported by this server");
@@ -615,64 +613,9 @@ public final class FluidNetworkProtocolValidation {
 		}
 	}
 
-	private static void validateSnapshotCodecAndOptionalSections() {
-		FluidSnapshotPayload payload = snapshot(2L, 7L,
-				List.of(new FluidSnapshotPayload.Extension(77, new byte[] {9, 8, 7})));
-		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
-		FluidSnapshotPayload decoded;
-		try {
-			FluidSnapshotPayload.CODEC.encode(buffer, payload);
-			decoded = FluidSnapshotPayload.CODEC.decode(buffer);
-		} finally {
-			buffer.release();
-		}
-		require(decoded.layout() == payload.layout() && decoded.kind() == payload.kind()
-				&& decoded.dimension().equals(DIMENSION) && decoded.regionId().equals(REGION)
-				&& decoded.generation() == 2L && decoded.sequence() == 7L,
-				"snapshot identity/layout header did not round-trip");
-		require(Arrays.equals(decoded.volume(), payload.volume()) && Arrays.equals(decoded.markers(), payload.markers())
-				&& Arrays.equals(decoded.solids(), payload.solids()), "snapshot reconstruction arrays changed in codec");
-		require(decoded.extensions().size() == 1 && decoded.extensions().getFirst().type() == 77
-				&& Arrays.equals(decoded.extensions().getFirst().data(), new byte[] {9, 8, 7}),
-				"unknown length-delimited optional section was not skippable");
-
-		FluidSnapshotPayload removal = FluidSnapshotPayload.removeRegion(DIMENSION, REGION, 2L, 8L);
-		buffer = new FriendlyByteBuf(Unpooled.buffer());
-		try {
-			FluidSnapshotPayload.CODEC.encode(buffer, removal);
-			require(FluidSnapshotPayload.CODEC.decode(buffer).removesRegion(), "region removal codec changed kind");
-		} finally {
-			buffer.release();
-		}
-	}
-
-	private static void validateGenerationAndSequenceOrdering() {
-		FluidSnapshotLedger ledger = new FluidSnapshotLedger();
-		require(ledger.evaluate(snapshot(1L, 1L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
-				"first snapshot was rejected");
-		require(ledger.evaluate(snapshot(1L, 1L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.IGNORE_STALE,
-				"duplicate sequence was accepted");
-		require(ledger.evaluate(snapshot(1L, 2L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
-				"newer sequence was rejected");
-		require(ledger.evaluate(snapshot(2L, 1L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
-				"new generation did not reset sequence ordering");
-		require(ledger.evaluate(snapshot(1L, 99L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.IGNORE_STALE,
-				"older generation overrode the current state");
-		require(ledger.evaluate(FluidSnapshotPayload.removeRegion(DIMENSION, REGION, 2L, 2L), FluidProtocol.Layout.PURE)
-				== FluidSnapshotLedger.Decision.REMOVE_REGION, "ordered removal was rejected");
-		require(ledger.evaluate(snapshot(2L, 1L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.IGNORE_STALE,
-				"removal tombstone allowed delayed resurrection");
-		require(ledger.evaluate(snapshot(3L, 1L), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
-				"new generation could not replace removal tombstone");
-		require(ledger.evaluate(snapshot(4L, 2L), FluidProtocol.Layout.MATERIAL) == FluidSnapshotLedger.Decision.REJECT_PROTOCOL,
-				"snapshot bypassed negotiated layout");
-		require(ledger.evaluate(FluidSnapshotPayload.clearAll(), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.CLEAR_ALL,
-				"clear-all control was rejected");
-	}
-
 	private static void validateCompactSurface() {
 		for(int grid:new int[]{2,64}) {
-			int cells=grid*grid*grid;var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER));
+			int cells=grid*grid*grid;var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
 			float[][] volume={new float[cells]};Arrays.fill(volume[0],.75f);float[] planes=new float[4*cells],micro=new float[8*cells];
 			for(int c=0;c<cells;c++){planes[4*c+1]=1;planes[4*c+3]=.75f;for(int m=0;m<8;m++)micro[8*c+m]=(m&2)==0?.125f:.0625f;}
 			long start=System.nanoTime();var snapshot=mmm.fluid.FluidSurfaceProjection.fromDeviceFields(grid,grid,grid,.5f,fluids,volume,planes,micro,new byte[cells]);
@@ -790,24 +733,6 @@ public final class FluidNetworkProtocolValidation {
 				== FluidMaterialSnapshotLedger.Decision.REJECT_PROTOCOL, "material snapshot bypassed capability negotiation");
 		require(ledger.evaluate(FluidMaterialSnapshotPayload.clearAll(), negotiation)
 				== FluidMaterialSnapshotLedger.Decision.CLEAR_ALL, "material clear-all was rejected");
-	}
-
-	private static FluidSnapshotPayload snapshot(long generation, long sequence) {
-		return snapshot(generation, sequence, List.of());
-	}
-
-	private static FluidSnapshotPayload snapshot(
-			long generation,
-			long sequence,
-			List<FluidSnapshotPayload.Extension> extensions
-	) {
-		return new FluidSnapshotPayload(
-				FluidProtocol.Layout.PURE, FluidSnapshotPayload.Kind.SNAPSHOT, DIMENSION, REGION,
-				generation, sequence, new BlockPos(2, 3, 4), 0.5F, 2, 2, 2,
-				new byte[] {1, 2, 3, 4, 5, 6, 7, 8},
-				new byte[] {1, 0, 1, 0, 1, 0, 1, 0},
-				new byte[] {0, 0, 0, 1, 0, 0, 0, 0}, false, extensions
-		);
 	}
 
 	private static FluidMaterialSnapshotPayload materialSnapshot(long generation, long sequence) {

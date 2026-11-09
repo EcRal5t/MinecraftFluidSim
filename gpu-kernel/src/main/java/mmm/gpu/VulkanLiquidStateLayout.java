@@ -40,15 +40,22 @@ public final class VulkanLiquidStateLayout {
     public record State(DeviceLiquidInventory inventory, MacMomentumState momentum) { }
 
     private final int sizeX, sizeY, sizeZ, stockCapacity, speciesCapacity, limbCapacity, materialCount;
+    private final mmm.spatial.SpatialGrid grid;
     private final long alignment, bytes;
     private final EnumMap<Field, Column> columns = new EnumMap<>(Field.class);
 
     public VulkanLiquidStateLayout(int sizeX, int sizeY, int sizeZ, int stockCapacity,
                                    int speciesCapacity, int limbCapacity, long storageAlignment, int materialCount) {
+        this(mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ),stockCapacity,speciesCapacity,limbCapacity,storageAlignment,materialCount);
+    }
+    public VulkanLiquidStateLayout(mmm.spatial.SpatialGrid grid,int stockCapacity,
+                                  int speciesCapacity,int limbCapacity,long storageAlignment,int materialCount){
+        int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
         if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || stockCapacity < 0 || speciesCapacity < 0
                 || materialCount < 1 || limbCapacity < 0 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
             throw new IllegalArgumentException("Invalid resident liquid shape or storage alignment");
         this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+        this.grid=grid;
         this.materialCount=materialCount;
         stockCapacity=Math.max(stockCapacity,Math.multiplyExact(cellCount(),materialCount));
         this.stockCapacity = stockCapacity; this.speciesCapacity = speciesCapacity; this.limbCapacity = Math.max(limbCapacity, Math.multiplyExact(4, stockCapacity));
@@ -61,9 +68,9 @@ public final class VulkanLiquidStateLayout {
                 case VOLUME_OFFSETS, SPECIES_OFFSETS -> Math.addExact(stockCapacity, 1);
                 case VOLUME_LIMBS -> this.limbCapacity;
                 case SPECIES_HANDLES, SPECIES_AMOUNTS -> speciesCapacity;
-                case MOMENTUM_X -> product(sizeX + 1, sizeY, sizeZ);
-                case MOMENTUM_Y -> product(sizeX, sizeY + 1, sizeZ);
-                case MOMENTUM_Z -> product(sizeX, sizeY, sizeZ + 1);
+                case MOMENTUM_X -> grid.faceCount(0);
+                case MOMENTUM_Y -> grid.faceCount(1);
+                case MOMENTUM_Z -> grid.faceCount(2);
                 default -> stockCapacity;
             };
             cursor = align(cursor);
@@ -82,10 +89,10 @@ public final class VulkanLiquidStateLayout {
     public static VulkanLiquidStateLayout forState(DeviceLiquidInventory inventory,
                                                    MacMomentumState momentum,long storageAlignment,int materialCount) {
         int slots=Math.multiplyExact(inventory.cellCount(),materialCount);
-        var provisional=new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),slots,
+        var provisional=new VulkanLiquidStateLayout(momentum.grid(),slots,
                 inventory.speciesHandles().length,Math.multiplyExact(4,slots),storageAlignment,materialCount);
         var slotted=provisional.slotInventory(inventory);
-        return new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),slots,
+        return new VulkanLiquidStateLayout(momentum.grid(),slots,
                 slotted.speciesHandles().length,requiredVolumeCapacity(slotted,slots),storageAlignment,materialCount);
     }
     public int materialCount(){return materialCount;}
@@ -94,7 +101,8 @@ public final class VulkanLiquidStateLayout {
     public int sizeX() { return sizeX; }
     public int sizeY() { return sizeY; }
     public int sizeZ() { return sizeZ; }
-    public int cellCount() { return product(sizeX, sizeY, sizeZ); }
+    public mmm.spatial.SpatialGrid grid(){return grid;}
+    public int cellCount() { return grid.cellCount(); }
     public int stockCapacity() { return stockCapacity; }
     public int speciesCapacity() { return speciesCapacity; }
     public int limbCapacity() { return limbCapacity; }
@@ -114,7 +122,7 @@ public final class VulkanLiquidStateLayout {
         inventory=slotInventory(inventory);
         if (inventory.cellCount() != cellCount() || inventory.stockCount() > stockCapacity
                 || inventory.speciesHandles().length > speciesCapacity || inventory.volumes().limbs().length > limbCapacity
-                || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
+                || !momentum.grid().equals(grid))
             throw new IllegalArgumentException("Liquid import shape differs from resident layout");
         ByteBuffer out = view(destination);
         var dyadic = inventory.volumes();
@@ -249,14 +257,14 @@ public final class VulkanLiquidStateLayout {
                 ints(in, Field.SUPPORT_MASKS, stocks), volumes, longs(in, Field.MASS_UNITS, stocks), longs(in, Field.ENERGY_BITS, stocks),
                 ints(in, Field.MIXTURE_PRESENT, stocks), ints(in, Field.SPECIES_OFFSETS, stocks + 1), ints(in, Field.SPECIES_HANDLES, species),
                 longs(in, Field.SPECIES_AMOUNTS, species), longs(in, Field.MASS_RESIDUAL_UNITS, stocks));
-        return new State(compactInventory(inventory), new MacMomentumState(sizeX, sizeY, sizeZ,
+        return new State(compactInventory(inventory), new MacMomentumState(grid,
                 doubles(in, Field.MOMENTUM_X), doubles(in, Field.MOMENTUM_Y), doubles(in, Field.MOMENTUM_Z)));
     }
 
     /** Records column relocation during capacity growth; caller supplies transfer synchronization. */
     void copyColumns(VkCommandBuffer command, VulkanLiquidStateLayout oldLayout, GpuBuffer source,
                      GpuBuffer output, MemoryStack stack) {
-        if (sizeX != oldLayout.sizeX || sizeY != oldLayout.sizeY || sizeZ != oldLayout.sizeZ
+        if (!grid.equals(oldLayout.grid)
                 || materialCount != oldLayout.materialCount || stockCapacity < oldLayout.stockCapacity || speciesCapacity < oldLayout.speciesCapacity
                 || limbCapacity < oldLayout.limbCapacity)
             throw new IllegalArgumentException("Liquid growth must retain the source grid and column capacities");

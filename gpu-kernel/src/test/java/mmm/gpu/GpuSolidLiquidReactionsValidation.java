@@ -17,9 +17,9 @@ public final class GpuSolidLiquidReactionsValidation {
     private GpuSolidLiquidReactionsValidation(){}
     public static void main(String[] args){run(args,false,8,false);run(args,true,0,false);run(args,true,8,false);run(args,false,0,true);}
     private static void run(String[] args,boolean region,int deposits,boolean multiDonor){
-        var chemical=BuiltinChemicalDefinitions.REGISTRY;var granular=BuiltinGranularDefinitions.createRegistry();var gas=BuiltinGasDefinitions.createRegistry();
+        var chemical=mmm.fluid.TestFluidDefinitions.load().chemistry();var granular=mmm.fluid.TestFluidDefinitions.load().granular();var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         int grid=3,cells=27,cell=13;double h=.5,gravity=9.81,duration=31_536_000;long initialMass=10_000_000_000L,ions=1_000_000;
-        var fluid=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:water",0,90)));
+        var fluid=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:water",0,90, 0xff197ae8)));
         var water=material("mmm:reactive_water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",4200);
         var materials=new ArrayList<ThermalMaterialDefinition>();materials.add(water);var solids=new ArrayList<ThermalMaterialDefinition>();
         for(var m:granular.materials()){var value=material("mmm:thermal_"+m.id().substring(m.id().indexOf(':')+1),ThermalMaterialDefinition.CarrierKind.GRANULAR,m.id(),800);solids.add(value);materials.add(value);}
@@ -33,12 +33,12 @@ public final class GpuSolidLiquidReactionsValidation {
                 new long[]{initialMass},new long[]{0},new int[]{1},new int[]{0,species.length},species,speciesAmounts,new long[]{initialMass-(multiDonor?1800:760)*ions});
         int nx=4*3*3,ny=3*4*3,nz=3*3*4;double[] px=new double[nx],py=new double[ny],pz=new double[nz];double[] velocity={2,-1,3};
         for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){int x=1+(axis==0?side:0),y=1+(axis==1?side:0),z=1+(axis==2?side:0);
-            int sx=grid+(axis==0?1:0),sy=grid+(axis==1?1:0),face=(z*sy+y)*sx+x;(axis==0?px:axis==1?py:pz)[face]=.5*velocity[axis];}
+            var space=mmm.spatial.SpatialGrid.rectangular(grid,grid,grid);int face=space.faceAt(x,y,z,axis)-space.faceOffset(axis);(axis==0?px:axis==1?py:pz)[face]=.5*velocity[axis];}
         var momentum=new MacMomentumState(grid,grid,grid,px,py,pz);
         try(var context=new VulkanDeviceContext(args.length>0?Integer.parseInt(args[0]):0,true,true);var kernel=new VulkanSolidLiquidReactions(context);var ledgerKernel=new VulkanEnergyLedger(context);var regionKernel=new VulkanRegionReactions(context,chemical)){
             long a=Math.max(8,context.storageOffsetAlignment());var liquid=new VulkanLiquidStateLayout(grid,grid,grid,1,64,16,a,1);
             var definition=new VulkanGranularStateLayout.Definitions(granular.fingerprint(),chemical.fingerprint(),granular.materials().stream().map(ParticulateMaterial::id).toList(),chemical.species().stream().map(ChemicalSpecies::id).toList());
-            var solid=new VulkanGranularStateLayout(grid,grid,grid,multiDonor?2:0,deposits,128,definition,liquid.bytes(),a);
+            var solid=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),multiDonor?2:0,deposits,128,definition,liquid.bytes(),a);
             var tables=VulkanReactionDefinitions.fromRegistries(chemical,granular,thermal,gas).layout(solid.endOffset(),a);
             long lr=align(tables.endOffset(),a),ls=align(lr+8,a),gr=align(ls+8L*chemical.species().size(),a),gs=align(gr+8L*solids.size(),a);
             var liquidCaloric=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(fluid,thermal),Math.toIntExact(lr/4),Math.toIntExact(ls/4),chemical.species().size(),gs+8L*solids.size()*chemical.species().size(),a);
@@ -72,7 +72,7 @@ public final class GpuSolidLiquidReactionsValidation {
             for(var chunk:regionLayout.headers())initial.duplicate().position(Math.toIntExact(chunk.offset())).put(chunk.bytes().duplicate());
             for(var chunk:regionLayout.tables())initial.duplicate().position(Math.toIntExact(chunk.offset())).put(chunk.bytes().duplicate());
             ledger.initializeHeader(initial);
-            try(var storage=new VulkanRegionStorage(context,ledger.endOffset(),1024*1024)){
+            try(var storage=new VulkanRegionStorage(context,ledger.endOffset(),1024*1024,liquid.grid())){
                 storage.initialize(initial,0);
                 try(var source=storage.capture();var candidate=storage.prepare(source)){
                     if(region){

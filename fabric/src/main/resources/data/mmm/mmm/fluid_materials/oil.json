@@ -1,0 +1,47 @@
+{
+  "reference_density_kg_per_m3": "800",
+  "miscibility_group": "mmm:oil",
+  "surface_tension_n_per_m": "0",
+  "contact_angle_radians": "1.5707963267948966",
+  "reference_temperature_k": "293.15",
+  "thermal_expansion_per_k": "0.0007",
+  "viscosity_points": [
+    [
+      "253.15",
+      "0.18"
+    ],
+    [
+      "273.15",
+      "0.112"
+    ],
+    [
+      "293.15",
+      "0.055"
+    ],
+    [
+      "313.15",
+      "0.028"
+    ],
+    [
+      "333.15",
+      "0.016"
+    ],
+    [
+      "353.15",
+      "0.01"
+    ],
+    [
+      "373.15",
+      "0.006"
+    ],
+    [
+      "423.15",
+      "0.003"
+    ],
+    [
+      "473.15",
+      "0.0018"
+    ]
+  ],
+  "display_argb": "ccc89a32"
+}

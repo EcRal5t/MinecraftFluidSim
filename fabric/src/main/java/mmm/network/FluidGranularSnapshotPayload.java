@@ -44,7 +44,7 @@ public record FluidGranularSnapshotPayload(
 			throw new IllegalArgumentException("Granular snapshot must retain material geometry");
 		}
 		if (material.isSnapshot()) {
-			new GranularDisplaySnapshot(material.sizeX(), material.sizeY(), material.sizeZ(), material.cellSize(),
+			new GranularDisplaySnapshot(material.geometry().grid(), material.cellSize(),
 					registryFingerprint, granularMaterials, depositBulkFill, depositPorosity,
 					depositTopMaterial, activeParcels);
 			if (chemical != null) chemical.validate(material);

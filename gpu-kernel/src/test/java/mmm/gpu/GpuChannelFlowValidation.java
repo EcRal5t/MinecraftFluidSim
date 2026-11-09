@@ -33,11 +33,12 @@ public final class GpuChannelFlowValidation {
     private static double run(VulkanDeviceContext context,VulkanLiquidGeometry geometry,VulkanLiquidProjection projection,
                               VulkanPressureKernel pressure,VulkanPressureMultigrid multigrid,int length,int width,double mu,int steps) {
         int sx=length+6,sy=6,sz=5,n=sx*sy*sz,right=length+3;
+        var grid=mmm.spatial.SpatialGrid.rectangular(sx,sy,sz);
         double h=.5, mass=1000*h*h*h;
         byte[] masks=new byte[n];int[] offsets=new int[n+1];
         var material=new ArrayList<Integer>();var support=new ArrayList<Integer>();var volumes=new ArrayList<SignedDyadic>();
-        for(int z=0;z<sz;z++)for(int y=0;y<sy;y++)for(int x=0;x<sx;x++){
-            int c=(z*sy+y)*sx+x;
+        for(int c=0;c<n;c++){
+            int x=grid.x(c),y=grid.y(c),z=grid.z(c);
             boolean reservoir=(x<3||x>=right)&&z>=1&&z<=3;
             boolean channel=x>=3&&x<right&&z>=1&&z<=width&&y<2;
             boolean open=reservoir||channel;
@@ -52,8 +53,8 @@ public final class GpuChannelFlowValidation {
                 support.stream().mapToInt(Integer::intValue).toArray(),DeviceDyadicArray.encode(volumes),masses,energy,
                 new int[stocks],new int[stocks+1],new int[0],new long[0],new long[stocks]);
         var momentum=new MacMomentumState(sx,sy,sz,new double[(sx+1)*sy*sz],new double[sx*(sy+1)*sz],new double[sx*sy*(sz+1)]);
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        var constitutive=BuiltinFluidMaterials.createRegistry();
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        var constitutive=mmm.fluid.TestFluidDefinitions.load().material();
         var caloric=List.of(new ThermalMaterialDefinition("mmm:water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",
                 293.15,4200*293.15,0,List.of(new ThermalMaterialDefinition.CaloricSegment(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,10000,4200))));
         var definitions=new VulkanLiquidRegion.MechanicalDefinitions(n,0,4*n,4,-40,new int[]{0},new long[]{0},
@@ -75,7 +76,7 @@ public final class GpuChannelFlowValidation {
             double total=0,rightVolume=0;
             for(int c=0;c<n;c++)for(int row=result.cellOffsets()[c];row<result.cellOffsets()[c+1];row++){
                 double volume=result.volumes().valueAt(row).toDouble();total+=volume;
-                if(c%sx>=right)rightVolume+=volume;
+                if(grid.x(c)>=right)rightVolume+=volume;
             }
             if(Math.abs(total-stocks)>1e-8)throw new AssertionError("Channel liquid volume changed: "+total+" vs "+stocks);
             long actualMass=0;for(long units:result.massUnits())actualMass=Math.addExact(actualMass,units);

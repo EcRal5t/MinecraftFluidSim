@@ -5,12 +5,14 @@ import mmm.thermal.CoherentPhaseStore;
 import mmm.thermal.GranularEnergyColumn;
 import mmm.thermal.ThermalAuditLedger;
 import mmm.thermal.ThermalLimits;
+import mmm.spatial.SpatialGrid;
 
 import java.util.List;
 
 /** Orthogonal in-memory thermal handoff; it is not a region-state or wire codec. */
 public final class FlipThermalParticleState {
 	private final int sizeX, sizeY, sizeZ, particleCount;
+	private final SpatialGrid grid;
 	private final float cellSize;
 	private final String thermalRegistryFingerprint;
 	private final double insertionTemperatureK;
@@ -54,6 +56,15 @@ public final class FlipThermalParticleState {
 			double[] depositEnergy, List<CoherentPhaseStore.Group> coherentGroups,
 			double[] gasNodeEnergy, ThermalAuditLedger audit
 	) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize,particleCount,thermalRegistryFingerprint,insertionTemperatureK,
+				internalEnergy,activeParcelEnergy,depositEnergy,coherentGroups,gasNodeEnergy,audit);
+	}
+	public FlipThermalParticleState(
+			SpatialGrid grid,float cellSize,int particleCount,String thermalRegistryFingerprint,double insertionTemperatureK,
+			double[] internalEnergy,double[] activeParcelEnergy,double[] depositEnergy,
+			List<CoherentPhaseStore.Group> coherentGroups,double[] gasNodeEnergy,ThermalAuditLedger audit
+	) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(Float.isFinite(cellSize) && cellSize > 0.0F)
 				|| particleCount < 0 || internalEnergy == null || internalEnergy.length != particleCount
 				|| activeParcelEnergy == null || depositEnergy == null || coherentGroups == null || gasNodeEnergy == null) {
@@ -70,7 +81,7 @@ public final class FlipThermalParticleState {
 		for (double energy : internalEnergy) if (!Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Thermal particle energy must be finite");
 		}
-		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int cellCount = grid.cellCount();
 		SignedDyadic coherentEnergy = CoherentPhaseStore.exactEnergyOfCanonicalSnapshot(
 				cellCount, ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION, coherentGroups);
 		if (activeParcelEnergy.length > mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION
@@ -95,7 +106,7 @@ public final class FlipThermalParticleState {
 		if (!audit.acceptsInventory(inventory)) {
 			throw new IllegalArgumentException("Thermal carrier handoff does not close its audit ledger");
 		}
-		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
+		this.grid=grid;this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
 		this.particleCount = particleCount;
 		this.thermalRegistryFingerprint = thermalRegistryFingerprint;
 		this.insertionTemperatureK = insertionTemperatureK;
@@ -116,6 +127,7 @@ public final class FlipThermalParticleState {
 	}
 
 	public int particleCount() { return particleCount; }
+	public SpatialGrid grid() { return grid; }
 	public String thermalRegistryFingerprint() { return thermalRegistryFingerprint; }
 	public double insertionTemperatureK() { return insertionTemperatureK; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }

@@ -1,6 +1,5 @@
 package mmm.simulation;
 
-import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidSolverConfig;
@@ -21,71 +20,75 @@ final class FluidRegionFactory {
 
 	private FluidRegionFactory() { }
 
-	static FluidRegion createCommandRegion(
-			ServerLevel level,
-			BlockPos origin,
-			int blockSizeX,
-			int blockSizeY,
-			int blockSizeZ
-	) {
-		HostFluidState domain = createDomain(
-				blockSizeX, blockSizeY, blockSizeZ
-		);
-		return new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain);
-	}
-
-	static FluidRegion createControllerRegion(
-			ServerLevel level,
-			FluidRegionFootprint footprint
-	) {
-		return createControllerRegion(level.dimension(), footprint);
-	}
-
 	static FluidRegion createControllerRegion(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
-			FluidRegionFootprint footprint) {
-		HostFluidState domain = createDomain(footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ());
+			FluidRegionFootprint footprint, CommittedWorldRegistries world) {
+		float cellSize = 1.0F / CELLS_PER_BLOCK;
+        var config = new FluidSolverConfig(cellSize, 9.81F, 1.0F / 20.0F, 240, 1.0E-4F, 2.0E-3F);
+        HostFluidState domain = new HostFluidState(grid(footprint), config, world.definitions());
 		return new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(), domain, footprint);
 	}
+
+    static mmm.spatial.SpatialGrid grid(FluidRegionFootprint footprint) {
+        int sx = Math.multiplyExact(footprint.blockSizeX(), CELLS_PER_BLOCK);
+        int sy = Math.multiplyExact(footprint.blockSizeY(), CELLS_PER_BLOCK);
+        int sz = Math.multiplyExact(footprint.blockSizeZ(), CELLS_PER_BLOCK);
+        var members = new java.util.HashSet<mmm.spatial.SpatialGrid.Block>();
+        var origin = footprint.minimumInterior();
+        for (long packed : footprint.interiorBlocks()) {
+            var block = BlockPos.of(packed);
+            int x = (block.getX() - origin.getX()) * CELLS_PER_BLOCK;
+            int y = (block.getY() - origin.getY()) * CELLS_PER_BLOCK;
+            int z = (block.getZ() - origin.getZ()) * CELLS_PER_BLOCK;
+            members.add(new mmm.spatial.SpatialGrid.Block(x / 8, y / 8, z / 8));
+        }
+        return new mmm.spatial.SpatialGrid(sx, sy, sz, members);
+    }
 
 	static HostFluidState createDomain(
 			int blockSizeX,
 			int blockSizeY,
-			int blockSizeZ
+			int blockSizeZ,
+			CommittedWorldRegistries world
 	) {
 		float cellSize = 1.0F / CELLS_PER_BLOCK;
 		FluidSolverConfig config = new FluidSolverConfig(
-				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				cellSize, 9.81F, 1.0F / 20.0F,
 				240, 1.0E-4F, 2.0E-3F);
 		return new HostFluidState(
 				Math.multiplyExact(blockSizeX, CELLS_PER_BLOCK),
 				Math.multiplyExact(blockSizeY, CELLS_PER_BLOCK),
 				Math.multiplyExact(blockSizeZ, CELLS_PER_BLOCK),
-				config);
+				config, world.definitions());
 	}
 
 	/** Shared production configuration for the transient air demonstration. */
-	static HostFluidState createAirDomain() {
+	static HostFluidState createAirDomain(CommittedWorldRegistries world) {
 		return new HostFluidState(DemoSceneLayout.AIR_SIZE_X * CELLS_PER_BLOCK,
 				DemoSceneLayout.AIR_SIZE_Y * CELLS_PER_BLOCK,
 				DemoSceneLayout.AIR_SIZE_Z * CELLS_PER_BLOCK,
-				new FluidSolverConfig(0.5F, 1000.0F, 9.81F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F));
+				new FluidSolverConfig(0.5F, 9.81F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F), world.definitions());
 	}
 
 	/** Scaled wetting demonstration: two-cell capillary length with unchanged world cell size. */
-	static HostFluidState createTensionDomain() {
+	static HostFluidState createTensionDomain(CommittedWorldRegistries world) {
 		return new HostFluidState(MinecraftDebugFixtures.BLOCK_SIZE_X * CELLS_PER_BLOCK,
 				MinecraftDebugFixtures.BLOCK_SIZE_Y * CELLS_PER_BLOCK,
 				MinecraftDebugFixtures.BLOCK_SIZE_Z * CELLS_PER_BLOCK,
-				new FluidSolverConfig(0.5F, 1000.0F, 0.981F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F));
+				new FluidSolverConfig(0.5F, 0.981F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F), world.definitions());
 	}
 
 	/**
 	 * Gives a pure-water domain its default single-material column. It is a pure function of the
 	 * domain itself, so both controller activation and the debug fixtures share this one path.
 	 */
-	static void bindDefaultMaterialState(HostFluidState domain) {
+	static void bindDefaultMaterialState(HostFluidState domain, mmm.fluid.MaterialRegistry definitions) {
 		if (domain.hasMaterialState()) return;
-		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+		var materials = new java.util.ArrayList<mmm.fluid.FluidMaterial>();
+		for (String id : java.util.List.of("mmm:water", "mmm:oil", "mmm:mercury"))
+			materials.add(definitions.entry(id).material());
+		for (var entry : definitions.entries())
+			if (materials.stream().noneMatch(material -> material.id().equals(entry.material().id()))) materials.add(entry.material());
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(materials));
 	}
 
 	static int captureVanillaWater(ServerLevel level, FluidRegion region) {
@@ -111,27 +114,25 @@ final class FluidRegionFactory {
 		BlockPos origin = region.origin();
 		float cellSize = domain.config().cellSize();
 		int wetCells = 0;
-		float[] volumes = new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
-		for (int z = 0; z < domain.sizeZ(); z++) {
-			for (int y = 0; y < domain.sizeY(); y++) {
-				for (int x = 0; x < domain.sizeX(); x++) {
-					if (domain.isSolid(x, y, z)) continue;
-					double worldX = origin.getX() + (x + 0.5) * cellSize;
-					double worldY = origin.getY() + (y + 0.5) * cellSize;
-					double worldZ = origin.getZ() + (z + 0.5) * cellSize;
-					BlockPos blockPosition = BlockPos.containing(worldX, worldY, worldZ);
-					if (region.footprint() != null && !region.footprint().containsInterior(blockPosition)) continue;
-					float waterHeight = waterHeightAt.apply(blockPosition);
-					if (waterHeight <= 0.0F) continue;
-					double cellBottom = origin.getY() + y * cellSize;
-					double localBottom = cellBottom - Math.floor(cellBottom);
-					float fraction = Mth.clamp((float) ((waterHeight - localBottom) / cellSize), 0.0F, 1.0F);
-					if (fraction <= 0.0F) continue;
-					volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = fraction;
-					wetCells++;
-				}
-			}
-		}
+		float[] volumes = new float[domain.grid().cellCount()];
+		for (int cell = 0; cell < domain.grid().cellCount(); cell++) {
+            int x = domain.grid().x(cell), y = domain.grid().y(cell), z = domain.grid().z(cell);
+            if (domain.isSolid(x, y, z)) continue;
+            double worldX = origin.getX() + (x + 0.5) * cellSize;
+            double worldY = origin.getY() + (y + 0.5) * cellSize;
+            double worldZ = origin.getZ() + (z + 0.5) * cellSize;
+            BlockPos blockPosition = BlockPos.containing(worldX, worldY, worldZ);
+            if (region.footprint() != null && !region.footprint().containsInterior(blockPosition)) continue;
+            float waterHeight = waterHeightAt.apply(blockPosition);
+            if (waterHeight <= 0.0F) continue;
+            double cellBottom = origin.getY() + y * cellSize;
+            double localBottom = cellBottom - Math.floor(cellBottom);
+            float fraction = Mth.clamp((float) ((waterHeight - localBottom) / cellSize), 0.0F, 1.0F);
+            if (fraction <= 0.0F) continue;
+            volumes[cell] = fraction;
+            wetCells++;
+        }
+
 		domain.setVolumes(volumes);
 		domain.resetAmbientGas();
 		region.commitHostEdit(generation, domain);

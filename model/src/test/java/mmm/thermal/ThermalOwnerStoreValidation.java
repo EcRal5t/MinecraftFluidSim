@@ -34,38 +34,23 @@ public final class ThermalOwnerStoreValidation {
 
 		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
-		diluteAqueousPropertiesReportTheirRange();
         ethanolMixtureUsesConservedMassFractions();
 	}
 
     private static void ethanolMixtureUsesConservedMassFractions() {
+        var chemistry=TestChemicalDefinitions.load();
+        var ethanol=chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.ETHANOL));
+        var props=ethanol.liquidProperties();
+        double mass=ethanol.molarMassKgPerMol().toDouble();
         var water=new ThermalMaterialDefinition("mmm:test_water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",
                 293.15,0,.6,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,4200)));
-        var pure=AqueousMixtureProperties.thermalMaterial(water,.046,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L));
-        require(Math.abs(pure.specificHeatAt(300)-2430)<1e-9 && Math.abs(pure.conductivityWPerMeterK()-.171)<1e-12,
-                "Pure ethanol thermal properties differ");
-        var mixture=AqueousMixtureProperties.thermalMaterial(water,.092,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L));
-        require(Math.abs(mixture.specificHeatAt(300)-3315)<1e-9 && Math.abs(mixture.conductivityWPerMeterK()-.3855)<1e-12,
-                "Mixed thermal properties do not follow ethanol mass fraction");
-        var state=AqueousMixtureProperties.evaluate(Map.of(BuiltinChemicalDefinitions.ETHANOL,1.0),.046,.0000583,293.15,101325,
-                .046*4200,.001,.6);
-        require(Math.abs(state.heatCapacityJPerK()-.046*2430)<1e-9 && Math.abs(state.viscosityPaS()-.0012)<1e-12,
-                "Pure ethanol caloric or viscous state differs");
+        var pure=AqueousMixtureProperties.thermalMaterial(water,mass,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L),chemistry);
+        require(Math.abs(pure.specificHeatAt(300)-props.heatCapacityJPerKgK())<1e-9
+                && Math.abs(pure.conductivityWPerMeterK()-props.conductivityWPerMK())<1e-12,"Pure ethanol thermal properties differ");
+        var mixture=AqueousMixtureProperties.thermalMaterial(water,2*mass,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L),chemistry);
+        require(Math.abs(mixture.specificHeatAt(300)-(4200+props.heatCapacityJPerKgK())/2)<1e-9
+                && Math.abs(mixture.conductivityWPerMeterK()-(.6+props.conductivityWPerMK())/2)<1e-12,"Mixture thermal properties differ");
     }
-
-	private static void diluteAqueousPropertiesReportTheirRange() {
-		var amounts=Map.of(BuiltinChemicalDefinitions.H2O, 1000.0/18, BuiltinChemicalDefinitions.NA_PLUS, .01,
-				BuiltinChemicalDefinitions.CL_MINUS, .01);
-		var state=AqueousMixtureProperties.evaluate(amounts,1.0,.001,298.15,101325,4200,.001,.6);
-		require(state.effectiveVolumesSupported() && state.viscositySupported() && state.viscosityPaS()>.001
-				&& state.densityKgPerM3()==1000, "Dilute NaCl state or measured range differs");
-		require(AqueousMixtureProperties.effectiveVolumePerMole(BuiltinChemicalDefinitions.NA_PLUS)
-				+ AqueousMixtureProperties.effectiveVolumePerMole(BuiltinChemicalDefinitions.CL_MINUS)
-				== AqueousMixtureProperties.SALT_EFFECTIVE_VOLUME_M3_PER_MOL, "Ion transfer volumes do not add to salt");
-		var unsupported=AqueousMixtureProperties.evaluate(Map.of(BuiltinChemicalDefinitions.H2O,1000.0/18,
-				BuiltinChemicalDefinitions.NA_PLUS,.01),1,.001,298.15,101325,4200,.001,.6);
-		require(!unsupported.effectiveVolumesSupported() && !unsupported.viscositySupported(), "Unpaired ion was reported as supported NaCl");
-	}
 
 	private static void thermalAuditAcceptsFloatingPointResidual() {
 		var initial = SignedDyadic.of(1.0e12);
@@ -385,7 +370,7 @@ public final class ThermalOwnerStoreValidation {
 	}
 
 	private static void referenceEnergyUsesCanonicalSpeciesOrder() {
-		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var chemistry = TestChemicalDefinitions.load();
 		var material = new ThermalMaterialDefinition("test:ordered", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"test:liquid", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 4)));
 		var offsets = new java.util.ArrayList<ThermalSpeciesOffset>();
@@ -430,7 +415,7 @@ public final class ThermalOwnerStoreValidation {
 		var material = new ThermalMaterialDefinition("test:thermal", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"test:liquid", 300, 20, 0.5,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 4)));
-		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var chemistry = TestChemicalDefinitions.load();
 		var offsets = new java.util.ArrayList<ThermalSpeciesOffset>();
 		for (var species : chemistry.species()) offsets.add(new ThermalSpeciesOffset("test:offset/" + species.id().replace(':', '/'),
 				species.id(), material.id(), ExactRational.of(species.id().equals(BuiltinChemicalDefinitions.H2O) ? 1000 : 2000)));

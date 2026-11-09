@@ -16,11 +16,15 @@ public final class GranularCouplingFields {
 	private boolean fixedOnly = true;
 
 	public GranularCouplingFields(int sizeX, int sizeY, int sizeZ, double cellSize) {
+		this(mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize);
+	}
+	public GranularCouplingFields(mmm.spatial.SpatialGrid grid,double cellSize) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0.0)) {
 			throw new IllegalArgumentException("Granular coupling dimensions are invalid");
 		}
-		this.kernel = new GranularKernel(sizeX, sizeY, sizeZ, cellSize);
-		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		this.kernel = new GranularKernel(grid,cellSize);
+		this.cellCount = grid.cellCount();
 		this.solidSvq = new long[cellCount];
 		this.fixedCellSvq = new long[cellCount];
 	}

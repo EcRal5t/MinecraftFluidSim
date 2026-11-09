@@ -22,14 +22,14 @@ public final class MarkerVelocityTransferValidation {
         ambientResetAndVentCarryKineticEnergy();
 	}
 	private static HostFluidState domain() {
-		return new HostFluidState(4,4,4,new FluidSolverConfig(.5F,1000,0,.001F,400,1e-5F,.002F));
+		return new HostFluidState(4,4,4,new FluidSolverConfig(.5F,0,.001F,400,1e-5F,.002F), mmm.fluid.TestFluidDefinitions.load());
 	}
 	private static void initialInputKeepsActualMassAndMomentum() {
 		for (double scale : new double[]{125, 1.25e8}) {
 			var d=domain(); long[] masses={Mass.fromKilograms(scale),Mass.fromKilograms(3*scale)};
 			float[] velocity={1,-2,3, 5,2,-1};
 			d.restoreMaterialParticleState(new FlipMaterialParticleState(4,4,4,.5F,2,.25,
-					Math.addExact(masses[0],masses[1]),List.of(new FluidMaterial("test:liquid",1000,"test:liquid",0,Math.PI/2)),
+					Math.addExact(masses[0],masses[1]),List.of(new FluidMaterial("test:liquid",1000,"test:liquid",0,Math.PI/2, 0xff197ae8)),
 					new float[]{.625F,.625F,.625F,.125F, .625F,.625F,.625F,.125F},velocity,new byte[64],masses,new int[2]));
 			d.domainFlowFields.preparePhysicalState();
 			near(d.totalMassUnits(),Math.addExact(masses[0],masses[1]),0,"Integer input mass");
@@ -57,7 +57,7 @@ public final class MarkerVelocityTransferValidation {
 		}
 	}
 	private static void adjacentCellsSupplyActualFaceMass() {
-		var d=domain();d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)));
+		var d=domain();d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material())));
 		long first=Mass.fromKilograms(25),second=Mass.fromKilograms(100);
 		if(!d.domainInventory.tryInsertExactMaterial(1,1,1,.2F,first,0,0).transferred()
 				||!d.domainInventory.tryInsertExactMaterial(2,1,1,.2F,second,0,0).transferred())throw new AssertionError("Variable-density input was refused");
@@ -176,7 +176,7 @@ public final class MarkerVelocityTransferValidation {
         if(!closed||!open)throw new AssertionError("Thin liquid film did not retain its wetted and dry faces");
     }
     private static void containerEditsFollowOpenFaces() {
-        var d=new HostFluidState(5,5,5,new FluidSolverConfig(.5F,1000,0,.05F,48,1e-4F,.002F));
+        var d=new HostFluidState(5,5,5,new FluidSolverConfig(.5F,0,.05F,48,1e-4F,.002F), mmm.fluid.TestFluidDefinitions.load());
         for(int y=0;y<5;y++)for(int z=0;z<5;z++)d.setSolid(2,y,z,true);
         d.setVolume(3,2,2,.25F);
         if(d.tryExtractExactVolume(1,2,2,.125F,4).transferred())

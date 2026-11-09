@@ -10,11 +10,14 @@ import java.util.UUID;
 public record RegionSectionState(RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 		int sectionX,int sectionY,int sectionZ,int localStartX,int localStartY,int localStartZ,int sizeX,int sizeY,int sizeZ,
 		List<LiquidCellInventory.Stock> liquidStocks,List<FaceMomentum> faceMomentum,byte[] solidMask,List<RegionExtension> extensions,long checksum) {
-	public record FaceMomentum(int axis,int face,double kilogramMetersPerSecond) implements Comparable<FaceMomentum> {
+	public record FaceMomentum(int axis,int x,int y,int z,double kilogramMetersPerSecond) implements Comparable<FaceMomentum> {
 		public FaceMomentum {
-			if (axis < 0 || axis > 2 || face < 0 || !Double.isFinite(kilogramMetersPerSecond)) throw new IllegalArgumentException("Invalid persisted MAC face");
+			if (axis < 0 || axis > 2 || x<0 || y<0 || z<0 || !Double.isFinite(kilogramMetersPerSecond)) throw new IllegalArgumentException("Invalid persisted MAC face");
 		}
-		public int compareTo(FaceMomentum other) { int order = Integer.compare(axis,other.axis); return order == 0 ? Integer.compare(face,other.face) : order; }
+		public int compareTo(FaceMomentum other) {
+			int order=Integer.compare(axis,other.axis);if(order==0)order=Integer.compare(z,other.z);
+			if(order==0)order=Integer.compare(y,other.y);return order==0?Integer.compare(x,other.x):order;
+		}
 	}
 	public RegionSectionState {
 		Objects.requireNonNull(layout); Objects.requireNonNull(regionId); Objects.requireNonNull(dimensionId);

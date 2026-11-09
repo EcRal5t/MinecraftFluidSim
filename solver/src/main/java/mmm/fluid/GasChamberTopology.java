@@ -173,7 +173,7 @@ final class GasChamberTopology {
 		areas.merge((long) low << 32 | (high & 0xffffffffL), area, Double::sum);
 	}
     private static double componentError(GasComplementGeometry.Component component) { return 8*Math.ulp(component.volume()); }
-	private static int cellCount(GasComplementGeometry geometry) { return Math.multiplyExact(geometry.sizeX(), Math.multiplyExact(geometry.sizeY(), geometry.sizeZ())); }
+    private static int cellCount(GasComplementGeometry geometry) { return geometry.cellCount(); }
 	private static int root(int[] parent, int piece) {
 		int root = piece; while (parent[root] != root) root = parent[root];
 		while (parent[piece] != piece) { int next = parent[piece]; parent[piece] = root; piece = next; }

@@ -23,6 +23,7 @@ layout(constant_id = 0) const int pipelineStage = -1;
 bool activeCell(int cell);
 bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
+// SPATIAL_GRID
 // HOST_LAYOUT
 // SERIES_CONDUCTANCE_LIBRARY
 // PLIC_FACE_LIBRARY
@@ -150,10 +151,10 @@ double liquidCold(int lr, int material) {
     double coldEnergy=kg*specificLiquid(material,minimum);
     int ethanol=liquidCaloricWord(CAL_ETHANOL_SPECIES);
     if(material==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && ethanol>=0){
-        double ethanolMass=caloricEthanolMass(kg,double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,ethanol)));
+        double ethanolMass=caloricEthanolMass(kg,double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,ethanol)),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
         double refT=readDouble(liquidCaloricWord(CAL_REFERENCE_TEMPERATURE)+2*material);
         double waterCold=readDouble(liquidCaloricWord(CAL_COLD_SENSIBLE)+2*material);
-        coldEnergy+=ethanolMass*((minimum-refT)*CAL_ETHANOL_CP-waterCold);
+        coldEnergy+=ethanolMass*((minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)-waterCold);
     }
     for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) {
         int64_t speciesAmount = phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp);
@@ -163,18 +164,13 @@ double liquidCold(int lr, int material) {
     return coldEnergy;
 }
 
-ivec3 shape() {
-    return ivec3(phaseRowHeader(headerWord(H_PHASE_ROWS_HEADER), LP_H_SIZE_X), phaseRowHeader(headerWord(H_PHASE_ROWS_HEADER), LP_H_SIZE_Y), phaseRowHeader(headerWord(H_PHASE_ROWS_HEADER), LP_H_SIZE_Z));
-}
-int cell(ivec3 q) {
-    ivec3 z = shape();
-    return any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, z)) ? -1 : (q.z * z.y + q.y) * z.x + q.x;
-}
+ivec3 shape() { return gridShape(); }
+int cell(ivec3 q) { return gridCell(q); }
 double internalArea(int c, int lr);
 int contactNode(int c, int pass) {
     if (pass == 0) return c;
     int axis=(pass-1)/2, parity=(pass-1)%2;
-    ivec3 z=shape(), q=ivec3(c%z.x,c/z.x%z.y,c/(z.x*z.y)), other=q;
+    ivec3 q=gridPosition(c), other=q;
     other[axis] += (q[axis] & 1) == parity ? 1 : -1;
     return cell(other);
 }
@@ -183,7 +179,7 @@ double contactArea(int c, int node, int pass, int lr) {
     int gc=geometryHeaderWord(GEO_H_CELLS);
     double cf=readDouble(gc+2*(4*c+3)),nf=readDouble(gc+2*(4*node+3));
     if(cf<=0.0LF || nf>=1.0LF)return 0.0LF;
-    int axis=(pass-1)/2; ivec3 z=shape(), q=ivec3(c%z.x,c/z.x%z.y,c/(z.x*z.y));
+    int axis=(pass-1)/2; ivec3 q=gridPosition(c);
     bool positive=(q[axis]&1)==(pass-1)%2;
     int masks=geometryHeaderWord(GEO_H_MASKS),cm=int(words[masks+c]),nm=int(words[masks+node]);
     int cp=geometryHeaderWord(GEO_H_PLANES)+8*c,np=geometryHeaderWord(GEO_H_PLANES)+8*node;
@@ -555,7 +551,7 @@ double liquidSpeciesEnergy(int material,int species,int64_t unit,double temperat
     double specific=specificLiquid(material,temperature);
     if(material==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && species==liquidCaloricWord(CAL_ETHANOL_SPECIES)){
         double refT=readDouble(liquidCaloricWord(CAL_REFERENCE_TEMPERATURE)+2*material);
-        specific=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*material)+(temperature-refT)*CAL_ETHANOL_CP;
+        specific=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*material)+(temperature-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY);
     }
     return double(unit)*massUnit()*specific+
         readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(material*liquidCaloricWord(CAL_SPECIES_STRIDE)+species));
@@ -683,7 +679,7 @@ uvec4 exchange(int node) {
         double liquidSpecificCold=specificLiquid(m,minimum);
         if(m==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && sp==liquidCaloricWord(CAL_ETHANOL_SPECIES)){
             double refT=readDouble(liquidCaloricWord(CAL_REFERENCE_TEMPERATURE)+2*m);
-            liquidSpecificCold=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*m)+(minimum-refT)*CAL_ETHANOL_CP;
+            liquidSpecificCold=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*m)+(minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY);
         }
         double lcold=double(unit)*massUnit()*liquidSpecificCold+
                      readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(m*liquidCaloricWord(CAL_SPECIES_STRIDE)+sp));
@@ -785,7 +781,7 @@ uvec4 exchange(int node) {
         atomicAdd(longs[(gasField(GAS_SPECIES_AMOUNTS) + 2 * entry) / 2], q);
         atomicAdd(longs[(gasField(GAS_MASS_UNITS) + 2 * audit) / 2], mass);
         atomicAdd(longs[(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * audit) / 2], nanos);
-        double heightDifference=double(node/shape().x%shape().y-c/shape().x%shape().y)*readDouble(p.header+H_CELL_SIZE);
+        double heightDifference=double(gridPosition(node).y-gridPosition(c).y)*readDouble(p.header+H_CELL_SIZE);
         writeDouble(workField(FIELD_PE_WORK) + 2 * c, readDouble(workField(FIELD_PE_WORK)+2*c)+(dissolve?1.0LF:-1.0LF)*double(mass)*massUnit()*readDouble(p.header+H_GRAVITY)*heightDifference);
         if(vapor){words[headerWord(H_PHASE_MOTION_CELLS) + c] = 1u;atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)], 1u);}
     }
@@ -794,28 +790,10 @@ uvec4 exchange(int node) {
     words[workField(FIELD_HEAD)+node]=uint(-1);
     return counts;
 }
-int faceBase(int axis) {
-    ivec3 s = shape();
-    return axis == 0 ? 0 : (s.x + 1) * s.y * s.z + (axis == 2 ? s.x * (s.y + 1) * s.z : 0);
-}
-ivec3 unit(int axis) {
-    ivec3 v = ivec3(0);
-    v[axis] = 1;
-    return v;
-}
-void faceCells(int id, out int axis, out int a, out int b) {
-    axis = id < faceBase(1) ? 0 : id < faceBase(2) ? 1 : 2;
-    int local = id - faceBase(axis);
-    ivec3 s = shape() + unit(axis), q = ivec3(local % s.x, local / s.x % s.y, local / (s.x * s.y));
-    a = cell(q - unit(axis));
-    b = cell(q);
-}
-int cellFace(int c, int axis, int side) {
-    ivec3 s = shape(), q = ivec3(c % s.x, c / s.x % s.y, c / (s.x * s.y));
-    q[axis] += side;
-    s[axis]++;
-    return faceBase(axis) + (q.z * s.y + q.y) * s.x + q.x;
-}
+int faceBase(int axis) { return gridFaceOffset(axis); }
+ivec3 unit(int axis) { ivec3 v=ivec3(0);v[axis]=1;return v; }
+void faceCells(int id, out int axis, out int a, out int b) { ivec3 e=gridFaceEndpoints(id);a=e.x;b=e.y;axis=e.z; }
+int cellFace(int c, int axis, int side) { return gridFace(c,2*axis+side); }
 double cmass(int c, int field) {
     return double(readQuantity(c < 0 ? p.header + H_AMBIENT_MASS_UNITS : workField(field) + 2 * c)) * massUnit();
 }
@@ -873,8 +851,8 @@ double liquidHeatCapacity(int c,int lr,int material) {
     while(at<last && temperature>=readDouble(liquidCaloricWord(CAL_SEGMENT_UPPER)+2*at))at++;
     double ethanol=0.0LF;int sp=liquidCaloricWord(CAL_ETHANOL_SPECIES);
     if(material==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && sp>=0)
-        ethanol=caloricEthanolMass(kg,double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)));
-    return caloricCapacity(kg,ethanol,readDouble(liquidCaloricWord(CAL_SEGMENT_CAPACITY)+2*at));
+        ethanol=caloricEthanolMass(kg,double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
+    return caloricCapacity(kg,ethanol,readDouble(liquidCaloricWord(CAL_SEGMENT_CAPACITY)+2*at),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY));
 }
 double gasHeatCapacity(int c) {
     double temperature=state(c,0),capacity=0.0LF;

@@ -96,7 +96,7 @@ final class VulkanThermalConduction implements AutoCloseable {
 
     static final int WORK_FIELDS = 8;
     private static String shaderLayout() {
-        return headerDefines() + stageDefines() + "#define ETHANOL_CP " + mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K + "LF\n" + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values());
+        return headerDefines() + stageDefines() + VulkanLiquidThermodynamics.shaderLayout() + "#define CONTACT_LIQUID_CALORIC " + VulkanThermalContacts.LIQUID_CALORIC_WORD + "\n" + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values());
     }
 
     static final int COMPLETE=10;

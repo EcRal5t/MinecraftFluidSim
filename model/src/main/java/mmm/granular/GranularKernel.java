@@ -4,11 +4,13 @@ import java.math.BigInteger;
 import java.util.Objects;
 import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
+import mmm.spatial.SpatialGrid;
 
 /** Reusable exact eight-cell hat kernel, including clipped-domain normalization and SVQ quotas. */
 public final class GranularKernel {
 	private static final SignedDyadic HALF = SignedDyadic.of(.5), ONE = SignedDyadic.of(1, 0);
 	private final int[] size, base = new int[3], cells = new int[8];
+	private final SpatialGrid spatial;
 	private final SignedDyadic h;
 	private final boolean binary;
 	private final ExactRational rationalH;
@@ -22,11 +24,16 @@ public final class GranularKernel {
 	private final double[][] gradientWeight = new double[3][2], gradientDerivative = new double[3][2];
 	private int count;
 	private long quantity;
+	private boolean dyadicQuota;
 
 	public GranularKernel(int sizeX, int sizeY, int sizeZ, double cellSize) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize);
+	}
+	public GranularKernel(SpatialGrid spatial,double cellSize) {
+		int sizeX=spatial.sizeX(),sizeY=spatial.sizeY(),sizeZ=spatial.sizeZ();
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0))
 			throw new IllegalArgumentException("Granular kernel dimensions are invalid");
-		Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		this.spatial=spatial;
 		size = new int[]{sizeX, sizeY, sizeZ}; h = SignedDyadic.of(cellSize);
 		binary = h.significand().equals(BigInteger.ONE);
 		rationalH = binary ? null : exact(h);
@@ -43,6 +50,7 @@ public final class GranularKernel {
 		if (x == null || y == null || z == null || signedSvq == 0)
 			throw new IllegalArgumentException("Granular kernel position or volume is invalid");
 		quantity = signedSvq;
+		dyadicQuota=binary;
 		var position = new SignedDyadic[]{x, y, z};
 		// A clipped axis has one positive surviving factor; normalization cancels that factor exactly.
 		for (int axis = 0; axis < 3; axis++) {
@@ -71,7 +79,8 @@ public final class GranularKernel {
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int cx = base[0] + ox, cy = base[1] + oy, cz = base[2] + oz;
 			if (cx < 0 || cy < 0 || cz < 0 || cx >= size[0] || cy >= size[1] || cz >= size[2]) continue;
-			cells[count] = (cz * size[1] + cy) * size[0] + cx;
+			int cell=spatial.cell(cx,cy,cz);if(cell<0)continue;
+			cells[count] = cell;
 			binaryRemainder[count] = null; rationalRemainder[count] = null;
 			if (binary) {
 				binaryQuota[count] = binaryWeight[0][ox].multiply(binaryWeight[1][oy]).multiply(binaryWeight[2][oz]).multiply(quantity);
@@ -82,8 +91,16 @@ public final class GranularKernel {
 			}
 			count++;
 		}
-		if (binary ? !binarySum.equals(quantity) : !rationalSum.equals(ExactRational.of(signedSvq)))
-			throw new IllegalStateException("Granular kernel does not re-sum to exact volume");
+		if (binary ? !binarySum.equals(quantity) : !rationalSum.equals(ExactRational.of(signedSvq))) {
+			ExactRational sum=binary?exact(binarySum):rationalSum;
+			if(sum.isZero())throw new IllegalStateException("Granular kernel has no spatial support");
+			for(int i=0;i<count;i++){
+				ExactRational quota=binary?exact(binaryQuota[i]):rationalQuota[i];
+				rationalQuota[i]=new ExactRational(quota.numerator().multiply(sum.denominator()),
+						quota.denominator().multiply(sum.numerator())).multiply(signedSvq);
+			}
+			dyadicQuota=false;
+		}
 	}
 
 	/** Binary64 derivative of the same clipped cell-centred hat weights used by integer quotas. */
@@ -102,14 +119,23 @@ public final class GranularKernel {
 			else { weight[axis][0] = 1 - fraction; weight[axis][1] = fraction;
 				derivative[axis][0] = -1 / length; derivative[axis][1] = 1 / length; }
 		}
-		int count = 0;
+		int count = 0;double[] raw=new double[8];double sum=0,dxsum=0,dysum=0,dzsum=0;
 		for (int oz = 0; oz < 2; oz++) for (int oy = 0; oy < 2; oy++) for (int ox = 0; ox < 2; ox++) {
 			int cx = start[0] + ox, cy = start[1] + oy, cz = start[2] + oz;
 			if (cx < 0 || cy < 0 || cz < 0 || cx >= size[0] || cy >= size[1] || cz >= size[2]) continue;
-			targetCells[count] = (cz * size[1] + cy) * size[0] + cx;
+			int cell=spatial.cell(cx,cy,cz);if(cell<0)continue;
+			targetCells[count] = cell;
+			raw[count]=weight[0][ox]*weight[1][oy]*weight[2][oz];sum+=raw[count];
 			gx[count] = volume * derivative[0][ox] * weight[1][oy] * weight[2][oz];
 			gy[count] = volume * weight[0][ox] * derivative[1][oy] * weight[2][oz];
-			gz[count] = volume * weight[0][ox] * weight[1][oy] * derivative[2][oz]; count++;
+			gz[count] = volume * weight[0][ox] * weight[1][oy] * derivative[2][oz];
+			dxsum+=gx[count];dysum+=gy[count];dzsum+=gz[count];count++;
+		}
+		if(!(sum>0))throw new IllegalStateException("Granular gradient has no spatial support");
+		for(int i=0;i<count;i++){
+			gx[i]=(gx[i]*sum-raw[i]*dxsum)/(sum*sum);
+			gy[i]=(gy[i]*sum-raw[i]*dysum)/(sum*sum);
+			gz[i]=(gz[i]*sum-raw[i]*dzsum)/(sum*sum);
 		}
 		return count;
 	}
@@ -120,22 +146,22 @@ public final class GranularKernel {
 	}
 
 	public int size() { return count; }
-	public int cellCount() { return size[0] * size[1] * size[2]; }
+	public int cellCount() { return spatial.cellCount(); }
 	public boolean sameGeometry(GranularKernel other) {
-		return other != null && java.util.Arrays.equals(size, other.size) && h.equals(other.h);
+		return other != null && spatial.equals(other.spatial) && h.equals(other.h);
 	}
 	public int cell(int index) { return cells[Objects.checkIndex(index, count)]; }
 	public SignedDyadic dyadicQuota(int index) {
 		Objects.checkIndex(index, count);
-		if (!binary) throw new IllegalStateException("Granular kernel quota is not dyadic at this cell size");
+		if (!dyadicQuota) throw new IllegalStateException("Granular kernel quota is not dyadic at this cell size");
 		return binaryQuota[index];
 	}
 	public long floor(int index) {
 		Objects.checkIndex(index, count);
-		if (binary && binaryRemainder[index] == null) {
+		if (dyadicQuota && binaryRemainder[index] == null) {
 			floors[index] = floor(binaryQuota[index]).longValueExact();
 			binaryRemainder[index] = binaryQuota[index].subtract(SignedDyadic.of(floors[index], 0));
-		} else if (!binary && rationalRemainder[index] == null) {
+		} else if (!dyadicQuota && rationalRemainder[index] == null) {
 			floors[index] = floor(rationalQuota[index]).longValueExact();
 			rationalRemainder[index] = rationalQuota[index].subtract(ExactRational.of(floors[index]));
 		}
@@ -143,11 +169,11 @@ public final class GranularKernel {
 	}
 	public long ceil(int index) {
 		long low = floor(index);
-		return (binary ? binaryRemainder[index].signum() : rationalRemainder[index].signum()) == 0 ? low : Math.addExact(low, 1);
+		return (dyadicQuota ? binaryRemainder[index].signum() : rationalRemainder[index].signum()) == 0 ? low : Math.addExact(low, 1);
 	}
 	public int compareRemainder(int first, int second) {
 		floor(first); floor(second);
-		return binary ? binaryRemainder[first].compareTo(binaryRemainder[second])
+		return dyadicQuota ? binaryRemainder[first].compareTo(binaryRemainder[second])
 				: rationalRemainder[first].compareTo(rationalRemainder[second]);
 	}
 

@@ -20,7 +20,7 @@ import java.util.UUID;
 public final class FluidRegionManagerValidation {
 	private static long nextRegionId;
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+			0.5F, 9.81F, 1.0F / 20.0F,
 			32, 1.0E-4F, 2.0E-3F);
 	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "validation_dimension_registry")
@@ -302,7 +302,7 @@ public final class FluidRegionManagerValidation {
 
 	private static FluidRegion regionAt(int x, int y, int z, int nx, int ny, int nz) {
 		return new FluidRegion(new UUID(0L, ++nextRegionId), DIMENSION, new BlockPos(x, y, z),
-				new HostFluidState(nx, ny, nz, CONFIG));
+				new HostFluidState(nx, ny, nz, CONFIG, mmm.fluid.TestFluidDefinitions.load()));
 	}
 
 	private static void require(boolean condition, String message) {

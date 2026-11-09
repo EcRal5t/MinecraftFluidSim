@@ -6,13 +6,13 @@ import mmm.fluid.HostFluidState;
 public final class DebugScenarioInitialization {
 	private DebugScenarioInitialization() { }
 
-	/** Exaggerated surface tension makes the wetting effect visible at block scale. */
+	/** Applies the requested contact angle to the world water definition. */
 	public static mmm.fluid.MaterialRegistry tensionDefinitions(mmm.fluid.MaterialRegistry original, int angleDegrees) {
 		var entries = original.entries().stream().map(entry -> {
 			var material = entry.material();
-			if (material.id().equals(mmm.fluid.BuiltinFluidMaterials.WATER.id())) {
+			if (material.id().equals("mmm:water")) {
 				material = new mmm.fluid.FluidMaterial(material.id(), material.referenceDensity(),
-						material.miscibilityGroup(), 1000.0, Math.toRadians(angleDegrees));
+						material.miscibilityGroup(), material.surfaceTension(), Math.toRadians(angleDegrees), material.displayArgb());
 			}
 			return new mmm.fluid.MaterialRegistry.MaterialEntry(material, entry.viscosity(), entry.thermalExpansion());
 		}).toList();
@@ -20,25 +20,23 @@ public final class DebugScenarioInitialization {
 	}
 
 	public static void bindTensionPalette(HostFluidState domain, mmm.fluid.MaterialRegistry definitions) {
-		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(
-				mmm.fluid.BuiltinFluidMaterials.DEFAULT_PALETTE.stream()
-						.map(material -> definitions.entry(material.id()).material()).toList()));
+		FluidRegionFactory.bindDefaultMaterialState(domain, definitions);
 	}
 
 	public static void fillDam(HostFluidState domain, boolean layeredMaterials) {
-		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
+		float[] volumes=new float[domain.grid().cellCount()];
 		int fillX = domain.sizeX() * 2 / 5;
 		int fillY = domain.sizeY() * 3 / 4;
 		for (int z = 0; z < domain.sizeZ(); z++) {
 			for (int y = 0; y < fillY; y++) {
 				for (int x = 0; x < fillX; x++) {
-					if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = 1.0F;
+					if (domain.grid().cell(x,y,z) >= 0 && !domain.isSolid(x, y, z)) volumes[domain.grid().cell(x,y,z)] = 1.0F;
 				}
 			}
 		}
 		int[] materials=layeredMaterials?new int[volumes.length]:null;
 		if(materials!=null) for(int z=0;z<domain.sizeZ();z++) for(int y=0;y<domain.sizeY();y++) for(int x=0;x<domain.sizeX();x++)
-			materials[(z*domain.sizeY()+y)*domain.sizeX()+x]=y+.5F>=fillY/2.0F?1:0;
+			if (domain.grid().cell(x,y,z) >= 0) materials[domain.grid().cell(x,y,z)]=y+.5F>=fillY/2.0F?1:0;
 		domain.setVolumes(volumes,materials);
 		domain.resetAmbientGas();
 	}
@@ -85,18 +83,18 @@ public final class DebugScenarioInitialization {
 		int leftArmLimit = 3 * FluidRegionFactory.CELLS_PER_BLOCK;
 		for (int localNode : gas.nodeIds()) {
 			int cell = localNode - 1;
-			if (cell % domain.sizeX() < leftArmLimit)
+			if (domain.grid().x(cell) < leftArmLimit)
 				domain.setGasNodeStandardVolume(localNode, gas.availableVolume(localNode) * factor);
 		}
 		return node;
 	}
 
 	public static void fillAirWater(HostFluidState domain) {
-		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
+		float[] volumes=new float[domain.grid().cellCount()];
 		int cellsPerBlock = FluidRegionFactory.CELLS_PER_BLOCK;
 		for (int z = 0; z < domain.sizeZ(); z++) for (int y = cellsPerBlock; y < 5 * cellsPerBlock / 2; y++)
-			for (int x = 0; x < domain.sizeX(); x++) if (!domain.isSolid(x,y,z))
-				volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = 1.0F;
+			for (int x = 0; x < domain.sizeX(); x++) if (domain.grid().cell(x,y,z) >= 0 && !domain.isSolid(x,y,z))
+				volumes[domain.grid().cell(x,y,z)] = 1.0F;
 		domain.setVolumes(volumes);
 		domain.resetAmbientGas();
 	}
@@ -114,9 +112,9 @@ public final class DebugScenarioInitialization {
 		double centerX = 0.5 * (sx - 1) * cellSize;
 		double centerY = wallY - radius * cos;
 		double centerZ = 0.5 * (sz - 1) * cellSize;
-		float[] volumes=new float[sx*sy*sz];
+		float[] volumes=new float[domain.grid().cellCount()];
 		for(int z=0;z<sz;z++) for(int y=2;y<sy;y++) for(int x=0;x<sx;x++)
-			if (!domain.isSolid(x, y, z)) volumes[(z*sy+y)*sx+x]=(float)sphericalCapFraction(x,y,z,cellSize,centerX,centerY,centerZ,radius,wallY);
+			if (domain.grid().cell(x,y,z) >= 0 && !domain.isSolid(x, y, z)) volumes[domain.grid().cell(x,y,z)]=(float)sphericalCapFraction(x,y,z,cellSize,centerX,centerY,centerZ,radius,wallY);
 		domain.setVolumes(volumes);
 		domain.resetAmbientGas();
 	}

@@ -40,27 +40,15 @@ final class VulkanActivityPending implements AutoCloseable {
             vkCmdFillBuffer(command, output.handle(), activityCells.offset(), activityCells.bytes(), 1);
             vkCmdFillBuffer(command, output.handle(), activityFaces.offset(), activityFaces.bytes(), 1);
         } else {
-            int sx = liquid.sizeX(), sy = liquid.sizeY(), sz = liquid.sizeZ();
+            var grid = liquid.grid();
             var cells = ByteBuffer.allocateDirect(4 * active.length).order(ByteOrder.LITTLE_ENDIAN);
             for (boolean value : active) cells.putInt(value ? 1 : 0);
             cells.flip();
             var faces = ByteBuffer.allocateDirect(Math.toIntExact(activityFaces.bytes())).order(ByteOrder.LITTLE_ENDIAN);
-            for (int axis = 0; axis < 3; axis++) {
-                int nx = sx + (axis == 0 ? 1 : 0), ny = sy + (axis == 1 ? 1 : 0), nz = sz + (axis == 2 ? 1 : 0);
-                for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) {
-                    int coordinate = axis == 0 ? x : axis == 1 ? y : z;
-                    int length = axis == 0 ? sx : axis == 1 ? sy : sz;
-                    boolean enabled;
-                    if (coordinate == 0 || coordinate == length) {
-                        int cx = Math.min(x, sx - 1), cy = Math.min(y, sy - 1), cz = Math.min(z, sz - 1);
-                        enabled = active[(cz * sy + cy) * sx + cx];
-                    } else {
-                        int second = (z * sy + y) * sx + x;
-                        int first = second - (axis == 0 ? 1 : axis == 1 ? sx : sx * sy);
-                        enabled = active[first] && active[second];
-                    }
-                    faces.putInt(enabled ? 1 : 0);
-                }
+            for (int face = 0; face < grid.faceCount(); face++) {
+                int left = grid.faceLeft(face), right = grid.faceRight(face);
+                boolean enabled = (left < 0 || active[left]) && (right < 0 || active[right]);
+                faces.putInt(enabled ? 1 : 0);
             }
             faces.flip();
             updateActivity(command, output, activityCells.offset(), cells);

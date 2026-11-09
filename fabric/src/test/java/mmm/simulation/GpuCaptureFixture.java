@@ -36,13 +36,13 @@ final class GpuCaptureFixture {
         var dimension = ResourceKey.create(Registries.DIMENSION,
                 Identifier.fromNamespaceAndPath("mmm", "gpu_capture"));
         var domain = FluidRegionFactory.createDomain(MinecraftDebugFixtures.BLOCK_SIZE_X,
-                MinecraftDebugFixtures.BLOCK_SIZE_Y, MinecraftDebugFixtures.BLOCK_SIZE_Z);
+                MinecraftDebugFixtures.BLOCK_SIZE_Y, MinecraftDebugFixtures.BLOCK_SIZE_Z, registries);
         var region = new FluidRegion(UUID.randomUUID(), dimension, BlockPos.ZERO, domain);
         if (!manager.addAndSelect(region).accepted()) throw new IllegalStateException("capture region admission failed");
         var world = new World(dimension.identifier().toString());
         var files = new TakeoverJournalFiles(startup.worldRoot());
         try {
-            FluidRegionFactory.bindDefaultMaterialState(domain);
+            FluidRegionFactory.bindDefaultMaterialState(domain, registries.materialRegistry());
             int wetCells = FluidRegionFactory.captureWater(region, world::waterHeight);
             float sourceHeight = Blocks.WATER.defaultBlockState().getFluidState().getOwnHeight();
             double expectedVolume = 128.0 + 64.0 + 64.0 * (2.0 * sourceHeight - 1.0);

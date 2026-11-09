@@ -8,7 +8,6 @@ import mmm.network.FluidMaterialSnapshotPayload;
 import mmm.network.FluidChemicalSnapshotPayload;
 import mmm.network.FluidGranularSnapshotPayload;
 import mmm.network.FluidThermalSnapshotPayload;
-import mmm.network.FluidSnapshotPayload;
 import mmm.network.ControllerSummaryPayload;
 import mmm.network.LifecycleOperationPreviewPayload;
 import mmm.network.ThermalReservoirSummaryPayload;
@@ -51,10 +50,6 @@ public final class MmmModClient implements ClientModInitializer {
 			FluidProtocol.Negotiation negotiation = FluidProtocol.negotiate(payload.offer());
 			negotiated.set(negotiation.accepted() ? negotiation : null);
 			context.responseSender().sendPacket(FluidProtocolResponsePayload.from(negotiation));
-		});
-		ClientPlayNetworking.registerGlobalReceiver(FluidSnapshotPayload.TYPE, (payload, context) -> {
-			FluidProtocol.Negotiation negotiation = negotiated.get();
-			renderer.accept(payload, negotiation == null ? null : negotiation.selectedLayout());
 		});
 		ClientPlayNetworking.registerGlobalReceiver(FluidMaterialSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));

@@ -1,15 +1,14 @@
 package mmm.fluid;
 
 /**
- * Numerical parameters for the standalone fluid prototype.
+ * Numerical parameters shared by host edits and the production fluid solver.
  *
  * <p>The solver uses Minecraft's positive Y direction as "up" and stores
- * pressure as gauge pressure, so atmospheric pressure is zero. Pressure tolerance is the
+ * pressure increments relative to the local state equation. Pressure tolerance is the
  * absolute RMS algebraic residual accepted from the projection.</p>
  */
 public record FluidSolverConfig(
 		float cellSize,
-		float density,
 		float gravity,
 		float timeStep,
 		int maxPressureIterations,
@@ -22,7 +21,6 @@ public record FluidSolverConfig(
 	public static final double UNRESOLVED_LAYER_FRACTION = 1.0 / 64.0;
 	public FluidSolverConfig {
 		if (!(Float.isFinite(cellSize) && cellSize > 0.0F)) throw new IllegalArgumentException("cellSize must be finite and positive");
-		if (!(Float.isFinite(density) && density > 0.0F)) throw new IllegalArgumentException("density must be finite and positive");
 		if (!(Float.isFinite(gravity) && gravity >= 0.0F)) throw new IllegalArgumentException("gravity must be finite and non-negative");
 		if (!(Float.isFinite(timeStep) && timeStep > 0.0F)) throw new IllegalArgumentException("timeStep must be finite and positive");
 		if (maxPressureIterations < 1) throw new IllegalArgumentException("maxPressureIterations must be positive");
@@ -35,7 +33,6 @@ public record FluidSolverConfig(
 	public static FluidSolverConfig prototypeDefaults() {
 		return new FluidSolverConfig(
 				1.0F,
-				1_000.0F,
 				9.81F,
 				1.0F / 20.0F,
 				200,

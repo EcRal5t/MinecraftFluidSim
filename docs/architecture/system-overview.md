@@ -31,6 +31,22 @@
 
 液体库存按单元和材料保存精确参考体积、质量、物种及内能；颗粒、连续固相与逐格气体分别保存自身库存及收支。涉及多相的编辑以同一计划交接物质、组成、动量和内能。质量、物种和体积余量保留整数或精确表示，几何与力学采用浮点近似。专题见[材料](material-state.md)、[化学](chemistry-state.md)、[气体](gas-state.md)、[颗粒](granular-state.md)、[热学](thermal-state.md)和[存档](region-state.md)。
 
+### 空间域与计算分块
+
+一个区域持有完整物理域、材料定义和提交代。域内采用固定 8³ 单元块，块内保持规则网格，实际登记的块按空间顺序紧凑存储。单块与多块使用同一套寻址和求解。单元坐标、六邻接和 MAC 面身份由 `SpatialGrid` 统一提供；相邻块引用同一个共享面，压力包含跨块项，输运按同一份接受通量更新两侧库存。
+
+固定拓扑由 `VulkanSpatialGrid` 编码为独立只读设备数据，创建域时上传，液体、气体、颗粒、热学及观察内核共同引用。压力多重网格按同一空间坐标聚合。颗粒床层按实际驻留的竖向列存储；缺块处保留明确的几何隔断。分块布局与活动组各有职责：块决定存储，物理连通和设备接触决定共同推进或暂停的范围。
+
+控制器和水池按实际空间占地登记、采样碰撞与检查世界区块。驻留块内位于容器外的单元按固体处理。资源计费使用驻留单元总数，长窄通道可跨越多个块；每区域和服务器总量继续受配置预算约束。所有块共享一个候选和区域 HEAD，完整 checkpoint 保存块成员与空间地址，恢复时重建紧凑索引。
+
+入口：[SpatialGrid](../../model/src/main/java/mmm/spatial/SpatialGrid.java)、[VulkanSpatialGrid](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSpatialGrid.java)、[spatial-grid.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/spatial-grid.glsl)、[FluidRegionFactory.grid](../../fabric/src/main/java/mmm/simulation/FluidRegionFactory.java)、[PhysicalActivityGraph](../../solver/src/main/java/mmm/fluid/PhysicalActivityGraph.java)。跨块完整步验证入口为 `runGpuSpatialDomainValidation`。
+
+### 数据驱动的物质定义
+
+世界启动时从 `data/mmm/mmm` 下的 JSON 加载液体、气体组分、化学物种与反应、颗粒及热学定义，形成完整的 `FluidDefinitions`。库存功能开关控制实际参与的物理过程；所有宿主编辑、容器操作、恢复和 GPU 表生成均读取这份世界定义。液体密度、温度黏度曲线、表面张力、接触角、热浮力参数与颜色位于 `fluid_materials`；组分摩尔质量、扩散与混合液体物性位于 `species`，溶液黏度修正参数位于 `chemical_phases`，气体种类与环境比例位于 `gas_components`。热容、参考内能、导热、相变及有限墙继续由对应热学 JSON 提供。
+
+液液界面张力由可选 `fluid_interfaces` 定义。世界定义随能力包保存，checkpoint 引用其指纹；宿主与 GPU 从同一份数值构建状态函数与材料表。求解配置保存数值参数，纯水和原版桶的密度由材料定义提供。入口：[WorldMaterialDataPackLoader](../../fabric/src/main/java/mmm/simulation/WorldMaterialDataPackLoader.java)、[RegistryBundleLoader](../../fabric/src/main/java/mmm/simulation/RegistryBundleLoader.java)、[FluidDefinitions](../../solver/src/main/java/mmm/fluid/FluidDefinitions.java)、[VulkanFluidStateCodec](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidStateCodec.java)。
+
 <a id="units"></a>
 ### SI 物理量与整数编码
 
@@ -101,7 +117,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
 5. 日常查询与展示读取设备观察；checkpoint 和宿主编辑显式导出所需代次。
 
-普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇；同一墙只归一个区域，显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
+普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
 
 管理员可用 `/mmm process feed <间隔tick>` 周期性执行主手容器事务，用 `/mmm process drive <秒数>` 启动对准格的有限时长往复驱动；`stop` 停止两者，`sample` 读取格内液体、气体和固体库存。周期投料按加载状态、玩家运行意图与区域可用性调度，静水休眠时继续接受到期投料；容器事务唤醒物理计算。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击按当前维度与方块位置停止对应驱动。驱动使用规定运动的共同压力、黏性和外功结算。工艺配置按区域保存，区域移除时清除；物理状态由常规 checkpoint 恢复。
 
@@ -157,6 +173,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - [HostFluidState](../../solver/src/main/java/mmm/fluid/HostFluidState.java)、[DomainInventory](../../solver/src/main/java/mmm/fluid/DomainInventory.java)、[DomainCollision](../../solver/src/main/java/mmm/fluid/DomainCollision.java)、[DomainPhaseInventory](../../solver/src/main/java/mmm/fluid/DomainPhaseInventory.java)：宿主状态与有限库存、几何编辑。
 - [HostMixtureEdit](../../solver/src/main/java/mmm/fluid/HostMixtureEdit.java)、[SpatialGasEdits](../../solver/src/main/java/mmm/fluid/SpatialGasEdits.java)、[CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：外部物料、碰撞及占容编辑共同准备液气库存、面动量和实际载体耗散热；开放外界面保留环境惯量。
+- [LiquidCollisionEdit](../../solver/src/main/java/mmm/fluid/LiquidCollisionEdit.java)：批量碰撞先按未来孔容保留本格库存，再沿原开放面搬迁超容量部分；质量、物种和携能复用共同库存转移。`HostFluidState.applyCollisionEdits` 一次发布完整几何与库存，空间不足时保留原状态，世界采样层读取位移统计。
 - [GasInitialization](../../solver/src/main/java/mmm/fluid/GasInitialization.java)：显式气腔初态导入逐格库存；续算和存档直接保存空间状态。
 - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：宿主共享相几何与局部状态方程压力查询。
 - [MovingBodyWetGeometry](../../solver/src/main/java/mmm/fluid/MovingBodyWetGeometry.java)、[WaterContactGeometry](../../solver/src/main/java/mmm/fluid/WaterContactGeometry.java)：基于共享 PLIC 和逐格气压计算实体浸液、压力作用与水接触。

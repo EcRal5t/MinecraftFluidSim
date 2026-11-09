@@ -89,13 +89,13 @@ public final class GpuProductionDemoValidation {
 			runCapture(startup, world, manager, steps, stop, scenario.equals("takeover"));
 			return;
 		}
-		var domain = scenario.startsWith("droplet") ? FluidRegionFactory.createDomain(2, 2, 2)
-				: scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain()
-				: isAirScenario(scenario) ? FluidRegionFactory.createAirDomain()
+		var domain = scenario.startsWith("droplet") ? FluidRegionFactory.createDomain(2, 2, 2, world)
+				: scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain(world)
+				: isAirScenario(scenario) ? FluidRegionFactory.createAirDomain(world)
 				: scenario.equals("flow") ? FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X,
-						DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z)
+						DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z, world)
 				: FluidRegionFactory.createDomain(MinecraftDebugFixtures.BLOCK_SIZE_X,
-						MinecraftDebugFixtures.BLOCK_SIZE_Y, MinecraftDebugFixtures.BLOCK_SIZE_Z);
+						MinecraftDebugFixtures.BLOCK_SIZE_Y, MinecraftDebugFixtures.BLOCK_SIZE_Z, world);
 		var region = new FluidRegion(UUID.randomUUID(), ResourceKey.create(Registries.DIMENSION,
 				Identifier.fromNamespaceAndPath("mmm", "gpu_demo_validation")), BlockPos.ZERO, domain);
 		if (isAirScenario(scenario)) region.setEntityPhysicsEnabled(false);
@@ -110,10 +110,10 @@ public final class GpuProductionDemoValidation {
 			DebugScenarioInitialization.fillTensionCap(domain);
 			world.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep(), material);
 		} else {
-			FluidRegionFactory.bindDefaultMaterialState(domain);
+			FluidRegionFactory.bindDefaultMaterialState(domain, world.materialRegistry());
 			if (scenario.startsWith("droplet")) {
-				float[] volumes = new float[domain.sizeX() * domain.sizeY() * domain.sizeZ()];
-				volumes[(1 * domain.sizeY() + 3) * domain.sizeX() + 1] = Math.scalb(1.0f, scenario.equals("droplet-tail") ? -41 : -40);
+				float[] volumes = new float[domain.grid().cellCount()];
+				volumes[domain.grid().cell(1,3,1)] = Math.scalb(1.0f, scenario.equals("droplet-tail") ? -41 : -40);
 				domain.setVolumes(volumes);
 			} else if (isAirScenario(scenario)) DebugScenarioInitialization.fillAirWater(domain);
 			else if (scenario.equals("flow")) DemoSceneInitialization.fillFlow(domain);
@@ -250,7 +250,7 @@ public final class GpuProductionDemoValidation {
 				mixture, mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K);
 		int candidates = 0;
 		for (int y = 0; y < domain.sizeY(); y++) for (int z = 0; z < domain.sizeZ(); z++) for (int x = 0; x < domain.sizeX(); x++) {
-			int cell = (z * domain.sizeY() + y) * domain.sizeX() + x;
+			int cell = domain.grid().cell(x,y,z);
 			if (domain.isSolid(x, y, z) || !domain.groupAvailable(cell) || domain.volume(x, y, z) > 0.75f) continue;
 			candidates++;
 			var result = domain.tryInsertExactVolume(x, y, z, volume, 0, water, true, energy);
@@ -787,11 +787,11 @@ public final class GpuProductionDemoValidation {
             if(stock.internalEnergy()-base>maxSensible){maxSensible=stock.internalEnergy()-base;maxSensibleMass=kg;maxSensibleCell=stock.key().cell();}
         }
         double gasEnergy=0;if(state.spatialGas()!=null)for(double u:state.spatialGas().internalEnergy())gasEnergy+=u;
-        double gpu=Double.NaN;if(hottestCell>=0){int x=hottestCell%region.sizeX(),y=hottestCell/region.sizeX()%region.sizeY(),z=hottestCell/(region.sizeX()*region.sizeY());
+        double gpu=Double.NaN;if(hottestCell>=0){int x=region.grid().x(hottestCell),y=region.grid().y(hottestCell),z=region.grid().z(hottestCell);
             var sample=region.observeCellInventory(x,y,z);if(sample!=null)gpu=sample.temperatureKelvin().orElse(Double.NaN);}
         System.out.printf("stage=liquid-caloric where=%s mass_kg=%.12g liquid_u_j=%.17g reference_j=%.17g sensible_j=%.17g h2o_quanta=%d ethanol_quanta=%d gas_u_j=%.17g hot_cell=%d cpu_k=%.12g gpu_k=%.12g%n",
                 stage,mass,energy,reference,energy-reference,water,ethanol,gasEnergy,hottestCell,hottest,gpu);
-        int sx=state.sizeX(),sy=state.sizeY(),sz=state.sizeZ();int x=maxSensibleCell%sx,y=maxSensibleCell/sx%sy,z=maxSensibleCell/(sx*sy);
+        int sx=state.sizeX(),sy=state.sizeY(),sz=state.sizeZ();int x=state.grid().x(maxSensibleCell),y=state.grid().y(maxSensibleCell),z=state.grid().z(maxSensibleCell);
         boolean outsideFace=x==0||y==0||z==0||x==sx-1||y==sy-1||z==sz-1;
         System.out.printf("stage=liquid-caloric-detail hot_mass_kg=%.12g tail_mass_kg=%.12g tail_sensible_j=%.17g max_sensible_cell=%d coords=%d,%d,%d dims=%d,%d,%d exterior=%s max_sensible_mass_kg=%.12g max_sensible_j=%.17g%n",
                 hotMass,tailMass,tailSensible,maxSensibleCell,x,y,z,sx,sy,sz,outsideFace,maxSensibleMass,maxSensible);
@@ -879,7 +879,7 @@ public final class GpuProductionDemoValidation {
 	private static void captureCollisions(FluidRegion region, String scenario) {
 		int sx = region.sizeX(), sy = region.sizeY(), sz = region.sizeZ();
 		int cellsPerBlock = FluidRegionFactory.CELLS_PER_BLOCK;
-		byte[] masks = new byte[sx * sy * sz];
+		byte[] masks = new byte[region.grid().cellCount()];
 		int solid = 0;
 		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++) {
 			boolean glass = switch (scenario) {
@@ -888,9 +888,9 @@ public final class GpuProductionDemoValidation {
 				case "tension", "tension30", "tension120" -> y / cellsPerBlock == 0;
 				default -> false;
 			};
-			if (glass) { masks[(z * sy + y) * sx + x] = (byte) 0xff; solid++; }
+			if (glass) { masks[region.grid().cell(x,y,z)] = (byte) 0xff; solid++; }
 		}
-		var capture = new mmm.world.CollisionField(sx, sy, sz, masks);
+		var capture = new mmm.world.CollisionField(region.grid(), masks);
 		var applied = FluidRegionWorldInteraction.applyCapturedCollisions(region, capture, cellsPerBlock);
 		require(applied.changedCells() == solid, "Scaffold collision capture was not applied");
 		System.out.println("stage=collision-applied cells=" + solid);
@@ -953,12 +953,12 @@ public final class GpuProductionDemoValidation {
 		double[] volume = new double[2], xmoment = new double[2], ymoment = new double[2], side = new double[2], columns = new double[2];
 		if (isAirScenario(scenario))
 			for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++)
-				if (state.fixedGeometry().mask((z * sy + 2) * sx + x) == 0) columns[x < sx / 2 ? 0 : 1]++;
+				if (state.fixedGeometry().mask(state.grid().cell(x,2,z)) == 0) columns[x < sx / 2 ? 0 : 1]++;
 		long acid = 0, base = 0, waterQuanta = 0;
 		double wetArea = 0;
 		var chemistry = state.chemicalRegistry();
 		for (var stock : state.liquid().physicalStocks()) {
-			int cell = stock.key().cell(), x = cell % sx, y = cell / sx % sy;
+			int cell = stock.key().cell(), x = state.grid().x(cell), y = state.grid().y(cell);
 			int material = stock.key().material();
 			double amount = stock.volumeFraction();
 			if (material < 2) { volume[material] += amount; xmoment[material] += x * amount; ymoment[material] += y * amount; }

@@ -19,6 +19,7 @@ bool activeCell(int cell);
 bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
 // DYADIC_LIBRARY
+// SPATIAL_GRID
 // HOST_LAYOUT
 const uint ERROR_INVALID_STATE = 1073741824u;
 const int STAGE_INITIALIZE = 0;
@@ -189,8 +190,8 @@ double capacity(int kind, int row, double temperature, out double knot) {
     double total=double(mass(kind,row))*1e-10LF, ethanol=0.0;
     int ethanolSpecies=caloricHeaderWord(kind,CAL_ETHANOL_SPECIES);
     if(m==caloricHeaderWord(kind,CAL_AQUEOUS_MATERIAL)&&ethanolSpecies>=0)
-        ethanol=caloricEthanolMass(total,double(readQuantity(kind,row,ethanolSpecies)));
-    return caloricCapacity(total,ethanol,readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at));
+        ethanol=caloricEthanolMass(total,double(readQuantity(kind,row,ethanolSpecies)),readDouble(headerWord(101)+CAL_ETHANOL_MOLAR_MASS));
+    return caloricCapacity(total,ethanol,readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at),readDouble(headerWord(101)+CAL_ETHANOL_HEAT_CAPACITY));
 }
 int64_t freezable(int liquid) {
     int64_t result = phaseRowMass(phaseRowsHeader(), liquid);
@@ -227,10 +228,10 @@ dvec2 pairEnergy(int liquid, int solid, double temperature, bool freezing, int64
             result.x += double(qa) * reference(0, liquid, s);
             int m=material(0,liquid);
             if(m==caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL)&&s==caloricHeaderWord(0,CAL_ETHANOL_SPECIES)) {
-                double ethanol=caloricEthanolMass(double(a)*1e-10LF,double(qa));
+                double ethanol=caloricEthanolMass(double(a)*1e-10LF,double(qa),readDouble(headerWord(101)+CAL_ETHANOL_MOLAR_MASS));
                 double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
                 double pureSensible=specific(0,liquid,temperature)-readDouble(caloricHeaderWord(0,CAL_MATERIAL_REFERENCE)+2*m);
-                result.x+=ethanol*((temperature-refT)*CAL_ETHANOL_CP-pureSensible);
+                result.x+=ethanol*((temperature-refT)*readDouble(headerWord(101)+CAL_ETHANOL_HEAT_CAPACITY)-pureSensible);
             }
         }
         if (qb != 0l)
@@ -508,42 +509,9 @@ void phaseCell(int ordinal) {
     atomicAdd(words[workField(FIELD_CONTROL) + 8], uint(batches));
     atomicAdd(words[workField(FIELD_CONTROL) + 9], uint(freezing ? batches : -batches));
 }
-int axisFaces(int axis) {
-    return axis == 0   ? (headerWord(H_SIZE_X) + 1) * headerWord(H_SIZE_Y) * headerWord(H_SIZE_Z)
-           : axis == 1 ? headerWord(H_SIZE_X) * (headerWord(H_SIZE_Y) + 1) * headerWord(H_SIZE_Z)
-                       : headerWord(H_SIZE_X) * headerWord(H_SIZE_Y) * (headerWord(H_SIZE_Z) + 1);
-}
-int faceIndex(int cell, int side) {
-    int axis = side / 2, x = cell % headerWord(H_SIZE_X), y = cell / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y),
-        z = cell / (headerWord(H_SIZE_X) * headerWord(H_SIZE_Y));
-    if ((side & 1) != 0) {
-        if (axis == 0)
-            x++;
-        else if (axis == 1)
-            y++;
-        else
-            z++;
-    }
-    int base = axis == 0 ? 0 : axisFaces(0) + (axis == 2 ? axisFaces(1) : 0);
-    return base + (z * (headerWord(H_SIZE_Y) + (axis == 1 ? 1 : 0)) + y) * (headerWord(H_SIZE_X) + (axis == 0 ? 1 : 0)) + x;
-}
-ivec2 faceCells(int face) {
-    int axis = face < axisFaces(0) ? 0 : face < axisFaces(0) + axisFaces(1) ? 1 : 2;
-    int at = face - (axis == 0 ? 0 : axisFaces(0) + (axis == 2 ? axisFaces(1) : 0)),
-        sx = headerWord(H_SIZE_X) + (axis == 0 ? 1 : 0), sy = headerWord(H_SIZE_Y) + (axis == 1 ? 1 : 0), x = at % sx, y = at / sx % sy,
-        z = at / (sx * sy),
-        coordinate = axis == 0   ? x
-                     : axis == 1 ? y
-                                 : z,
-        size = axis == 0   ? headerWord(H_SIZE_X)
-               : axis == 1 ? headerWord(H_SIZE_Y)
-                           : headerWord(H_SIZE_Z);
-    int right = coordinate < size ? (z * headerWord(H_SIZE_Y) + y) * headerWord(H_SIZE_X) + x : -1,
-        left = coordinate > 0 ? ((z - (axis == 2 ? 1 : 0)) * headerWord(H_SIZE_Y) + y - (axis == 1 ? 1 : 0)) * headerWord(H_SIZE_X) + x -
-                                    (axis == 0 ? 1 : 0)
-                              : -1;
-    return ivec2(left, right);
-}
+int axisFaces(int axis) { return gridFaceCount(axis); }
+int faceIndex(int cell,int side) { return gridFace(cell,side); }
+ivec2 faceCells(int face) { return gridFaceEndpoints(face).xy; }
 int momentumAddress(int face) {
     int axis = face < axisFaces(0) ? 0 : face < axisFaces(0) + axisFaces(1) ? 1 : 2;
     int offset = axis == 0 ? 0 : axisFaces(0) + (axis == 2 ? axisFaces(1) : 0);

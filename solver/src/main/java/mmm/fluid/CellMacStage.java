@@ -105,12 +105,9 @@ final class CellMacStage {
 			double[] normalized = axis == 0 ? domain.mac.faceMassX : axis == 1 ? domain.mac.faceMassY : domain.mac.faceMassZ;
 			float[] flags = axis == 0 ? domain.mac.velocityWeightX : axis == 1 ? domain.mac.velocityWeightY : domain.mac.velocityWeightZ;
 			boolean[] valid = axis == 0 ? domain.mac.velocityValidX : axis == 1 ? domain.mac.velocityValidY : domain.mac.velocityValidZ;
-			int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0), nz = domain.sizeZ + (axis == 2 ? 1 : 0);
-			for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) {
-				int face = (z * ny + y) * nx + x;
-				int coordinate = axis == 0 ? x : axis == 1 ? y : z, size = axis == 0 ? domain.sizeX : axis == 1 ? domain.sizeY : domain.sizeZ;
-				int right = coordinate < size ? domain.domainFlowFields.cellIndex(x, y, z) : -1;
-				int left = coordinate > 0 ? domain.domainFlowFields.cellIndex(x - (axis == 0 ? 1 : 0), y - (axis == 1 ? 1 : 0), z - (axis == 2 ? 1 : 0)) : -1;
+			for (int face=0;face<mass.length;face++) {
+				int global=domain.grid.faceOffset(axis)+face;
+				int right=domain.grid.faceRight(global),left=domain.grid.faceLeft(global);
 				mass[face] = .5 * ((left < 0 ? ambientCellMass() : cellMass[left]) + (right < 0 ? ambientCellMass() : cellMass[right]));
 				normalized[face] = mass[face] / domain.unitScale.cubicMetersPerNormalizedVolume();
 				flags[face] = mass[face] > 0 ? 1 : 0;
@@ -130,26 +127,22 @@ final class CellMacStage {
 		domain.lastLiquidBoundaryImpulseX+=impulse.x();domain.lastLiquidBoundaryImpulseY+=impulse.y();domain.lastLiquidBoundaryImpulseZ+=impulse.z();
 	}
 	boolean isWallFace(int axis,int face,byte[] masks){
-		int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
-		int x=face%nx,y=face/nx%ny,z=face/(nx*ny),coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-		if(coordinate==0||coordinate==size){
+		int global=domain.grid.faceOffset(axis)+face;
+		int a=domain.grid.faceLeft(global),b=domain.grid.faceRight(global);
+		if(a<0||b<0){
 			if(domain.gasState.spatial==null||domain.gasState.sealedDomainBoundary)return true;
-			int cell=domain.domainFlowFields.cellIndex(x-(axis==0&&coordinate==size?1:0),y-(axis==1&&coordinate==size?1:0),z-(axis==2&&coordinate==size?1:0));
-			int mask=masks==null?domain.geometry.cutCells.mask(cell):Byte.toUnsignedInt(masks[cell]),side=coordinate==0?0:1;
+			int cell=a<0?b:a;
+			int mask=masks==null?domain.geometry.cutCells.mask(cell):Byte.toUnsignedInt(masks[cell]),side=a<0?0:1;
 			for(int micro=0;micro<8;micro++)if((micro>>>axis&1)==side&&(mask&(1<<micro))==0)return false;
 			return true;
 		}
 		if(masks==null)return !(domain.geometry.cutCells.openFaceField(axis)[face]>0);
-		int b=domain.domainFlowFields.cellIndex(x,y,z),a=b-(axis==0?1:axis==1?domain.sizeX:domain.sizeX*domain.sizeY);
 		for(int micro=0;micro<8;micro++)if((micro>>>axis&1)!=0&&(masks[a]&1<<micro)==0&&(masks[b]&1<<(micro^(1<<axis)))==0)return false;
 		return true;
 	}
 	boolean mechanicsFaceActive(int axis,int face){
-		int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
-		int x=face%nx,y=face/nx%ny,z=face/(nx*ny);
-		int coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-		int b=coordinate<size?domain.domainFlowFields.cellIndex(x,y,z):-1;
-		int a=coordinate>0?domain.domainFlowFields.cellIndex(x-(axis==0?1:0),y-(axis==1?1:0),z-(axis==2?1:0)):-1;
+		int global=domain.grid.faceOffset(axis)+face;
+		int b=domain.grid.faceRight(global),a=domain.grid.faceLeft(global);
 		return domain.activityGroups.mechanicsFaceActive(a,b);
 	}
 	/** A stationary inelastic normal constraint transfers -P to the liquid and its kinetic energy to local U. */
@@ -158,9 +151,7 @@ final class CellMacStage {
 		for(int axis=0;axis<3;axis++)for(int face=0;face<momentum[axis].length;face++){
 			if(!mechanicsFaceActive(axis,face))continue;
 			double p=momentum[axis][face];if(p==0||!isWallFace(axis,face,masks))continue;
-			int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0),x=face%nx,y=face/nx%ny,z=face/(nx*ny);
-			int coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-			int b=coordinate<size?domain.domainFlowFields.cellIndex(x,y,z):-1,a=coordinate>0?domain.domainFlowFields.cellIndex(x-(axis==0?1:0),y-(axis==1?1:0),z-(axis==2?1:0)):-1;
+			int global=domain.grid.faceOffset(axis)+face,b=domain.grid.faceRight(global),a=domain.grid.faceLeft(global);
 			long ma=a<0?0:cellMass[a],mb=b<0?0:cellMass[b];double total=(double)ma+mb,mass=.5*total/Mass.UNITS_PER_KILOGRAM;
 			if(mass>0){double energy=.5*p*(p/mass),first=energy*(ma/total);if(a>=0)heat[a]+=first;if(b>=0)heat[b]+=energy-first;}
 			impulse[axis]-=p;momentum[axis][face]=0;
@@ -172,7 +163,7 @@ final class CellMacStage {
 		for(var stock:inventory.physicalStocks())mass[stock.key().cell()]=Math.addExact(mass[stock.key().cell()],stock.massUnits());
 		var walls=stopWallMomentum(values,mass,heat,masks);var byCell=new java.util.TreeMap<Integer,SignedDyadic>();
 		for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)byCell.put(cell,SignedDyadic.of(heat[cell]));
-		return new ExternalMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,values[0],values[1],values[2]),java.util.Map.copyOf(byCell),java.util.Map.of(),walls);
+		return new ExternalMomentum(new MacMomentumState(domain.grid,values[0],values[1],values[2]),java.util.Map.copyOf(byCell),java.util.Map.of(),walls);
 	}
 
 	/** Stationary insertion adds inertia; extraction removes the carried momentum at its current velocity. */
@@ -194,10 +185,9 @@ final class CellMacStage {
             movedGas[cell]=Math.addExact(movedGas[cell],amount);
             if(target<0){escapedGas[cell]=Math.addExact(escapedGas[cell],amount);continue;}
             double kg=Mass.kilograms(amount);
-            int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
             for(int axis=0;axis<3;axis++){
-                int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
-                int low=(z*ny+y)*nx+x,high=low+(axis==0?1:axis==1?nx:nx*ny);
+                int low=domain.grid.face(cell,2*axis)-domain.grid.faceOffset(axis);
+                int high=domain.grid.face(cell,2*axis+1)-domain.grid.faceOffset(axis);
                 double[] mass=axis==0?massX:axis==1?massY:massZ,p=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
                 double a=mass[low]>0?p[low]/mass[low]:0,b=mass[high]>0?p[high]/mass[high]:0;
                 incomingP[axis][target]+=.5*kg*(a+b);
@@ -220,11 +210,9 @@ final class CellMacStage {
         for(int axis=0;axis<3;axis++){
             double[] oldMass=axis==0?massX:axis==1?massY:massZ,oldP=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
             result[axis]=new double[oldMass.length];
-            int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0),nz=domain.sizeZ+(axis==2?1:0);
-            for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++){
-                int face=(z*ny+y)*nx+x,coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-                int right=coordinate<size?domain.domainFlowFields.cellIndex(x,y,z):-1;
-                int left=coordinate>0?domain.domainFlowFields.cellIndex(x-(axis==0?1:0),y-(axis==1?1:0),z-(axis==2?1:0)):-1;
+            for(int face=0;face<oldMass.length;face++){
+                int global=domain.grid.faceOffset(axis)+face;
+                int right=domain.grid.faceRight(global),left=domain.grid.faceLeft(global);
                 double speed=oldMass[face]>0?oldP[face]/oldMass[face]:0;
                 double ambient=(left<0||right<0)&&!isWallFace(axis,face,masks)?ambientCellMass():0;
                 double retainedMass=.5*(at(retained,left)+at(retained,right)+ambient),newMass=.5*(at(future,left)+at(future,right)+ambient);
@@ -243,7 +231,7 @@ final class CellMacStage {
                     removedEnergy.merge(cell,SignedDyadic.of(.25*removed[cell]*speed*speed),SignedDyadic::add);
             }
         }
-        return new ExternalMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,result[0],result[1],result[2]),
+        return new ExternalMomentum(new MacMomentumState(domain.grid,result[0],result[1],result[2]),
                 java.util.Map.copyOf(heat),java.util.Map.copyOf(removedEnergy),new WallImpulse(impulse[0],impulse[1],impulse[2]));
     }
     private static double at(double[] values,int cell){return cell<0?0:values[cell];}

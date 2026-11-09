@@ -52,38 +52,34 @@ final class ThermalBoundaryResolver {
 		if (level == null || region == null || cellsPerBlock <= 0
 				|| !region.solverLoaded() || !region.hasThermalState()) return false;
 		int sizeX = region.sizeX(), sizeY = region.sizeY(), sizeZ = region.sizeZ();
-        double[] temperatures=sampleField(region.origin(), sizeX, sizeY, sizeZ, cellsPerBlock,
+        double[] temperatures=sampleField(region.origin(), region.grid(), cellsPerBlock,
                 position -> MinecraftGroupAvailability.loaded(level,position) ? surfaceTemperature(level,position) : Double.NaN);
         double[] previous=region.thermalBoundaryTemperatures();
-        for(int cell=0;cell<sizeX*sizeY*sizeZ;cell++) if(!region.groupAvailable(cell))
+        for(int cell=0;cell<region.grid().cellCount();cell++) if(!region.groupAvailable(cell))
             for(int direction=0;direction<6;direction++) temperatures[cell*6+direction]=previous==null ? Double.NaN : previous[cell*6+direction];
         return region.replaceThermalBoundaryTemperatures(temperatures);
 	}
 
 	static double[] sampleField(BlockPos origin, int sizeX, int sizeY, int sizeZ, int cellsPerBlock,
-			java.util.function.ToDoubleFunction<BlockPos> source) {
-		double[] temperatures = new double[Math.multiplyExact(Math.multiplyExact(
-				Math.multiplyExact(sizeX, sizeY), sizeZ), 6)];
-		int blocksX = sizeX / cellsPerBlock + 2, blocksY = sizeY / cellsPerBlock + 2;
-		int blocksZ = sizeZ / cellsPerBlock + 2;
-		double[] cache = new double[Math.multiplyExact(Math.multiplyExact(blocksX, blocksY), blocksZ)];
-		boolean[] sampled = new boolean[cache.length];
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int cell = (z * sizeY + y) * sizeX + x;
-			for (int direction = 0; direction < 6; direction++) {
-				int bx = Math.floorDiv(x + (direction == 0 ? -1 : direction == 1 ? 1 : 0), cellsPerBlock);
-				int by = Math.floorDiv(y + (direction == 2 ? -1 : direction == 3 ? 1 : 0), cellsPerBlock);
-				int bz = Math.floorDiv(z + (direction == 4 ? -1 : direction == 5 ? 1 : 0), cellsPerBlock);
-				int block = ((bz + 1) * blocksY + by + 1) * blocksX + bx + 1;
-				if (!sampled[block]) {
-					cache[block] = source.applyAsDouble(origin.offset(bx, by, bz));
-					sampled[block] = true;
-				}
-				temperatures[cell * 6 + direction] = cache[block];
-			}
-		}
-		return temperatures;
-	}
+            java.util.function.ToDoubleFunction<BlockPos> source) {
+        return sampleField(origin, mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ), cellsPerBlock, source);
+    }
+
+    static double[] sampleField(BlockPos origin, mmm.spatial.SpatialGrid grid, int cellsPerBlock,
+            java.util.function.ToDoubleFunction<BlockPos> source) {
+        double[] temperatures = new double[Math.multiplyExact(grid.cellCount(), 6)];
+        var cache = new java.util.HashMap<BlockPos, Double>();
+        for (int cell = 0; cell < grid.cellCount(); cell++) {
+            int x=grid.x(cell), y=grid.y(cell), z=grid.z(cell);
+            for (int direction = 0; direction < 6; direction++) {
+                int bx = Math.floorDiv(x + (direction == 0 ? -1 : direction == 1 ? 1 : 0), cellsPerBlock);
+                int by = Math.floorDiv(y + (direction == 2 ? -1 : direction == 3 ? 1 : 0), cellsPerBlock);
+                int bz = Math.floorDiv(z + (direction == 4 ? -1 : direction == 5 ? 1 : 0), cellsPerBlock);
+                temperatures[cell * 6 + direction] = cache.computeIfAbsent(origin.offset(bx,by,bz), source::applyAsDouble);
+            }
+        }
+        return temperatures;
+    }
 
 	boolean hasExplicitDefinition(BlockState state) {
 		return state.is(MmmBlocks.THERMAL_RESERVOIR) || matchingDefinition(state) != null;

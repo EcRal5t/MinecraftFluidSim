@@ -82,9 +82,7 @@ final class VulkanLiquidGeometry implements AutoCloseable {
     }
 
     private void recordStage(VkCommandBuffer command, int sizeX, int sizeY, int sizeZ, int stage, float h, float dt) {
-        int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-        int faces = Math.addExact(Math.addExact(Math.multiplyExact(sizeX + 1, sizeY * sizeZ),
-                Math.multiplyExact(sizeY + 1, sizeX * sizeZ)), Math.multiplyExact(sizeZ + 1, sizeX * sizeY));
+        int cells = bindings.grid().cellCount(), faces=bindings.grid().faceCount();
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             var constants = stack.malloc(32);

@@ -10,6 +10,7 @@ const int STAGE_COUNT_MEMBERS = 5;
 const int STAGE_JOIN_PARTICLES = 7;
 const uint ERROR_MECHANICAL_BODY = 32u;
 // HOST_LAYOUT
+// SPATIAL_GRID
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint words[]; };
@@ -38,28 +39,23 @@ void joinComponents(int first,int second){
         if(atomicCompSwap(words[headerValue(H_PARENTS)+high],uint(high),uint(low))==uint(high))return;
     }
 }
-int cellIndex(ivec3 pos){return (pos.z*headerValue(H_SIZE_Y)+pos.y)*headerValue(H_SIZE_X)+pos.x;}
 void joinFace(int index){
-    int nx=(headerValue(H_SIZE_X)+1)*headerValue(H_SIZE_Y)*headerValue(H_SIZE_Z),ny=headerValue(H_SIZE_X)*(headerValue(H_SIZE_Y)+1)*headerValue(H_SIZE_Z);
-    int axis=index<nx?0:index<nx+ny?1:2,local=index-(axis==0?0:axis==1?nx:nx+ny);
-    ivec3 dims=ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z));dims[axis]++;
-    ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
-    if(pos[axis]==0||pos[axis]==ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z))[axis])return;
+    ivec2 cells=gridFaceEndpoints(index).xy;
+    if(cells.x<0||cells.y<0)return;
     int at=headerValue(H_PROJECTED_FACES)+8*index;
     if(value(at)<=0.0||value(at+4)<=0.0)return;
-    ivec3 previous=pos;previous[axis]--;joinComponents(cellIndex(previous),cellIndex(pos));
+    joinComponents(cells.x,cells.y);
 }
 void joinCell(int index){
     if(headerValue(H_GAS_COUNTS)>=0){if(gasCount()>headerValue(H_GAS_CAPACITY)||gasCount()!=headerValue(H_CELLS)){atomicOr(errors,ERROR_MECHANICAL_BODY);return;}joinComponents(index,headerValue(H_CELLS)+index);}
-    ivec3 pos=ivec3(index%headerValue(H_SIZE_X),index/headerValue(H_SIZE_X)%headerValue(H_SIZE_Y),index/(headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)));
     int first=int(sourceWords[headerValue(H_SOURCE_CELL_OFFSETS)+index]),last=int(sourceWords[headerValue(H_SOURCE_CELL_OFFSETS)+index+1]);
     for(int side=0;side<6;side++){
         bool moving=false;
         for(int stock=first;stock<last;stock++)if(routeMass(stock,side+1)>int64_t(0)){moving=true;break;}
         if(!moving)continue;
-        ivec3 target=pos;target[side/2]+=(side&1)==0?-1:1;
-        if(any(lessThan(target,ivec3(0)))||any(greaterThanEqual(target,ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z))))){atomicOr(errors,ERROR_MECHANICAL_BODY);return;}
-        joinComponents(index,cellIndex(target));
+        int target=gridNeighbor(index,side);
+        if(target<0){atomicOr(errors,ERROR_MECHANICAL_BODY);return;}
+        joinComponents(index,target);
     }
 }
 void joinParticle(int index){
@@ -69,12 +65,9 @@ void joinParticle(int index){
     for(int entry=24*index;entry<24*(index+1);entry++){
         if(value(headerValue(H_GRAIN_FACE_SHARES)+2*entry)<=0.0&&(value(headerValue(H_GRAIN_DRAG_RESISTANCE)+2*index)<=0.0||value(headerValue(H_GRAIN_DRAG_WEIGHTS)+2*entry)<=0.0))continue;
         int f=int(words[headerValue(H_GRAIN_FACE_IDS)+entry]);if(f<0)continue;
-        int nx=(headerValue(H_SIZE_X)+1)*headerValue(H_SIZE_Y)*headerValue(H_SIZE_Z),ny=headerValue(H_SIZE_X)*(headerValue(H_SIZE_Y)+1)*headerValue(H_SIZE_Z);
-        int axis=f<nx?0:f<nx+ny?1:2,local=f-(axis==0?0:axis==1?nx:nx+ny);
-        ivec3 dims=ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z));dims[axis]++;
-        ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
-        if(pos[axis]<ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z))[axis])joinComponents(vertex,cellIndex(pos));
-        if(pos[axis]>0){pos[axis]--;joinComponents(vertex,cellIndex(pos));}
+        ivec2 cells=gridFaceEndpoints(f).xy;
+        if(cells.x>=0)joinComponents(vertex,cells.x);
+        if(cells.y>=0)joinComponents(vertex,cells.y);
     }
 }
 void main(){

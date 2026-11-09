@@ -21,7 +21,7 @@ final class PressureSystem {
         solidFaces=new GranularFaceVolumes(domain);faces=domain.geometry.cutCells.snapshot().faceIncidence();
     }
     FlipPressurePhaseGeometry phaseGeometry(){
-        if(phaseGeometry==null)phaseGeometry=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
+        if(phaseGeometry==null)phaseGeometry=new FlipPressurePhaseGeometry(domain.grid);
         return phaseGeometry;
     }
     void invalidateGeometry(){geometryDirty=true;}

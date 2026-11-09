@@ -8,6 +8,7 @@ layout(binding=0,std430)buffer Arena{uint words[];};
 layout(binding=1,std430)buffer Errors{uint errors;};
 layout(binding=2,std430)buffer FrozenConductance{double frozenG[];};
 layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
+// SPATIAL_GRID
 // HOST_LAYOUT
 // SERIES_CONDUCTANCE_LIBRARY
 // PLIC_FACE_LIBRARY
@@ -95,7 +96,7 @@ double liquidEthanolMass(int row){
  if(int(words[headerWord(H_LIQUID_MATERIALS)+row])!=headerWord(H_AQUEOUS_MATERIAL)||headerWord(H_ETHANOL_SPECIES)<0)return 0.0;
  double amount=0.0;for(int i=int(words[headerWord(H_LIQUID_SPECIES_OFFSETS)+row]);i<int(words[headerWord(H_LIQUID_SPECIES_OFFSETS)+row+1]);i++)
   if(int(words[headerWord(H_LIQUID_SPECIES_HANDLES)+i])==headerWord(H_ETHANOL_SPECIES))amount+=double(readQuantity(headerWord(H_LIQUID_SPECIES_AMOUNTS)+2*i));
- return min(double(readQuantity(headerWord(H_LIQUID_MASS)+2*row))*1e-10LF,amount*1e-6LF*.046LF);
+ return min(double(readQuantity(headerWord(H_LIQUID_MASS)+2*row))*1e-10LF,amount*1e-6LF*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
 }
 void prepareOwner(int candidate){
  if(candidate==0){int n=liveOwners();words[workField(FIELD_REQUIREMENTS)]=uint(n);words[headerWord(H_CONDUCTION_COUNTS)]=uint(n);if(n>headerWord(H_CONDUCTION_OWNER_CAPACITY))atomicOr(errors,64u);}
@@ -104,7 +105,7 @@ void prepareOwner(int candidate){
  double energy=0.0,temperature=0.0,k=0.0;int terms=1;
  if(kind==0){energy=readDouble(headerWord(H_LIQUID_ENERGY)+2*row);temperature=readDouble(headerWord(H_LIQUID_TEMPERATURE)+2*row);int handle=int(words[headerWord(H_LIQUID_MATERIALS)+row]);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,handle));
   double mass=double(readQuantity(headerWord(H_LIQUID_MASS)+2*row))*1e-10LF;
-  k=mix(k,ETHANOL_CONDUCTIVITY,liquidEthanolMass(row)/mass);}
+  k=mix(k,readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_CONDUCTIVITY),liquidEthanolMass(row)/mass);}
  else if(kind==2){energy=readDouble(headerWord(H_GRANULAR_ENERGY)+2*row);temperature=readDouble(headerWord(H_GRANULAR_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_GRANULAR_MATERIAL)+row])));}
  else if(kind==4){energy=readDouble(headerWord(H_DEVICE_ENERGY)+2*row);temperature=readDouble(headerWord(H_DEVICE_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_DEVICE_MATERIAL)+row])));}
  else if(kind==3){energy=readDouble(headerWord(H_COHERENT_ENERGY)+2*row);temperature=readDouble(headerWord(H_COHERENT_TEMPERATURE)+2*row);k=readDouble(workField(FIELD_CONDUCTIVITY)+2*material(kind,int(words[headerWord(H_COHERENT_MATERIAL)+row])));}
@@ -154,13 +155,10 @@ void coverage(int cell){double sums[32];for(int i=0;i<32;i++)sums[i]=0.0;
  }
 }
 double harmonic(double a,double b){return a==0.0LF||b==0.0LF?0.0LF:seriesConductance(2.0LF,a,1.0LF,b,1.0LF);}
-ivec3 shape(){return ivec3(headerWord(H_SIZE_X),headerWord(H_SIZE_Y),headerWord(H_SIZE_Z));}ivec3 xyz(int cell){ivec3 s=shape();return ivec3(cell%s.x,cell/s.x%s.y,cell/(s.x*s.y));}
-int neighbor(int cell,int axis,int side){ivec3 q=xyz(cell),s=shape();q[axis]+=side==0?-1:1;if(any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s)))return -1;return (q.z*s.y+q.y)*s.x+q.x;}
-int macFace(int cell,int axis,int side){
- ivec3 q=xyz(cell),dims=shape();q[axis]+=side;dims[axis]++;
- int offset=axis==0?0:axis==1?(shape().x+1)*shape().y*shape().z:(shape().x+1)*shape().y*shape().z+shape().x*(shape().y+1)*shape().z;
- return offset+(q.z*dims.y+q.y)*dims.x+q.x;
-}
+ivec3 shape(){return gridShape();}
+ivec3 xyz(int cell){return gridPosition(cell);}
+int neighbor(int cell,int axis,int side){return gridNeighbor(cell,2*axis+side);}
+int macFace(int cell,int axis,int side){return gridFace(cell,2*axis+side);}
 double wetPort(int cell,int bit,int axis,int side){
  if(headerWord(H_PLIC_PLANES)<0)return .25LF;
  double fill=readDouble(headerWord(H_PLIC_CELLS)+8*cell+6);

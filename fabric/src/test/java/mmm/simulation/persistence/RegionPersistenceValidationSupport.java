@@ -36,15 +36,17 @@ import java.util.Set;
 import java.util.UUID;
 
 abstract class RegionPersistenceValidationSupport {
-	static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+	static final FluidSolverConfig CONFIG = new FluidSolverConfig(0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation_registry"));
 	static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation"));
 
 	static FluidRegion populatedRegion(UUID id) {
-		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
+		return populatedRegion(id,mmm.fluid.TestFluidDefinitions.load());
+	}
+	static FluidRegion populatedRegion(UUID id,mmm.fluid.FluidDefinitions definitions) {
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG, definitions);
 		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
@@ -74,7 +76,7 @@ abstract class RegionPersistenceValidationSupport {
 
 	/** Fixed codec columns, independent of the runtime cell-fill quadrature. */
 	static FluidRegion canonicalCodecRegion(UUID id) {
-		var domain = new HostFluidState(6, 4, 6, CONFIG);
+		var domain = new HostFluidState(6, 4, 6, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		var template = domain.exportParticleState();
@@ -96,7 +98,7 @@ abstract class RegionPersistenceValidationSupport {
 
 	static FluidRegion emptyRegion(UUID id) {
 		BlockPos origin = new BlockPos(32, 16, 32);
-		HostFluidState domain = new HostFluidState(8, 8, 8, CONFIG);
+		HostFluidState domain = new HostFluidState(8, 8, 8, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		Set<Long> interior = new HashSet<>();
 		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {

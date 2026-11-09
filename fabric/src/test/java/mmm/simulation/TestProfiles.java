@@ -17,8 +17,8 @@ import java.util.Set;
 
 /** Builds world capability profiles for persistence and protocol gates that no longer use feature flags. */
 public final class TestProfiles {
-	private static final MaterialRegistry MATERIAL = BuiltinFluidMaterials.createRegistry();
-	private static final GasRegistry GAS = BuiltinGasDefinitions.createRegistry();
+	private static final MaterialRegistry MATERIAL = mmm.fluid.TestFluidDefinitions.load().material();
+	private static final GasRegistry GAS = mmm.fluid.TestFluidDefinitions.load().gas();
 
 	private TestProfiles() { }
 
@@ -27,11 +27,11 @@ public final class TestProfiles {
 			ThermalRegistry thermal, GasRegistry gas
 	) {
 		RegistryFingerprintSet bindings = new RegistryFingerprintSet(
-				capabilities.contains(WorldCapability.MATERIALS) ? MATERIAL.fingerprint() : "",
-				chemical == null ? "" : chemical.fingerprint(),
-				granular == null ? "" : granular.fingerprint(),
-				gas == null ? "" : gas.fingerprint(),
-				thermal == null ? "" : thermal.fingerprint());
+				MATERIAL.fingerprint(),
+				(chemical == null ? mmm.fluid.TestFluidDefinitions.load().chemistry() : chemical).fingerprint(),
+				(granular == null ? mmm.fluid.TestFluidDefinitions.load().granular() : granular).fingerprint(),
+				(gas == null ? GAS : gas).fingerprint(),
+				(thermal == null ? mmm.fluid.TestFluidDefinitions.load().thermal() : thermal).fingerprint());
 		return WorldCapabilityProfile.of(capabilities, bindings);
 	}
 

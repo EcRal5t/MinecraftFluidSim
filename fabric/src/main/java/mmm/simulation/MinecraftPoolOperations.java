@@ -96,7 +96,7 @@ public final class MinecraftPoolOperations {
 			}
 			var scan=FluidControllerRegions.scanPool(level,hit,maximumBlocks());
 			if(!scan.succeeded()) return say(player,"无法接管：需要已加载、池底池壁完整、水平水面的静水小池。"+scan.failure(),false);
-			var admission=regions.previewAdd(Math.multiplyExact(scan.footprint().denseBlockCapacity(),FluidRegionFactory.CELL_VOLUMES_PER_BLOCK));
+			var admission=regions.previewAdd(FluidRegionFactory.grid(scan.footprint()).cellCount());
 			if(!admission.accepted()) return say(player,admission.failure(),false);
 			var water=operations.scanOwnershipPreimage(level,scan.footprint());
 			previews.put(player.getUUID(),new Preview(level.dimension().identifier().toString(),hit.immutable(),scan.footprint(),water,null,tick+200));

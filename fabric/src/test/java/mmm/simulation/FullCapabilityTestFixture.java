@@ -24,27 +24,24 @@ public final class FullCapabilityTestFixture {
 
 	public static Registries load() throws Exception {
 		ProductionRegistries.Set production = ProductionRegistries.load();
-		return new Registries(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+		return new Registries(new FluidMaterialRegistry(ProductionRegistries.palette()),
 				production.chemical(), production.granular(), production.gas(), production.thermal(),
 				production.material());
 	}
 
 	/** Custom constitutive data exercises both in-memory and disk restoration. */
 	public static MaterialRegistry doubledWaterViscosity() {
-		MaterialRegistry baseline = BuiltinFluidMaterials.createRegistry();
+		MaterialRegistry baseline = mmm.fluid.TestFluidDefinitions.load().material();
 		return new MaterialRegistry(baseline.entries().stream().map(entry ->
 				!entry.material().id().equals("mmm:water") ? entry : new MaterialRegistry.MaterialEntry(
 						entry.material(), entry.viscosity().stream().map(segment -> new MaterialRegistry.ViscositySegment(
 								segment.minimumTemperatureK(), segment.maximumTemperatureK(),
 								2 * segment.dynamicViscosityPascalSecondsAtMinimum(),
-								2 * segment.dynamicViscosityPascalSecondsAtMaximum())).toList())).toList(), baseline.pairTensions());
+								2 * segment.dynamicViscosityPascalSecondsAtMaximum())).toList(), entry.thermalExpansion())).toList(), baseline.pairTensions());
 	}
 
 	public static FluidMaterialRegistry bindEmptyMaterialState(HostFluidState domain, FluidMaterialRegistry liquids) {
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				domain.sizeX(), domain.sizeY(), domain.sizeZ(), domain.config().cellSize(),
-				0, 0.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(0.0), liquids.materials(), new float[0], new float[0],
-				new byte[domain.sizeX() * domain.sizeY() * domain.sizeZ()], java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(m)).toArray(), new int[0]));
+        domain.bindMaterialRegistry(liquids);
 		return domain.materialRegistry();
 	}
 

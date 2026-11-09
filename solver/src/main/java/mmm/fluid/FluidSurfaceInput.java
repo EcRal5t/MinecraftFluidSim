@@ -6,17 +6,20 @@ import java.util.List;
  * Bounded convex liquid pieces in region-local coordinates. Clips use cell-local unit coordinates.
  */
 public record FluidSurfaceInput(
-    int sizeX, int sizeY, int sizeZ, float cellSize, List<Piece> pieces) {
+    mmm.spatial.SpatialGrid grid, float cellSize, List<Piece> pieces) {
+  public FluidSurfaceInput(int x, int y, int z, float h, List<Piece> pieces) {
+    this(x == 0 && y == 0 && z == 0 ? null : mmm.spatial.SpatialGrid.rectangular(x,y,z), h, pieces);
+  }
+  public int sizeX() { return grid == null ? 0 : grid.sizeX(); }
+  public int sizeY() { return grid == null ? 0 : grid.sizeY(); }
+  public int sizeZ() { return grid == null ? 0 : grid.sizeZ(); }
   public static final int MAX_PIECES = 1 << 18;
   public static final int MAX_CLIPS = 3;
 
   public FluidSurfaceInput {
-    if ((sizeX <= 0 || sizeY <= 0 || sizeZ <= 0)
-            && !(sizeX == 0 && sizeY == 0 && sizeZ == 0 && pieces.isEmpty())
-        || !(cellSize > 0)
-        || !Float.isFinite(cellSize))
+    if (!(cellSize > 0) || !Float.isFinite(cellSize) || grid == null && !pieces.isEmpty())
       throw new IllegalArgumentException("Invalid surface dimensions");
-    int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+    int cells = grid == null ? 0 : grid.cellCount();
     if (pieces instanceof CompactFluidSurface compact) {
       if(compact.cells()!=cells)throw new IllegalArgumentException("Compact surface dimensions differ");
     } else {
@@ -41,8 +44,9 @@ public record FluidSurfaceInput(
     int cx = (int) Math.floor(x / cellSize),
         cy = (int) Math.floor(y / cellSize),
         cz = (int) Math.floor(z / cellSize);
-    if (cx < 0 || cy < 0 || cz < 0 || cx >= sizeX || cy >= sizeY || cz >= sizeZ) return -1;
-    int cell = cx + sizeX * (cy + sizeY * cz);
+    if (cx < 0 || cy < 0 || cz < 0 || cx >= sizeX() || cy >= sizeY() || cz >= sizeZ()) return -1;
+    int cell = grid.cell(cx, cy, cz);
+    if (cell < 0) return -1;
     var point =
         new FluidMaterialSurfaceMesher.Point(
             x / cellSize - cx, y / cellSize - cy, z / cellSize - cz);

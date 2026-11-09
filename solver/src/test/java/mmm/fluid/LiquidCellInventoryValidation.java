@@ -13,6 +13,7 @@ import java.util.Map;
 /** Short finite-volume inventory transaction checks, with no mechanical integration loop. */
 public final class LiquidCellInventoryValidation {
 	public static void main(String[] args) {
+		spatialGridCoordinatesAndSharedFaces();
 		continuousFluxMovesResolvedMinorityMaterial();
 		continuousSlowFluxDoesNotStopAcrossSteps();
 		sharedFluxPreservesAllQuantities();
@@ -24,6 +25,35 @@ public final class LiquidCellInventoryValidation {
 		explicitMechanicalHeatIsOneAtomicCandidate();
 		transportAndMechanicalHeatCommitTogether();
 		System.out.println("Liquid cell inventory validation passed: six-face quantities, atomic rows, recovery and U rounding");
+	}
+	private static void spatialGridCoordinatesAndSharedFaces() {
+		var rectangular=mmm.spatial.SpatialGrid.rectangular(17,10,9);
+		require(rectangular.cellCount()==17*10*9,"Rectangular grid cell count differs");
+		for(int cell=0;cell<rectangular.cellCount();cell++)
+			require(rectangular.cell(rectangular.x(cell),rectangular.y(cell),rectangular.z(cell))==cell,"Grid cell coordinate round trip differs");
+		var sparse=new mmm.spatial.SpatialGrid(17,10,9,List.of(
+				new mmm.spatial.SpatialGrid.Block(0,0,0),new mmm.spatial.SpatialGrid.Block(1,0,0),
+				new mmm.spatial.SpatialGrid.Block(1,1,0)));
+		require(sparse.cellCount()==512+512+128,"Sparse grid retained non-member cells");
+		require(sparse.columnCount()==16*8&&sparse.column(16,0)<0,"Granular columns retained absent grid space");
+		require(sparse.cell(1,8,0)==-1&&sparse.cell(16,0,0)==-1,"Missing spatial block resolved to a cell");
+		for(int cell=0;cell<sparse.cellCount();cell++) {
+			require(sparse.cell(sparse.x(cell),sparse.y(cell),sparse.z(cell))==cell,"Sparse cell coordinate round trip differs");
+			int column=sparse.columnOfCell(cell);
+			require(sparse.columnX(column)==sparse.x(cell)&&sparse.columnZ(column)==sparse.z(cell),"Sparse column coordinate differs");
+			for(int side=0;side<6;side++) {
+				int other=sparse.neighbor(cell,side);if(other<0)continue;
+				int face=sparse.face(cell,side);
+				require(sparse.neighbor(other,side^1)==cell&&sparse.face(other,side^1)==face,"Adjacent cells do not share a face");
+				require((side&1)==0?sparse.faceRight(face)==cell&&sparse.faceLeft(face)==other:
+						sparse.faceLeft(face)==cell&&sparse.faceRight(face)==other,"Shared face endpoints differ");
+			}
+		}
+		var kernel=new mmm.granular.GranularKernel(sparse,.5);
+		kernel.capture(3.99F,3.99F,.25F,101);
+		int selection=kernel.canonicalMask();kernel.requireMask(selection);long apportioned=0;
+		for(int i=0;i<kernel.size();i++)apportioned+=kernel.floor(i)+((selection>>>i)&1);
+		require(apportioned==101,"Sparse granular support changed its exact volume");
 	}
 	private static void transportAndMechanicalHeatCommitTogether() {
 		var cells=new LiquidCellInventory(3,null);var key=new LiquidCellInventory.Key(0,0,255);
@@ -68,7 +98,7 @@ public final class LiquidCellInventoryValidation {
 				"Common material flux changed exact inventory");
 	}
 	private static void continuousSlowFluxDoesNotStopAcrossSteps() {
-		var chemistry=BuiltinChemicalDefinitions.REGISTRY;var cells=new LiquidCellInventory(4,chemistry);
+		var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();var cells=new LiquidCellInventory(4,chemistry);
 		var mixture=ChemicalMixtureRecord.fromStableAmounts(chemistry,Map.of(BuiltinChemicalDefinitions.H2O,1_000_000L),0);
 		var stocks=new ArrayList<LiquidCellInventory.Stock>();
 		for(int cell=0;cell<4;cell++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(1),1_000_000_000L,mixture,100));
@@ -95,8 +125,8 @@ public final class LiquidCellInventoryValidation {
         return routes.build();
     }
 	private static void bulkVolumeReplacement() {
-		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F);
-		var bulk=new HostFluidState(3,3,3,config);var single=new HostFluidState(3,3,3,config);
+		var config=new FluidSolverConfig(.5F, 0, .05F, 120, 1e-5F, .002F);
+		var bulk=new HostFluidState(3,3,3,config,TestFluidDefinitions.load());var single=new HostFluidState(3,3,3,config,TestFluidDefinitions.load());
 		byte[] masks=new byte[27];masks[0]=(byte)252;
 		bulk.geometry.cutCells.restoreMicroMasks(masks);single.geometry.cutCells.restoreMicroMasks(masks);
 		float[] volumes=new float[27];for(int c=0;c<27;c++)volumes[c]=c%4==0?1:.25F;
@@ -108,53 +138,46 @@ public final class LiquidCellInventoryValidation {
 		var before=bulk.liquidCells.snapshot();volumes[26]=Float.NaN;boolean rejected=false;
 		try{bulk.setVolumes(volumes);}catch(IllegalArgumentException expected){rejected=true;}
 		require(rejected && before.rows().equals(bulk.liquidCells.snapshot().rows()),"Invalid bulk target partially published");
-		var bound=new HostFluidState(3,3,3,config);
-		bound.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		bound.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		var bound=new HostFluidState(3,3,3,config,TestFluidDefinitions.load());
+		bound.bindMaterialRegistry(new FluidMaterialRegistry(List.of(TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(),
+				TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material())));
+		bound.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
 		var materials=new int[27];java.util.Arrays.fill(volumes,.5F);for(int c=0;c<27;c++)materials[c]=c%2;
 		bound.setVolumes(volumes,materials);
 		for(var stock:bound.liquidCells.stocks())require(stock.massUnits()==bound.unitScale.massUnitsForNormalized(.5*bound.materialRegistry.material(stock.key().material()).referenceDensity())
-				&& stock.mixture().massUnits(BuiltinChemicalDefinitions.REGISTRY)==stock.massUnits(),"Bulk material quantities did not use actual phase density");
+				&& stock.mixture().massUnits(mmm.fluid.TestFluidDefinitions.load().chemistry())==stock.massUnits(),"Bulk material quantities did not use actual phase density");
 		var restored=HostFluidState.restoreAuthoritativeState(bound.captureAuthoritativeState());
 		require(restored.liquidCells.snapshot().rows().equals(bound.liquidCells.snapshot().rows()),"Bulk cell state did not restore");
 	}
 
 	private static void collisionPreservesGeometricTail() {
-		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
-		domain.materialRegistry = new FluidMaterialRegistry(List.of(new FluidMaterial("test:tail",1000,"test:tail",0,Math.PI/2)));
+		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(.5F, 0, .05F, 120, 1e-5F, .002F),TestFluidDefinitions.load());
+		domain.materialRegistry = new FluidMaterialRegistry(List.of(new FluidMaterial("test:tail",1000,"test:tail",0,Math.PI/2, 0xff197ae8)));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
 		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,null,0))).commit();
 		domain.markCellInventoryChanged();
-		var displaced = domain.setSolidMicroMaskMaterial(1,1,1,255);
-		require(displaced.portions().size()==1 && displaced.portions().getFirst().massUnits()==0
-				&& SignedDyadic.of(displaced.portions().getFirst().volume()).equals(volume), "Collision lost a zero-mass geometric tail");
-		var restored = domain.domainInventory.tryInsertExactMixture(0,1,1,displaced.portions(),0,false,0);
-		require(restored.transferred() && domain.liquidCells.exactVolume().equals(volume)
-				&& domain.totalMassUnits()==0, "Collision tail could not return through the common inventory transaction");
+		domain.applyCollisionEdits(List.of(new FluidDomainContracts.CollisionEdit(1,1,1,255)));
+		require(domain.liquidCells.exactVolume().equals(volume) && domain.totalMassUnits()==0
+				&& domain.liquidCells.stocksInCell(key.cell()).isEmpty(), "Collision lost a zero-mass geometric tail");
 	}
 	private static void chemicalTailRetainsComposition() {
-		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
-		domain.materialRegistry = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var domain = new HostFluidState(3,3,3,new FluidSolverConfig(.5F, 0, .05F, 120, 1e-5F, .002F),TestFluidDefinitions.load());
+		domain.materialRegistry = new FluidMaterialRegistry(List.of(TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material()));
+		var chemistry = mmm.fluid.TestFluidDefinitions.load().chemistry();
 		domain.bindChemistry(chemistry);
 		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry,Map.of(BuiltinChemicalDefinitions.H2O,1L),0);
 		mixture = mixture.withMassResidualUnits(-mixture.speciesMassUnits(chemistry));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
 		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,mixture,0))).commit();
 		domain.markCellInventoryChanged();
-		var displaced = domain.setSolidMicroMaskChemical(1,1,1,255);
-		var before = domain.liquidCells.snapshot(); boolean rejected = false;
-		try { domain.domainInventory.tryInsertExactChemical(0,1,1,displaced.ledger(),0,false,1); }
-		catch(IllegalArgumentException expected) { rejected=true; }
-		require(rejected && domain.liquidCells.snapshot().rows().equals(before.rows()),"Geometric chemical tail accepted nonzero U");
-		var restored = domain.domainInventory.tryInsertExactChemical(0,1,1,displaced.ledger(),0,false,0);
-		require(restored.transferred() && domain.liquidCells.exactVolume().equals(volume)
+		domain.applyCollisionEdits(List.of(new FluidDomainContracts.CollisionEdit(1,1,1,255)));
+		require(domain.liquidCells.exactVolume().equals(volume)
 				&& domain.totalMassUnits()==0 && domain.liquidCells.physicalSize()==0
 				&& domain.liquidCells.stocks().getFirst().mixture().equals(mixture),"Chemical geometric tail lost species or signed residual");
 	}
 
 	private static void sharedFluxPreservesAllQuantities() {
-		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var chemistry = mmm.fluid.TestFluidDefinitions.load().chemistry();
 		var cells = new LiquidCellInventory(27, chemistry);
 		var water = new LiquidCellInventory.Key(13, 0, 255);
 		var oil = new LiquidCellInventory.Key(13, 1, 255);
@@ -233,7 +256,7 @@ public final class LiquidCellInventoryValidation {
 		boolean rejected=false; try { prepared.commit(); } catch (IllegalStateException expected) { rejected=true; }
 		require(rejected,"An unheated predecessor could publish after the complete heated candidate");
 		// Disconnected supports in one cell exchange work with their own liquid stock.
-		var chemistry=BuiltinChemicalDefinitions.REGISTRY;var isolated=new LiquidCellInventory(1,chemistry);
+		var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();var isolated=new LiquidCellInventory(1,chemistry);
 		var firstKey=new LiquidCellInventory.Key(0,0,0x01);var secondKey=new LiquidCellInventory.Key(0,0,0x80);
 		var mixture=ChemicalMixtureRecord.fromSolutesAndSolventMass(chemistry,Map.of(),BuiltinChemicalDefinitions.H2O,10_000_000L);
 		var first=new LiquidCellInventory.Stock(firstKey,SignedDyadic.of(.0625),10_000_000L,mixture,3);

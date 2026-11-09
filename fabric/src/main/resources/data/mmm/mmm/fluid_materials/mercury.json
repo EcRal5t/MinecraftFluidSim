@@ -1,0 +1,39 @@
+{
+  "reference_density_kg_per_m3": "13600",
+  "miscibility_group": "mmm:mercury",
+  "surface_tension_n_per_m": "0",
+  "contact_angle_radians": "1.5707963267948966",
+  "reference_temperature_k": "293.15",
+  "thermal_expansion_per_k": "0.000182",
+  "viscosity_points": [
+    [
+      "234.32",
+      "0.0024"
+    ],
+    [
+      "273.15",
+      "0.00169"
+    ],
+    [
+      "293.15",
+      "0.001526"
+    ],
+    [
+      "323.15",
+      "0.00137"
+    ],
+    [
+      "373.15",
+      "0.001245"
+    ],
+    [
+      "473.15",
+      "0.00108"
+    ],
+    [
+      "630",
+      "0.0009"
+    ]
+  ],
+  "display_argb": "faaeb6c2"
+}

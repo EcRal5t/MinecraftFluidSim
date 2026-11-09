@@ -28,10 +28,10 @@ public final class FluidProtocol {
 
 	private FluidProtocol() { }
 
-	public enum Layout { PURE, MATERIAL, CHEMICAL, GRANULAR, THERMAL }
+	public enum Layout { MATERIAL, CHEMICAL, GRANULAR, THERMAL }
 
 	public static Offer serverOffer() {
-		return new Offer(Layout.PURE, REQUIRED_CAPABILITIES, 0L);
+		return materialServerOffer();
 	}
 
 	/** The offered layout and snapshot capabilities follow the committed world capability profile. */

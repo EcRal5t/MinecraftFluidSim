@@ -24,18 +24,20 @@ layout(binding=5,std430) readonly buffer Control { double control[]; };
 layout(binding=6,std430) buffer Hierarchy { double hierarchy[]; };
 layout(binding=7,std430) buffer Dispatch { uint dispatchWords[]; };
 layout(push_constant) uniform Params {
-    int sx; int sy; int sz; int stage;
-    int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int factor;
+    int topology; int schedule; int levelCount; int stage;
+    int base; int peerBase; int peerTopology; int unusedY; int unusedZ; int fineCount; int pressureStride; int factor;
     int applyDispatch;
 } p;
 shared double coarseCorrection[64];
 shared float coarseProjected[64];
 const float OMEGA=0.66666666666666666667;
 
-int count(ivec3 shape) { return shape.x*shape.y*shape.z; }
-int indexOf(ivec3 at,ivec3 shape) { return (at.z*shape.y+at.y)*shape.x+at.x; }
-ivec3 coordinate(int row,ivec3 shape) { return ivec3(row%shape.x,row/shape.x%shape.y,row/(shape.x*shape.y)); }
-bool inside(ivec3 at,ivec3 shape) { return all(greaterThanEqual(at,ivec3(0)))&&all(lessThan(at,shape)); }
+int spatialWord(int at){return int(dispatchWords[at]);}
+// SPATIAL_ADDRESS
+int count(int shape){return gridCellsAt(shape);}
+int indexOf(ivec3 at,int shape){return gridCellAt(shape,at);}
+ivec3 coordinate(int row,int shape){return gridPositionAt(shape,row);}
+bool inside(ivec3 at,int shape){return gridCellAt(shape,at)>=0;}
 ivec3 adjacent(ivec3 at,int side) { at[side/2]+=(side&1)==0?-1:1;return at; }
 int matrixEntryIndex(int base,int row,int entry) { return base+7*row+entry; }
 int residualIndex(int base,int n,int row) { return 2*base+14*n+row; }
@@ -49,7 +51,7 @@ double diagonal(int base,int row) { return hierarchy[matrixEntryIndex(base,row,0
 float scaled(int base,int row,float rhs) {
     float d=float(diagonal(base,row));return d>0.0?OMEGA*rhs/d:0.0;
 }
-float product(int base,ivec3 shape,int row,int vectorOffset) {
+float product(int base,int shape,int row,int vectorOffset) {
     precise float result=float(diagonal(base,row))*vectorValue(vectorOffset+row);
     ivec3 at=coordinate(row,shape);
     for(int side=0;side<6;side++) {
@@ -62,12 +64,12 @@ float product(int base,ivec3 shape,int row,int vectorOffset) {
 void buildFine(int row) {
     for(int entry=0;entry<7;entry++)hierarchy[matrixEntryIndex(p.base,row,entry)]=0.0;
     if(rows[row]<0)return;
-    ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
+    ivec3 at=coordinate(row,p.topology);
     for(int edge=starts[row];edge<starts[row+1];edge++) {
         int column=columns[edge];double value=values[edge];
         if(column==row)hierarchy[matrixEntryIndex(p.base,row,0)]+=value;
         else if(column<p.fineCount&&rows[column]>=0) {
-            ivec3 difference=coordinate(column,ivec3(p.sx,p.sy,p.sz))-at;
+            ivec3 difference=coordinate(column,p.topology)-at;
             int axis=difference.x!=0?0:difference.y!=0?1:2;
             int side=2*axis+(difference[axis]>0?1:0);
             hierarchy[matrixEntryIndex(p.base,row,side+1)]+=value;
@@ -78,15 +80,15 @@ void buildFine(int row) {
 // Constant prolongation and summed restriction give exactly A_coarse = P^T A_fine P.
 void buildCoarse(int row) {
     double entries[7];for(int entry=0;entry<7;entry++)entries[entry]=0.0;
-    ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz)),origin=2*at;
+    ivec3 at=coordinate(row,p.topology),origin=2*at;
     for(int child=0;child<8;child++) {
         ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
-        if(!inside(fine,ivec3(p.psx,p.psy,p.psz)))continue;
-        int fineRow=indexOf(fine,ivec3(p.psx,p.psy,p.psz));
+        if(!inside(fine,p.peerTopology))continue;
+        int fineRow=indexOf(fine,p.peerTopology);
         entries[0]+=diagonal(p.peerBase,fineRow);
         for(int side=0;side<6;side++) {
             ivec3 next=adjacent(fine,side);
-            if(!inside(next,ivec3(p.psx,p.psy,p.psz)))continue;
+            if(!inside(next,p.peerTopology))continue;
             double value=hierarchy[matrixEntryIndex(p.peerBase,fineRow,side+1)];
             if(all(equal(next/2,at)))entries[0]+=value;
             else entries[side+1]+=value;
@@ -102,13 +104,13 @@ void loadFine(int row,int n) {
 }
 
 void restrictResidual(int row,int n) {
-    ivec3 origin=2*coordinate(row,ivec3(p.sx,p.sy,p.sz));int fineN=count(ivec3(p.psx,p.psy,p.psz));
+    ivec3 origin=2*coordinate(row,p.topology);int fineN=count(p.peerTopology);
     precise float rhs=0.0;
     for(int child=0;child<8;child++) {
         ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
-        if(!inside(fine,ivec3(p.psx,p.psy,p.psz)))continue;
-        int fineRow=indexOf(fine,ivec3(p.psx,p.psy,p.psz));
-        rhs+=vectorValue(residualIndex(p.peerBase,fineN,fineRow))-product(p.peerBase,ivec3(p.psx,p.psy,p.psz),fineRow,temporaryIndex(p.peerBase,fineN,0));
+        if(!inside(fine,p.peerTopology))continue;
+        int fineRow=indexOf(fine,p.peerTopology);
+        rhs+=vectorValue(residualIndex(p.peerBase,fineN,fineRow))-product(p.peerBase,p.peerTopology,fineRow,temporaryIndex(p.peerBase,fineN,0));
     }
     writeVector(residualIndex(p.base,n,row),rhs);
     writeVector(temporaryIndex(p.base,n,row),scaled(p.base,row,rhs));
@@ -120,9 +122,9 @@ void factorCoarse(int row,int n){
     if(row<n){
         for(int column=0;column<n;column++)hierarchy[p.factor+row*n+column]=0.0;
         hierarchy[p.factor+row*n+row]=diagonal(p.base,row);
-        ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
-        for(int side=0;side<6;side++){ivec3 next=adjacent(at,side);if(inside(next,ivec3(p.sx,p.sy,p.sz)))
-            hierarchy[p.factor+row*n+indexOf(next,ivec3(p.sx,p.sy,p.sz))]=hierarchy[matrixEntryIndex(p.base,row,side+1)];}
+        ivec3 at=coordinate(row,p.topology);
+        for(int side=0;side<6;side++){ivec3 next=adjacent(at,side);if(inside(next,p.topology))
+            hierarchy[p.factor+row*n+indexOf(next,p.topology)]=hierarchy[matrixEntryIndex(p.base,row,side+1)];}
     }
     memoryBarrierBuffer();barrier();
     for(int column=0;column<n;column++){
@@ -161,34 +163,34 @@ void solveCoarse(int row,int n){
     writeVector(correctionIndex(p.base,n,row),result);
 }
 void scheduleApply(){
-    ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0,base=p.base;
-    for(;;){
-        int at=p.applyDispatch+4*command++,n=count(shape);
-        dispatchWords[at]=control[CONTROL_RUN]!=0.0?uint((dispatchWords[activeBase(base,n)]+127u)/128u):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
-        if(max(shape.x,max(shape.y,shape.z))<=4)break;base+=levelDoubles(n);shape=(shape+1)/2;
+    for(int level=0;level<p.levelCount;level++){
+        int base=spatialWord(p.schedule+2*level),n=spatialWord(p.schedule+2*level+1),at=p.applyDispatch+4*level;
+        dispatchWords[at]=control[CONTROL_RUN]!=0.0?uint((dispatchWords[activeBase(base,n)]+127u)/128u):0u;
+        dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
     }
 }
+
 float lifted(int row,int n){
-    int coarseRow=indexOf(coordinate(row,ivec3(p.sx,p.sy,p.sz))/2,ivec3(p.psx,p.psy,p.psz));
-    precise float value=vectorValue(temporaryIndex(p.base,n,row))+vectorValue(correctionIndex(p.peerBase,count(ivec3(p.psx,p.psy,p.psz)),coarseRow));
+    int coarseRow=indexOf(coordinate(row,p.topology)/2,p.peerTopology);
+    precise float value=vectorValue(temporaryIndex(p.base,n,row))+vectorValue(correctionIndex(p.peerBase,count(p.peerTopology),coarseRow));
     return value;
 }
 void prolongAndSmooth(int row,int n){
     precise float current=lifted(row,n),productValue=float(diagonal(p.base,row))*current;
-    ivec3 pos=coordinate(row,ivec3(p.sx,p.sy,p.sz));
+    ivec3 pos=coordinate(row,p.topology);
     for(int side=0;side<6;side++){
-        ivec3 next=adjacent(pos,side);if(inside(next,ivec3(p.sx,p.sy,p.sz)))
-            productValue+=float(hierarchy[matrixEntryIndex(p.base,row,side+1)])*lifted(indexOf(next,ivec3(p.sx,p.sy,p.sz)),n);
+        ivec3 next=adjacent(pos,side);if(inside(next,p.topology))
+            productValue+=float(hierarchy[matrixEntryIndex(p.base,row,side+1)])*lifted(indexOf(next,p.topology),n);
     }
     writeVector(correctionIndex(p.base,n,row),current+scaled(p.base,row,vectorValue(residualIndex(p.base,n,row))-productValue));
 }
 
 void main() {
-    if(p.stage==STAGE_CLEAR_ACTIVE_ROWS){if(gl_GlobalInvocationID.x==0u)dispatchWords[activeBase(p.base,count(ivec3(p.sx,p.sy,p.sz)))]=0u;return;}
+    if(p.stage==STAGE_CLEAR_ACTIVE_ROWS){if(gl_GlobalInvocationID.x==0u)dispatchWords[activeBase(p.base,count(p.topology))]=0u;return;}
     if(p.stage==STAGE_SCHEDULE_APPLY){if(gl_GlobalInvocationID.x==0u)scheduleApply();return;}
     // These values are uniform over every workgroup, including the barrier-bearing coarse solve.
     if(control[CONTROL_RUN]==0.0)return;
-    int row=int(gl_GlobalInvocationID.x),n=count(ivec3(p.sx,p.sy,p.sz));
+    int row=int(gl_GlobalInvocationID.x),n=count(p.topology);
     if(p.stage==STAGE_SOLVE_COARSE){solveCoarse(row,n);return;}
     if(p.stage==STAGE_FACTOR_COARSE){factorCoarse(row,n);return;}
     if(p.stage==STAGE_INVERT_COARSE){invertCoarse(int(gl_LocalInvocationID.x),int(gl_WorkGroupID.x),n);return;}

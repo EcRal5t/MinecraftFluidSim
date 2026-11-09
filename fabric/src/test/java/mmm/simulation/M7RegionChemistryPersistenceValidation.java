@@ -38,8 +38,7 @@ import java.util.UUID;
 
 	/** Current feature-layout admission and restore checks for chemistry, granular and thermal regions. */
 public final class M7RegionChemistryPersistenceValidation {
-	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "m7_persistence_registry"));
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
@@ -66,7 +65,8 @@ public final class M7RegionChemistryPersistenceValidation {
 		var store = new mmm.simulation.persistence.WorldCapabilityBundleStore(root,
 				new mmm.simulation.persistence.WorldCapabilityBundleStore.QuarantineAdmission(64, 64L << 20));
 		var committed = store.openOrPublish(definitions).bundle();
-		FluidRegion source = populatedRegion(UUID.randomUUID(), CONFIG);
+		FluidRegion source = populatedRegion(UUID.randomUUID(), CONFIG,
+				mmm.fluid.TestFluidDefinitions.withRegistries(custom,production.chemical(),production.gas(),production.granular(),production.thermal()));
 		bindDefaultMaterials(source);
 		FullCapabilityTestFixture.bindFull(source.editableHost(), new FullCapabilityTestFixture.Registries(
 				production.liquids(), production.chemical(), production.granular(), production.gas(),
@@ -87,14 +87,16 @@ public final class M7RegionChemistryPersistenceValidation {
 					committed.thermal(), committed.gas(), 4, production.materials());
 			throw new AssertionError("repository accepted definitions from another world profile");
 		} catch (IllegalArgumentException expectedMismatch) {
-			check(expectedMismatch.getMessage().contains("world profile"), "unexpected repository rejection");
+			check(expectedMismatch.getMessage().contains("committed profile"),
+					"unexpected repository rejection: " + expectedMismatch.getMessage());
 		}
 		try {
 			new RegionRepositoryAdapter(root, TestProfiles.full(), production.chemical(), production.granular(),
 					production.thermal(), production.gas(), 4, production.materials()).checkpoint(source);
 			throw new AssertionError("checkpoint reinterpreted a domain with different material definitions");
 		} catch (java.io.IOException expectedMismatch) {
-			check(expectedMismatch.getMessage().contains("material definitions"), "unexpected checkpoint rejection");
+			check(expectedMismatch.getMessage().contains("material definitions"),
+					"unexpected checkpoint rejection: " + expectedMismatch.getMessage());
 		}
 		var writer = new RegionRepositoryAdapter(root, committed.profile(), committed.chemical(), committed.granular(),
 				committed.thermal(), committed.gas(), 4, committed.material());
@@ -125,13 +127,16 @@ public final class M7RegionChemistryPersistenceValidation {
 	private static void materialOnlyViscosityRestores() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "material-viscosity-restore-");
 		var custom = FullCapabilityTestFixture.doubledWaterViscosity();
+		var customDefinitions=mmm.fluid.TestFluidDefinitions.withRegistries(custom,null,null,null,null);
 		var profile = mmm.worldprofile.WorldCapabilityProfile.of(
 				java.util.EnumSet.of(mmm.worldprofile.WorldCapability.MATERIALS),
-				new mmm.worldprofile.RegistryFingerprintSet(custom.fingerprint(), "", "", "", ""));
-		FluidRegion source = populatedRegion(UUID.randomUUID());
+				new mmm.worldprofile.RegistryFingerprintSet(custom.fingerprint(),customDefinitions.chemistry().fingerprint(),
+						customDefinitions.granular().fingerprint(),customDefinitions.gas().fingerprint(),customDefinitions.thermal().fingerprint()));
+		FluidRegion source = populatedRegion(UUID.randomUUID(),CONFIG,customDefinitions);
 		bindDefaultMaterials(source);
 		source.editableHost().bindMaterialDefinitions(custom);
-		var repository = new RegionRepositoryAdapter(root, profile, null, null, null, null, custom);
+		var world=customDefinitions;
+		var repository = new RegionRepositoryAdapter(root,profile,world.chemistry(),world.granular(),world.thermal(),world.gas(),custom);
 		repository.checkpoint(source);
 		var manager = manager();
 		check(repository.loadMetadata(manager).isEmpty(), "material-only viscosity metadata was rejected");
@@ -147,18 +152,19 @@ public final class M7RegionChemistryPersistenceValidation {
 
 	private static void validateThermalProductionGate() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "thermal-production-");
-		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		ThermalRegistry thermal = productionThermalRegistry();
+		GasRegistry gas = mmm.fluid.TestFluidDefinitions.load().gas();
+		ThermalRegistry thermal = mmm.fluid.TestFluidDefinitions.load().thermal();
 		FluidRegion source = populatedRegion(UUID.randomUUID());
 		bindDefaultMaterials(source);
 		source.editableHost().bindGasRegistry(gas);
 		source.editableHost().bindThermal(thermal, source.editableHost().materialRegistry(), 300.0);
 		source.editableHost().setThermalTemperatureInCell(2, 1, 2, 325.0);
-		RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas, TestProfiles.materialRegistry());
+		var definitions=mmm.fluid.TestFluidDefinitions.load();
+		RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), definitions.chemistry(), definitions.granular(), definitions.thermal(), definitions.gas(), definitions.material());
 		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint was not published");
 
 		FluidRegionManager manager = manager();
-		RegionRepositoryAdapter restoring = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas, TestProfiles.materialRegistry());
+		RegionRepositoryAdapter restoring = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), definitions.chemistry(), definitions.granular(), definitions.thermal(), definitions.gas(), definitions.material());
 		check(restoring.loadMetadata(manager).isEmpty(), "valid thermal metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
 		check(admitted.solverLoaded() && admitted.editableHost().hasThermalState()
@@ -175,57 +181,10 @@ public final class M7RegionChemistryPersistenceValidation {
 				"over-budget committed metadata was not retained as PAUSED_BUDGET");
 
 		FluidRegionManager gateOff = manager();
-		List<String> gateIssues = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateOff);
+		List<String> gateIssues = new RegionRepositoryAdapter(root,TestProfiles.materials(),definitions.chemistry(),definitions.granular(),definitions.thermal(),definitions.gas(),definitions.material()).loadMetadata(gateOff);
 		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("thermal")),
 				"thermal-off discovery did not preserve and lock thermal region state");
 
-	}
-
-	private static ThermalRegistry productionThermalRegistry() {
-		return productionThermalRegistry(null, null);
-	}
-
-	private static ThermalRegistry productionThermalRegistry(
-			ChemicalRegistry chemistry, GranularRegistry granular
-	) {
-		List<ThermalMaterialDefinition> definitions = new java.util.ArrayList<>();
-		java.util.Map<String, String> liquidHosts = new java.util.HashMap<>();
-		for (var liquid : BuiltinFluidMaterials.DEFAULT_PALETTE) {
-			String id = "test:thermal/" + liquid.id().substring(liquid.id().indexOf(':') + 1);
-			liquidHosts.put(liquid.id(), id);
-			definitions.add(new ThermalMaterialDefinition(id,
-				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 293.15, 0.0, 0.5,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1000.0))));
-		}
-		definitions.add(new ThermalMaterialDefinition("test:thermal/air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.NITROGEN, 293.15, 0.0, 0.025,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 718.0))));
-		definitions.add(new ThermalMaterialDefinition("test:thermal/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.WATER_VAPOR, 293.15, 2_400_000.0, 0.025,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1850.0))));
-		java.util.Map<String, String> granularHosts = new java.util.HashMap<>();
-		if (granular != null) for (var material : granular.materials()) {
-			String id = "test:thermal/granular_" + material.id().substring(material.id().indexOf(':') + 1);
-			granularHosts.put(material.id(), id);
-			definitions.add(new ThermalMaterialDefinition(id, ThermalMaterialDefinition.CarrierKind.GRANULAR,
-					material.id(), 293.15, 0.0, 0.5,
-					List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 800.0))));
-		}
-		List<ThermalSpeciesOffset> offsets = new java.util.ArrayList<>();
-		int offsetOrdinal = 0;
-		if (chemistry != null) for (var phase : chemistry.phases()) {
-			String host = liquidHosts.get(phase.materialId());
-			for (String species : phase.allowedSpecies()) offsets.add(new ThermalSpeciesOffset(
-					"test:offset/liquid_" + offsetOrdinal++, species, host, ExactRational.ZERO));
-		}
-		if (granular != null) for (var reaction : granular.reactions()) {
-			String host = granularHosts.get(reaction.solidMaterialId());
-			for (String species : reaction.solidComposition().keySet()) offsets.add(new ThermalSpeciesOffset(
-					"test:offset/granular_" + offsetOrdinal++, species, host, ExactRational.ZERO));
-		}
-		return mmm.fluid.ThermalValidationSupport.thermalRegistry(definitions, offsets, List.of(),
-				chemistry == null ? "" : chemistry.fingerprint(),
-				granular == null ? "" : granular.fingerprint());
 	}
 
 	private static void validateGranularFeatureLayout() throws Exception {
@@ -244,7 +203,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(restored.editableHost().hasChemistryState() && restored.editableHost().hasGranularState()
 				&& restored.editableHost().precipitationEnabled(), "current granular layout did not restore");
 		FluidRegionManager gateManager = manager();
-		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateManager);
+		List<String> issues = new RegionRepositoryAdapter(gateRoot,TestProfiles.materials(),definitions.chemical(),definitions.granular(),definitions.thermal(),definitions.gas(),definitions.materials()).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"granular-off discovery did not preserve and lock granular region state");
 	}
@@ -264,7 +223,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		assertChemicalStateEquals(chemical.editableHost().exportChemicalParticleState(), restored.editableHost().exportChemicalParticleState());
 		FluidRegionManager gateManager = manager();
-		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateManager);
+		List<String> issues = new RegionRepositoryAdapter(gateRoot,TestProfiles.materials(),definitions.chemical(),definitions.granular(),definitions.thermal(),definitions.gas(),definitions.materials()).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"chemistry-off discovery did not preserve and lock chemical region state");
 	}
@@ -276,8 +235,11 @@ public final class M7RegionChemistryPersistenceValidation {
 	private static FluidRegion populatedRegion(UUID id) { return populatedRegion(id, CONFIG); }
 
 	private static FluidRegion populatedRegion(UUID id, FluidSolverConfig config) {
+		return populatedRegion(id,config,mmm.fluid.TestFluidDefinitions.load());
+	}
+	private static FluidRegion populatedRegion(UUID id,FluidSolverConfig config,mmm.fluid.FluidDefinitions definitions) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		HostFluidState domain = new HostFluidState(6, 4, 6, config);
+		HostFluidState domain = new HostFluidState(6, 4, 6, config,definitions);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -299,11 +261,11 @@ public final class M7RegionChemistryPersistenceValidation {
 		double[] mass = new double[pure.particleCount()];
 		double totalMass = 0.0;
 		for (int marker = 0; marker < pure.particleCount(); marker++) {
-			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			mass[marker] = positions[marker * 4 + 3] * mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material().referenceDensity();
 			totalMass += mass[marker];
 		}
 		region.editableHost().restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), mmm.simulation.ProductionRegistries.palette(), positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 	}
 
 	private static void assertChemicalStateEquals(FlipChemicalParticleState expected, FlipChemicalParticleState actual) {

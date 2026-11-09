@@ -11,7 +11,7 @@ public final class AirNetworkValidation {
     }
 
     private static void validateIntegerPartition() {
-        var registry=BuiltinGasDefinitions.createRegistry();var chemistry=mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY;
+        var registry=mmm.fluid.TestFluidDefinitions.load().gas();var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();
         long quanta=4366,residual=479,mass=quanta*440+residual;
         var source=new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.CO2,1_000_003,mass,
                 List.of(new GasComponentAmount.SpeciesAmount(mmm.chemistry.BuiltinChemicalDefinitions.CO2,quanta)),residual)));
@@ -30,7 +30,7 @@ public final class AirNetworkValidation {
 		java.nio.file.Path root = null;
 		try {
 			root = java.nio.file.Files.createTempDirectory("mmm-gas-registry-");
-			GasRegistry definitions = BuiltinGasDefinitions.createRegistry();
+			GasRegistry definitions = mmm.fluid.TestFluidDefinitions.load().gas();
 			java.nio.file.Path snapshot = root.resolve("gas-registry.nbt");
 			GasRegistryCodec.writeSnapshot(snapshot, definitions);
 			GasRegistry decoded = GasRegistryCodec.readSnapshot(snapshot);
@@ -59,10 +59,10 @@ public final class AirNetworkValidation {
 	}
 
 	public static void validatePieceSnapshot() {
-		AirNetwork network = new AirNetwork(); network.addNode(1, 1); network.addNode(2, 2);
+		AirNetwork network = new AirNetwork(mmm.fluid.TestFluidDefinitions.load().gas()); network.addNode(1, 1); network.addNode(2, 2);
 		int[] pieces = new int[32]; java.util.Arrays.fill(pieces, -1);
 		pieces[2] = 1; pieces[7] = 2; pieces[8] = 0; pieces[9] = 1; pieces[16] = 2;
-		GasStateSnapshot state = GasStateSnapshot.capture(4, 1, 1, pieces, network, "");
+		GasStateSnapshot state = GasStateSnapshot.capture(mmm.spatial.SpatialGrid.rectangular(4,1,1), pieces, network, "");
 		check(state.nodes().getFirst().topologyKey() == 2 && state.nodes().getLast().topologyKey() == 7
 				&& state.nodes().getFirst().inventory().equals(network.inventory(1))
 				&& state.nodes().getLast().inventory().equals(network.inventory(2)),
@@ -73,7 +73,7 @@ public final class AirNetworkValidation {
 		check(state.pieceNodeOrdinal()[2] == 1 && state.pieceNodeOrdinal()[7] == 2,
 				"snapshot primary piece membership aliases caller arrays");
 		int[] reversed = state.pieceNodeOrdinal(); reversed[2] = 2; reversed[7] = 1;
-		expectThrow(() -> GasStateSnapshot.capture(4, 1, 1, reversed, network, ""),
+		expectThrow(() -> GasStateSnapshot.capture(mmm.spatial.SpatialGrid.rectangular(4,1,1), reversed, network, ""),
 				"independent snapshot sorting of noncanonical inventory/thermal ordinals");
 		int[] shortColumn = java.util.Arrays.copyOf(state.pieceNodeOrdinal(), 31);
 		expectThrow(() -> pieceSnapshot(state, state.nodes(), shortColumn), "incomplete final micro membership");
@@ -90,12 +90,11 @@ public final class AirNetworkValidation {
 				state.nodes().getLast()), state.pieceNodeOrdinal()), "incorrect global minimum-piece key");
 		expectThrow(() -> pieceSnapshot(state, List.of(state.nodes().getLast(), state.nodes().getFirst()),
 				state.pieceNodeOrdinal()), "noncanonical node key order");
-		expectThrow(() -> new GasStateSnapshot(Integer.MAX_VALUE, 1, 1, state.registryFingerprint(), "",
-				state.nodes(), state.pieceNodeOrdinal(), state.externalSource(), state.escapedSink(), state.phaseSource(), state.phaseSink()), "piece dimension overflow");
+        expectThrow(() -> mmm.spatial.SpatialGrid.rectangular(0,1,1), "invalid spatial dimensions");
 	}
 
 	private static GasStateSnapshot pieceSnapshot(GasStateSnapshot state, List<GasStateSnapshot.Node> nodes, int[] pieces) {
-		return new GasStateSnapshot(state.sizeX(), state.sizeY(), state.sizeZ(), state.registryFingerprint(), "",
+		return new GasStateSnapshot(state.grid(), state.registryFingerprint(), "",
 				nodes, pieces, state.externalSource(), state.escapedSink(), state.phaseSource(), state.phaseSink());
 	}
 

@@ -4,7 +4,6 @@ import mmm.network.FluidChemicalSnapshotPayload;
 import mmm.network.FluidGranularSnapshotPayload;
 import mmm.network.FluidMaterialSnapshotPayload;
 import mmm.network.FluidProtocol;
-import mmm.network.FluidSnapshotPayload;
 import mmm.network.FluidThermalSnapshotPayload;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelExtractionContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
@@ -35,9 +34,6 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 	private final ClientRegionSnapshotStore snapshots = new ClientRegionSnapshotStore();
 	private final FluidRenderBackend backend = new FluidRenderBackend();
 
-	public void accept(FluidSnapshotPayload payload, FluidProtocol.Layout negotiatedLayout) {
-		snapshots.accept(payload, negotiatedLayout);
-	}
 
 	public void accept(FluidMaterialSnapshotPayload payload, FluidProtocol.Negotiation negotiation) {
 		snapshots.accept(payload, negotiation);
@@ -61,11 +57,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
     public void render(LevelRenderContext context) {
         renderMaterials(context.levelState().cameraRenderState.pos, false);
-        if (snapshots.fluidFrames().isEmpty()) return;
-        backend.renderDebug(vertices -> {
-            for (var state : snapshots.fluidFrames()) FluidSurfaceGeometry.buildGeometry(context, vertices, state);
 
-        });
     }
 
     public void renderShadow(net.minecraft.world.phys.Vec3 cameraPosition) {

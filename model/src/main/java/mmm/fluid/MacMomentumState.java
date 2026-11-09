@@ -1,24 +1,27 @@
 package mmm.fluid;
 
+import mmm.spatial.SpatialGrid;
+
 /** Immutable SI momentum on the staggered faces of a liquid control-volume grid. */
 public final class MacMomentumState {
-	private final int sizeX, sizeY, sizeZ;
+	private final SpatialGrid grid;
 	private final double[] x, y, z;
 
 	public MacMomentumState(int sizeX, int sizeY, int sizeZ, double[] x, double[] y, double[] z) {
-		this(sizeX,sizeY,sizeZ,x,y,z,false);
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),x,y,z,false);
+	}
+	public MacMomentumState(SpatialGrid grid,double[] x,double[] y,double[] z) {
+		this(grid,x,y,z,false);
 	}
 	/** Private solver outputs transfer ownership once; public construction still copies caller arrays. */
 	static MacMomentumState takeOwned(int sizeX,int sizeY,int sizeZ,double[] x,double[] y,double[] z){
-		return new MacMomentumState(sizeX,sizeY,sizeZ,x,y,z,true);
+		return new MacMomentumState(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),x,y,z,true);
 	}
-	private MacMomentumState(int sizeX,int sizeY,int sizeZ,double[] x,double[] y,double[] z,boolean owned){
-		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || x == null || y == null || z == null
-				|| x.length != Math.multiplyExact(Math.multiplyExact(sizeX + 1, sizeY), sizeZ)
-				|| y.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY + 1), sizeZ)
-				|| z.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ + 1))
+	private MacMomentumState(SpatialGrid grid,double[] x,double[] y,double[] z,boolean owned){
+		if (grid == null || x == null || y == null || z == null
+				|| x.length != grid.faceCount(0) || y.length != grid.faceCount(1) || z.length != grid.faceCount(2))
 			throw new IllegalArgumentException("MAC momentum shape differs from its grid");
-		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+		this.grid = grid;
 		this.x = checked(x,owned); this.y = checked(y,owned); this.z = checked(z,owned);
 	}
 
@@ -29,9 +32,10 @@ public final class MacMomentumState {
 		return result;
 	}
 
-	public int sizeX() { return sizeX; }
-	public int sizeY() { return sizeY; }
-	public int sizeZ() { return sizeZ; }
+	public SpatialGrid grid() { return grid; }
+	public int sizeX() { return grid.sizeX(); }
+	public int sizeY() { return grid.sizeY(); }
+	public int sizeZ() { return grid.sizeZ(); }
 	public double[] copyX() { return x.clone(); }
 	public double[] copyY() { return y.clone(); }
 	public double[] copyZ() { return z.clone(); }

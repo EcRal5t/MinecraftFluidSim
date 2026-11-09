@@ -74,7 +74,7 @@ final class VulkanLiquidWorkspaceSections {
         final VulkanLiquidThermodynamics.Layout thermal;
         final long endOffset;
         GranularSection(long base){var config=region.granularConfiguration;long a=liquid.alignment();
-            state=new VulkanGranularStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),granularReserves.particles(),granularReserves.deposits(),granularReserves.species(),config.initial().definitions(),base,a);
+            state=new VulkanGranularStateLayout(liquid.grid(),granularReserves.particles(),granularReserves.deposits(),granularReserves.species(),config.initial().definitions(),base,a);
             geometry=new VulkanGranularGeometry.Layout(state,workspace.geometry.get(GeometryField.OCCUPIED_SOLID),state.endOffset(),a);
             materialReference=new VulkanLiquidStateLayout.Column(align(geometry.endOffset()),config.materialReferences().length,8);
             speciesReference=new VulkanLiquidStateLayout.Column(align(materialReference.offset()+materialReference.bindingBytes()),config.speciesReferences().length,8);
@@ -108,7 +108,7 @@ final class VulkanLiquidWorkspaceSections {
                     granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.FIXED_SVQ),coupled,
                     geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),mixture.states(),geometry.get(GeometryField.FIXED_MASKS),viscosity,bodyFaceAreas,coupled.endOffset(),a);
             assembly.bindActivity(word(workspace.activityCells),word(workspace.activityFaces));
-            constraint=new VulkanMixtureFlux.Layout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),geometry.get(GeometryField.FACES),geometry.get(GeometryField.FLUXES),gas!=null,mixture.states(),
+            constraint=new VulkanMixtureFlux.Layout(liquid.grid(),geometry.get(GeometryField.FACES),geometry.get(GeometryField.FLUXES),gas!=null,mixture.states(),
                     geometry.get(GeometryField.FIXED_MASKS),targetSolid,gas==null?null:gas.thermo.states(),gas==null||region.gasConfiguration.sealedExterior(),assembly.endOffset(),a);
             endOffset=constraint.endOffset();
         }
@@ -145,7 +145,7 @@ final class VulkanLiquidWorkspaceSections {
         final long endOffset;
         GasSection(VulkanLiquidCellVolumes.Layout totals,long base,int occupiedWord) {
             var config=region.gasConfiguration;long a=liquid.alignment();int cells=liquid.cellCount();
-            state=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),cells,config.tables().definitions(),base,a);
+            state=new VulkanGasStateLayout(liquid.grid(),cells,config.tables().definitions(),base,a);
             volumes=new VulkanLiquidStateLayout.Column(align(state.endOffset()),cells,8);
             thermo=VulkanGasThermodynamics.layout(state,config.tables(),word(volumes),volumes.offset()+volumes.bindingBytes(),a);
             int cellWord=word(workspace.geometry.get(GeometryField.CELLS));

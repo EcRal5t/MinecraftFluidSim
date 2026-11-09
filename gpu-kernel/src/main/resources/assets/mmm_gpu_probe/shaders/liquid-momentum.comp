@@ -20,6 +20,7 @@ layout(push_constant) uniform Params {
 p;
 const uint ERROR_INVALID_MOMENTUM = 32u;
 const int64_t MAX_LONG = int64_t(0x7fffffffffffffffUL);
+// SPATIAL_GRID
 // HOST_LAYOUT
 int headerWord(int i) {
     return int(words[p.header + i]);
@@ -67,28 +68,19 @@ int64_t addSigned(int64_t a, int64_t b) {
     }
     return a + b;
 }
-ivec3 gridSize() {
-    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
-}
 ivec3 axisUnitVector(int axis) {
     ivec3 direction = ivec3(0);
     direction[axis] = 1;
     return direction;
 }
-bool coordinatesInside(ivec3 coordinates, ivec3 size) {
-    return all(greaterThanEqual(coordinates, ivec3(0))) && all(lessThan(coordinates, size));
-}
 int cellIndex(ivec3 coordinates) {
-    ivec3 size = gridSize();
-    return coordinatesInside(coordinates, size) ? (coordinates.z * size.y + coordinates.y) * size.x + coordinates.x : -1;
+    return gridCell(coordinates);
 }
 int faceAxisOffset(int axis) {
-    ivec3 grid = gridSize();
-    return axis == 0 ? 0 : (grid.x + 1) * grid.y * grid.z + (axis == 2 ? grid.x * (grid.y + 1) * grid.z : 0);
+    return gridFaceOffset(axis);
 }
 int faceIndex(ivec3 coordinates, int axis) {
-    ivec3 faceGridSize = gridSize() + axisUnitVector(axis);
-    return coordinatesInside(coordinates, faceGridSize) ? faceAxisOffset(axis) + (coordinates.z * faceGridSize.y + coordinates.y) * faceGridSize.x + coordinates.x : -1;
+    return gridFaceAt(coordinates,axis);
 }
 int64_t routeMass(int stock, int slot) {
     uint mask = words[headerWord(H_SOURCE_MASKS) + stock];
@@ -98,10 +90,7 @@ int64_t routeMass(int stock, int slot) {
     return getLong(headerWord(H_ROUTE_MASS) + 2 * routeEntry);
 }
 void decodeFaceCoordinates(int faceId, out int axis, out ivec3 coordinates) {
-    axis = faceId < faceAxisOffset(1) ? 0 : faceId < faceAxisOffset(2) ? 1 : 2;
-    ivec3 faceGridSize = gridSize() + axisUnitVector(axis);
-    int localIndex = faceId - faceAxisOffset(axis);
-    coordinates = ivec3(localIndex % faceGridSize.x, localIndex / faceGridSize.x % faceGridSize.y, localIndex / (faceGridSize.x * faceGridSize.y));
+    axis=gridFaceEndpoints(faceId).z;coordinates=gridFacePosition(faceId);
 }
 int faceFlags(int faceId) {
     return headerWord(H_ACTIVITY_FACES) >= 0 && words[headerWord(H_ACTIVITY_FACES) + faceId] == 0u
@@ -169,7 +158,6 @@ void transport(int faceId) {
     int component;
     ivec3 coordinates;
     decodeFaceCoordinates(faceId, component, coordinates);
-    ivec3 faceGridSize = gridSize() + axisUnitVector(component);
     int lowerCell = cellIndex(coordinates - axisUnitVector(component)), upperCell = cellIndex(coordinates);
     int64_t sourceMass = addPositive(cellMassUnits(lowerCell, false), cellMassUnits(upperCell, false)), targetMass = addPositive(cellMassUnits(lowerCell, true), cellMassUnits(upperCell, true));
     bool hasAmbient = (lowerCell < 0 || upperCell < 0) && getDouble(headerWord(H_PROJECTED_FACES) + 8 * faceId + 4) > 0.0;
@@ -194,7 +182,7 @@ void transport(int faceId) {
             ivec3 neighborCoordinates = coordinates + axisUnitVector(axis) * (side == 0 ? -1 : 1);
             neighborFaces[neighborSlot] = faceIndex(neighborCoordinates, component);
             incomingAmounts[neighborSlot] = int64_t(0);
-            if (!coordinatesInside(neighborCoordinates, faceGridSize)) {
+            if (neighborFaces[neighborSlot]<0) {
                 int64_t outsideFlux = interfaceFlux(side == 0 ? neighborCoordinates : coordinates, axis, component);
                 if (axis == component) outsideFlux = addSigned(outsideFlux, outsideFlux);
                 int64_t intoDomain = side == 0 ? outsideFlux : -outsideFlux;
@@ -275,27 +263,13 @@ void jumpRoot(int faceId) {
     words[targetRoots + faceId] = words[sourceRoots + int(words[sourceRoots + faceId])];
 }
 void accumulateLine(int line) {
-    ivec3 grid = gridSize(), coordinates;
-    int axis;
-    if (line < grid.y * grid.z) {
-        axis = 0;
-        coordinates = ivec3(0, line % grid.y, line / grid.y);
-    } else if ((line -= grid.y * grid.z) < grid.x * grid.z) {
-        axis = 1;
-        coordinates = ivec3(line % grid.x, 0, line / grid.x);
-    } else {
-        line -= grid.x * grid.z;
-        axis = 2;
-        coordinates = ivec3(line % grid.x, line / grid.x, 0);
-    }
-    int roots = headerWord(H_ROOTS + p.parity);
-    // Each invocation owns one complete parallel-face line; root accumulation needs no floating atomics.
-    for (int i = 0; i <= grid[axis]; i++) {
-        coordinates[axis] = i;
-        int faceId = faceIndex(coordinates, axis), rootFace = int(words[roots + faceId]);
-        putDouble(headerWord(H_GROUP_MASS) + 2 * rootFace, getDouble(headerWord(H_GROUP_MASS) + 2 * rootFace) + 5e-11 * double(dualMassUnits(faceId)));
-        putDouble(headerWord(H_GROUP_MOMENTUM) + 2 * rootFace,
-                  getDouble(headerWord(H_GROUP_MOMENTUM) + 2 * rootFace) + getDouble(headerWord(H_TRANSPORTED_MOMENTUM) + 2 * faceId));
+    int axis=gridFaceEndpoints(line).z;ivec3 coordinates=gridFacePosition(line);
+    if(faceIndex(coordinates-axisUnitVector(axis),axis)>=0)return;
+    int roots=headerWord(H_ROOTS+p.parity);
+    for(int faceId=line;faceId>=0;coordinates[axis]++,faceId=faceIndex(coordinates,axis)){
+        int rootFace=int(words[roots+faceId]);
+        putDouble(headerWord(H_GROUP_MASS)+2*rootFace,getDouble(headerWord(H_GROUP_MASS)+2*rootFace)+5e-11*double(dualMassUnits(faceId)));
+        putDouble(headerWord(H_GROUP_MOMENTUM)+2*rootFace,getDouble(headerWord(H_GROUP_MOMENTUM)+2*rootFace)+getDouble(headerWord(H_TRANSPORTED_MOMENTUM)+2*faceId));
     }
 }
 void finalizeFace(int faceId) {
@@ -326,7 +300,7 @@ void finalizeFace(int faceId) {
     putDouble(headerWord(H_FACE_HEAT) + 2 * faceId, heat);
 }
 void gatherHeat(int cellId) {
-    ivec3 grid = gridSize(), coordinates = ivec3(cellId % grid.x, cellId / grid.x % grid.y, cellId / (grid.x * grid.y));
+    ivec3 coordinates=gridPosition(cellId);
     double heat = 0;
     for (int axis = 0; axis < 3; axis++)
         for (int side = 0; side < 2; side++) {

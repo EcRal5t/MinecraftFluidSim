@@ -12,6 +12,7 @@ final class RegionHostHandoffValidation {
     static void validate() throws Exception {
         finiteDeviceReloadUsesCheckpoint();
         ordinaryWallContactsSpanBothSides();
+        sparseControllerSharesWallInventory();
         processSettingsSurviveRestartAndStop();
         periodicFeedRemainsDueDuringSleep();
         driverStopUsesClickedBlock();
@@ -36,7 +37,7 @@ final class RegionHostHandoffValidation {
     }
 
     private static void periodicFeedRemainsDueDuringSleep() {
-        var region=region(new HostFluidState(2,2,2,new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f)));
+        var region=region(new HostFluidState(2,2,2,new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load()));
         region.setPaused(false);
         for(int step=0;step<200;step++)region.lifecycle().observeCompletedStep(true,200);
         require(region.lifecycle().state()==FluidRegionLifecycle.State.HYDROSTATIC_SLEEP&&!region.canStep(),
@@ -56,9 +57,9 @@ final class RegionHostHandoffValidation {
     }
 
     private static void driverStopUsesClickedBlock() throws Exception {
-        var config=new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f);
-        var first=region(new HostFluidState(2,2,2,config));
-        var second=new FluidRegion(UUID.randomUUID(),first.dimension(),new BlockPos(10,0,0),new HostFluidState(2,2,2,config));
+        var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f);
+        var first=region(new HostFluidState(2,2,2,config, mmm.fluid.TestFluidDefinitions.load()));
+        var second=new FluidRegion(UUID.randomUUID(),first.dimension(),new BlockPos(10,0,0),new HostFluidState(2,2,2,config, mmm.fluid.TestFluidDefinitions.load()));
         var manager=new FluidRegionManager(new mmm.application.RegionCatalog.Limits(4,100,400));
         require(manager.add(first).accepted()&&manager.addAndSelect(second).accepted(),"Drive regions were not admitted");
         var root=java.nio.file.Files.createTempDirectory("mmm-driver-target-");
@@ -89,7 +90,7 @@ final class RegionHostHandoffValidation {
     }
 
     private static void touchingUnavailableCellKeepsBodyAvailable() {
-        var host=new HostFluidState(6,2,2,new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        var host=new HostFluidState(6,2,2,new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load());
         for(int z=0;z<2;z++)for(int y=0;y<2;y++)host.setSolid(2,y,z,true);
         var region=region(host);region.solverBackend(new HandoffBackend());region.ensureDeviceResident();
         var available=new boolean[24];java.util.Arrays.fill(available,true);
@@ -104,7 +105,7 @@ final class RegionHostHandoffValidation {
 
     private static void ordinaryWallContactsSpanBothSides() throws Exception {
         var registry=FullCapabilityTestFixture.load().thermal();
-        var host=new HostFluidState(6,6,6,new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        var host=new HostFluidState(6,6,6,new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load());
         for(int z=2;z<4;z++)for(int y=2;y<4;y++)for(int x=2;x<4;x++)host.setSolid(x,y,z,true);
         var dimensions=net.minecraft.resources.ResourceKey.<Level>createRegistryKey(net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","wall_dimensions"));
         var dimension=net.minecraft.resources.ResourceKey.create(dimensions,net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","wall_dimension"));
@@ -122,9 +123,44 @@ final class RegionHostHandoffValidation {
         }
     }
 
+    private static void sparseControllerSharesWallInventory() throws Exception {
+        var interior = new java.util.HashSet<Long>();
+        interior.add(new BlockPos(0,0,0).asLong());
+        for (int x=2;x<=20;x++) interior.add(new BlockPos(x,0,0).asLong());
+        for (int z=1;z<=20;z++) interior.add(new BlockPos(20,0,z).asLong());
+        var wallPosition = new BlockPos(1,0,0);
+        var footprint = new mmm.simulation.controller.FluidRegionFootprint(wallPosition,BlockPos.ZERO,new BlockPos(20,0,20),
+                interior,java.util.Set.of(wallPosition.asLong()),java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)));
+        var grid = FluidRegionFactory.grid(footprint);
+        require(grid.cellCount() < grid.sizeX()*grid.sizeY()*grid.sizeZ(),"Sparse footprint allocated its entire bounding box");
+        require(grid.cell(0,0,0)>=0 && grid.cell(40,0,40)>=0 && grid.cell(20,0,20)<0,
+                "Sparse footprint lost a real arm or retained an empty block");
+        var definitions=mmm.fluid.TestFluidDefinitions.load();
+        var host=new HostFluidState(grid,new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f),definitions);
+        host.bindMaterialRegistry(FullCapabilityTestFixture.load().liquids());
+        var key=net.minecraft.resources.ResourceKey.<Level>createRegistryKey(net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","sparse_dimensions"));
+        var dimension=net.minecraft.resources.ResourceKey.create(key,net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","sparse_wall"));
+        var region=new FluidRegion(UUID.randomUUID(),dimension,BlockPos.ZERO,host,footprint);
+        host.bindGasRegistry(definitions.gas());
+        host.bindThermal(definitions.thermal(),host.materialRegistry(),300);
+        var thermal=definitions.thermal(); var type=thermal.finiteDevice("mmm:ordinary_stone_wall");
+        double energy=new ThermalStateFunction(thermal).internalEnergyAtTemperature(thermal.materialHandle(type.thermalMaterialId()),
+                type.bodyMassKilograms(),java.util.Map.of(),type.initialTemperatureK());
+        var wall=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,wallPosition.asLong()+"@minecraft:stone",type.id(),
+                new FiniteThermalBodyState(0,thermal.fingerprint(),type.thermalMaterialId(),type.bodyMassUnits(),energy));
+        var ports=OrdinaryThermalWalls.ports(region,wall,thermal);
+        require(ports.stream().anyMatch(port->port.cellX()==1) && ports.stream().anyMatch(port->port.cellX()==4),
+                "The shared wall did not contact both chambers");
+        var inventory=FiniteThermalDeviceInventory.empty(thermal.fingerprint()).insertExternal(wall);
+        region.restoreFiniteThermalDevices(inventory,thermal,0);
+        require(region.finiteThermalDevices(thermal.fingerprint()).devices().size()==1,
+                "The shared wall did not keep one thermal inventory");
+        require(region.reservedCellCapacity()==grid.cellCount(),"Sparse region budget differs from resident cells");
+    }
+
     private static void finiteDeviceReloadUsesCheckpoint() throws Exception {
         var registries = FullCapabilityTestFixture.load();
-        var host = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        var host = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load());
         host.sealDomainBoundary();
         host.bindMaterialRegistry(registries.liquids());
         host.bindGasRegistry(registries.gas());
@@ -160,7 +196,7 @@ final class RegionHostHandoffValidation {
     }
 
     private static void hostEditsRespectCurrentActivity() throws Exception {
-        var host = new HostFluidState(6, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        var host = new HostFluidState(6, 2, 2, new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load());
         for (int z=0;z<2;z++) for (int y=0;y<2;y++) host.setSolid(2,y,z,true);
         host.setVolume(0,0,0,.5f);
         host.setVolume(4,0,0,.75f);
@@ -200,7 +236,7 @@ final class RegionHostHandoffValidation {
     }
 
     private static void fullyLoadedPlannerGroupsRemainIndependent() throws Exception {
-        var host = new HostFluidState(6, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+        var host = new HostFluidState(6, 2, 2, new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load());
         for (int z=0;z<2;z++) for (int y=0;y<2;y++) host.setSolid(2,y,z,true);
         host.setVolume(0,0,0,.5f);
         host.setVolume(4,0,0,.75f);

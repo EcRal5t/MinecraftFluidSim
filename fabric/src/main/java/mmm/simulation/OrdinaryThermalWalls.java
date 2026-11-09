@@ -34,12 +34,19 @@ final class OrdinaryThermalWalls {
         var others=new ArrayList<FiniteThermalDeviceState>();
         for(var device:previous.devices())if(device.providerId().equals(PROVIDER))existing.put(position(device),device);else others.add(device);
         var positions=new HashSet<Long>();
-        int bx=region.sizeX()/cellsPerBlock,by=region.sizeY()/cellsPerBlock,bz=region.sizeZ()/cellsPerBlock;
         var footprint=region.footprint();
-        for(int z=0;z<bz;z++)for(int y=0;y<by;y++)for(int x=0;x<bx;x++){
-            var interior=region.origin().offset(x,y,z);
-            if(footprint!=null&&!footprint.containsInterior(interior))continue;
-            for(var d:Direction.values())positions.add(interior.relative(d).asLong());
+        if (footprint != null) {
+            for (long packed : footprint.interiorBlocks()) {
+                var interior = BlockPos.of(packed);
+                if (!footprint.containsInterior(interior)) continue;
+                for (var direction : Direction.values()) positions.add(interior.relative(direction).asLong());
+            }
+        } else {
+            for (int cell = 0; cell < region.grid().cellCount(); cell++) {
+                var interior = region.origin().offset(region.grid().x(cell)/cellsPerBlock,
+                        region.grid().y(cell)/cellsPerBlock, region.grid().z(cell)/cellsPerBlock);
+                for (var direction : Direction.values()) positions.add(interior.relative(direction).asLong());
+            }
         }
         positions.addAll(existing.keySet());
         var next=new ArrayList<>(others); var added=SignedDyadic.ZERO; var removed=SignedDyadic.ZERO;
@@ -90,7 +97,7 @@ final class OrdinaryThermalWalls {
                 int x=(neighbor.getX()-region.origin().getX())*cellsPerBlock+local[0];
                 int y=(neighbor.getY()-region.origin().getY())*cellsPerBlock+local[1];
                 int z=(neighbor.getZ()-region.origin().getZ())*cellsPerBlock+local[2];
-                if(x<0||x>=region.sizeX()||y<0||y>=region.sizeY()||z<0||z>=region.sizeZ()||region.solidMicroMask(x,y,z)==255)continue;
+                if(region.grid().cell(x,y,z)<0||region.solidMicroMask(x,y,z)==255)continue;
                 requests.add(new FluidDomainContracts.ThermalPortRequest(x,y,z,axis*2+(positive?0:1),port.wallThicknessMeters(),material.conductivityWPerMeterK(),port.fluidFilmThicknessMeters()));
             }
         }

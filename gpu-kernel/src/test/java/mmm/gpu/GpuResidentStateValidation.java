@@ -11,21 +11,13 @@ import mmm.thermal.*;
 public final class GpuResidentStateValidation {
     public static void main(String[] args) {
         int device=args.length>0?Integer.parseInt(args[0]):0;
-        var domain=new HostFluidState(8,8,8,new FluidSolverConfig(.5f,1000,9.81f,.05f,200,1e-5f,.002f));
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());domain.sealDomainBoundary();
+        var domain=new HostFluidState(8,8,8,new FluidSolverConfig(.5f,9.81f,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.load());
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());domain.sealDomainBoundary();
         float[] volumes=new float[512];for(int c=0;c<512;c++)volumes[c]=(c/8)%8<3?.7f:0;
         domain.setVolumes(volumes);
-        var materials=new ArrayList<ThermalMaterialDefinition>();
-        materials.add(material("water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",4184,.6));
-        var offsets=new ArrayList<ThermalSpeciesOffset>();
-        for(var gas:mmm.fluid.air.BuiltinGasDefinitions.createRegistry().components()){
-            String host="test:resident_"+gas.id().substring(4);
-            materials.add(material(gas.id().substring(4),ThermalMaterialDefinition.CarrierKind.GAS,gas.id(),718,.026));
-            for(String species:gas.allowedSpecies())offsets.add(new ThermalSpeciesOffset(host+"/"+species.substring(4),species,host,mmm.chemistry.ExactRational.ZERO));
-        }
-        var thermal=new ThermalRegistry(materials,offsets,List.of(),"","");
-        domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bindThermal(thermal,fluids,300);
+        var thermal=mmm.fluid.TestFluidDefinitions.load().thermal();
+        domain.bindGasRegistry(mmm.fluid.TestFluidDefinitions.load().gas());domain.bindThermal(thermal,fluids,300);
         var initial=domain.captureAuthoritativeState();var codec=new VulkanFluidStateCodec(initial);var audit=domain.thermalAudit();long expectedMass=domain.totalMassUnits();
         validateCapabilityContracts(initial);
         if(initial.spatialGas()==null||initial.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty))throw new AssertionError("Resident fixture did not initialize local gas");
@@ -81,13 +73,13 @@ public final class GpuResidentStateValidation {
         }
     }
     private static void validateAmbientBodyClosure(int device,ThermalRegistry thermal,boolean high){
-        var domain=new HostFluidState(3,3,3,new FluidSolverConfig(.5f,1000,0,.05f,200,1e-5f,.002f));
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+        var domain=new HostFluidState(3,3,3,new FluidSolverConfig(.5f,0,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.load());
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());
         int edge=high?2:0,cell=12+edge;
         for(int z=0;z<3;z++)for(int y=0;y<3;y++)for(int x=0;x<3;x++)
             if(x!=edge||y!=1||z!=1)domain.setSolid(x,y,z,true);
-        domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+        domain.bindGasRegistry(mmm.fluid.TestFluidDefinitions.load().gas());
         domain.bindThermal(thermal,fluids,300);
         FluidStateAccess current=domain.captureAuthoritativeState();
         var initial=current.exportState();var initialGas=initial.spatialGas();
@@ -135,11 +127,11 @@ public final class GpuResidentStateValidation {
     private static void validateCapabilityContracts(FluidDomainState thermalOnly) {
         expectIllegal(() -> new FluidStepRequest(0, thermalOnly, List.of(), true, 1));
         expectIllegal(() -> new FluidThermalStepRequest(0, thermalOnly, true, 1));
-        var domain = new HostFluidState(2, 2, 2, thermalOnly.config());
-        domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)));
-        domain.bindChemistry(mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+        var domain = new HostFluidState(2, 2, 2, thermalOnly.config(), mmm.fluid.TestFluidDefinitions.load());
+        domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material())));
+        domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
         expectIllegal(() -> new VulkanFluidStateCodec(domain.captureAuthoritativeState()));
-        var simple = new HostFluidState(2, 2, 2, thermalOnly.config()).captureAuthoritativeState();
+        var simple = new HostFluidState(2, 2, 2, thermalOnly.config(), mmm.fluid.TestFluidDefinitions.load()).captureAuthoritativeState();
         if (simple.spatialGas()==null || simple.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty)
                 || !new VulkanFluidStateCodec(simple).template().spatialGas().cells().equals(simple.spatialGas().cells()))
             throw new AssertionError("Cold import lost its local gas inventory");
@@ -149,11 +141,11 @@ public final class GpuResidentStateValidation {
         throw new AssertionError("Unsupported capability combination was accepted");
     }
     private static void validateGranularColdImport(int device) {
-        var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,200,1e-5f,.002f));
-        var fluids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+        var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,9.81f,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.load());
+        var fluids = new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
         domain.bindMaterialRegistry(fluids);
-        domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
-        domain.bindGranular(mmm.granular.BuiltinGranularDefinitions.createRegistry(), fluids, BuiltinFluidMaterials.createRegistry());
+        domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());
+        domain.bindGranular(mmm.fluid.TestFluidDefinitions.load().granular(), fluids, mmm.fluid.TestFluidDefinitions.load().material());
         var initial = domain.captureAuthoritativeState();
         if (initial.spatialGas()==null || initial.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty))
             throw new AssertionError("Granular fixture lost its local gas inventory");
@@ -167,11 +159,9 @@ public final class GpuResidentStateValidation {
         }
     }
     private static void validateSmallGeometry(int device,ThermalRegistry thermal){
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        thermal=new ThermalRegistry(thermal.materials(),thermal.speciesOffsets(),thermal.transitions(),thermal.boundaries(),thermal.finiteDevices(),
-                mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY.fingerprint(),"","");
-        var definitions=VulkanLiquidRegion.MechanicalDefinitions.fromRegistries(fluids,BuiltinFluidMaterials.createRegistry(),
-                mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY,thermal,8,0,64,4,-40,true);
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        var definitions=VulkanLiquidRegion.MechanicalDefinitions.fromRegistries(fluids,mmm.fluid.TestFluidDefinitions.load().material(),
+                mmm.fluid.TestFluidDefinitions.load().chemistry(),thermal,8,0,64,4,-40,true);
         double small=Math.scalb(1.0,-40);
         try(var context=new VulkanDeviceContext(device,true,true);var geometry=new VulkanLiquidGeometry(context);
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
@@ -367,8 +357,5 @@ public final class GpuResidentStateValidation {
         if(cell==null||cell.materials().isEmpty()||cell.temperatureKelvin().isEmpty()||contacts.isEmpty())throw new AssertionError("Committed cell/water readout lost liquid or temperature");
         double volume=0;var keys=new java.util.HashSet<String>();for(var contact:contacts){if(contact.areaSquareMetres()<=0||contact.waterVolumeCubicMetres()<=0||!keys.add(contact.cell()+":"+contact.supportMask()+":"+contact.materialHandle()))throw new AssertionError("Water contact lost physical area or duplicated a stock");volume+=contact.waterVolumeCubicMetres();}
         if(volume>cell.liquidVolumeCubicMetres()+1e-9)throw new AssertionError("Water contact repeats contacted inventory across faces");
-    }
-    private static ThermalMaterialDefinition material(String id,ThermalMaterialDefinition.CarrierKind kind,String carrier,double cp,double conductivity){
-        return new ThermalMaterialDefinition("test:resident_"+id,kind,carrier,300,0,conductivity,List.of(new ThermalMaterialDefinition.CaloricSegment(1,2000,cp)));
     }
 }

@@ -143,7 +143,7 @@ final class M3MaterialSurfaceValidation {
     check(Math.abs(adjoiningArea - 1.5) < 1.0E-12,
         "a zero-volume neighbor removed a real liquid face or produced a sheet");
     var domain =
-        new HostFluidState(4, 4, 4, new FluidSolverConfig(1, 1_000, 0, .025F, 200, 1.0E-5F, 2.0E-3F));
+        new HostFluidState(4, 4, 4, new FluidSolverConfig(1, 0, .025F, 200, 1.0E-5F, 2.0E-3F), mmm.fluid.TestFluidDefinitions.load());
     domain.setVolume(1, 1, 1, 1.0E-6F);
     domain.domainCollision.setMaterialInCell(1, 1, 1, registry, material);
     var thin = domain.copyMaterialRenderSnapshot();
@@ -261,8 +261,8 @@ final class M3MaterialSurfaceValidation {
 
   private static HostFluidState filledDomain() {
     FluidSolverConfig config =
-        new FluidSolverConfig(1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F, 200, 1.0E-5F, 2.0E-3F);
-    HostFluidState domain = new HostFluidState(6, 6, 6, config);
+        new FluidSolverConfig(1.0F, 0.0F, 1.0F / 40.0F, 200, 1.0E-5F, 2.0E-3F);
+    HostFluidState domain = new HostFluidState(6, 6, 6, config, mmm.fluid.TestFluidDefinitions.load());
     for (int z = 1; z <= 4; z++)
       for (int y = 1; y <= 4; y++)
         for (int x = 1; x <= 4; x++) {
@@ -274,10 +274,10 @@ final class M3MaterialSurfaceValidation {
   private static FluidMaterialRegistry registry() {
     return new FluidMaterialRegistry(
         List.of(
-            new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
-            new FluidMaterial("mmm:miscible", 1_050.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
-            new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0),
-            new FluidMaterial("mmm:heavy", 13_600.0, "mmm:heavy", 0.0, Math.PI / 2.0)));
+            new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2.0, 0xff197ae8),
+            new FluidMaterial("mmm:miscible", 1_050.0, "mmm:aqueous", 0.0, Math.PI / 2.0, 0xff197ae8),
+            new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0, 0xff197ae8),
+            new FluidMaterial("mmm:heavy", 13_600.0, "mmm:heavy", 0.0, Math.PI / 2.0, 0xff197ae8)));
   }
 
   private static void check(boolean condition, String message) {

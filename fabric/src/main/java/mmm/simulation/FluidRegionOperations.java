@@ -62,9 +62,9 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	) {
 		this.manager = manager;
 		this.worldProfileProven = worldProfileProven;
-		this.persistence = new RegionRepositoryAdapter(worldRoot, profile, chemicalRegistry, granularRegistry,
-				thermalRegistry, gasRegistry, maximumThermalSubsteps, materialDefinitions);
-		this.ownershipTransactions = persistence.newOwnershipTransactions();
+		this.persistence = worldProfileProven ? new RegionRepositoryAdapter(worldRoot, profile, chemicalRegistry, granularRegistry,
+				thermalRegistry, gasRegistry, maximumThermalSubsteps, materialDefinitions) : null;
+		this.ownershipTransactions = persistence == null ? null : persistence.newOwnershipTransactions();
 		creationLocked = configurationLocked || !worldProfileProven;
 		if (worldProfileProven) {
 			List<String> metadataIssues = persistence.loadMetadata(manager);
@@ -75,7 +75,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		}
 	}
 
-	void advanceTick() { serviceTick++; persistence.retainRestores(manager); }
+	void advanceTick() { serviceTick++; if (persistence != null) persistence.retainRestores(manager); }
 	void cancelRestore(FluidRegion region) { persistence.cancelRestore(region.id()); }
 	boolean creationLocked() { return creationLocked; }
 	List<String> issues() { return List.copyOf(issues); }

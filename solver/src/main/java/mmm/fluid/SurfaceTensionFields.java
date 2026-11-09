@@ -77,8 +77,8 @@ final class SurfaceTensionFields {
 		}
 		smoothSurfaceTensionColor();
 		rebuildSurfaceTensionNormals();
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int index = domain.domainFlowFields.cellIndex(x, y, z);
+		for (int index=0;index<domain.cellCount;index++) {
+			int x=domain.grid.x(index),y=domain.grid.y(index),z=domain.grid.z(index);
 			if (domain.geometry.cutCells.fullySolid(index) || domain.liquidGrid.stockCount[index] == 0) continue;
 			double sigma = surfaceTensionAtCell(index);
 			if (sigma <= 0.0) continue;
@@ -90,8 +90,8 @@ final class SurfaceTensionFields {
 		smooth(surfaceTensionColor,surfaceTensionSmoothed);
 	}
 	private void smooth(double[] color,double[] smoothed) {
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int index = domain.domainFlowFields.cellIndex(x, y, z);
+		for (int index=0;index<domain.cellCount;index++) {
+			int x=domain.grid.x(index),y=domain.grid.y(index),z=domain.grid.z(index);
 			double sum = 0.0;
 			int count = 0;
 			for (int dz = -1; dz <= 1; dz++) for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
@@ -113,14 +113,15 @@ final class SurfaceTensionFields {
 		int zPlus = Math.min(domain.sizeZ - 1, Math.max(0, z + dz));
 		int zMinus = Math.min(domain.sizeZ - 1, Math.max(0, z - dz));
 		int plus=domain.domainFlowFields.cellIndex(xPlus,yPlus,zPlus),minus=domain.domainFlowFields.cellIndex(xMinus,yMinus,zMinus);
+		int center=domain.grid.cell(x,y,z);if(plus<0)plus=center;if(minus<0)minus=center;
 		return companion==null ? color[plus]-color[minus] : companion[minus]*color[plus]-companion[plus]*color[minus];
 	}
 	void rebuildSurfaceTensionNormals() {
 		rebuildNormals(surfaceTensionSmoothed,null,surfaceTensionNormalX,surfaceTensionNormalY,surfaceTensionNormalZ);
 	}
 	private void rebuildNormals(double[] color,double[] companion,double[] normalX,double[] normalY,double[] normalZ) {
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int index = domain.domainFlowFields.cellIndex(x, y, z);
+		for (int index=0;index<domain.cellCount;index++) {
+			int x=domain.grid.x(index),y=domain.grid.y(index),z=domain.grid.z(index);
 			if (domain.geometry.cutCells.fullySolid(index)) {
 				normalX[index] = normalY[index] = 0.0;
 				normalZ[index] = 1.0;
@@ -149,8 +150,8 @@ final class SurfaceTensionFields {
 		smooth(pair.color,pair.second);
 		rebuildNormals(pair.second,pair.first,pair.normalX,pair.normalY,pair.normalZ);
 		Arrays.fill(pair.curvature,0);
-		for(int z=0;z<domain.sizeZ;z++)for(int y=0;y<domain.sizeY;y++)for(int x=0;x<domain.sizeX;x++){
-			int cell=domain.domainFlowFields.cellIndex(x,y,z);
+		for(int cell=0;cell<domain.cellCount;cell++){
+			int x=domain.grid.x(cell),y=domain.grid.y(cell),z=domain.grid.z(cell);
 			if(!domain.geometry.cutCells.fullySolid(cell)&&domain.liquidGrid.stockCount[cell]>0)
 				pair.curvature[cell]=curvature(x,y,z,false,pair.normalX,pair.normalY,pair.normalZ);
 		}
@@ -227,6 +228,7 @@ final class SurfaceTensionFields {
 			if (!domain.domainFlowFields.inside(nx,ny,nz)) open = 0;
 			if (open < 1) {
 				int sample = domain.domainFlowFields.cellIndex(Math.clamp(nx,0,domain.sizeX-1),Math.clamp(ny,0,domain.sizeY-1),Math.clamp(nz,0,domain.sizeZ-1));
+				if(sample<0)sample=target;
 				double local = normal[target];
 				double wallNormal=local;
 				if(component==axis){
@@ -243,6 +245,7 @@ final class SurfaceTensionFields {
 		}
 		int sample = domain.domainFlowFields.cellIndex(Math.min(domain.sizeX - 1, Math.max(0, nx)),
 				Math.min(domain.sizeY - 1, Math.max(0, ny)), Math.min(domain.sizeZ - 1, Math.max(0, nz)));
+		if(sample<0)sample=domain.grid.cell(x,y,z);
 		return normal[sample];
 	}
 }

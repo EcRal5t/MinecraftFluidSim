@@ -105,7 +105,7 @@ final class CellInventoryReader {
 		double cubicMetresPerCell = domain.unitScale.cubicMetersPerNormalizedVolume();
 		ArrayList<FluidCellInventoryView.MaterialAmount> materials = new ArrayList<>();
 		for (int material = 0; material < materialVolume.length; material++) if (materialVolume[material] > 0.0) {
-			String id = domain.materialRegistry == null ? BuiltinFluidMaterials.WATER.id()
+			String id = domain.materialRegistry == null ? BuiltinFluidMaterials.WATER
 					: domain.materialRegistry.material(material).id();
 			materials.add(new FluidCellInventoryView.MaterialAmount(id,
 					materialVolume[material] * cubicMetresPerCell,

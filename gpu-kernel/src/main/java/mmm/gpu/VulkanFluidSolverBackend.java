@@ -146,8 +146,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 ports.stream()
                     .map(port -> {
                         var contact = port.contact();
-                        int cell = contact.cellX()
-                            + successor.sizeX() * (contact.cellY() + successor.sizeY() * contact.cellZ());
+                        int cell = successor.grid().cell(contact.cellX(), contact.cellY(), contact.cellZ());
                         return new VulkanThermalDeviceLayout.Port(port.providerId(), port.objectId(), cell,
                             contact.direction(), contact.wallThicknessMetres(), contact.wallConductivityWPerMetreK(),
                             contact.filmThicknessMetres());
@@ -293,7 +292,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                     .map(port -> {
                         var c = port.contact();
                         return new VulkanThermalDeviceLayout.Port(port.providerId(), port.objectId(),
-                            c.cellX() + template.sizeX() * (c.cellY() + template.sizeY() * c.cellZ()), c.direction(),
+                            template.grid().cell(c.cellX(), c.cellY(), c.cellZ()), c.direction(),
                             c.wallThicknessMetres(), c.wallConductivityWPerMetreK(), c.filmThicknessMetres());
                     })
                     .toList();
@@ -662,7 +661,8 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             }
         }
         private VulkanCellObservation.Cell cellAt(int x, int y, int z) {
-            int index = x + codec.layout().sizeX() * (y + codec.layout().sizeY() * z);
+            int index = codec.layout().grid().cell(x, y, z);
+            if (index < 0) throw new IllegalArgumentException("Cell observation lies outside region");
             if (cell == null || observedCell != index) {
                 cell = cellObservation.capture(capture, codec, x, y, z);
                 observedCell = index;

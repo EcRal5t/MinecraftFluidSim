@@ -17,7 +17,7 @@ final class PendingPhaseMotionCodec {
 	private static final int MAGIC = 0x5257504d; // RWPM
 	private static final int VERSION = 1;
 
-	byte[] encode(PendingPhaseMotionState state) throws IOException {
+	byte[] encode(PendingPhaseMotionState state,mmm.spatial.SpatialGrid grid) throws IOException {
 		if (state == null || state.isEmpty()) {
 			throw new IllegalArgumentException("Empty pending phase motion is represented by extension absence");
 		}
@@ -26,7 +26,7 @@ final class PendingPhaseMotionCodec {
 			out.writeInt(MAGIC); out.writeInt(VERSION); out.writeInt(state.cellCount());
 			out.writeInt(state.entries().size());
 			for (PendingPhaseMotionState.Entry entry : state.entries()) {
-				out.writeInt(entry.cell());
+				out.writeInt(grid.x(entry.cell()));out.writeInt(grid.y(entry.cell()));out.writeInt(grid.z(entry.cell()));
 			}
 		}
 		byte[] payload = bytes.toByteArray();
@@ -36,7 +36,8 @@ final class PendingPhaseMotionCodec {
 		return payload;
 	}
 
-	PendingPhaseMotionState decode(byte[] payload, int expectedCellCount) throws IOException {
+	PendingPhaseMotionState decode(byte[] payload,mmm.spatial.SpatialGrid grid) throws IOException {
+		int expectedCellCount=grid.cellCount();
 		if (payload == null || payload.length > ThermalLimits.MAX_SERIALIZED_EXTENSION_BYTES) {
 			throw new IOException("Pending phase-motion extension is missing or over budget");
 		}
@@ -50,7 +51,9 @@ final class PendingPhaseMotionCodec {
 			}
 			ArrayList<PendingPhaseMotionState.Entry> entries = new ArrayList<>(count);
 			for (int index = 0; index < count; index++) {
-				entries.add(new PendingPhaseMotionState.Entry(input.readInt()));
+				int cell=grid.cell(input.readInt(),input.readInt(),input.readInt());
+				if(cell<0)throw new IOException("Pending phase cell is outside its grid");
+				entries.add(new PendingPhaseMotionState.Entry(cell));
 			}
 			if (input.read() != -1) throw new IOException("Trailing pending phase-motion bytes");
 			return new PendingPhaseMotionState(cellCount, entries);

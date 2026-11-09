@@ -41,7 +41,7 @@ final class VulkanLiquidDisplay implements AutoCloseable {
                 encoded.putInt(8+20*c+16,row);
             }
             return mmm.fluid.FluidMaterialRenderSnapshot.fromDisplayFields(l.sizeX(),l.sizeY(),l.sizeZ(),h,fluids.materials(),fluids.phaseGroups(),fractions,phases,
-                new mmm.fluid.FluidSurfaceInput(l.sizeX(),l.sizeY(),l.sizeZ(),h,new mmm.fluid.CompactFluidSurface(encoded.array())));
+                new mmm.fluid.FluidSurfaceInput(l.grid(),h,new mmm.fluid.CompactFluidSurface(encoded.array())));
         }
     }
     private static int word(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}

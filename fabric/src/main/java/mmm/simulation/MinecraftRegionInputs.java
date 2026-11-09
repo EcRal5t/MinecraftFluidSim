@@ -21,11 +21,11 @@ import java.util.UUID;
 /** Captures region geometry/entity observations and applies the accepted paired entity response. */
 final class MinecraftRegionInputs {
 	static final double NEUTRAL_SUBMERGENCE = 0.72;
-	private static final double BODY_REFERENCE_DENSITY_KG_M3 = 1000.0 * NEUTRAL_SUBMERGENCE;
 	private static final double TICKS_PER_SECOND = 20.0;
 	private static final int COLLISION_REFRESH_INTERVAL_TICKS = 5;
 
 	private final int cellsPerBlock;
+	private final double waterDensity;
 	private final MotionHistory motion = new MotionHistory();
 	private final Map<UUID, List<Interaction>> pendingResponses = new HashMap<>();
 	private final ThermalBoundaryResolver thermalBoundaries;
@@ -35,9 +35,10 @@ final class MinecraftRegionInputs {
 	private java.util.function.Function<FluidRegion,List<MovingBodyFluidCoupling.Request>> manualPrescribedBodies = region -> List.of();
 	void manualPrescribedBodies(java.util.function.Function<FluidRegion,List<MovingBodyFluidCoupling.Request>> source) { manualPrescribedBodies=java.util.Objects.requireNonNull(source); }
 
-	MinecraftRegionInputs(ThermalRegistry thermalRegistry, int cellsPerBlock) {
+	MinecraftRegionInputs(ThermalRegistry thermalRegistry, int cellsPerBlock, double waterDensity) {
 		if (cellsPerBlock <= 0) throw new IllegalArgumentException("cells per block must be positive");
 		this.cellsPerBlock = cellsPerBlock;
+		this.waterDensity = waterDensity;
 		this.thermalBoundaries = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
 		this.ordinaryWalls = thermalRegistry == null ? null : new OrdinaryThermalWalls(thermalRegistry, thermalBoundaries);
 	}
@@ -242,7 +243,7 @@ final class MinecraftRegionInputs {
 		return !(entity instanceof Player player) || (!player.isSpectator() && !player.getAbilities().flying);
 	}
 
-	private static Contact sampleContact(FluidRegion region, Entity entity) {
+	private Contact sampleContact(FluidRegion region, Entity entity) {
 		BlockPos origin = region.origin();
 		AABB box = entity.getBoundingBox();
 		var sample = region.sampleBody(
@@ -259,13 +260,13 @@ final class MinecraftRegionInputs {
 		return new Contact(submergedFraction, displacedVolume, sample.waterContactVolumeCubicMetres(),
 				new MovingBodyFluidCoupling.Bounds(box.minX - origin.getX(), box.minY - origin.getY(),
 						box.minZ - origin.getZ(), box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ()),
-				effectiveBodyMass(bodyVolume, region.solverConfig().gravity(), entity.getGravity()));
+				effectiveBodyMass(bodyVolume, region.solverConfig().gravity(), entity.getGravity(), waterDensity));
 	}
 
 	/** Host gravity calibrates the effective mass of an externally controlled body. */
-	static double effectiveBodyMass(double volume, double solverGravity, double hostGravityBlocksPerTickSquared) {
+	static double effectiveBodyMass(double volume, double solverGravity, double hostGravityBlocksPerTickSquared, double waterDensity) {
 		double hostGravity = hostGravityBlocksPerTickSquared * TICKS_PER_SECOND * TICKS_PER_SECOND;
-		return volume * BODY_REFERENCE_DENSITY_KG_M3 * (solverGravity > 0 && hostGravity > 0 ? solverGravity / hostGravity : 1.0);
+		return volume * waterDensity * NEUTRAL_SUBMERGENCE * (solverGravity > 0 && hostGravity > 0 ? solverGravity / hostGravity : 1.0);
 	}
 
 	/** One frozen liquid observation; carries no Minecraft entity reference into core. */

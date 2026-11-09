@@ -28,7 +28,6 @@ public final class AirNetwork {
 	private GasAuditLedger phaseSink = GasAuditLedger.EMPTY;
 	private long revision;
 
-	public AirNetwork() { this(BuiltinGasDefinitions.createRegistry()); }
 
 	public AirNetwork(GasRegistry registry) {
 		this.registry = Objects.requireNonNull(registry, "registry");

@@ -82,6 +82,7 @@ public final class MaterialRegistryCodec {
 			tag.putString("MiscibilityGroup", material.miscibilityGroup());
 			tag.putLong("SurfaceTensionBits", Double.doubleToRawLongBits(material.surfaceTension()));
 			tag.putLong("ContactAngleBits", Double.doubleToRawLongBits(material.contactAngleRadians()));
+			tag.putInt("DisplayArgb", material.displayArgb());
 			ListTag viscosity = new ListTag();
 			for (MaterialRegistry.ViscositySegment segment : entry.viscosity()) {
 				CompoundTag value = new CompoundTag();
@@ -123,7 +124,7 @@ public final class MaterialRegistryCodec {
 			CompoundTag tag = compound(list, index, "material");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "ReferenceDensityKgPerM3Bits", Tag.TAG_LONG,
 					"MiscibilityGroup", Tag.TAG_STRING, "SurfaceTensionBits", Tag.TAG_LONG,
-					"ContactAngleBits", Tag.TAG_LONG, "Viscosity", Tag.TAG_LIST, "ThermalExpansion", Tag.TAG_LIST));
+					"ContactAngleBits", Tag.TAG_LONG, "DisplayArgb", Tag.TAG_INT, "Viscosity", Tag.TAG_LIST, "ThermalExpansion", Tag.TAG_LIST));
 			ListTag encodedExpansion = tag.getListOrEmpty("ThermalExpansion");
 			if (encodedExpansion.size() > 1) throw new IOException("Multiple thermal expansion definitions for one material");
 			LiquidThermalExpansion.Definition expansion = null;
@@ -151,7 +152,7 @@ public final class MaterialRegistryCodec {
 					Double.longBitsToDouble(tag.getLongOr("ReferenceDensityKgPerM3Bits", 0L)),
 					tag.getStringOr("MiscibilityGroup", ""),
 					Double.longBitsToDouble(tag.getLongOr("SurfaceTensionBits", 0L)),
-					Double.longBitsToDouble(tag.getLongOr("ContactAngleBits", 0L))), segments, expansion));
+					Double.longBitsToDouble(tag.getLongOr("ContactAngleBits", 0L)), tag.getIntOr("DisplayArgb", 0)), segments, expansion));
 		}
 		return List.copyOf(result);
 	}

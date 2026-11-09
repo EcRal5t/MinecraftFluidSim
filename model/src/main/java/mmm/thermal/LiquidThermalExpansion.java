@@ -6,10 +6,6 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /** Fixed-volume liquid buoyancy from a positive linear thermal-volume constitutive approximation. */
 public final class LiquidThermalExpansion {
@@ -35,28 +31,12 @@ public final class LiquidThermalExpansion {
 		}
 	}
 
-	private static final List<Definition> DEFINITIONS = List.of(
-			new Definition("mmm:mercury", 293.15, 1.82E-4),
-			new Definition("mmm:oil", 293.15, 7.00E-4),
-			new Definition("mmm:water", 293.15, 2.07E-4)
-	);
-	private static final Map<String, Definition> BY_CARRIER = DEFINITIONS.stream()
-			.collect(Collectors.toUnmodifiableMap(Definition::carrierId, Function.identity()));
 	private static final byte[] CANONICAL = canonical();
 	private static final String FINGERPRINT = sha256(CANONICAL);
 
 	private LiquidThermalExpansion() { }
 
-	public static List<Definition> definitions() { return DEFINITIONS; }
 	public static String fingerprint() { return FINGERPRINT; }
-	public static Definition find(String carrierId) { return BY_CARRIER.get(carrierId); }
-
-	public static Definition require(String carrierId) {
-		Definition definition = BY_CARRIER.get(carrierId);
-		if (definition == null) throw new IllegalArgumentException(
-				"No liquid thermal expansion definition for " + carrierId);
-		return definition;
-	}
 
 	private static byte[] canonical() {
 		try {

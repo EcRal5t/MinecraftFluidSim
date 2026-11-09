@@ -1,7 +1,6 @@
 package mmm;
 
 import mmm.logging.MmmCommandLog;
-import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidMaterial;
 import mmm.transfer.ContainerFluidLedger;
 import mmm.transfer.ChemicalContents;
@@ -80,31 +79,17 @@ final class MmmCommandHandlers {
 		if ("empty".equals(requested)) {
 			stack = new ItemStack(MmmItems.MATERIAL_BUCKET);
 			description = "空材料桶";
-		} else if ("water_oil_mix".equals(requested)) {
-			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(
-					new FluidMixture.Component(BuiltinFluidMaterials.WATER.id(),
-							ContainerFluidLedger.NANOS_PER_BLOCK / 2L,
-							mmm.units.Mass.fromKilograms(0.5 * BuiltinFluidMaterials.WATER.referenceDensity())),
-					new FluidMixture.Component(BuiltinFluidMaterials.OIL.id(),
-							ContainerFluidLedger.NANOS_PER_BLOCK / 2L,
-							mmm.units.Mass.fromKilograms(0.5 * BuiltinFluidMaterials.OIL.referenceDensity()))
-			)));
-			description = "半水半油混合材料桶";
 		} else {
-			FluidMaterial material = switch (requested) {
-				case "water", "mmm:water" -> BuiltinFluidMaterials.WATER;
-				case "oil", "mmm:oil" -> BuiltinFluidMaterials.OIL;
-				case "mercury", "mmm:mercury" -> BuiltinFluidMaterials.MERCURY;
+			String name = switch (requested) {
+				case "water", "mmm:water" -> "water";
+				case "oil", "mmm:oil" -> "oil";
+				case "mercury", "mmm:mercury" -> "mercury";
+				case "water_oil_mix" -> "water_oil";
 				default -> null;
 			};
-			if (material == null) return fail(source, "未知材料：" + requested);
-			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(new FluidMixture.Component(material.id(),
-					ContainerFluidLedger.NANOS_PER_BLOCK, mmm.units.Mass.fromKilograms(material.referenceDensity())))));
-			description = material.id() + " 满材料桶";
-		}
-		if (!"empty".equals(requested)) {
-			world.bindActualContainerProfile(stack);
-			world.attachDebugLiquidThermalContents(stack);
+			if (name == null) return fail(source, "未知材料：" + requested);
+			stack = world.creativeMaterial(name);
+			description = name + " 满材料桶";
 		}
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
@@ -161,28 +146,7 @@ final class MmmCommandHandlers {
 			default -> null;
 		};
 		if (species == null) return fail(source, "未知 reagent：" + requested);
-		ChemicalRegistry registry = world.chemicalRegistry();
-		java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
-		if (species.equals(BuiltinChemicalDefinitions.H2O)) {
-			amounts.put(species, 55_555_555_556L);
-		} else if (species.equals(BuiltinChemicalDefinitions.ETHANOL)) {
-			amounts.put(species, 17_152_173_913L);
-		} else {
-			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
-			amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
-		}
-		double mass = species.equals(BuiltinChemicalDefinitions.ETHANOL) ? BuiltinChemicalDefinitions.ETHANOL_REFERENCE_DENSITY_KG_M3 : 1_000.0;
-		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
-		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
-				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
-		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				BuiltinFluidMaterials.WATER.id(), 1.0, mmm.units.Mass.fromKilograms(mass),
-				mixture.massResidualUnits(),
-				mixture.stableAmounts(registry))));
-		stack = ContainerItemStacks.toStack(
-				ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));
-		world.bindActualContainerProfile(stack);
-		world.attachDebugLiquidThermalContents(stack);
+		stack = world.creativeReagent(requested);
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
 		return succeed(source, "已生成 " + requested + "（显式 creative/debug 化学外部源）", 1);
@@ -195,7 +159,7 @@ final class MmmCommandHandlers {
 		if (!fixtures.createTensionDemo(player, angleDegrees)) {
 			return fail(source, "无法创建表面张力测试域：" + fixtures.lastFailure());
 		}
-		return succeed(source, "已创建暂停的表面张力球形冠液滴（演示用 σ=1000 N/m、g=0.981 m/s²，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；各角度从相同半球开始，用 /mmm step 或 /mmm run 比较接触面的变化", 1);
+		return succeed(source, "已创建暂停的表面张力球形冠液滴（演示用世界材料表面张力、g=0.981 m/s²，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；各角度从相同半球开始，用 /mmm step 或 /mmm run 比较接触面的变化", 1);
 	}
 
 	static int createAirDemo(CommandSourceStack source, String mode)

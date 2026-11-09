@@ -7,6 +7,7 @@
 ## 输入与显色归属
 
 服务端按已提交状态发布有界展示快照，客户端按区域身份、网络代次和序号接收。移除游标使旧消息失效。
+液体统一使用材料快照，携带实际块成员；几何、化学、温度和颗粒显色共用该帧的紧凑格索引，客户端通过空间拓扑查找相邻格和世界坐标。
 库存、物种、质量及内能由物理模块保存，展示量化和客户端颜色设置由展示链处理。
 `CarrierInventoryReader.copyMaterialRenderSnapshot` 从单元库存、同代 PLIC 与 `FixedGeometrySnapshot` 生成 `FluidSurfaceInput`。每片隐含一个开放微盒，附带 PLIC 和材料高度裁剪平面；同单元材料按密度顺序分配实际库存份额，采用格内分层近似。共享面由客户端凸片求交确定，接触界面只保留一次，法向指向第二侧。正液量沿实际 PLIC 显示，开放微盒约束形状；极小相采用紧凑角部形状。仅接触裁剪面而无体积的片不参加网格、邻面遮挡或相机介质判定。
 
@@ -18,10 +19,10 @@
 
 ## 当前几何与绘制
 
-`ClientFluidVolumeRenderer` 协调快照、几何生成与 GPU 提交；`FluidSurfaceGeometry`、`MaterialSurfaceGeometry` 和 `GranularSurfaceGeometry` 提供各类几何。
+`ClientFluidVolumeRenderer` 协调快照、几何生成与 GPU 提交；`MaterialSurfaceGeometry` 和 `GranularSurfaceGeometry` 提供液体与颗粒几何。
 材料表面从已接受的 `FluidSurfaceInput` 重建，网格保留两侧材料、来源单元与朝向；相机位置决定当前可见一侧的材质。
 生产表面使用 `BLOCK` 顶点格式，提交位置、颜色、方块图集 UV、实际世界光照和法线。水采用 `water_still`，汞采用 `iron_block`，其他材料采用 `white_concrete` 乘材料颜色。pH 与温度模式共用几何，通过位置／颜色管线保留色带，执行正常深度测试和深度写入。
-材料表面双面绘制，同一批全部材料按相机距离排序并一次提交透明四边形；每个三角形以重复末顶点编码为四边形。水、油、汞各有固定基础透明度，光影包可进一步计算水的光学效果。
+材料表面双面绘制，同一批全部材料按相机距离排序并一次提交透明四边形；每个三角形以重复末顶点编码为四边形。材料的基础透明度读取 JSON `display_argb` 的 alpha 通道，光影包可进一步计算水的光学效果。
 绘制注册于 `BEFORE_TRANSLUCENT_TERRAIN`，在不透明深度已准备的透明目标中先提交液体，使近侧玻璃随后混合到液面上。流体批次内部按距离排序；与原版透明区块的跨批次排序仍有限制。`FluidRenderBackend` 持有可复用的 `StagedVertexBuffer`，逐次构建、上传和提交，关闭客户端时释放；纹理和光照读取当前资源管理器，资源重载后自然使用新图集。区域移除与断线清理已接受帧和网格。
 颗粒保留沉积层外露面与活动代表粒子的方盒形状，沿材质管线提交图集纹理、实际世界光照与逐面法线；Iris 读取沙方块的分类。固定方向明暗已由正常照明替换。调试外壳沿 `renderDebug` 使用 `DEBUG_FILLED_BOX`。
 

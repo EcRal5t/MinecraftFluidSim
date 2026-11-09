@@ -2,7 +2,6 @@ package mmm.network;
 
 import mmm.MmmMod;
 import mmm.fluid.FluidMaterial;
-import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidMaterialRenderSnapshot;
 import mmm.fluid.FluidSurfaceInput;
 import net.minecraft.core.BlockPos;
@@ -92,7 +91,7 @@ public record FluidMaterialSnapshotPayload(
 			if (!(Float.isFinite(cellSize) && cellSize > 0.0F) || sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) {
 				throw new IllegalArgumentException("Material snapshot geometry is invalid");
 			}
-			int cells = boundedCells(sizeX, sizeY, sizeZ);
+			int cells = geometry.grid().cellCount();
 			if (cells > MAX_CELLS || geometry.sizeX() != sizeX || geometry.sizeY() != sizeY || geometry.sizeZ() != sizeZ
 					|| Float.compare(geometry.cellSize(), cellSize) != 0
 					|| materialFractions.length != materials.size() || phaseFractions.length != phaseGroups.size()) {
@@ -144,7 +143,7 @@ public record FluidMaterialSnapshotPayload(
 	) {
 		List<MaterialEntry> materials = snapshot.materials().stream()
 				.map(material -> new MaterialEntry(material.id(), material.referenceDensity(), material.miscibilityGroup(),
-						BuiltinFluidMaterials.displayArgb(material.id())))
+						material.displayArgb()))
 				.toList();
 		byte[][] materialFractions = new byte[materials.size()][];
 		for (int material = 0; material < materialFractions.length; material++) {
@@ -163,7 +162,7 @@ public record FluidMaterialSnapshotPayload(
 	public FluidMaterialRenderSnapshot toRenderSnapshot() {
 		if (!isSnapshot()) throw new IllegalStateException("Only material snapshot payloads contain mesher fields");
 		List<FluidMaterial> definitions = materials.stream()
-				.map(material -> new FluidMaterial(material.id(), material.referenceDensity(), material.phaseGroup(), 0.0, Math.PI / 2.0))
+				.map(material -> new FluidMaterial(material.id(), material.referenceDensity(), material.phaseGroup(), 0.0, Math.PI / 2.0, material.argb()))
 				.toList();
 		return FluidMaterialRenderSnapshot.fromDisplayFields(
 				sizeX, sizeY, sizeZ, cellSize, definitions, phaseGroups,
@@ -204,6 +203,11 @@ public record FluidMaterialSnapshotPayload(
 		buffer.writeVarInt(payload.sizeX);
 		buffer.writeVarInt(payload.sizeY);
 		buffer.writeVarInt(payload.sizeZ);
+        var grid = payload.geometry.grid();
+        buffer.writeVarInt(grid == null ? 0 : grid.blockCount());
+        if (grid != null) for (int slot = 0; slot < grid.blockCount(); slot++) {
+            var block = grid.block(slot); buffer.writeVarInt(block.x()); buffer.writeVarInt(block.y()); buffer.writeVarInt(block.z());
+        }
 		buffer.writeVarInt(payload.materials.size());
 		for (MaterialEntry material : payload.materials) {
 			buffer.writeUtf(material.id(), MAX_KEY_LENGTH);
@@ -234,7 +238,12 @@ public record FluidMaterialSnapshotPayload(
 		BlockPos origin = buffer.readBlockPos();
 		float cellSize = buffer.readFloat();
 		int sizeX = buffer.readVarInt(), sizeY = buffer.readVarInt(), sizeZ = buffer.readVarInt();
-		int cells = boundedCells(sizeX, sizeY, sizeZ);
+		int blockCount = readBoundedCount(buffer, MAX_CELLS, "spatial blocks");
+        var blocks = new ArrayList<mmm.spatial.SpatialGrid.Block>(blockCount);
+        for (int slot = 0; slot < blockCount; slot++) blocks.add(new mmm.spatial.SpatialGrid.Block(buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt()));
+        var grid = blockCount == 0 ? null : new mmm.spatial.SpatialGrid(sizeX, sizeY, sizeZ, blocks);
+        int cells = grid == null ? 0 : grid.cellCount();
+        if (cells > MAX_CELLS) throw new IllegalArgumentException("Material snapshot grid is too large");
 		int materialCount = readBoundedCount(buffer, MAX_PALETTE_ENTRIES, "material palette");
 		List<MaterialEntry> materials = new ArrayList<>(materialCount);
 		for (int material = 0; material < materialCount; material++) {
@@ -244,7 +253,7 @@ public record FluidMaterialSnapshotPayload(
 		int phaseCount = readBoundedCount(buffer, MAX_PALETTE_ENTRIES, "phase palette");
 		List<String> phases = new ArrayList<>(phaseCount);
 		for (int phase = 0; phase < phaseCount; phase++) phases.add(buffer.readUtf(MAX_KEY_LENGTH));
-		FluidSurfaceInput geometry = readGeometry(buffer, sizeX, sizeY, sizeZ, cellSize,
+		FluidSurfaceInput geometry = readGeometry(buffer, grid, cellSize,
 				(long) cells * (materialCount + phaseCount));
 		byte[][] materialFractions = readFields(buffer, materialCount, cells);
 		byte[][] phaseFractions = readFields(buffer, phaseCount, cells);
@@ -265,15 +274,6 @@ public record FluidMaterialSnapshotPayload(
 		);
 	}
 
-	private static int boundedCells(int sizeX, int sizeY, int sizeZ) {
-		if (sizeX < 0 || sizeY < 0 || sizeZ < 0
-				|| sizeX > MAX_CELLS || sizeY > MAX_CELLS || sizeZ > MAX_CELLS
-				|| (long) sizeX * sizeY > MAX_CELLS || (long) sizeX * sizeY * sizeZ > MAX_CELLS) {
-			throw new IllegalArgumentException("Material snapshot grid is too large");
-		}
-		return sizeX * sizeY * sizeZ;
-	}
-
 	private static int readBoundedCount(FriendlyByteBuf buffer, int maximum, String label) {
 		int count = buffer.readVarInt();
 		if (count < 0 || count > maximum) throw new IllegalArgumentException("Invalid " + label + " count");
@@ -289,7 +289,7 @@ public record FluidMaterialSnapshotPayload(
 	private static void validatePalette(List<MaterialEntry> materials, List<String> phaseGroups) {
 		Set<String> materialIds = new HashSet<>(), phases = new HashSet<>();
 		for (String phase : phaseGroups) {
-			new FluidMaterial("mmm:validation", 1.0, phase, 0.0, Math.PI / 2.0);
+			new FluidMaterial("mmm:validation", 1.0, phase, 0.0, Math.PI / 2.0, 0);
 			if (!phases.add(phase)) throw new IllegalArgumentException("Duplicate phase group " + phase);
 		}
 		for (MaterialEntry material : materials) {
@@ -339,13 +339,13 @@ public record FluidMaterialSnapshotPayload(
 	}
 
 	private static FluidSurfaceInput readGeometry(
-			FriendlyByteBuf buffer, int sizeX, int sizeY, int sizeZ, float cellSize, long fieldBytes
+			FriendlyByteBuf buffer, mmm.spatial.SpatialGrid grid, float cellSize, long fieldBytes
 	) {
 		int count = buffer.readVarInt();
 		if(count==-1){
 			if(fieldBytes<0||fieldBytes+9>MAX_TOTAL_FIELD_BYTES)throw new IllegalArgumentException("Material snapshot fields are too large");
 			var compact=new mmm.fluid.CompactFluidSurface(buffer.readByteArray((int)(MAX_TOTAL_FIELD_BYTES-fieldBytes-9)));
-			return new FluidSurfaceInput(sizeX,sizeY,sizeZ,cellSize,compact);
+			return new FluidSurfaceInput(grid,cellSize,compact);
 		}
 		if(count<0||count>FluidSurfaceInput.MAX_PIECES)throw new IllegalArgumentException("Invalid surface pieces count");
 		long bytes = 4L + fieldBytes;
@@ -367,7 +367,7 @@ public record FluidMaterialSnapshotPayload(
 			}
 			pieces.add(new FluidSurfaceInput.Piece(cell, micro, material, phase, planes));
 		}
-		return new FluidSurfaceInput(sizeX, sizeY, sizeZ, cellSize, pieces);
+		return new FluidSurfaceInput(grid, cellSize, pieces);
 	}
 
 	private static byte[][] deepCopy(byte[][] fields) {
@@ -382,7 +382,7 @@ public record FluidMaterialSnapshotPayload(
 
 	public record MaterialEntry(String id, double referenceDensity, String phaseGroup, int argb) {
 		public MaterialEntry {
-			new FluidMaterial(id, referenceDensity, phaseGroup, 0.0, Math.PI / 2.0);
+			new FluidMaterial(id, referenceDensity, phaseGroup, 0.0, Math.PI / 2.0, argb);
 		}
 	}
 

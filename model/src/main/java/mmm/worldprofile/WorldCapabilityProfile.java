@@ -53,7 +53,7 @@ public record WorldCapabilityProfile(
 			throw new IllegalArgumentException("Region layout " + regionLayoutId + " does not match capability set; expected "
 					+ derived);
 		}
-		requireExactBindings(sorted, registryFingerprints);
+		requireExactBindings(registryFingerprints);
 		if (!registryFingerprints.aggregateFingerprint().equals(aggregateFingerprint)) {
 			throw new IllegalArgumentException("Registry aggregate fingerprint mismatch");
 		}
@@ -98,25 +98,9 @@ public record WorldCapabilityProfile(
 		return "pure";
 	}
 
-	private static void requireExactBindings(TreeSet<WorldCapability> capabilities, RegistryFingerprintSet bindings) {
-		boolean condensedThermal = capabilities.contains(WorldCapability.THERMAL)
-				|| capabilities.contains(WorldCapability.PHASECHANGE);
-		Map<RegistryKind, Boolean> required = new TreeMap<>();
-		required.put(RegistryKind.MATERIAL, capabilities.contains(WorldCapability.MATERIALS));
-		required.put(RegistryKind.CHEMICAL, capabilities.contains(WorldCapability.CHEMISTRY));
-		required.put(RegistryKind.GRANULAR, capabilities.contains(WorldCapability.GRANULAR));
-		required.put(RegistryKind.GAS, condensedThermal);
-		required.put(RegistryKind.THERMAL, condensedThermal);
-		for (Map.Entry<RegistryKind, Boolean> entry : required.entrySet()) {
-			boolean bound = bindings.isBound(entry.getKey());
-			if (entry.getValue() && !bound) {
-				throw new IllegalArgumentException("Registry binding " + entry.getKey().token() + " is required by the capability set");
-			}
-			if (!entry.getValue() && bound) {
-				throw new IllegalArgumentException("Registry binding " + entry.getKey().token()
-						+ " must be empty for the capability set");
-			}
-		}
+	private static void requireExactBindings(RegistryFingerprintSet bindings) {
+		for (RegistryKind kind : RegistryKind.values()) if (!bindings.isBound(kind))
+			throw new IllegalArgumentException("World registry binding is missing: " + kind.token());
 	}
 
 	private static byte[] encodeCanonical(String schema, String unitIdentity, TreeSet<WorldCapability> capabilities,

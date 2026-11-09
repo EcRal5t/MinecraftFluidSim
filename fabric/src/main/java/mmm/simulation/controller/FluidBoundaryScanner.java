@@ -44,13 +44,21 @@ public final class FluidBoundaryScanner {
 			}
 		}
 
-		if (closedComponents.size() > 1) {
-			return ScanResult.failed(Status.AMBIGUOUS_INTERIORS,
-					"controller touches " + closedComponents.size() + " distinct closed interiors");
-		}
-		if (closedComponents.size() == 1) {
-			return ScanResult.success(toFootprint(controllerPosition, closedComponents.getFirst()));
-		}
+		if (!closedComponents.isEmpty()) {
+            var interior = new HashSet<Long>(); var boundary = new HashSet<Long>(); var chunks = new HashSet<Long>();
+            int minX=Integer.MAX_VALUE,minY=Integer.MAX_VALUE,minZ=Integer.MAX_VALUE;
+            int maxX=Integer.MIN_VALUE,maxY=Integer.MIN_VALUE,maxZ=Integer.MIN_VALUE;
+            for (var component : closedComponents) {
+                interior.addAll(component.interior()); boundary.addAll(component.boundary()); chunks.addAll(component.chunks());
+                minX=Math.min(minX,component.minimum().getX()); minY=Math.min(minY,component.minimum().getY()); minZ=Math.min(minZ,component.minimum().getZ());
+                maxX=Math.max(maxX,component.maximum().getX()); maxY=Math.max(maxY,component.maximum().getY()); maxZ=Math.max(maxZ,component.maximum().getZ());
+            }
+            if (interior.size() > maximumInteriorBlocks) return ScanResult.failed(Status.BUDGET_EXCEEDED,
+                    "combined interiors exceed the block scan budget");
+            return ScanResult.success(new FluidRegionFootprint(controllerPosition, new BlockPos(minX,minY,minZ),
+                    new BlockPos(maxX,maxY,maxZ), interior, boundary, chunks));
+        }
+
 		if (incompleteComponents > 0) {
 			return ScanResult.failed(Status.INCOMPLETE_CHUNKS,
 					"no closed interior was provable without entering an unloaded chunk");
@@ -141,14 +149,7 @@ public final class FluidBoundaryScanner {
 		if (!boundary.contains(controllerPosition.asLong())) {
 			throw new IllegalStateException("A scanned controller-adjacent component lost its controller boundary");
 		}
-		for (int chunkZ = minimumZ >> 4; chunkZ <= maximumZ >> 4; chunkZ++) {
-			for (int chunkX = minimumX >> 4; chunkX <= maximumX >> 4; chunkX++) {
-				if (!world.isChunkLoaded(chunkX, chunkZ)) {
-					return ComponentScan.failed(CellAccess.INCOMPLETE_CHUNKS);
-				}
-				chunks.add(ChunkPos.pack(chunkX, chunkZ));
-			}
-		}
+
 		return ComponentScan.closed(new Component(
 				Set.copyOf(interior), Set.copyOf(boundary), Set.copyOf(chunks),
 				new BlockPos(minimumX, minimumY, minimumZ), new BlockPos(maximumX, maximumY, maximumZ)

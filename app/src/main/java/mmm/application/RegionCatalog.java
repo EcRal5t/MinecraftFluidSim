@@ -189,10 +189,17 @@ public final class RegionCatalog<T> {
 			UUID regionId, String dimensionId,
 			double minimumX, double minimumY, double minimumZ,
 			double maximumX, double maximumY, double maximumZ,
-			long reservedCells
+			long reservedCells,
+            java.util.Set<Block> occupiedBlocks
 	) {
+        public record Block(int x, int y, int z) { }
+        public Descriptor(UUID id, String dimension, double minX, double minY, double minZ,
+                double maxX, double maxY, double maxZ, long cells) {
+            this(id, dimension, minX, minY, minZ, maxX, maxY, maxZ, cells, null);
+        }
 		public Descriptor {
 			Objects.requireNonNull(regionId, "regionId");
+            if (occupiedBlocks != null) occupiedBlocks = java.util.Set.copyOf(occupiedBlocks);
 			if (dimensionId == null || dimensionId.isBlank()
 					|| !(Double.isFinite(minimumX) && Double.isFinite(minimumY) && Double.isFinite(minimumZ)
 					&& Double.isFinite(maximumX) && Double.isFinite(maximumY) && Double.isFinite(maximumZ))
@@ -203,11 +210,21 @@ public final class RegionCatalog<T> {
 		}
 
 		boolean overlaps(Descriptor other) {
-			return dimensionId.equals(other.dimensionId)
-					&& minimumX < other.maximumX && other.minimumX < maximumX
-					&& minimumY < other.maximumY && other.minimumY < maximumY
-					&& minimumZ < other.maximumZ && other.minimumZ < maximumZ;
-		}
+            if (!dimensionId.equals(other.dimensionId) || minimumX >= other.maximumX || other.minimumX >= maximumX
+                    || minimumY >= other.maximumY || other.minimumY >= maximumY
+                    || minimumZ >= other.maximumZ || other.minimumZ >= maximumZ) return false;
+            if (occupiedBlocks == null && other.occupiedBlocks == null) return true;
+            if (occupiedBlocks != null && other.occupiedBlocks != null) {
+                var smaller = occupiedBlocks.size() <= other.occupiedBlocks.size() ? occupiedBlocks : other.occupiedBlocks;
+                var larger = smaller == occupiedBlocks ? other.occupiedBlocks : occupiedBlocks;
+                return smaller.stream().anyMatch(larger::contains);
+            }
+            var blocks = occupiedBlocks == null ? other.occupiedBlocks : occupiedBlocks;
+            var box = occupiedBlocks == null ? this : other;
+            return blocks.stream().anyMatch(block -> block.x() < box.maximumX && block.x()+1 > box.minimumX
+                    && block.y() < box.maximumY && block.y()+1 > box.minimumY
+                    && block.z() < box.maximumZ && block.z()+1 > box.minimumZ);
+        }
 	}
 
 	public record Limits(

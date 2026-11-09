@@ -23,7 +23,8 @@ final class DomainGasInventory {
         || cy >= domain.sizeY
         || cz >= domain.sizeZ) return -1;
     domain.domainCapabilities.initializeSpatialGas();
-    int cell=cx+domain.sizeX*(cy+domain.sizeY*cz),micro=((x/h-cx)>=.5?1:0)+((y/h-cy)>=.5?2:0)+((z/h-cz)>=.5?4:0);
+    int cell=domain.grid.cell(cx,cy,cz),micro=((x/h-cx)>=.5?1:0)+((y/h-cy)>=.5?2:0)+((z/h-cz)>=.5?4:0);
+    if(cell<0)return -1;
     if((domain.geometry.cutCells.mask(cell)&(1<<micro))!=0||!domain.groupAvailable(cell))return -1;
     domain.pressureSystem.prepareGeometry();
     var plane=domain.pressureSystem.phaseGeometry().componentPlane(cell,micro);
@@ -73,7 +74,7 @@ final class DomainGasInventory {
       var gas=volume==0?GasInventory.EMPTY:cache.computeIfAbsent(volume,v->model.inventoryAtPressure(v,GasRegistry.STANDARD_PRESSURE_PA,GasRegistry.STANDARD_TEMPERATURE_K,registry.ambient()));
       cells.add(gas);if(!gas.isEmpty())energies[cell]=model.internalEnergyAtTemperature(gas,GasRegistry.STANDARD_TEMPERATURE_K);
     }
-    var next=new mmm.fluid.air.SpatialGasState(old.sizeX(),old.sizeY(),old.sizeZ(),old.registryFingerprint(),old.chemicalRegistryFingerprint(),cells,energies,
+    var next=new mmm.fluid.air.SpatialGasState(old.grid(),old.registryFingerprint(),old.chemicalRegistryFingerprint(),cells,energies,
         old.externalSource().add(mmm.fluid.air.GasRegionAudit.aggregate(cells)),old.escapedSink().add(mmm.fluid.air.GasRegionAudit.aggregate(old.cells())),old.phaseSource(),old.phaseSink());
     var gasEdit=new SpatialGasEdits.Plan(old,next,SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO,SpatialGasEdits.ventAll(old));
     var edit=HostMixtureEdit.prepare(domain,domain.liquidCells.planEdits(List.of()),gasEdit,null);
@@ -108,7 +109,7 @@ final class DomainGasInventory {
     }
     model.requireInventoryEnergy(after,finalEnergy);mixture(domain,cell,after,finalEnergy);
     var cells=new java.util.ArrayList<>(old.cells());cells.set(cell,after);double[] energies=old.internalEnergy();energies[cell]=finalEnergy;
-    var next=new mmm.fluid.air.SpatialGasState(old.sizeX(),old.sizeY(),old.sizeZ(),old.registryFingerprint(),old.chemicalRegistryFingerprint(),cells,energies,
+    var next=new mmm.fluid.air.SpatialGasState(old.grid(),old.registryFingerprint(),old.chemicalRegistryFingerprint(),cells,energies,
             extract?old.externalSource():old.externalSource().add(moved),extract?old.escapedSink().add(moved):old.escapedSink(),old.phaseSource(),old.phaseSink());
     var carried=SignedDyadic.of(carriedEnergy);var delta=SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(old.energyAt(cell)));
     var audit=domain.thermalState.audit().ledger();audit=extract?audit.withExternalSinkEnergy(carried).withRoundoff(delta.add(carried)):

@@ -107,6 +107,7 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testPublicTransfers() throws Exception {
+		double waterDensity=mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material().referenceDensity();
 		var root=Files.createTempDirectory("mmm-public-transfer-");
 		var receipts=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
 		var address=new mmm.api.transfer.DispenserAddress("minecraft:overworld",1,2,3,0);
@@ -121,9 +122,9 @@ public final class ContainerTransferStoreValidation {
 		var preview=new ContainerTransferJournal(operation,region,address.dimensionId(),4,5,ContainerTransferJournal.Operation.INSERT,
 				250_000_000L,actor,before,after,0,ContainerTransferJournal.Phase.REGION_COMMITTED);
 		receipts.prepare(request,binding,preview);
-		var manifest=mmm.transfer.ContainerTransferManifests.from(preview);
+		var manifest=mmm.transfer.ContainerTransferManifests.from(preview,waterDensity);
 		check(manifest.components().getFirst().amount()==250_000_000L
-				&& manifest.components().getFirst().massUnits()==mmm.units.Mass.fromKilograms(250),"Public manifest lost actual partial inventory");
+				&& manifest.components().getFirst().massUnits()==mmm.units.Mass.fromKilograms(.25*waterDensity),"Public manifest lost actual partial inventory");
 		check(MinecraftContainerActorAdapter.classifyInventory(before,new mmm.transfer.TransferActorState(instance,3),preview,false)==CrossDomainRecovery.ExternalTruth.BEFORE,
 				"Actor before generation was not recognized");
 		check(MinecraftContainerActorAdapter.classifyInventory(after,new mmm.transfer.TransferActorState(instance,4),preview,true)==CrossDomainRecovery.ExternalTruth.AFTER,
@@ -170,7 +171,7 @@ public final class ContainerTransferStoreValidation {
 		recovery.retryTransaction(operation);
 		check(!recovery.hasPending(region) && writes[0]==1 && events[0]==1,"Receipt retry did not finish exactly one inventory commit");
 		var restarted=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
-		check(restarted.entry(operation).receipt().manifest().equals(manifest) && restarted.entry(operation).receipt().actorAfterGeneration()==4,
+		check(restarted.entry(operation).receipt(waterDensity).manifest().equals(manifest) && restarted.entry(operation).receipt(waterDensity).actorAfterGeneration()==4,
 				"Restart lost the actual manifest or durable actor generation");
 		var next=UUID.randomUUID();var actor2=new ContainerTransferActor.Dispenser(address.dimensionId(),1,2,3,0,instance,4);
 		var after2=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL,500_000_000L,null);
@@ -180,7 +181,7 @@ public final class ContainerTransferStoreValidation {
 		restarted.prepare(request2,binding,settlement2);restarted.complete(settlement2,true);
 		Files.writeString(root.resolve("mmm/public-transfer/unpublished.operation.nbt.tmp"),"unpublished");
 		var bounded=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
-		check(bounded.entry(operation)==null && bounded.entry(next).receipt().committed() && bounded.entries().size()==1,
+		check(bounded.entry(operation)==null && bounded.entry(next).receipt(waterDensity).committed() && bounded.entries().size()==1,
 				"Latest receipt retention grew operation history or forgot the latest result");
 		var pendingId=UUID.randomUUID();
 		var pendingRequest=new mmm.api.transfer.TransferRequest(pendingId,ref,4,region,address.dimensionId(),2.25,3.25,4.25,request.direction(),request.quantity());
@@ -461,7 +462,7 @@ public final class ContainerTransferStoreValidation {
 		store.write(emptyMaterial);
 		check(emptyMaterial.equals(store.read(tx4)), "empty material bucket fingerprint did not round-trip");
 
-		ChemicalContents chemicalContents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+		ChemicalContents chemicalContents = new ChemicalContents(mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint(),
 				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group(
 						"mmm:water", ContainerFluidLedger.NANOS_PER_BLOCK,
 						mmm.units.Mass.fromKilograms(18.0), mmm.units.Mass.fromKilograms(0.0),
@@ -479,7 +480,7 @@ public final class ContainerTransferStoreValidation {
 		store.write(chemical);
 		check(chemical.equals(store.read(tx5)), "chemical bucket WAL fingerprint did not round-trip");
 		check(chemical.requiresChemicalRegistry(), "chemical WAL did not declare its registry dependency");
-		chemical.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY);
+		chemical.validateChemicalRegistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
 		ChemicalContents foreignContents = new ChemicalContents("0".repeat(64), ChemicalLimits.QUANTA_PER_MOL,
 				chemicalContents.groups());
 		ContainerTransferJournal.ItemFingerprint foreignChemical = new ContainerTransferJournal.ItemFingerprint(
@@ -491,10 +492,10 @@ public final class ContainerTransferStoreValidation {
 				ContainerTransferActor.player(UUID.randomUUID(), ContainerTransferActor.Hand.MAIN),
 				foreignChemical, materialAfter, ContainerTransferJournal.Phase.PREPARED);
 		checkThrows(IllegalArgumentException.class,
-				() -> foreignJournal.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY),
+				() -> foreignJournal.validateChemicalRegistry(mmm.fluid.TestFluidDefinitions.load().chemistry()),
 				"foreign chemical WAL fingerprint was accepted by recovery validation");
 		ChemicalContents.Split chemicalPartial = chemicalContents.split(333_333_333L,
-				BuiltinChemicalDefinitions.REGISTRY);
+				mmm.fluid.TestFluidDefinitions.load().chemistry());
 		ContainerTransferJournal.ItemFingerprint chemicalAfter = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, chemicalPartial.remaining().totalVolumeNanos(), -1L,
 				chemicalPartial.remaining().encode(), chemicalPartial.remaining().totalMassUnits(),
@@ -516,19 +517,19 @@ public final class ContainerTransferStoreValidation {
 		checkThrows(IOException.class, () -> store.write(wrongFamily),
 				"material insertion must not converge to a vanilla empty bucket");
 
-		var granularRegistry = BuiltinGranularDefinitions.createRegistry();
+		var granularRegistry = mmm.fluid.TestFluidDefinitions.load().granular();
 		long inertSvq = SolidVolume.SVQ_PER_CELL;
 		long reactiveSvq = SolidVolume.SVQ_PER_CELL / 2L;
 		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
-				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+				mmm.fluid.TestFluidDefinitions.load().chemistry(), java.util.Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64L,
 						BuiltinChemicalDefinitions.CL_MINUS, 64L), 0L);
 		GranularContents granularContents = new GranularContents(granularRegistry.fingerprint(),
 				SolidVolume.SVQ_PER_CUBIC_METER, List.of(
 				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, inertSvq, mmm.units.Mass.fromKilograms(650.0)),
 				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, reactiveSvq,
-						mmm.units.Mass.fromKilograms(reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
-						reactive.massResidualUnits(), reactive.stableAmounts(BuiltinChemicalDefinitions.REGISTRY)
+						mmm.units.Mass.fromKilograms(reactive.totalMass(mmm.fluid.TestFluidDefinitions.load().chemistry())),
+						reactive.massResidualUnits(), reactive.stableAmounts(mmm.fluid.TestFluidDefinitions.load().chemistry())
 						.entrySet().stream().sorted(java.util.Map.Entry.comparingByKey())
 						.map(entry -> new GranularContents.SpeciesAmount(
 								entry.getKey(), entry.getValue())).toList())));
@@ -549,9 +550,9 @@ public final class ContainerTransferStoreValidation {
 		check(granular.equals(store.read(tx7)), "granular container WAL fingerprint did not round-trip");
 		check(granular.requiresGranularRegistry() && granular.requiresChemicalRegistry(),
 				"reactive granular WAL did not declare both registry dependencies");
-		granular.validateGranularRegistry(granularRegistry, BuiltinChemicalDefinitions.REGISTRY);
+		granular.validateGranularRegistry(granularRegistry, mmm.fluid.TestFluidDefinitions.load().chemistry());
 		checkThrows(IllegalArgumentException.class,
-				() -> granular.validateGranularRegistry(BuiltinGranularDefinitions.createRegistry(), null),
+				() -> granular.validateGranularRegistry(mmm.fluid.TestFluidDefinitions.load().granular(), null),
 				"reactive granular WAL was accepted without chemistry");
 
 		ContainerTransferJournal wrongGranularFamily = ContainerTransferJournal.granular(
@@ -786,9 +787,9 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testActualMarkerSettlement() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+				0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 		for (long requested : new long[] {1L, 59L, 333_333_333L, 999_999_999L, 1_000_000_000L}) {
-			HostFluidState domain = new HostFluidState(6, 4, 6, config);
+			HostFluidState domain = new HostFluidState(6, 4, 6, config, mmm.fluid.TestFluidDefinitions.load());
 			float plannedVolume = MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), requested);
 			long plannedNanos = MinecraftContainerTransferOperations.cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			check(plannedNanos > 0L && plannedNanos <= requested,
@@ -814,13 +815,13 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testMaterialSettlement() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
-		HostFluidState domain = new HostFluidState(6, 4, 6, config);
+				0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+		HostFluidState domain = new HostFluidState(6, 4, 6, config, mmm.fluid.TestFluidDefinitions.load());
 		domain.setVolume(1, 1, 1, 0.125F);
 		FlipParticleState pure = domain.exportParticleState();
 		List<FluidMaterial> materials = List.of(
-				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
-				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0));
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material());
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
 				domain.totalVolumeExact(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(125.0), materials, pure.copyPositionVolume(),
@@ -855,15 +856,16 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testTinyThermalMaterialSettlement() {
-		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
+		var config = new FluidSolverConfig(0.5F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		var liquids = new mmm.fluid.FluidMaterialRegistry(List.of(
-				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2)));
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
 		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", 293.15, 0.0, 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
-		var registry = mmm.fluid.ThermalValidationSupport.thermalRegistry(List.of(definition));
+		var definitions = mmm.fluid.TestFluidDefinitions.withThermal(mmm.fluid.ThermalValidationSupport.thermalRegistry(List.of(definition)));
+        var registry = definitions.thermal();
 		var state = new ThermalStateFunction(registry);
-		var domain = new HostFluidState(3, 3, 3, config);
+		var domain = new HostFluidState(3, 3, 3, config, definitions);
 		domain.bindThermal(registry, liquids, 300.0);
 		var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", 999_999_999L, mmm.units.Mass.fromKilograms(999.0))));
 		var planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
@@ -897,19 +899,19 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testChemicalInsertionMassConservation() {
-		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
+		var config = new FluidSolverConfig(0.5F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		for (double sourceMass : new double[] {1.0, 18.0, 999.0}) {
-			var domain = new HostFluidState(3, 3, 3, config);
-			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
-					new mmm.fluid.FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
-			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			var domain = new HostFluidState(3, 3, 3, config, mmm.fluid.TestFluidDefinitions.load());
+			domain.bindGranular(mmm.fluid.TestFluidDefinitions.load().granular(),
+					new mmm.fluid.FluidMaterialRegistry(mmm.simulation.ProductionRegistries.palette()), mmm.fluid.TestFluidDefinitions.load().material());
+			domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
 			double sourceResidual = sourceMass - 18.0;
-			var contents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(), ChemicalLimits.QUANTA_PER_MOL,
+			var contents = new ChemicalContents(mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint(), ChemicalLimits.QUANTA_PER_MOL,
 					List.of(new ChemicalContents.Group("mmm:water", 999_999_999L,
 							mmm.units.Mass.fromKilograms(sourceMass), mmm.units.Mass.fromKilograms(sourceResidual),
 							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
-			contents.validateAgainst(BuiltinChemicalDefinitions.REGISTRY);
-			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, domain.unitScale());
+			contents.validateAgainst(mmm.fluid.TestFluidDefinitions.load().chemistry());
+			var requested = contents.toLedger(mmm.fluid.TestFluidDefinitions.load().chemistry(), domain.unitScale());
 			var result = domain.tryInsertExactChemical(1, 1, 1, requested, 3, false);
 			check(result.transferred(), "representable chemical insertion was refused");
 			long mass = 0L, residual = 0L, species = 0L;
@@ -927,19 +929,20 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testExistingBucketThermalSettlement() {
-		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
+		var config = new FluidSolverConfig(0.5F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		var liquids = new mmm.fluid.FluidMaterialRegistry(List.of(
-				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2)));
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
 		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", 293.15, 0.0, 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
-		var registry = mmm.fluid.ThermalValidationSupport.thermalRegistry(List.of(definition));
+		var definitions = mmm.fluid.TestFluidDefinitions.withThermal(mmm.fluid.ThermalValidationSupport.thermalRegistry(List.of(definition)));
+        var registry = definitions.thermal();
 		for (double sign : new double[] {-1.0, 1.0}) {
-			var source = new HostFluidState(3, 3, 3, config);
+			var source = new HostFluidState(3, 3, 3, config, definitions);
 			source.setVolume(1, 1, 1, 0.125F);
 			source.setVolume(2, 1, 1, 0.125F);
 			source.bindThermal(registry, liquids, 300.0);
-			var domain = new HostFluidState(3, 3, 3, config);
+			var domain = new HostFluidState(3, 3, 3, config, definitions);
 			domain.restoreMaterialParticleState(source.exportMaterialParticleState());
 			double[] energy = new double[domain.particleCount()];
 			energy[0] = sign * 16_384.0;
@@ -978,7 +981,7 @@ public final class ContainerTransferStoreValidation {
 	private static void testSmallChemicalSample() {
 		try {
 			var definitions = FullCapabilityTestFixture.load();
-			var domain = new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .05F, 48, 1e-4F, .002F));
+			var domain = new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 0, .05F, 48, 1e-4F, .002F), mmm.fluid.TestFluidDefinitions.load());
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, definitions.liquids());
 			domain.setVolume(1, 1, 1, 7.983301677e-7F);
 			FullCapabilityTestFixture.bindFull(domain, definitions, 293.15, 8);
@@ -988,7 +991,7 @@ public final class ContainerTransferStoreValidation {
 			check(nanos == 99, "sample preview must retain the fractional nanovolume");
 			var taken = domain.tryExtractExactChemical(1, 1, 1,
 					MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), nanos), 0,
-					ledger -> { ChemicalContents.fromLedger(ledger, BuiltinChemicalDefinitions.REGISTRY, nanos); return true; });
+					ledger -> { ChemicalContents.fromLedger(ledger, mmm.fluid.TestFluidDefinitions.load().chemistry(), nanos); return true; });
 			check(taken.transferred(), "representable chemical sample was refused");
 			var remainder = domain.exportLiquidCellState().stocks().getFirst();
 			var group = taken.ledger().groups().getFirst();
@@ -1002,8 +1005,8 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testPartialOutlet() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
-		HostFluidState domain = new HostFluidState(4, 4, 4, config);
+				0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+		HostFluidState domain = new HostFluidState(4, 4, 4, config, mmm.fluid.TestFluidDefinitions.load());
 		domain.tryInsertExactVolume(2, 2, 2, 0.5F, 1);
 		long requested = MinecraftContainerTransferOperations.extractableNanos(domain, new int[] {2, 2, 2},
 				mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
@@ -1018,18 +1021,20 @@ public final class ContainerTransferStoreValidation {
 		Path root = Files.createTempDirectory("mmm-ownership-checkpoint-lock");
 		try {
 			FluidSolverConfig config = new FluidSolverConfig(
-					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+					0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 			UUID regionId = UUID.randomUUID();
 			BlockPos origin = BlockPos.ZERO;
 			BlockPos controller = new BlockPos(-1, 0, 0);
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			HostFluidState domain = new HostFluidState(2, 2, 2, config);
+			HostFluidState domain = new HostFluidState(2, 2, 2, config, mmm.fluid.TestFluidDefinitions.load());
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
 					origin, domain, footprint);
-			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
+			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.materials(), mmm.fluid.TestFluidDefinitions.load().chemistry(),
+                    mmm.fluid.TestFluidDefinitions.load().granular(), mmm.fluid.TestFluidDefinitions.load().thermal(),
+                    mmm.fluid.TestFluidDefinitions.load().gas(), TestProfiles.materialRegistry());
 			check(persistence.checkpoint(region) == 1L, "fixture did not publish its first checkpoint");
 
 			Path ownershipDirectory = root.resolve("mmm").resolve("ownership").resolve(regionId.toString());
@@ -1052,14 +1057,14 @@ public final class ContainerTransferStoreValidation {
 		Path root = Files.createTempDirectory("mmm-container-target-adoption");
 		try {
 			FluidSolverConfig config = new FluidSolverConfig(
-					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+					0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 			UUID regionId = UUID.randomUUID();
 			BlockPos origin = BlockPos.ZERO;
 			BlockPos controller = new BlockPos(-1, 0, 0);
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			HostFluidState pure = new HostFluidState(2, 2, 2, config);
+			HostFluidState pure = new HostFluidState(2, 2, 2, config, mmm.fluid.TestFluidDefinitions.load());
 			pure.setVolume(1, 1, 1, 0.25F);
 			FlipParticleState particles = pure.exportParticleState();
 			float[] positionVolume = particles.copyPositionVolume();
@@ -1067,13 +1072,13 @@ public final class ContainerTransferStoreValidation {
 			int[] materials = new int[particles.particleCount()];
 			double totalMass = 0.0;
 			for (int marker = 0; marker < masses.length; marker++) {
-				masses[marker] = positionVolume[marker * 4 + 3] * config.density();
+				masses[marker] = positionVolume[marker * 4 + 3] * mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material().referenceDensity();
 				totalMass += masses[marker];
 			}
-			HostFluidState base = new HostFluidState(2, 2, 2, config);
+			HostFluidState base = new HostFluidState(2, 2, 2, config, mmm.fluid.TestFluidDefinitions.load());
 			base.restoreMaterialParticleState(new FlipMaterialParticleState(
 					2, 2, 2, config.cellSize(), particles.particleCount(), particles.totalVolume(), mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(totalMass),
-					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
+					mmm.simulation.ProductionRegistries.palette(), positionVolume, particles.copyParticleVelocities(),
 					particles.copySolidMask(), java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(m)).toArray(), materials));
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, footprint);
 			base.sealDomainBoundary();
@@ -1083,7 +1088,9 @@ public final class ContainerTransferStoreValidation {
 					&& base.gasBoundary().sealedInventoryNanos() > 0,
 					"private-target fixture did not initialize conserved sealed gas inventory: nodes=" + base.gasBoundary().nodeCount());
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(
-					root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
+					root, TestProfiles.materials(), mmm.fluid.TestFluidDefinitions.load().chemistry(),
+                    mmm.fluid.TestFluidDefinitions.load().granular(), mmm.fluid.TestFluidDefinitions.load().thermal(),
+                    mmm.fluid.TestFluidDefinitions.load().gas(), TestProfiles.materialRegistry());
 			long baseGeneration = persistence.checkpoint(region);
 			HostFluidState candidate = HostFluidState.restoreAuthoritativeState(base.captureAuthoritativeState());
 			check(candidate.tryInsertExactVolume(1, 1, 1, 0.125F, 1).transferred(),

@@ -86,7 +86,7 @@ final class CarrierThermalConduction {
 		}
 		var contacts=new ThermalCarrierContacts(Math.max(16,count*4));double h=domain.config.cellSize();
 		for(int cell=0;cell<domain.cellCount;cell++) {
-			int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
+			int x=domain.grid.x(cell),y=domain.grid.y(cell),z=domain.grid.z(cell);
 			for(int p=head[cell];p>=0;p=next[p]) {
 				if(conductivity[p]==0)continue;
 				for(int q=next[p];q>=0;q=next[q]) {
@@ -96,9 +96,8 @@ final class CarrierThermalConduction {
 					if(g>0)add(domain,owners,contacts,p,q,g,Double.NaN);
 				}
 				for(int axis=0;axis<3;axis++) {
-					int coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-					if(coordinate+1<size) {
-						int neighbor=cell+(axis==0?1:axis==1?domain.sizeX:domain.sizeX*domain.sizeY);
+					int neighbor=domain.grid.neighbor(cell,2*axis+1);
+					if(neighbor>=0) {
 						for(int q=head[neighbor];q>=0;q=next[q]) {
 							double area=0;
 							for(int bit=0;bit<8;bit++)if((bit>>axis&1)!=0&&(support[p]&1<<bit)!=0&&(support[q]&1<<(bit^(1<<axis)))!=0) {

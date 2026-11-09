@@ -94,7 +94,7 @@ final class VulkanLiquidGather implements AutoCloseable {
 
     static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output, VulkanLiquidRouteLayout routes,
                          int fixedMaskWordOffset, int speciesMassWordOffset, long scratchBase, long alignment) {
-        if (source.sizeX() != output.sizeX() || source.sizeY() != output.sizeY() || source.sizeZ() != output.sizeZ()
+        if (!source.grid().equals(output.grid())
                 || output.materialCount()<1 || source.materialCount()!=output.materialCount()
                 || routes.sourceStockCapacity() < source.stockCapacity() || scratchBase < output.bytes()
                 || scratchBase < routes.endOffset() || alignment < 8 || (alignment & (alignment - 1)) != 0)

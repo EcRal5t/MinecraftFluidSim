@@ -12,7 +12,7 @@ import mmm.thermal.*;
 public final class GpuThermalPhaseValidation {
     public static void main(String[] args) throws Exception {
         int device=Integer.parseInt(args[0]);Path definitions=Path.of(args[1]);
-        var chemistry=BuiltinChemicalDefinitions.REGISTRY;var granular=BuiltinGranularDefinitions.createRegistry();var gas=BuiltinGasDefinitions.createRegistry();
+        var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();var granular=mmm.fluid.TestFluidDefinitions.load().granular();var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         var thermal=new ThermalRegistry(read(definitions,"thermal_materials",ThermalDefinitionCodec::decodeMaterial),
             read(definitions,"thermal_species",ThermalDefinitionCodec::decodeSpecies),read(definitions,"phase_transitions",ThermalDefinitionCodec::decodeTransition),
             List.of(),List.of(),chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
@@ -35,10 +35,10 @@ public final class GpuThermalPhaseValidation {
     private static void run(VulkanFluidSolverBackend backend,String mode,ThermalRegistry thermal,GasRegistry gas) {
         if(mode.equals("gas-pulse")||mode.equals("gas-pocket")){runLocalGas(backend,mode,thermal,gas);return;}
         if(mode.equals("thermal-interface")){runThermalInterface(backend,thermal,gas);return;}
-        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,1000,0,.05f,200,1e-5f,.002f));
+        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,0,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.withThermal(thermal));
         boolean ambient=mode.equals("ambient-outgas");
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());if(!ambient)domain.sealDomainBoundary();
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());if(!ambient)domain.sealDomainBoundary();
         boolean vaporEmpty=mode.equals("vapor-empty");
         var transition=thermal.transitions().stream().filter(t->BuiltinChemicalDefinitions.H2O.equals(t.speciesId())).findFirst().orElseThrow();
         var batch=new GasLiquidPhaseModel(thermal,gas).gasBatch(transition,1).components().getFirst();
@@ -46,14 +46,14 @@ public final class GpuThermalPhaseValidation {
         long vaporQuantum=Math.max(1,Math.round((double)batch.massUnits()/waterUnit/transition.lowerVolumeSvqPerBatch()));
         float initialVolume=vaporEmpty?(float)(vaporQuantum*waterUnit*1e-10/(1000.0*.125)):mode.equals("melt")?.001f:mode.equals("multi-contact")?1.0f:.25f;
         domain.setVolume(1,1,1,initialVolume);
-        domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);domain.bindGasRegistry(gas);
+        domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());domain.bindGasRegistry(gas);
         boolean film=mode.equals("dissolve")||mode.equals("outgas")||ambient||mode.equals("multi-contact");
         boolean mixed=mode.startsWith("mixed-");
         if(film)domain.setMarkerChemical(0,!mode.equals("dissolve")&&!mode.equals("multi-contact")?Map.of(BuiltinChemicalDefinitions.H2O,1_000_000_000L,BuiltinChemicalDefinitions.CO2,100_000_000L):Map.of(BuiltinChemicalDefinitions.H2O,1_000_000_000L));
         if(vaporEmpty)domain.setMarkerChemical(0,Map.of(BuiltinChemicalDefinitions.H2O,vaporQuantum));
         if(mixed)domain.setMarkerChemical(0,Map.of(BuiltinChemicalDefinitions.H2O,400_000_000L,BuiltinChemicalDefinitions.ETHANOL,400_000_000L));
         double temperature=vaporEmpty?1300:mixed?(mode.equals("mixed-boil")?380:280):film?298.15:switch(mode){case "freeze"->250;case "melt"->350;case "boil"->420;default->280;};
-        domain.bindThermal(thermal,fluids,temperature);
+        domain.bindThermal(domain.definitions().thermal(),fluids,temperature);
         if(mode.equals("melt")){
             long batches=1000,mass=mmm.units.Mass.exactUnits(java.math.BigInteger.ONE,java.math.BigInteger.ONE);
             double energy=new ThermalStateFunction(thermal).internalEnergyAtTemperature(thermal.materialHandle("mmm:ice"),1,Map.of(),temperature);
@@ -148,12 +148,12 @@ public final class GpuThermalPhaseValidation {
     }
     /** Pressure and species propagation use the full resident mechanical and caloric chain. */
     private static void runThermalInterface(VulkanFluidSolverBackend backend,ThermalRegistry thermal,GasRegistry gas) {
-        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,1000,0,.05f,200,1e-5f,.002f));
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());domain.sealDomainBoundary();
+        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,0,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.withThermal(thermal));
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());domain.sealDomainBoundary();
         for(int z=0;z<4;z++)for(int y=0;y<4;y++)for(int x=0;x<4;x++)if(x!=1||y!=1||z!=1)domain.setSolid(x,y,z,true);
-        domain.setVolume(1,1,1,.5f);domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);domain.bindGasRegistry(gas);
-        domain.bindThermal(thermal,fluids,293.15);domain.resetAmbientGas();
+        domain.setVolume(1,1,1,.5f);domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());domain.bindGasRegistry(gas);
+        domain.bindThermal(domain.definitions().thermal(),fluids,293.15);domain.resetAmbientGas();
         int cell=1+(1*4+1)*4;domain.editGas(cell+1,BuiltinGasDefinitions.CO2,100_000_000L,450,false);
         try(var before=domain.captureAuthoritativeState()){
             var initial=before.exportState();double liquidBefore=initial.liquid().physicalStocks().getFirst().internalEnergy();
@@ -168,13 +168,13 @@ public final class GpuThermalPhaseValidation {
         System.out.println("GPU half-cell gas/liquid thermal interface: exchange=true energy=true");
     }
     private static void runLocalGas(VulkanFluidSolverBackend backend,String mode,ThermalRegistry thermal,GasRegistry gas) {
-        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,1000,0,.05f,200,1e-5f,.002f));
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,0,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.withThermal(thermal));
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());
         domain.sealDomainBoundary();
         if(mode.equals("gas-pocket"))domain.setVolume(1,1,1,.9999f);
-        domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);domain.bindGasRegistry(gas);
-        domain.bindThermal(thermal,fluids,293.15);domain.resetAmbientGas();
+        domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());domain.bindGasRegistry(gas);
+        domain.bindThermal(domain.definitions().thermal(),fluids,293.15);domain.resetAmbientGas();
         int pulse=1+(1*4+1)*4,neighbor=pulse+1;
         if(mode.equals("gas-pocket")){
             double volume=domain.gasBoundary().availableVolume(pulse+1);

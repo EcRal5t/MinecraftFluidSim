@@ -81,17 +81,22 @@ final class MinecraftTakeoverAdapter {
 	static Map<BlockPos, BlockState> collectWater(FluidRegion region, int cellsPerBlock,
 			java.util.function.Function<BlockPos, BlockState> blockAt) {
 		Map<BlockPos, BlockState> candidates = new HashMap<>();
-		int blocksX = region.sizeX() / cellsPerBlock;
-		int blocksY = region.sizeY() / cellsPerBlock;
-		int blocksZ = region.sizeZ() / cellsPerBlock;
-		for (int blockZ = 0; blockZ < blocksZ; blockZ++) for (int blockY = 0; blockY < blocksY; blockY++) {
-			for (int blockX = 0; blockX < blocksX; blockX++) {
-				BlockPos position = region.origin().offset(blockX, blockY, blockZ);
-				BlockState state = blockAt.apply(position);
-				if (!state.is(Blocks.WATER)) continue;
-				candidates.put(position.immutable(), state);
-			}
-		}
+		var positions = new java.util.HashSet<BlockPos>();
+        if (region.footprint() != null) {
+            for (long packed : region.footprint().interiorBlocks()) {
+                var position = BlockPos.of(packed);
+                if (region.footprint().containsInterior(position)) positions.add(position);
+            }
+        } else {
+            var grid = region.grid();
+            for (int cell = 0; cell < grid.cellCount(); cell++) positions.add(region.origin().offset(
+                    grid.x(cell)/cellsPerBlock, grid.y(cell)/cellsPerBlock, grid.z(cell)/cellsPerBlock));
+        }
+        for (BlockPos position : positions) {
+            BlockState state = blockAt.apply(position);
+            if (state.is(Blocks.WATER)) candidates.put(position.immutable(), state);
+        }
+
 		return candidates;
 	}
 

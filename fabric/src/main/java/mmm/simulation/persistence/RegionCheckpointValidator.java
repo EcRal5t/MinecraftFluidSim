@@ -29,6 +29,7 @@ final class RegionCheckpointValidator {
 	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit";
 	private final RegionManifest manifest;
 	private final List<RegionSectionState> sections;
+	private mmm.spatial.SpatialGrid grid;
 
 	RegionCheckpointValidator(RegionCheckpoint checkpoint) {
 		this.manifest = checkpoint.manifest();
@@ -150,11 +151,11 @@ final class RegionCheckpointValidator {
 		for (RegionSectionState section : sections) {
 			ThermalRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
-					section.markerCount(), Integer.MAX_VALUE, Integer.MAX_VALUE);
+					section.markerCount(), Integer.MAX_VALUE, Integer.MAX_VALUE,spatialGrid());
 			if (granularPayload) {
 				GranularRegionStateCodec.SectionData granular = new GranularRegionStateCodec().decodeSection(
 						requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
-						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,spatialGrid());
 				if (data.activeParcelEnergyBits().length != granular.active().size()
 						|| data.depositGroupEnergyBits().length != granular.deposits().size()) {
 					throw new IOException("Thermal section does not bind one energy to each granular carrier");
@@ -241,7 +242,7 @@ final class RegionCheckpointValidator {
 		for (RegionSectionState section : sections) {
 			GranularRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
-					expected.activeBudget(), expected.depositGroupBudget());
+					expected.activeBudget(), expected.depositGroupBudget(),spatialGrid());
 			long sectionActiveSvq = 0L, sectionDepositSvq = 0L;
 			long sectionActiveMass = 0, sectionDepositMass = 0;
 			int depositCells = 0, previousCell = -1;
@@ -317,7 +318,7 @@ final class RegionCheckpointValidator {
 			throw new IOException("Granular manifest total ledger mismatch");
 		}
 		try {
-			new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), expected.registryFingerprint(),
+			new GranularStateSnapshot(spatialGrid(), expected.registryFingerprint(),
 					expected.chemicalRegistryFingerprint(), expected.materialPalette(), expected.solidCompositions(),
 					expected.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					Math.addExact(totalActiveSvq, totalDepositSvq),
@@ -330,28 +331,34 @@ final class RegionCheckpointValidator {
 
 	private static SignedDyadic liquidEnergy(RegionSectionState section) {var total=SignedDyadic.ZERO;for(var stock:section.liquidStocks())total=total.add(SignedDyadic.of(stock.internalEnergy()));return total;}
 	private void validateCellAndFaceOwnership() throws IOException {
-		int nx=manifest.sizeX(),ny=manifest.sizeY(),nz=manifest.sizeZ(),cells=nx*ny*nz;
+		var grid=spatialGrid();
+		int cells=grid.cellCount();
 		boolean[] covered=new boolean[cells];
-		boolean[][] faces={new boolean[(nx+1)*ny*nz],new boolean[nx*(ny+1)*nz],new boolean[nx*ny*(nz+1)]};
+		boolean[][] faces={new boolean[grid.faceCount(0)],new boolean[grid.faceCount(1)],new boolean[grid.faceCount(2)]};
 		SignedDyadic totalVolume=SignedDyadic.ZERO;long totalMass=0;
 		var keys=new java.util.HashSet<mmm.inventory.LiquidCellInventory.Key>();
 		for(var section:sections) {
 			byte[] masks=section.solidMask();int local=0;
 			for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++) {
-				int cell=x+nx*(y+ny*z);if(covered[cell])throw new IOException("Overlapping collision slices");covered[cell]=true;local++;
+				int cell=grid.cell(x,y,z);if(cell>=0){if(covered[cell])throw new IOException("Overlapping collision slices");covered[cell]=true;}local++;
 			}
 			for(var stock:section.liquidStocks()) {
-				int cell=stock.key().cell();if(cell>=cells||!keys.add(stock.key())||!RegionCheckpointAssembler.sectionOfCell(manifest.geometry(),cell).equals(section.key()))throw new IOException("Liquid key is repeated or stored in the wrong section");
-				int x=cell%nx-section.localStartX(),y=cell/nx%ny-section.localStartY(),z=cell/(nx*ny)-section.localStartZ();int mask=Byte.toUnsignedInt(masks[x+section.sizeX()*(y+section.sizeY()*z)]);
+				int stockCell=stock.key().cell(),sx=section.sizeX(),sy=section.sizeY();
+				if(stockCell>=masks.length)throw new IOException("Liquid key is outside its section");
+				int cell=grid.cell(section.localStartX()+stockCell%sx,section.localStartY()+stockCell/sx%sy,section.localStartZ()+stockCell/(sx*sy));
+				if(cell<0||!keys.add(new mmm.inventory.LiquidCellInventory.Key(cell,stock.key().material(),stock.key().supportMask())))throw new IOException("Liquid key is repeated or outside the grid");
+				int mask=Byte.toUnsignedInt(masks[stockCell]);
 				boolean found=false;for(int support:mmm.inventory.LiquidCellInventory.connectedSupports(mask))found|=support==stock.key().supportMask();if(!found)throw new IOException("Liquid stock crosses a fixed collision component");
 				if(!manifest.hasChemicalState()&&stock.mixture()!=null)throw new IOException("Unbound chemical stock");
 				if(manifest.materialPalette().isEmpty()&&stock.key().material()!=0)throw new IOException("Unbound liquid material");
 				totalVolume=totalVolume.add(stock.volume());totalMass=Math.addExact(totalMass,stock.massUnits());
 			}
 			for(var face:section.faceMomentum()) {
-				int axis=face.axis(),index=face.face();if(index>=faces[axis].length||faces[axis][index])throw new IOException("Repeated or out-of-grid MAC face");faces[axis][index]=true;
-				int sx=nx+(axis==0?1:0),sy=ny+(axis==1?1:0);int x=Math.min(index%sx,nx-1),y=Math.min(index/sx%sy,ny-1),z=Math.min(index/(sx*sy),nz-1);
-				if(!RegionCheckpointAssembler.sectionOfCell(manifest.geometry(),x+nx*(y+ny*z)).equals(section.key()))throw new IOException("MAC face is stored in the wrong section");
+				int axis=face.axis(),global=grid.faceAt(face.x(),face.y(),face.z(),axis);
+				if(global<0)throw new IOException("MAC face is outside its grid");
+				int index=global-grid.faceOffset(axis);if(faces[axis][index])throw new IOException("Repeated MAC face");faces[axis][index]=true;
+				int owner=grid.faceRight(global)>=0?grid.faceRight(global):grid.faceLeft(global);
+				if(!RegionCheckpointAssembler.sectionOfCell(manifest.geometry(),grid,owner).equals(section.key()))throw new IOException("MAC face is stored in the wrong section");
 			}
 		}
 		for(boolean seen:covered)if(!seen)throw new IOException("Incomplete collision coverage");for(var axis:faces)for(boolean seen:axis)if(!seen)throw new IOException("Incomplete MAC momentum coverage");
@@ -394,10 +401,9 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateGranularDepositSection(RegionSectionState section, int cell) throws IOException {
-		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
+		var grid=spatialGrid();int cellCount=grid.cellCount();
 		if (cell < 0 || cell >= cellCount) throw new IOException("Granular deposit cell is outside region bounds");
-		int x = cell % manifest.sizeX(), yz = cell / manifest.sizeX();
-		int y = yz % manifest.sizeY(), z = yz / manifest.sizeY();
+		int x = grid.x(cell), y = grid.y(cell), z = grid.z(cell);
 		float h = manifest.solverConfig().cellSize();
 		validateGranularSectionPosition(section, (x + 0.5F) * h, (y + 0.5F) * h, (z + 0.5F) * h);
 	}
@@ -413,6 +419,11 @@ final class RegionCheckpointValidator {
 		return ChemicalAuditLedgerCodec.decode(found.payload());
 	}
 
+	private mmm.spatial.SpatialGrid spatialGrid() throws IOException {
+		if(grid==null)grid=new SolverRuntimeCodec().decode(requiredExtension(manifest.extensions(),SolverRuntimeCodec.MANIFEST_EXTENSION).payload(),
+				manifest.sizeX(),manifest.sizeY(),manifest.sizeZ()).grid();
+		return grid;
+	}
 	private static RegionExtension requiredExtension(List<RegionExtension> extensions, String type) throws IOException {
 		RegionExtension found = null;
 		for (RegionExtension extension : extensions) if (type.equals(extension.type())) {

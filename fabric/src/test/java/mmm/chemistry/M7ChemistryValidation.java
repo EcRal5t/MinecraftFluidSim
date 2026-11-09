@@ -22,21 +22,21 @@ public final class M7ChemistryValidation {
 		validateInvalidDefinitions();
 		validatePhDisplayPhases();
 		System.out.printf("M7 chemistry core gate passed: fingerprint=%s iterations=%d species=%d reactions=%d%n",
-				BuiltinChemicalDefinitions.REGISTRY.fingerprint(), fast ? 1_000 : 10_000,
-				BuiltinChemicalDefinitions.REGISTRY.species().size(),
-				BuiltinChemicalDefinitions.REGISTRY.reactions().size());
+				mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint(), fast ? 1_000 : 10_000,
+				mmm.fluid.TestFluidDefinitions.load().chemistry().species().size(),
+				mmm.fluid.TestFluidDefinitions.load().chemistry().reactions().size());
 	}
 
 	private static void validatePhDisplayPhases() {
-		var materials = new mmm.fluid.FluidMaterialRegistry(mmm.fluid.BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var materials = new mmm.fluid.FluidMaterialRegistry(mmm.simulation.ProductionRegistries.palette());
 		var domain = new mmm.fluid.HostFluidState(4, 4, 4,
-				new mmm.fluid.FluidSolverConfig(.5F, 1000, 0, .01F, 64, 1e-6F, .002F));
+				new mmm.fluid.FluidSolverConfig(.5F, 0, .01F, 64, 1e-6F, .002F), mmm.fluid.TestFluidDefinitions.load());
 		domain.bindMaterialRegistry(materials);
 		domain.setVolume(1, 1, 1, .25F);
-		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
 		int cells = 64, cell = 21;
-		int water = materials.handle(mmm.fluid.BuiltinFluidMaterials.WATER.id());
-		int oil = materials.handle(mmm.fluid.BuiltinFluidMaterials.OIL.id());
+		int water = materials.handle(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material().id());
+		int oil = materials.handle(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material().id());
 		int waterOffset = materials.phaseHandle(water) * cells + cell;
 		int oilOffset = materials.phaseHandle(oil) * cells + cell;
 		byte[] neutral = domain.copyChemicalDisplaySnapshot().copyPh();
@@ -54,7 +54,7 @@ public final class M7ChemistryValidation {
 				&& Byte.toUnsignedInt(mixed[oilOffset]) == ChemicalDisplaySnapshot.PH_NO_DATA,
 				"Oil diluted the aqueous pH denominator or acquired an aqueous pH value");
 
-		var builtin = BuiltinChemicalDefinitions.REGISTRY;
+		var builtin = mmm.fluid.TestFluidDefinitions.load().chemistry();
 		var omitted = java.util.Set.of(BuiltinChemicalDefinitions.H_PLUS, BuiltinChemicalDefinitions.OH_MINUS);
 		var waterSpecies = builtin.species().stream().filter(value -> !omitted.contains(value.id())).toList();
 		var originalPhase = builtin.phase(builtin.phaseHandleForMaterial("mmm:water"));
@@ -64,8 +64,8 @@ public final class M7ChemistryValidation {
 		var saltReactions = builtin.reactions().stream().filter(value -> value.phaseId().equals(waterPhase.id())
 				&& value.reactants().keySet().stream().noneMatch(omitted::contains)
 				&& value.products().keySet().stream().noneMatch(omitted::contains)).toList();
-		var partial = new mmm.fluid.HostFluidState(4, 4, 4, domain.config());
-		partial.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER)));
+		var partial = new mmm.fluid.HostFluidState(4, 4, 4, domain.config(), mmm.fluid.TestFluidDefinitions.load());
+		partial.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material())));
 		partial.setVolume(1, 1, 1, .25F);
 		partial.bindChemistry(new ChemicalRegistry(waterSpecies, List.of(waterPhase), saltReactions));
 		check(Byte.toUnsignedInt(partial.copyChemicalDisplaySnapshot().copyPh()[cell]) == ChemicalDisplaySnapshot.PH_NO_DATA,
@@ -73,7 +73,7 @@ public final class M7ChemistryValidation {
 	}
 
 	private static void validateDefaultParcels() {
-		var registry = BuiltinChemicalDefinitions.REGISTRY;
+		var registry = mmm.fluid.TestFluidDefinitions.load().chemistry();
 		var store = new RegionChemistry(registry,1);
 		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0));
 		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0)),
@@ -193,14 +193,14 @@ public final class M7ChemistryValidation {
 	}
 
 	private static void validateCanonicalRegistry() {
-		ChemicalRegistry reference = BuiltinChemicalDefinitions.REGISTRY;
-		List<ChemicalSpecies> species = new ArrayList<>(BuiltinChemicalDefinitions.species());
-		List<ChemicalPhaseDefinition> phases = new ArrayList<>(BuiltinChemicalDefinitions.phases());
-		List<ChemicalReaction> reactions = new ArrayList<>(BuiltinChemicalDefinitions.reactions());
+		ChemicalRegistry reference = mmm.fluid.TestFluidDefinitions.load().chemistry();
+		List<ChemicalSpecies> species = new ArrayList<>(mmm.fluid.TestFluidDefinitions.load().chemistry().species());
+		List<ChemicalPhaseDefinition> phases = new ArrayList<>(mmm.fluid.TestFluidDefinitions.load().chemistry().phases());
+		List<ChemicalReaction> reactions = new ArrayList<>(mmm.fluid.TestFluidDefinitions.load().chemistry().reactions());
 		Collections.reverse(species);
 		Collections.rotate(phases, 1);
 		Collections.reverse(reactions);
-		ChemicalRegistry shuffled = new ChemicalRegistry(species, phases, reactions, BuiltinChemicalDefinitions.gasLiquidMassTransfers());
+		ChemicalRegistry shuffled = new ChemicalRegistry(species, phases, reactions, mmm.fluid.TestFluidDefinitions.load().chemistry().gasLiquidMassTransfers());
 		check(java.util.Arrays.equals(reference.canonicalBytes(), shuffled.canonicalBytes()),
 				"registry canonical bytes depend on file order");
 		check(reference.fingerprint().equals(shuffled.fingerprint()), "registry fingerprint depends on file order");
@@ -246,7 +246,7 @@ public final class M7ChemistryValidation {
 		var transfers = decodeDirectory(root.resolve(ChemicalDefinitionCodec.GAS_LIQUID_MASS_TRANSFERS_PATH),
 				ChemicalDefinitionCodec::decodeGasLiquidMassTransfer);
 		ChemicalRegistry bundled = new ChemicalRegistry(species, phases, reactions, transfers);
-		check(bundled.fingerprint().equals(BuiltinChemicalDefinitions.REGISTRY.fingerprint()),
+		check(bundled.fingerprint().equals(mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint()),
 				"bundled datapack definitions differ from the frozen registry");
 	}
 
@@ -263,7 +263,7 @@ public final class M7ChemistryValidation {
 	}
 
 	private static void validateAuditLedgerCodec() throws Exception {
-		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
+		ChemicalRegistry registry = mmm.fluid.TestFluidDefinitions.load().chemistry();
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
 				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), mmm.units.Mass.fromKilograms(856.0));
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
@@ -286,7 +286,7 @@ public final class M7ChemistryValidation {
 	private static void validateRegistrySnapshot() throws Exception {
 		java.nio.file.Path root = java.nio.file.Files.createTempDirectory("mmm-chemistry-registry-");
 		try {
-			ChemicalRegistry definitions = BuiltinChemicalDefinitions.REGISTRY;
+			ChemicalRegistry definitions = mmm.fluid.TestFluidDefinitions.load().chemistry();
 			java.nio.file.Path snapshot = root.resolve("chemical-registry.nbt");
 			ChemicalRegistryCodec.writeSnapshot(snapshot, definitions);
 			ChemicalRegistry decoded = ChemicalRegistryCodec.readSnapshot(snapshot);
@@ -318,13 +318,13 @@ public final class M7ChemistryValidation {
 			check(java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(definitions),
 							ChemicalRegistryCodec.snapshotBytes(definitions)),
 					"chemical registry snapshot encoding is not deterministic");
-			List<ChemicalSpecies> changedSpecies = new ArrayList<>(BuiltinChemicalDefinitions.species());
+			List<ChemicalSpecies> changedSpecies = new ArrayList<>(mmm.fluid.TestFluidDefinitions.load().chemistry().species());
 			ChemicalSpecies original = changedSpecies.getFirst();
 			changedSpecies.set(0, new ChemicalSpecies(original.id(), original.composition(), original.charge(),
 					original.molarMassKgPerMol(), original.baseArgb() ^ 0x00010101));
 			ChemicalRegistry changed = new ChemicalRegistry(
-					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions(),
-					BuiltinChemicalDefinitions.gasLiquidMassTransfers());
+					changedSpecies, mmm.fluid.TestFluidDefinitions.load().chemistry().phases(), mmm.fluid.TestFluidDefinitions.load().chemistry().reactions(),
+					mmm.fluid.TestFluidDefinitions.load().chemistry().gasLiquidMassTransfers());
 			check(!changed.fingerprint().equals(definitions.fingerprint()),
 					"changed species colour must change the fingerprint");
 			check(!java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(changed),
@@ -398,7 +398,7 @@ public final class M7ChemistryValidation {
 	}
 
 	private static ChemicalMixtureRecord record(Map<String, Long> amounts) {
-		return ChemicalMixtureRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY, amounts, 0L);
+		return ChemicalMixtureRecord.fromStableAmounts(mmm.fluid.TestFluidDefinitions.load().chemistry(), amounts, 0L);
 	}
 
 	private static void expectFailure(Runnable action, String message) {

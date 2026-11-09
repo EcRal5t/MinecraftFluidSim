@@ -46,7 +46,7 @@ public final class M6OwnershipValidation {
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
 			Identifier.fromNamespaceAndPath("mmm", "ownership_validation"));
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+			0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	private static int passed;
 
 	private M6OwnershipValidation() { }
@@ -325,7 +325,7 @@ public final class M6OwnershipValidation {
 
 	private static void testThermalNativeReturn() throws Exception {
 		var registries = mmm.simulation.FullCapabilityTestFixture.load();
-		var domain = new HostFluidState(6, 4, 4, CONFIG);
+		var domain = new HostFluidState(6, 4, 4, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.bindMaterialRegistry(registries.liquids());
 		domain.bindChemistry(registries.chemical());
 		var cells = new ArrayList<Integer>();
@@ -626,7 +626,7 @@ public final class M6OwnershipValidation {
 
 	private static FluidRegion populatedRegion(UUID id) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);

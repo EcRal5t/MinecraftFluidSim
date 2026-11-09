@@ -18,7 +18,7 @@ public final class SpatialGasInitialization {
     public static Result fromChambers(GasStateSnapshot source, double[] sourceEnergy, double[] dryVolumes,
                                       GasRegistry gas, mmm.chemistry.ChemicalRegistry chemistry, GasThermalModel thermal,
                                       double ambientPressurePa, double ambientTemperatureK) {
-        int cells = Math.multiplyExact(Math.multiplyExact(source.sizeX(), source.sizeY()), source.sizeZ());
+        int cells = source.grid().cellCount();
         if (sourceEnergy.length != source.nodes().size() || dryVolumes.length != cells
                 || !source.registryFingerprint().equals(gas.fingerprint()))
             throw new IllegalArgumentException("Gas initial-condition dimensions or material identity differ");
@@ -68,7 +68,7 @@ public final class SpatialGasInitialization {
                 energy[cell] = energies[i];
             }
         }
-        return new Result(new SpatialGasState(source.sizeX(), source.sizeY(), source.sizeZ(),
+        return new Result(new SpatialGasState(source.grid(),
                 source.registryFingerprint(), source.chemicalRegistryFingerprint(), inventory, energy,
                 source.externalSource().add(captured), source.escapedSink(), source.phaseSource(), source.phaseSink()),
                 capturedEnergy);

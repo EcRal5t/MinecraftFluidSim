@@ -45,18 +45,23 @@ final class GpuControllerFixture {
 
     static GpuControllerFixture create(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
             FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
-        return create(startup, world, manager, operations, false);
+        return create(startup, world, manager, operations, false, false);
     }
 
     static GpuControllerFixture createDistillation(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
             FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
-        return create(startup, world, manager, operations, true);
+        return create(startup, world, manager, operations, true, false);
+    }
+
+    static GpuControllerFixture createCrossBlockProcess(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
+            FluidRegionManager manager, FluidRegionOperations operations, boolean distillation) throws IOException {
+        return create(startup, world, manager, operations, distillation, true);
     }
 
     private static GpuControllerFixture create(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
-            FluidRegionManager manager, FluidRegionOperations operations, boolean distillation) throws IOException {
+            FluidRegionManager manager, FluidRegionOperations operations, boolean distillation, boolean crossBlock) throws IOException {
         initializeItems();
-        var layout = distillation ? distillationLayout() : ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
+        var layout = crossBlock ? crossBlockLayout(distillation) : distillation ? distillationLayout() : ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
         Set<Long> shell = new HashSet<>();
         layout.shell().forEach(position -> shell.add(position.asLong()));
         var worldView = new FluidBoundaryScanner.ScanWorld() {
@@ -67,9 +72,9 @@ final class GpuControllerFixture {
         var scan = FluidBoundaryScanner.scan(layout.controller(), worldView, 512);
         if (!scan.succeeded()) throw new IllegalStateException("controller scan: " + scan.failure());
         var dimension = ResourceKey.create(Registries.DIMENSION, Identifier.fromNamespaceAndPath("mmm", "gpu_controller"));
-        var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false,
+        var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false, world,
                 () -> null, candidate -> {
-                    if (distillation) installDistillationWalls(candidate);
+                    if (distillation) installDistillationWalls(candidate, crossBlock ? 6 : 0);
                     world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep());
                 },
                 operations::checkpoint);
@@ -88,6 +93,18 @@ final class GpuControllerFixture {
         return new GpuControllerFixture(region, cell, transactions, recovery, journal, actor, world);
     }
 
+    private static ControllerDemoLayout crossBlockLayout(boolean distillation) {
+        var minimum = new BlockPos(14,64,20);
+        int outerX = 8, outerY = distillation ? 5 : 4, outerZ = distillation ? 5 : 4;
+        var occupied = new java.util.ArrayList<BlockPos>(); var shell = new java.util.ArrayList<BlockPos>();
+        for (int z=0; z<outerZ; z++) for (int y=0; y<outerY; y++) for (int x=0; x<outerX; x++) {
+            var position = minimum.offset(x,y,z); occupied.add(position);
+            if (x==0 || x==outerX-1 || y==0 || y==outerY-1 || z==0 || z==outerZ-1) shell.add(position);
+        }
+        return new ControllerDemoLayout(minimum, minimum.offset(4,1,0), minimum.offset(4,0,1),
+                Direction.DOWN, List.copyOf(occupied), List.copyOf(shell));
+    }
+
     private static ControllerDemoLayout distillationLayout() {
         var minimum = new BlockPos(14, 64, 20);
         var occupied = new java.util.ArrayList<BlockPos>();
@@ -100,12 +117,12 @@ final class GpuControllerFixture {
                 Direction.DOWN, List.copyOf(occupied), List.copyOf(shell));
     }
 
-    private static void installDistillationWalls(FluidRegion region) {
+    private static void installDistillationWalls(FluidRegion region, int shift) {
         var host = region.editableHost();
         // A hot pool and a one-cell gas passage connect to a separately supported cold film.
-        for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
-            boolean hotPool = x < 2 && y < 4 && z < 2;
-            boolean gasPassage = y == 4 && z == 1;
+        for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < region.sizeX(); x++) {
+            boolean hotPool = x >= shift && x < shift + 2 && y < 4 && z < 2;
+            boolean gasPassage = x >= shift && y == 4 && z == 1;
             if (!hotPool && !gasPassage) host.setSolid(x, y, z, true);
         }
     }
@@ -196,7 +213,7 @@ final class GpuControllerFixture {
         if (region.hostSnapshot().unitScale().cubicMeters(region.hostSnapshot().totalVolumeExact()) <= 0)
             throw new IllegalStateException("controller pour did not publish liquid inventory");
         var function = new ThermalStateFunction(world.thermalRegistry());
-        int handle = world.thermalRegistry().materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id());
+        int handle = world.thermalRegistry().materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material().id());
         for (var stock : region.hostSnapshot().exportLiquidCellState().physicalStocks()) {
             double temperature = function.stateForInternalEnergy(handle, stock.massKilograms(),
                     stock.mixture() == null ? Map.of() : stock.mixture().stableAmounts(world.chemicalRegistry()),

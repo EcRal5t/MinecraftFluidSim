@@ -34,9 +34,9 @@ final class CarrierInventoryReader {
 			var stock = domain.liquidCells.physicalStockAt(i); int cell = stock.key().cell();
 			int micro = Integer.numberOfTrailingZeros(stock.key().supportMask());
 			float h = domain.config.cellSize();
-			x[i] = (cell % domain.sizeX + .25F + .5F * (micro & 1)) * h;
-			y[i] = (cell / domain.sizeX % domain.sizeY + .25F + .5F * (micro >> 1 & 1)) * h;
-			z[i] = (cell / (domain.sizeX * domain.sizeY) + .25F + .5F * (micro >> 2 & 1)) * h;
+			x[i] = (domain.grid.x(cell) + .25F + .5F * (micro & 1)) * h;
+			y[i] = (domain.grid.y(cell) + .25F + .5F * (micro >> 1 & 1)) * h;
+			z[i] = (domain.grid.z(cell) + .25F + .5F * (micro >> 2 & 1)) * h;
 			volume[i] = (float) stock.volumeFraction(); material[i] = stock.key().material(); mass[i] = stock.massUnits();
 			packed[4 * i] = x[i]; packed[4 * i + 1] = y[i]; packed[4 * i + 2] = z[i]; packed[4 * i + 3] = volume[i];
 			var flow = domain.sampleVelocity(x[i], y[i], z[i]);
@@ -46,13 +46,13 @@ final class CarrierInventoryReader {
 	}
 	FlipParticleState exportParticleState() {
 		var view = points();
-		return new FlipParticleState(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), view.mass.length,
+		return new FlipParticleState(domain.grid, domain.config.cellSize(), view.mass.length,
 				(float) view.total, view.packed, view.velocity, view.mass, domain.geometry.cutCells.copyMicroMasks());
 	}
 	FlipMaterialParticleState exportMaterialParticleState() {
 		if (domain.materialRegistry == null) throw new IllegalStateException("Material view requires a palette");
 		var view = points();
-		return new FlipMaterialParticleState(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), view.mass.length,
+		return new FlipMaterialParticleState(domain.grid, domain.config.cellSize(), view.mass.length,
 				view.total, domain.totalMassUnits(), domain.materialRegistry.materials(), view.packed, view.velocity,
 				domain.geometry.cutCells.copyMicroMasks(), view.mass, view.material);
 	}
@@ -75,14 +75,14 @@ final class CarrierInventoryReader {
 
 	GranularStateSnapshot exportGranularState() {
 		if (domain.granularState == null) throw new IllegalStateException("Granular state is not bound");
-		return GranularStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.granularState.registry,
+		return GranularStateSnapshot.capture(domain.grid, domain.granularState.registry,
 				domain.granularState.parcels, domain.granularState.deposits, domain.granularState.compositions,
 				domain.granularState.externalSource, domain.granularState.escapedSink);
 	}
 
 	GranularDisplaySnapshot copyGranularDisplaySnapshot() {
 		if (domain.granularState == null) throw new IllegalStateException("Granular state is not bound");
-		return GranularDisplaySnapshot.build(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+		return GranularDisplaySnapshot.build(domain.grid, domain.config.cellSize(),
 				domain.granularState.registry, domain.granularState.parcels, domain.granularState.deposits);
 	}
 
@@ -147,7 +147,7 @@ final class CarrierInventoryReader {
 	FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
 		domain.domainFlowFields.ensureInventoryGrid();
 		var registry = domain.materialRegistry == null ? new FluidMaterialRegistry(java.util.List.of(
-				new FluidMaterial("mmm:water", domain.config.density(), "mmm:aqueous", 0, Math.PI / 2))) : domain.materialRegistry;
+				domain.definitions().material().entry(BuiltinFluidMaterials.WATER).material())) : domain.materialRegistry;
 		domain.pressureSystem.prepareGeometry();
 		var inventory = domain.liquidCells.snapshot();
 		var phase = domain.pressureSystem.phaseGeometry();

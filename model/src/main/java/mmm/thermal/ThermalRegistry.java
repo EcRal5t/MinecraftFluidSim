@@ -28,6 +28,7 @@ public final class ThermalRegistry {
 	private final Map<String, Integer> transitionHandles;
 	private final Map<String, Integer> materialByCarrier;
 	private final Map<String, Map<String, ThermalSpeciesOffset>> offsetByHostSpecies;
+	private final ChemicalRegistry chemistry;
 	private final String chemicalRegistryFingerprint;
 	private final String granularRegistryFingerprint;
 	private final String gasRegistryFingerprint;
@@ -47,6 +48,14 @@ public final class ThermalRegistry {
 			String granularRegistryFingerprint,
 			String gasRegistryFingerprint
 	) {
+		this(materials,speciesOffsets,transitions,boundaries,finiteDevices,chemicalRegistryFingerprint,granularRegistryFingerprint,gasRegistryFingerprint,null);
+	}
+
+	private ThermalRegistry(List<ThermalMaterialDefinition> materials,List<ThermalSpeciesOffset> speciesOffsets,
+			List<ThermalPhaseTransition> transitions,List<ThermalBoundaryDefinition> boundaries,
+			List<FiniteThermalDeviceDefinition> finiteDevices,String chemicalRegistryFingerprint,
+			String granularRegistryFingerprint,String gasRegistryFingerprint,ChemicalRegistry chemistry) {
+		this.chemistry = chemistry;
 		this.materials = canonicalUnique(materials, ThermalLimits.MAX_MATERIALS,
 				ThermalMaterialDefinition::id, "thermal material");
 		this.speciesOffsets = canonicalOffsets(speciesOffsets);
@@ -111,6 +120,14 @@ public final class ThermalRegistry {
 	public ThermalRegistry(List<ThermalMaterialDefinition> materials) {
 		this(materials, List.of(), List.of(), List.of(), "", "");
 	}
+
+	public ThermalRegistry withChemistry(ChemicalRegistry chemistry) {
+		if (chemistry == null || !chemicalRegistryFingerprint.equals(chemistry.fingerprint()))
+			throw new IllegalArgumentException("Thermal and chemical registry fingerprints differ");
+		return new ThermalRegistry(materials,speciesOffsets,transitions,boundaries,finiteDevices,
+				chemicalRegistryFingerprint,granularRegistryFingerprint,gasRegistryFingerprint,chemistry);
+	}
+	public ChemicalRegistry chemistry() { return chemistry; }
 
 	public List<ThermalMaterialDefinition> materials() { return materials; }
 	public List<ThermalSpeciesOffset> speciesOffsets() { return speciesOffsets; }

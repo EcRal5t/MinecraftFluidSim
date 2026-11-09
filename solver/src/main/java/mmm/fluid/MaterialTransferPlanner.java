@@ -66,7 +66,7 @@ final class MaterialTransferPlanner {
 		if (SignedDyadic.of(represented).compareTo(accepted) > 0) represented = Math.nextDown(represented);
 		if (!(represented > 0)) return new FluidDomainContracts.VolumeAddition(0, false);
 		var volume = SignedDyadic.of(represented);
-		double density = domain.materialRegistry == null ? domain.config.density() : domain.materialRegistry.material(0).referenceDensity();
+		double density = domain.materialRegistry == null ? domain.definitions().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity() : domain.materialRegistry.material(0).referenceDensity();
 		long mass = domain.unitScale.massUnitsForNormalized(volume.toDouble() * density);
 		if (mass == 0) return new FluidDomainContracts.VolumeAddition(0, false);
 		boolean inserted = insert(List.of(defaultInput(0, volume, mass)), nearby, true, null);
@@ -227,7 +227,7 @@ final class MaterialTransferPlanner {
 			if (stocks.size() != 1) return false;
 			var stock = stocks.getFirst();
 			if (!materialId(stock.key().material()).equals("mmm:water") || !stock.volume().equals(SignedDyadic.of(1.0))
-					|| stock.massUnits() != domain.unitScale.massUnitsForNormalized(1000.0)) return false;
+					|| stock.massUnits() != domain.unitScale.massUnitsForNormalized(domain.definitions().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity())) return false;
 			var amounts = stable(stock.mixture());
 			if (stock.mixture() != null && (amounts.size() != 1 || !amounts.containsKey("mmm:h2o"))) return false;
 			if (domain.thermalState != null) {
@@ -236,13 +236,9 @@ final class MaterialTransferPlanner {
 				actualEnergy = actualEnergy.add(SignedDyadic.of(stock.internalEnergy()));
 				referenceEnergy = referenceEnergy.add(SignedDyadic.of(reference));
 			} else if (stock.internalEnergy() != 0) return false;
-			int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / domain.sizeX / domain.sizeY;
-			if (domain.mac.momentumX[x + (domain.sizeX + 1) * (y + domain.sizeY * z)] != 0
-					|| domain.mac.momentumX[x + 1 + (domain.sizeX + 1) * (y + domain.sizeY * z)] != 0
-					|| domain.mac.momentumY[x + domain.sizeX * (y + (domain.sizeY + 1) * z)] != 0
-					|| domain.mac.momentumY[x + domain.sizeX * (y + 1 + (domain.sizeY + 1) * z)] != 0
-					|| domain.mac.momentumZ[x + domain.sizeX * (y + domain.sizeY * z)] != 0
-					|| domain.mac.momentumZ[x + domain.sizeX * (y + domain.sizeY * (z + 1))] != 0) return false;
+			double[][] momentum={domain.mac.momentumX,domain.mac.momentumY,domain.mac.momentumZ};
+			for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++)
+				if(momentum[axis][domain.grid.face(cell,2*axis+side)-domain.grid.faceOffset(axis)]!=0)return false;
 		}
 		if (!actualEnergy.equals(referenceEnergy)) return false;
 		var nearby = cells.stream().distinct().map(cell -> new FluidDomainContracts.CellCandidate(cell, 0)).toList();
@@ -250,7 +246,7 @@ final class MaterialTransferPlanner {
 		if (extraction == null) return false;
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO,
 				SignedDyadic.of(extraction.energy())).commit();
-		for (int cell : cells) domain.setSolid(cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / domain.sizeX / domain.sizeY, true);
+		for (int cell : cells) domain.setSolid(domain.grid.x(cell),domain.grid.y(cell),domain.grid.z(cell),true);
 		return true;
 	}
 
@@ -331,7 +327,7 @@ final class MaterialTransferPlanner {
 		for (int i=0;i<cells.length;i++) {
 			int cell=cells[i], material=materials==null?0:materials[i];
 			if (material<0 || domain.materialRegistry==null && material!=0) throw new IllegalArgumentException("Cell material requires its bound palette");
-			double density=domain.materialRegistry==null?domain.config.density():domain.materialRegistry.material(material).referenceDensity();
+			double density=domain.materialRegistry==null?domain.definitions().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity():domain.materialRegistry.material(material).referenceDensity();
 			for (var stock : domain.liquidCells.stocksInCell(cell)) {
 				removed.computeIfAbsent(stock.key().material(),Removed::new)
 						.add(stock.volume(),stock.massUnits(),stock.mixture());
@@ -398,7 +394,7 @@ final class MaterialTransferPlanner {
 		}
 	}
 	private SignedDyadic available(int cell) { return SignedDyadic.of(domain.domainCollision.effectiveOpenCellVolume(cell)).subtract(domain.liquidCells.exactCellVolume(cell)); }
-	private String materialId(int material) { return domain.materialRegistry == null ? BuiltinFluidMaterials.WATER.id() : domain.materialRegistry.material(material).id(); }
+	private String materialId(int material) { return domain.materialRegistry == null ? BuiltinFluidMaterials.WATER : domain.materialRegistry.material(material).id(); }
 	private Map<String, Long> stable(ChemicalMixtureRecord mixture) { return mixture == null ? Map.of() : mixture.stableAmounts(domain.chemistry.registry()); }
 	private double modeledEnergy(int material, long mass, ChemicalMixtureRecord mixture, double temperature) {
 		return domain.thermalState.stateFunction().internalEnergyAtTemperature(domain.thermalState.thermalMaterialHandleForFluid(material), Mass.kilograms(mass), stable(mixture), temperature);

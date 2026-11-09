@@ -96,32 +96,60 @@ public final class FluidCutCellShapeValidation {
 
 	private static void documentedStairPlacementRestoresExactLedger() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				0.5F, 9.81F, 1.0F / 20.0F,
 				160, 5.0E-5F, 2.0E-3F);
-		HostFluidState domain = new HostFluidState(24, 16, 24, config);
+        var definitions = mmm.fluid.TestFluidDefinitions.load();
+		HostFluidState domain = new HostFluidState(24, 16, 24, config, definitions);
+        var liquids = new mmm.fluid.FluidMaterialRegistry(java.util.List.of(definitions.material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(liquids);
 		for (int z = 0; z < 24; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 9; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
+        domain.bindChemistry(definitions.chemistry());
+        domain.bindGasRegistry(definitions.gas());
+        domain.bindThermal(definitions.thermal(), liquids, 310.0);
 		float initialVolume = domain.totalVolume();
+        long initialMass = domain.totalMassUnits();
+        var initialSpecies = liquidSpecies(domain);
+        double initialLiquidEnergy = domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy()).toDouble();
 		VoxelShape stair = Shapes.joinUnoptimized(
 				Shapes.box(0.0, 0.0, 0.0, 1.0, 0.5, 1.0),
 				Shapes.box(0.0, 0.5, 0.5, 1.0, 1.0, 1.0),
 				BooleanOp.OR
 		);
-		float displaced = 0.0F;
-		for (int localZ = 0; localZ < 2; localZ++) for (int localY = 0; localY < 2; localY++) {
-			for (int localX = 0; localX < 2; localX++) {
-				displaced += domain.setSolidMicroMask(
-						4 + localX, 2 + localY, 4 + localZ, sample(stair, localX, localY, localZ)
-				);
-			}
-		}
-		FluidDomainContracts.VolumeAddition restoration = domain.addVolumeNearBudgeted(5, 3, 5, displaced, 8);
-		checkClose(displaced, 6.0F, 0.0F, "documented stair displacement");
-		checkClose(restoration.addedVolume(), displaced, 0.0F, "documented stair restoration");
-		check(!restoration.markerBudgetLimited(), "documented stair restoration exhausted marker budget");
-		checkClose(domain.totalVolume(), initialVolume, 0.0F, "documented stair exact marker ledger");
+		var registry=net.minecraft.resources.ResourceKey.<net.minecraft.world.level.Level>createRegistryKey(
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","shape_dimensions"));
+        var dimension=net.minecraft.resources.ResourceKey.create(registry,
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","shape_world"));
+        var region=new FluidRegion(java.util.UUID.randomUUID(),dimension,net.minecraft.core.BlockPos.ZERO,domain);
+        byte[] masks=new byte[domain.grid().cellCount()];
+        for (int localZ=0;localZ<2;localZ++) for (int localY=0;localY<2;localY++) for (int localX=0;localX<2;localX++) {
+            int x=4+localX,y=2+localY,z=4+localZ;
+            check(domain.volume(x,y,z)==1.0F,"stair fixture did not populate its collision cells");
+            masks[domain.grid().cell(x,y,z)]=(byte)sample(stair,localX,localY,localZ);
+        }
+        var result=FluidRegionWorldInteraction.applyCapturedCollisions(region,new mmm.world.CollisionField(domain.grid(),masks),2);
+        var after=region.hostSnapshot();
+        checkClose(result.displacedCellVolume(),6.0F,0.0F,"documented stair displacement");
+        checkClose(result.escapedCellVolume(),0.0F,0.0F,"documented stair escaped inventory");
+        checkClose(after.totalVolume(),initialVolume,0.0F,"documented stair conserved liquid");
+        check(after.totalMassUnits()==initialMass && liquidSpecies(after).equals(initialSpecies),
+                "documented stair changed liquid mass or composition");
+        double finalLiquidEnergy=after.exactInternalEnergy().subtract(after.exactGasInternalEnergy()).toDouble();
+        check(Math.abs(finalLiquidEnergy-initialLiquidEnergy)<=Math.max(1e-6,Math.abs(initialLiquidEnergy)*1e-10)
+                        && after.thermalAudit().expectedInventory().equals(after.exactInternalEnergy()),
+                "documented stair changed carried liquid energy or thermal audit");
+        for (int localZ=0;localZ<2;localZ++) for (int localY=0;localY<2;localY++) for (int localX=0;localX<2;localX++)
+            check(after.solidMicroMask(4+localX,2+localY,4+localZ)==sample(stair,localX,localY,localZ),
+                    "stair collision geometry was not committed");
 	}
+
+    private static java.util.Map<Integer,Long> liquidSpecies(HostFluidState domain) {
+        var total=new java.util.TreeMap<Integer,Long>();
+        for (var stock:domain.captureAuthoritativeState().liquid().physicalStocks()) if(stock.mixture()!=null)
+            for(int i=0;i<stock.mixture().entryCount();i++) total.merge(stock.mixture().speciesHandle(i),stock.mixture().amountAt(i),Math::addExact);
+        return total;
+    }
 
 	private static int sample(VoxelShape shape, int localX, int localY, int localZ) {
 		return FluidRegionWorldInteraction.sampleCutCellMask(shape, localX, localY, localZ, 2, INSET);

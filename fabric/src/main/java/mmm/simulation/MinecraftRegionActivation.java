@@ -153,7 +153,7 @@ public final class MinecraftRegionActivation {
 				world.profile().profileFingerprint(), footprint, ownershipPreimage);
 		ControllerRegionCreation.Result creation = ControllerRegionCreation.create(
 				regions, level.dimension(), footprint, defaultEntityPhysics.getAsBoolean(),
-				defaultDebugOverlays.getAsBoolean(), () -> FluidControllerRegions.availabilityFailure(level, footprint),
+				defaultDebugOverlays.getAsBoolean(), world, () -> FluidControllerRegions.availabilityFailure(level, footprint),
 				candidate -> {
 					regionTick.refreshRegionInputs(level, candidate);
 					if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);

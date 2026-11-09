@@ -9,7 +9,8 @@
 - **材料定义与单位**
   - 代码入口：
     - [FluidMaterialRegistry](../../model/src/main/java/mmm/fluid/FluidMaterialRegistry.java)
-    - [BuiltinFluidMaterials](../../solver/src/main/java/mmm/fluid/BuiltinFluidMaterials.java)
+    - [WorldMaterialDataPackLoader](../../fabric/src/main/java/mmm/simulation/WorldMaterialDataPackLoader.java)
+    - [FluidDefinitions](../../solver/src/main/java/mmm/fluid/FluidDefinitions.java)
     - [SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java)
   - 测试选择器：`materials`
 
@@ -47,8 +48,8 @@
 - 液体体积使用 `SignedDyadic`，质量使用统一整数编码；handoff 直接共享不可变库存行。
 - 注液计划从逐格原始体积的精确和扣除开放容量，计划内各材料共同抵扣这份精确剩余空间。请求剩余量也按实际片段精确扣减，保证跨格注入量不超过请求。转成 binary64 观察量及 binary32 注入片段时向下舍入；操作回执将实际接受量在 binary32 接口处舍入一次。化学量子不足以表示的片段留在请求剩余量中。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
-- 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
-- 材料底色来自独立只读 palette，最终颜色由客户端选择的组分、pH 或温度模式决定。
+- 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力、接触角和显示底色；液液张力由 registry 的 phase 无序对表给出。
+- 材料底色随数据包定义和世界能力包保存，最终颜色由客户端选择的组分、pH 或温度模式决定。
 - 液体动态黏度只有一份权威定义：world material registry 按 `Pa·s` 保存分段 `mu(T)` 与有效温区，写进世界能力包。`FluidMaterial` 不保存黏度，granular carrier 也不再自带 `dynamic_viscosity`，它只声明颗粒阻力标定用的 Reynolds 上限。
 - 同一材料条目保存可选体膨胀定义：载体 ID、参考温度与体积膨胀系数。三项都进入材料指纹和世界能力包；浮力计算读取已绑定条目。生产热学能力要求支持的液体具有该定义。
 - 实际单元记录的质量和体积参与库存结算，参考密度用于创建、校验和状态函数绑定。
@@ -60,7 +61,9 @@
 
 handle 用于数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。长期状态仅保存 stable ID，不持久化瞬态整数 handle。
 
-内置基线目前提供 water、oil 和 mercury。内置 palette 作为生产默认定义集使用；已提交区域由 checkpoint 中的 palette 与 registry identity 权威解释。
+默认数据包在 `data/mmm/mmm/fluid_materials` 提供 water、oil 和 mercury。每份 JSON 声明密度、互溶组、表面张力、接触角、显示色、温度黏度点和热浮力参数；`fluid_interfaces` 中的可选定义声明两组互溶组之间的张力。Java 中仅保存稳定物质 ID。已提交区域由世界能力包中的完整定义和 checkpoint 中的材料身份共同解释。
+
+`FluidSolverConfig` 保存格长、重力、步长和数值求解参数。新建纯水库存、原版桶转换、容器回执与持久恢复统一读取世界定义中的水密度。完整定义通过 `FluidDefinitions` 传递，液体库存功能关闭时仍可查询相应物性。
 
 ### 黏度求值
 
@@ -73,7 +76,7 @@ handle 用于数组索引。checkpoint 保存 canonical material palette，容�
 
 域内沿声明段线性插值，域外保持最近端点的正黏度。两种求值都拒绝非有限温度和低于热学严格正温数值域的输入。`minimumViscosityTemperatureK` / `maximumViscosityTemperatureK` 供诊断报告声明温区。
 
-材料定义随后端交接一起走：`FluidDomainState` 保存不可变 `MaterialRegistry` 引用，`Layout` 保存其 fingerprint。`bindMaterialDefinitions` 独立于颗粒能力；生产材料域和各附加能力域均绑定世界定义，冷恢复从已提交能力包取得。颗粒交接必须有定义，独立无黏度数值测试域可以不绑定。
+材料定义随后端交接一起走：`FluidDomainState` 保存完整不可变世界定义，`Layout` 保存其 fingerprint。材料与附加能力绑定均核对同一份定义，冷恢复从已提交能力包取得。宿主状态函数和 GPU 材料表从相同数据生成。
 
 ## 求解器边界
 
@@ -116,7 +119,7 @@ rho_liquid = sum(mass_kg) / actual_liquid_volume_m3
 
 抽取先预检目标库存与物品可表示数量，再从实际单元记录生成结算；物品须能表示实际体积、逐材料质量、组成与携带内能。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
-`setVolumes(float[])` 在一次事务中替换整域目标体积；数组按 x、y、z 递增的单元索引排列。
+`setVolumes(float[])` 在一次事务中替换整域目标体积；数组按 `SpatialGrid` 的紧凑单元索引排列，通过 `grid.cell(x,y,z)` 映射实际坐标。
 单格 `setVolume` 共用同一准备过程，体积按固定碰撞开放量减去实际固体占容裁剪；默认材料为 handle 0，可选材料数组为初始化提供逐格材料身份。
 旧库存的物种、质量与内能记外部 sink，新库存按目标材料密度、默认组成和注入温度记 external source。
 MAC 按实际质量变化移走对应动量或混合静止注入质量，明确的混合动能损失记局部热；库存、热账和逐格气体后继共同准备后一次发布。

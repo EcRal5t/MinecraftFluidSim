@@ -37,6 +37,7 @@ public final class MinecraftDebugFixtures {
 
 		/** Binds the committed world capability registries to a freshly allocated domain. */
 		void bindCapabilityState(HostFluidState domain);
+		CommittedWorldRegistries worldRegistries();
 
 		void bindTensionPalette(HostFluidState domain, int angleDegrees);
 		void bindTensionCapabilityState(HostFluidState domain, int angleDegrees);
@@ -250,7 +251,7 @@ public final class MinecraftDebugFixtures {
 			runtime.refreshCollisions(level);
 			long generation = regions.selected().solverGeneration();
 			HostFluidState domain = regions.selected().beginHostEdit();
-			if (profile.hasCapability(WorldCapability.MATERIALS)) FluidRegionFactory.bindDefaultMaterialState(domain);
+			runtime.bindCapabilityState(domain);
 			DebugScenarioInitialization.fillDam(domain, false);
 			if (domain.totalVolume() <= 0.0F) reject("溃坝区域没有可装水的开放空间；请在空旷处重试");
 			runtime.bindCapabilityState(domain);
@@ -306,16 +307,16 @@ public final class MinecraftDebugFixtures {
 			return false;
 		}
 		HostFluidState domain = switch (kind) {
-			case FLOW -> FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z);
-			case AIR -> FluidRegionFactory.createAirDomain();
-			case TENSION -> FluidRegionFactory.createTensionDomain();
-			case NORMAL -> FluidRegionFactory.createDomain(BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z);
+			case FLOW -> FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z, runtime.worldRegistries());
+			case AIR -> FluidRegionFactory.createAirDomain(runtime.worldRegistries());
+			case TENSION -> FluidRegionFactory.createTensionDomain(runtime.worldRegistries());
+			case NORMAL -> FluidRegionFactory.createDomain(BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z, runtime.worldRegistries());
 		};
 		FluidRegion candidate = new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain);
 		candidate.setEntityPhysicsEnabled(kind != TransientKind.AIR && defaultEntityPhysics.getAsBoolean());
 		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());
 		if (replacing) regions.select(replaced.id());
-		RegionCatalog.AdmissionResult preview = replacing ? regions.previewReplacement((long)domain.sizeX() * domain.sizeY() * domain.sizeZ())
+		RegionCatalog.AdmissionResult preview = replacing ? regions.previewReplacement(domain.grid().cellCount())
 				: regions.previewAdd(candidate);
 		if (!preview.accepted()) {
 			if (previous != null) regions.select(previous.id());

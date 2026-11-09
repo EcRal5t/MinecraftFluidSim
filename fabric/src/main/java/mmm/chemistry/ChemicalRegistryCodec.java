@@ -82,6 +82,17 @@ public final class ChemicalRegistryCodec {
 			tag.putString("MolarMassKgPerMol", definition.molarMassKgPerMol().canonical()); tag.putInt("Color", definition.baseArgb());
 			tag.putLong("Diffusivity", Double.doubleToRawLongBits(definition.diffusivityM2PerS() == null ? Double.NaN : definition.diffusivityM2PerS()));
 			tag.putLong("EffectiveVolume", Double.doubleToRawLongBits(definition.effectiveVolumeM3PerMol() == null ? Double.NaN : definition.effectiveVolumeM3PerMol()));
+			ListTag liquidProperties = new ListTag();
+			if (definition.liquidProperties() != null) {
+				var properties = definition.liquidProperties();
+				CompoundTag value = new CompoundTag();
+				value.putLong("Density", Double.doubleToRawLongBits(properties.referenceDensityKgPerM3()));
+				value.putLong("HeatCapacity", Double.doubleToRawLongBits(properties.heatCapacityJPerKgK()));
+				value.putLong("Conductivity", Double.doubleToRawLongBits(properties.conductivityWPerMK()));
+				value.putLong("Viscosity", Double.doubleToRawLongBits(properties.viscosityPaS()));
+				liquidProperties.add(value);
+			}
+			tag.put("LiquidProperties", liquidProperties);
 			tag.put("Composition", encodeIntegerMap(definition.composition())); species.add(tag);
 		}
 		root.put("Species", species);
@@ -92,6 +103,18 @@ public final class ChemicalRegistryCodec {
 			ListTag allowed = new ListTag();
 			for (String id : definition.allowedSpecies()) allowed.add(StringTag.valueOf(id));
 			tag.put("Allowed", allowed); tag.put("DefaultConcentrationMolPerM3", encodeRationalMap(definition.defaultConcentrationMolPerCubicMeter()));
+            ListTag correction = new ListTag();
+            if (definition.viscosityCorrection() != null) {
+                var value = definition.viscosityCorrection();
+                CompoundTag encoded = new CompoundTag();
+                encoded.putLong("A", Double.doubleToRawLongBits(value.a()));
+                encoded.putLong("B", Double.doubleToRawLongBits(value.b()));
+                encoded.putLong("MaximumMolality", Double.doubleToRawLongBits(value.maximumMolality()));
+                encoded.putLong("ReferenceTemperature", Double.doubleToRawLongBits(value.referenceTemperatureK()));
+                encoded.putLong("TemperatureTolerance", Double.doubleToRawLongBits(value.temperatureToleranceK()));
+                correction.add(encoded);
+            }
+            tag.put("ViscosityCorrection", correction);
 			phases.add(tag);
 		}
 		root.put("Phases", phases);
@@ -157,10 +180,24 @@ public final class ChemicalRegistryCodec {
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compound(list, i, "species");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Charge", Tag.TAG_INT, "MolarMassKgPerMol", Tag.TAG_STRING,
-					"Color", Tag.TAG_INT, "Composition", Tag.TAG_LIST, "Diffusivity", Tag.TAG_LONG, "EffectiveVolume", Tag.TAG_LONG));
+					"Color", Tag.TAG_INT, "Composition", Tag.TAG_LIST, "Diffusivity", Tag.TAG_LONG, "EffectiveVolume", Tag.TAG_LONG,
+					"LiquidProperties", Tag.TAG_LIST));
+			ListTag encodedProperties = tag.getListOrEmpty("LiquidProperties");
+			if (encodedProperties.size() > 1) throw new IOException("Multiple liquid properties for one species");
+			ChemicalSpecies.LiquidProperties properties = null;
+			if (!encodedProperties.isEmpty()) {
+				CompoundTag value = compound(encodedProperties, 0, "liquid properties");
+				requireAll(value, Map.of("Density", Tag.TAG_LONG, "HeatCapacity", Tag.TAG_LONG,
+						"Conductivity", Tag.TAG_LONG, "Viscosity", Tag.TAG_LONG));
+				properties = new ChemicalSpecies.LiquidProperties(
+						Double.longBitsToDouble(value.getLongOr("Density", 0)),
+						Double.longBitsToDouble(value.getLongOr("HeatCapacity", 0)),
+						Double.longBitsToDouble(value.getLongOr("Conductivity", 0)),
+						Double.longBitsToDouble(value.getLongOr("Viscosity", 0)));
+			}
 			result.add(new ChemicalSpecies(tag.getStringOr("Id", ""), decodeIntegerMap(tag.getListOrEmpty("Composition")),
 					tag.getIntOr("Charge", Integer.MIN_VALUE), ExactRational.parse(tag.getStringOr("MolarMassKgPerMol", "")),
-					tag.getIntOr("Color", 0), nullableDouble(tag.getLongOr("Diffusivity", 0)), nullableDouble(tag.getLongOr("EffectiveVolume", 0))));
+					tag.getIntOr("Color", 0), nullableDouble(tag.getLongOr("Diffusivity", 0)), nullableDouble(tag.getLongOr("EffectiveVolume", 0)), properties));
 		}
 		return result;
 	}
@@ -171,7 +208,7 @@ public final class ChemicalRegistryCodec {
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compound(list, i, "phase");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Material", Tag.TAG_STRING,
-					"Allowed", Tag.TAG_LIST, "DefaultConcentrationMolPerM3", Tag.TAG_LIST));
+					"Allowed", Tag.TAG_LIST, "DefaultConcentrationMolPerM3", Tag.TAG_LIST, "ViscosityCorrection", Tag.TAG_LIST));
 			List<String> allowed = new ArrayList<>();
 			ListTag encodedAllowed = tag.getListOrEmpty("Allowed");
 			for (int entry = 0; entry < encodedAllowed.size(); entry++) {
@@ -179,8 +216,21 @@ public final class ChemicalRegistryCodec {
 				if (!(value instanceof StringTag text)) throw new IOException("Invalid allowed species entry");
 				allowed.add(text.asString().orElseThrow());
 			}
-			result.add(new ChemicalPhaseDefinition(tag.getStringOr("Id", ""), tag.getStringOr("Material", ""),
-					allowed, decodeRationalMap(tag.getListOrEmpty("DefaultConcentrationMolPerM3"))));
+			ListTag encodedCorrection = tag.getListOrEmpty("ViscosityCorrection");
+            if (encodedCorrection.size() > 1) throw new IOException("Invalid viscosity correction count");
+            ChemicalPhaseDefinition.ViscosityCorrection correction = null;
+            if (!encodedCorrection.isEmpty()) {
+                CompoundTag value = compound(encodedCorrection, 0, "viscosity correction");
+                requireAll(value, Map.of("A", Tag.TAG_LONG, "B", Tag.TAG_LONG, "MaximumMolality", Tag.TAG_LONG,
+                        "ReferenceTemperature", Tag.TAG_LONG, "TemperatureTolerance", Tag.TAG_LONG));
+                correction = new ChemicalPhaseDefinition.ViscosityCorrection(
+                        Double.longBitsToDouble(value.getLongOr("A", 0)), Double.longBitsToDouble(value.getLongOr("B", 0)),
+                        Double.longBitsToDouble(value.getLongOr("MaximumMolality", 0)),
+                        Double.longBitsToDouble(value.getLongOr("ReferenceTemperature", 0)),
+                        Double.longBitsToDouble(value.getLongOr("TemperatureTolerance", 0)));
+            }
+            result.add(new ChemicalPhaseDefinition(tag.getStringOr("Id", ""), tag.getStringOr("Material", ""),
+                    allowed, decodeRationalMap(tag.getListOrEmpty("DefaultConcentrationMolPerM3")), correction));
 		}
 		return result;
 	}

@@ -2,6 +2,7 @@ package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
+import mmm.spatial.SpatialGrid;
 
 import mmm.chemistry.ChemicalRegistry;
 import mmm.chemistry.ChemicalTransferLedger;
@@ -21,6 +22,8 @@ public final class FluidDomainState implements FluidStateAccess {
 	@Override public FluidDomainState exportState() { return this; }
 	public enum CarrierKind { PURE, MATERIAL, CHEMICAL }
 	private final int sizeX, sizeY, sizeZ;
+	private final SpatialGrid grid;
+	private final FluidDefinitions definitions;
 	private final FluidSolverConfig config;
 	private final boolean sealedDomainBoundary;
 	private final LiquidCellInventory.Snapshot liquid;
@@ -69,7 +72,7 @@ public final class FluidDomainState implements FluidStateAccess {
 	private volatile FlipChemicalParticleState debugChemicals;
 	private volatile FlipThermalParticleState debugThermal;
 
-	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,
+	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,FluidDefinitions definitions,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
@@ -79,10 +82,10 @@ public final class FluidDomainState implements FluidStateAccess {
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
 			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
-		this(sizeX, sizeY, sizeZ, config, sealedDomainBoundary, liquid, phaseOccupancy, momentum, fixedGeometry, entityBodies, palette, chemicalRegistry, chemicalSource, chemicalSink, chemicalDirtyCells, chemicalReactionCursor, chemicalMassTransferPending, granularRegistry, granular, granularDynamics, precipitationEnabled, gasRegistry, gas, thermalRegistry, thermalOwner, maximumThermalTransportSubsteps, pendingPhaseMotion, thermalBoundaryTemperaturesK, condensedPhasePressure, materialDefinitions, PhysicalActivityGroups.Snapshot.EMPTY);
+		this(sizeX, sizeY, sizeZ, config,definitions, sealedDomainBoundary, liquid, phaseOccupancy, momentum, fixedGeometry, entityBodies, palette, chemicalRegistry, chemicalSource, chemicalSink, chemicalDirtyCells, chemicalReactionCursor, chemicalMassTransferPending, granularRegistry, granular, granularDynamics, precipitationEnabled, gasRegistry, gas, thermalRegistry, thermalOwner, maximumThermalTransportSubsteps, pendingPhaseMotion, thermalBoundaryTemperaturesK, condensedPhasePressure, materialDefinitions, PhysicalActivityGroups.Snapshot.EMPTY);
 	}
 
-	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,
+	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,FluidDefinitions definitions,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
@@ -92,15 +95,52 @@ public final class FluidDomainState implements FluidStateAccess {
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
 			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions, PhysicalActivityGroups.Snapshot activityState) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),config,definitions,sealedDomainBoundary,liquid,phaseOccupancy,momentum,
+				fixedGeometry,entityBodies,palette,chemicalRegistry,chemicalSource,chemicalSink,chemicalDirtyCells,
+				chemicalReactionCursor,chemicalMassTransferPending,granularRegistry,granular,granularDynamics,
+				precipitationEnabled,gasRegistry,gas,thermalRegistry,thermalOwner,maximumThermalTransportSubsteps,
+				pendingPhaseMotion,thermalBoundaryTemperaturesK,condensedPhasePressure,materialDefinitions,activityState);
+	}
+
+	public FluidDomainState(SpatialGrid grid, FluidSolverConfig config,FluidDefinitions definitions,
+			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
+			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
+			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
+			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
+			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
+			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
+			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
+		this(grid,config,definitions,sealedDomainBoundary,liquid,phaseOccupancy,momentum,fixedGeometry,entityBodies,palette,
+				chemicalRegistry,chemicalSource,chemicalSink,chemicalDirtyCells,chemicalReactionCursor,chemicalMassTransferPending,
+				granularRegistry,granular,granularDynamics,precipitationEnabled,gasRegistry,gas,thermalRegistry,thermalOwner,
+				maximumThermalTransportSubsteps,pendingPhaseMotion,thermalBoundaryTemperaturesK,condensedPhasePressure,
+				materialDefinitions,PhysicalActivityGroups.Snapshot.EMPTY);
+	}
+
+	public FluidDomainState(SpatialGrid grid, FluidSolverConfig config,FluidDefinitions definitions,
+			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
+			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
+			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
+			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
+			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
+			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
+			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions, PhysicalActivityGroups.Snapshot activityState) {
+		this.grid=Objects.requireNonNull(grid);
+		this.definitions=Objects.requireNonNull(definitions);
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		this.activityState = Objects.requireNonNull(activityState);
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("Invalid cell domain shape");
-		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int cells = grid.cellCount();
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.config = Objects.requireNonNull(config);
 		this.sealedDomainBoundary = sealedDomainBoundary;
 		this.liquid = Objects.requireNonNull(liquid); this.momentum = Objects.requireNonNull(momentum);
 		this.phaseOccupancy = Objects.requireNonNull(phaseOccupancy);
 		if (phaseOccupancy.cellCount() != cells) throw new IllegalArgumentException("Phase occupancy shape differs from domain");
-		if (liquid.cellCount() != cells || fixedGeometry==null || !fixedGeometry.matchesShape(sizeX,sizeY,sizeZ) || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
+		if (liquid.cellCount() != cells || fixedGeometry==null || !fixedGeometry.grid().equals(grid) || !momentum.grid().equals(grid))
 			throw new IllegalArgumentException("Liquid inventory, collision and MAC shapes differ");
 		this.fixedGeometry = fixedGeometry; this.palette = List.copyOf(palette);
 		this.entityBodies = Objects.requireNonNull(entityBodies, "Entity body state is missing");
@@ -150,7 +190,7 @@ public final class FluidDomainState implements FluidStateAccess {
 		if (granular != null && materialDefinitions == null) throw new IllegalArgumentException("Granular properties are missing");
 		this.gasRegistry = Objects.requireNonNull(gasRegistry); this.gas = gas;
 		if (gas != null && !gas.registryFingerprint.equals(gasRegistry.fingerprint())) throw new IllegalArgumentException("Gas registry identity mismatch");
-		if (gas != null && gas.spatial != null && (gas.spatial.sizeX()!=sizeX || gas.spatial.sizeY()!=sizeY || gas.spatial.sizeZ()!=sizeZ
+		if (gas != null && gas.spatial != null && (!gas.spatial.grid().equals(grid)
 				|| !gas.spatial.chemicalRegistryFingerprint().equals(chemicalRegistry==null?"":chemicalRegistry.fingerprint())))
 			throw new IllegalArgumentException("Spatial gas shape or chemical identity differs");
 		this.thermalRegistry = thermalRegistry; this.thermalOwner = thermalOwner;
@@ -167,6 +207,8 @@ public final class FluidDomainState implements FluidStateAccess {
 		if (condensedPhasePressure != null && condensedPhasePressure.cellCount() != cells) throw new IllegalArgumentException("Pressure field shape differs");
 		if (this.thermalBoundaryTemperaturesK != null && this.thermalBoundaryTemperaturesK.length != 6 * cells) throw new IllegalArgumentException("Thermal boundary shape differs");
 	}
+	public SpatialGrid grid() { return grid; }
+	public FluidDefinitions definitions() { return definitions; }
 	public int sizeX() { return sizeX; } public int sizeY() { return sizeY; } public int sizeZ() { return sizeZ; }
 	public FluidSolverConfig config() { return config; }
 	public boolean sealedDomainBoundary() { return sealedDomainBoundary; }
@@ -218,14 +260,14 @@ public final class FluidDomainState implements FluidStateAccess {
 		var cached = debugThermal;
 		if (cached == null) {
 			double[] energies = liquid.physicalStocks().stream().mapToDouble(LiquidCellInventory.Stock::internalEnergy).toArray();
-			debugThermal = cached = new FlipThermalParticleState(sizeX,sizeY,sizeZ,config.cellSize(),energies.length,
+			debugThermal = cached = new FlipThermalParticleState(grid,config.cellSize(),energies.length,
 					thermalOwner.registryFingerprint(),thermalOwner.insertionTemperatureK(),energies,thermalOwner.copyActiveParcelEnergy(),
 					thermalOwner.copyDepositEnergy(),thermalOwner.coherentGroups(),spatialGas() == null ? thermalOwner.copyGasNodeEnergy() : spatialGas().internalEnergy(),thermalOwner.audit());
 		}
 		return cached;
 	}
 	public Layout layout() {
-		return new Layout(config,sizeX,sizeY,sizeZ,sealedDomainBoundary,carrierKind(),palette,
+		return new Layout(config,definitions,grid,sizeX,sizeY,sizeZ,sealedDomainBoundary,carrierKind(),palette,
 				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(), granularRegistry == null ? "" : granularRegistry.fingerprint(),
 				precipitationEnabled,gasRegistry.fingerprint(),thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
 				thermalOwner == null ? 0 : thermalOwner.insertionTemperatureK(),maximumThermalTransportSubsteps,
@@ -234,6 +276,8 @@ public final class FluidDomainState implements FluidStateAccess {
 
 	public record Layout(
 			FluidSolverConfig config,
+			FluidDefinitions definitions,
+			SpatialGrid grid,
 			int sizeX,
 			int sizeY,
 			int sizeZ,
@@ -251,6 +295,8 @@ public final class FluidDomainState implements FluidStateAccess {
 	) {
 		public Layout {
 			Objects.requireNonNull(config, "config");
+			Objects.requireNonNull(definitions, "definitions");
+			Objects.requireNonNull(grid, "grid");
 			Objects.requireNonNull(carrierKind, "carrierKind");
 			materials = List.copyOf(materials);
 			Objects.requireNonNull(chemicalRegistryFingerprint, "chemicalRegistryFingerprint");

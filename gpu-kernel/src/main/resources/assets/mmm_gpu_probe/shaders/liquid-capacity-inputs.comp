@@ -6,6 +6,7 @@ layout(binding = 0, std430) buffer Arena { uint words[]; };
 layout(binding = 1, std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; } p;
 // HOST_LAYOUT
+// SPATIAL_GRID
 
 const uint SUBCELL_MASK = 255u;
 const int SOLID_QUANTA_PER_SUBCELL_SHIFT = 21;
@@ -34,14 +35,6 @@ int64_t poreQuanta(int cell) {
     return (int64_t(bitCount((~words[h(H_MASKS) + cell]) & SUBCELL_MASK)) << SOLID_QUANTA_PER_SUBCELL_SHIFT)
         - integerAt(h(H_OCCUPIED) + 2 * cell);
 }
-int faceIndex(ivec3 pos, int axis, bool positive) {
-    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
-    dims[axis]++;
-    if (positive) pos[axis]++;
-    int base = axis == 0 ? 0 : (h(H_SIZE_X) + 1) * h(H_SIZE_Y) * h(H_SIZE_Z);
-    if (axis == 2) base += h(H_SIZE_X) * (h(H_SIZE_Y) + 1) * h(H_SIZE_Z);
-    return base + (pos.z * dims.y + pos.y) * dims.x + pos.x;
-}
 void main() {
     int cell = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (cell >= h(H_CELL_COUNT) || errors != 0u) return;
@@ -52,21 +45,16 @@ void main() {
         atomicOr(errors, ERROR_INVALID_ROUTE);
         return;
     }
-    ivec3 dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
-    ivec3 pos = ivec3(cell % dims.x, cell / dims.x % dims.y, cell / (dims.x * dims.y));
     bool cellEnabled = h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
     double desired[6], total = 0.0;
     for (int side = 0; side < 6; side++) {
-        int axis = side / 2;
         bool positive = (side & 1) != 0;
-        int face = faceIndex(pos, axis, positive);
+        int face = gridFace(cell, side);
         double area = numberAt(h(H_FACES) + FACE_RECORD_WORDS * face + FACE_AREA_WORD);
         double flux = numberAt(h(H_FLUXES) + FLUX_RECORD_WORDS * face + FLUX_LIQUID_WORD);
         if (!finiteNumber(area) || !finiteNumber(flux)) { atomicOr(errors, ERROR_INVALID_ROUTE); return; }
-        bool internal = positive ? pos[axis] + 1 < dims[axis] : pos[axis] > 0;
-        int stride = axis == 0 ? 1 : axis == 1 ? dims.x : dims.x * dims.y;
-        int peer = cell + (positive ? stride : -stride);
-        bool connected = cellEnabled && internal && area > 0.0 &&
+        int peer = gridNeighbor(cell, side);
+        bool connected = cellEnabled && peer >= 0 && area > 0.0 &&
             (h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u);
         if (connected) {
             int64_t peerPore = poreQuanta(peer);

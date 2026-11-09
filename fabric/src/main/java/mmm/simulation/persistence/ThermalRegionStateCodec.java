@@ -106,7 +106,7 @@ final class ThermalRegionStateCodec {
 		}
 	}
 
-	byte[] encodeSection(SectionData data) throws IOException {
+	byte[] encodeSection(SectionData data,mmm.spatial.SpatialGrid grid) throws IOException {
 		validateSection(data);
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		try (DataOutputStream out = new DataOutputStream(bytes)) {
@@ -115,7 +115,8 @@ final class ThermalRegionStateCodec {
 			writeDoubles(out, data.depositGroupEnergyBits());
 			out.writeInt(data.coherentGroups().size());
 			for (CoherentEntry group : data.coherentGroups()) {
-				out.writeInt(group.cell()); out.writeUTF(group.phaseId()); out.writeLong(group.occupiedVolumeSvq());
+				out.writeInt(grid.x(group.cell()));out.writeInt(grid.y(group.cell()));out.writeInt(grid.z(group.cell()));
+				out.writeUTF(group.phaseId()); out.writeLong(group.occupiedVolumeSvq());
 				out.writeLong(group.massUnits()); writeComposition(out, group.composition());
 				out.writeLong(group.internalEnergyBits());
 			}
@@ -124,7 +125,7 @@ final class ThermalRegionStateCodec {
 		return bounded(bytes.toByteArray());
 	}
 
-	SectionData decodeSection(byte[] payload, int maximumLiquid, int maximumActive, int maximumDeposits) throws IOException {
+	SectionData decodeSection(byte[] payload, int maximumLiquid, int maximumActive, int maximumDeposits,mmm.spatial.SpatialGrid grid) throws IOException {
 		bounded(payload);
 		try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(payload))) {
 			if (input.readInt() != SECTION_MAGIC || input.readInt() != PAYLOAD_VERSION) {
@@ -134,9 +135,11 @@ final class ThermalRegionStateCodec {
 			long[] deposits = readDoubles(input, maximumDeposits, "deposit group energies");
 			int coherentCount = count(input.readInt(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION, "coherent groups");
 			ArrayList<CoherentEntry> coherent = new ArrayList<>(coherentCount);
-			for (int index = 0; index < coherentCount; index++) coherent.add(new CoherentEntry(
-					input.readInt(), input.readUTF(), input.readLong(), input.readLong(),
-					readComposition(input), input.readLong()));
+			for (int index = 0; index < coherentCount; index++) {
+				int cell=grid.cell(input.readInt(),input.readInt(),input.readInt());
+				if(cell<0)throw new IOException("Coherent phase is outside its spatial grid");
+				coherent.add(new CoherentEntry(cell,input.readUTF(),input.readLong(),input.readLong(),readComposition(input),input.readLong()));
+			}
 			SignedDyadic energy = readDyadic(input); requireEnd(input);
 			SectionData result = new SectionData(active, deposits, coherent, energy);
 			validateSection(result);

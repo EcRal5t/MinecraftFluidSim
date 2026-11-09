@@ -1,5 +1,7 @@
 package mmm.granular;
 
+import mmm.spatial.SpatialGrid;
+
 import mmm.chemistry.ChemicalRegistry;
 import mmm.units.SignedDyadic;
 
@@ -87,6 +89,7 @@ public final class GranularStateSnapshot {
 	}
 
 	private final int sizeX, sizeY, sizeZ;
+	private final SpatialGrid grid;
 	private final String registryFingerprint, chemicalRegistryFingerprint;
 	private final List<String> materialPalette;
 	private final List<StableComposition> solidCompositions;
@@ -126,6 +129,19 @@ public final class GranularStateSnapshot {
 			long totalSolidVolumeSvq, long totalMassUnits,
 			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
 	) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),registryFingerprint,chemicalRegistryFingerprint,materialPalette,
+				solidCompositions,solidSpeciesTotals,activeParcels,depositGroups,totalSolidVolumeSvq,totalMassUnits,externalSource,escapedSink);
+	}
+
+	public GranularStateSnapshot(
+			SpatialGrid grid, String registryFingerprint, String chemicalRegistryFingerprint,
+			List<String> materialPalette, List<StableComposition> solidCompositions,
+			Map<String, Long> solidSpeciesTotals, List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,
+			long totalSolidVolumeSvq, long totalMassUnits,
+			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
+	) {
+		this.grid=java.util.Objects.requireNonNull(grid);
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) throw new IllegalArgumentException("Invalid granular snapshot dimensions");
 		if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")) {
 			throw new IllegalArgumentException("Invalid granular registry fingerprint");
@@ -213,6 +229,14 @@ public final class GranularStateSnapshot {
 			GranularParcelStore parcels, GranularDepositStore deposits, SolidCompositionPool pool,
 			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
 	) {
+		return capture(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),registry,parcels,deposits,pool,externalSource,escapedSink);
+	}
+	public static GranularStateSnapshot capture(
+			SpatialGrid grid, GranularRegistry registry,
+			GranularParcelStore parcels, GranularDepositStore deposits, SolidCompositionPool pool,
+			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
+	) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		externalSource.validateAgainst(registry, pool == null ? null : pool.registry());
 		escapedSink.validateAgainst(registry, pool == null ? null : pool.registry());
 		List<String> palette = registry.materials().stream().map(ParticulateMaterial::id).toList();
@@ -234,7 +258,7 @@ public final class GranularStateSnapshot {
 		List<StableComposition> table = List.copyOf(unique); Map<StableComposition, Integer> indices = new HashMap<>();
 		for (int index = 0; index < table.size(); index++) indices.put(table.get(index), index + 1);
 		List<ActiveParcel> active = new ArrayList<>(parcels.count());
-		var kernel = new GranularKernel(sizeX, sizeY, sizeZ, .5);
+		var kernel = new GranularKernel(grid,.5);
 		parcels.requireGeometry(kernel);
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index); StableComposition composition = activeStable[index];
@@ -252,7 +276,7 @@ public final class GranularStateSnapshot {
 		TreeMap<String, Long> totals = stableTotals(active, deposit, table);
 		long volume = Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
 		long massUnits = Math.addExact(parcels.totalMassUnits(), deposits.totalMassUnits());
-		return new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
+		return new GranularStateSnapshot(grid, registry.fingerprint(),
 				pool == null ? "" : pool.registry().fingerprint(), palette, table, totals, active, deposit,
 				volume, massUnits, externalSource, escapedSink);
 	}
@@ -269,7 +293,7 @@ public final class GranularStateSnapshot {
 		if (parcels.count() != 0 || deposits.groupCount() != 0 || pool != null && pool.liveCount() != 0) {
 			throw new IllegalStateException("Granular restore target is not empty");
 		}
-		parcels.requireGeometry(new GranularKernel(sizeX, sizeY, sizeZ, .5));
+		parcels.requireGeometry(new GranularKernel(grid,.5));
 		if (!registryFingerprint.equals(registry.fingerprint())
 				|| !materialPalette.equals(registry.materials().stream().map(ParticulateMaterial::id).toList())) {
 			throw new IllegalArgumentException("Granular snapshot registry identity mismatch");
@@ -346,7 +370,7 @@ public final class GranularStateSnapshot {
 	}
 
 	private void validateActive() {
-		var kernel = new GranularKernel(sizeX, sizeY, sizeZ, .5);
+		var kernel = new GranularKernel(grid,.5);
 		for (ActiveParcel parcel : activeParcels) {
 			if (!(Float.isFinite(parcel.x()) && Float.isFinite(parcel.y()) && Float.isFinite(parcel.z())
 					&& parcel.x() >= 0.0F && parcel.x() < sizeX * 0.5F && parcel.y() >= 0.0F && parcel.y() < sizeY * 0.5F
@@ -366,7 +390,7 @@ public final class GranularStateSnapshot {
 		DepositGroup previous = null; int groupsInCell = 0;
 		for (DepositGroup group : depositGroups) {
 			SolidVolume.requirePorosity(group.porosityQ());
-			if (group.cell() < 0 || group.cell() >= sizeX * sizeY * sizeZ || !validMaterial(group.materialPaletteIndex())
+			if (group.cell() < 0 || group.cell() >= grid.cellCount() || !validMaterial(group.materialPaletteIndex())
 					|| !validComposition(group.solidCompositionIndex()) || group.solidVolumeSvq() <= 0L
 					|| group.massUnits() <= 0L) {
 				throw new IllegalArgumentException("Invalid granular deposit snapshot group");
@@ -414,6 +438,7 @@ public final class GranularStateSnapshot {
 	) { }
 
 	public int sizeX() { return sizeX; }
+	public SpatialGrid grid() { return grid; }
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public String registryFingerprint() { return registryFingerprint; }

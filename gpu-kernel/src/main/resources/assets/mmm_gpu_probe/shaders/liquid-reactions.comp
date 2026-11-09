@@ -129,12 +129,12 @@ bool same(int a, int b) {
 }
 double ethanolMassFor(int r,int64_t quanta){
     if(material(r)!=caloricHeaderWord(CAL_AQUEOUS_MATERIAL)||caloricHeaderWord(CAL_ETHANOL_SPECIES)<0)return 0.0;
-    return caloricEthanolMass(double(mass(r))*MASS_UNIT_KG,double(quanta));
+    return caloricEthanolMass(double(mass(r))*MASS_UNIT_KG,double(quanta),readDouble(headerWord(H_CALORIC_HEADER)+CAL_ETHANOL_MOLAR_MASS));
 }
 double ethanolColdCorrection(int r,int64_t quanta){
     int m=material(r);double cold=readDouble(headerWord(H_CALORIC_HEADER)+CAL_MINIMUM_TEMPERATURE);
     double waterCold=readDouble(caloricHeaderWord(CAL_COLD_SENSIBLE)+2*m);
-    return ethanolMassFor(r,quanta)*((cold-readDouble(caloricHeaderWord(CAL_REFERENCE_TEMPERATURE)+2*m))*CAL_ETHANOL_CP-waterCold);
+    return ethanolMassFor(r,quanta)*((cold-readDouble(caloricHeaderWord(CAL_REFERENCE_TEMPERATURE)+2*m))*readDouble(headerWord(H_CALORIC_HEADER)+CAL_ETHANOL_HEAT_CAPACITY)-waterCold);
 }
 int64_t rowEthanol(int r){int s=caloricHeaderWord(CAL_ETHANOL_SPECIES);return s<0?0l:dense(r,s);}
 double baseCold(int r) {
@@ -232,7 +232,7 @@ double capacityAt(int r, double t) {
     while (segment < last && t >= readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * segment))
         segment++;
     double total=double(mass(r))*MASS_UNIT_KG;
-    return caloricCapacity(total,ethanolMassFor(r,rowEthanol(r)),readDouble(caloricHeaderWord(CAL_SEGMENT_CAPACITY)+2*segment));
+    return caloricCapacity(total,ethanolMassFor(r,rowEthanol(r)),readDouble(caloricHeaderWord(CAL_SEGMENT_CAPACITY)+2*segment),readDouble(headerWord(H_CALORIC_HEADER)+CAL_ETHANOL_HEAT_CAPACITY));
 }
 double sensibleAboveCold(int r, double t) {
     int m = material(r), first = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
@@ -246,7 +246,7 @@ double sensibleAboveCold(int r, double t) {
     }
     double total=double(mass(r))*MASS_UNIT_KG,ethanol=ethanolMassFor(r,rowEthanol(r));
     double minimum=readDouble(headerWord(H_CALORIC_HEADER)+CAL_MINIMUM_TEMPERATURE);
-    return (total-ethanol)*sum+ethanol*CAL_ETHANOL_CP*(t-minimum);
+    return (total-ethanol)*sum+ethanol*readDouble(headerWord(H_CALORIC_HEADER)+CAL_ETHANOL_HEAT_CAPACITY)*(t-minimum);
 }
 int progress(int field) { return int(words[headerWord(H_PROGRESS) + 16 + field]); }
 int finiteRuleOrdinal(int ruleIndex) {

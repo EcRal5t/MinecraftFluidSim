@@ -53,10 +53,9 @@ final class GranularFaceVolumes {
 					if (x < 0 || x >= domain.sizeX + (axis == 0 ? 1 : 0)
 							|| y < 0 || y >= domain.sizeY + (axis == 1 ? 1 : 0)
 							|| z < 0 || z >= domain.sizeZ + (axis == 2 ? 1 : 0)) continue;
-					if (axis == 0 && (x == 0 || x == domain.sizeX)
-							|| axis == 1 && (y == 0 || y == domain.sizeY)
-							|| axis == 2 && (z == 0 || z == domain.sizeZ)) continue;
-					int local = local(axis, x, y, z);
+					int global=domain.grid.faceAt(x,y,z,axis);
+					if(global<0||domain.grid.faceLeft(global)<0||domain.grid.faceRight(global)<0)continue;
+					int local=global-domain.grid.faceOffset(axis);
 					double weight = (dx == 0 ? 1 - px + x0 : px - x0)
 							* (dy == 0 ? 1 - py + y0 : py - y0) * (dz == 0 ? 1 - pz + z0 : pz - z0)
 							* geometric(axis, local);
@@ -99,23 +98,12 @@ final class GranularFaceVolumes {
 	double solidArea(int face){return Math.max(0,fixedPore[face]-liquid[face]);}
 
 	private int length(int axis) { return axis == 0 ? domain.mac.velocityX.length : axis == 1 ? domain.mac.velocityY.length : domain.mac.velocityZ.length; }
-	private int local(int axis, int x, int y, int z) { return axis == 0 ? domain.domainFlowFields.xFaceIndex(x, y, z) : axis == 1 ? domain.domainFlowFields.yFaceIndex(x, y, z) : domain.domainFlowFields.zFaceIndex(x, y, z); }
-	private int rightCell(int axis, int local) {
-		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
-		return domain.domainFlowFields.cellIndex(local % nx, local / nx % ny, local / (nx * ny));
-	}
 	private double geometric(int axis, int local) {
-		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
-		int x = local % nx, y = local / nx % ny, z = local / (nx * ny);
-		return axis == 0 ? domain.geometry.cutCells.xFaceOpen(x, y, z)
-				: axis == 1 ? domain.geometry.cutCells.yFaceOpen(x, y, z) : domain.geometry.cutCells.zFaceOpen(x, y, z);
+		return domain.geometry.cutCells.openFaceField(axis)[local];
 	}
 	private double fixedFraction(int axis, int local) {
-		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
-		int x = local % nx, y = local / nx % ny, z = local / (nx * ny);
-		if (axis == 0 && (x == 0 || x == domain.sizeX) || axis == 1 && (y == 0 || y == domain.sizeY)
-				|| axis == 2 && (z == 0 || z == domain.sizeZ)) return 0;
-		int right = domain.domainFlowFields.cellIndex(x, y, z), left = right - (axis == 0 ? 1 : axis == 1 ? domain.sizeX : domain.sizeX * domain.sizeY);
+		int global=domain.grid.faceOffset(axis)+local,right=domain.grid.faceRight(global),left=domain.grid.faceLeft(global);
+		if(left<0||right<0)return 0;
 		double a = domain.geometry.cutCells.openCellVolume(left), b = domain.geometry.cutCells.openCellVolume(right);
 		if (!(a > 0 && b > 0) || fixedVolume[left] >= a || fixedVolume[right] >= b) return 1;
 		// The dual control volume contains half of each adjacent cell. Its fixed

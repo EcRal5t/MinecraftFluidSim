@@ -78,8 +78,7 @@ final class VulkanGasGeometry implements AutoCloseable {
         double h3=cellSize*cellSize*cellSize;
         if(scratchBase<totals.endOffset()||alignment<8||(alignment&(alignment-1))!=0||!(cellSize>0&&h3>0&&Double.isFinite(h3)))
             throw new IllegalArgumentException("Invalid gas geometry layout");
-        int cells=totals.source().cellCount(),sx=totals.source().sizeX(),sy=totals.source().sizeY(),sz=totals.source().sizeZ();
-        int faces=Math.toIntExact((long)(sx+1)*sy*sz+(long)sx*(sy+1)*sz+(long)sx*sy*(sz+1));
+        int cells=totals.source().cellCount(),faces=totals.source().grid().faceCount();
         long[] cursor={scratchBase};
         var header=column(cursor,64,4,alignment);var presence=column(cursor,cells,4,alignment);
         var volumes=column(cursor,cells,8,alignment);var masks=column(cursor,cells,4,alignment);

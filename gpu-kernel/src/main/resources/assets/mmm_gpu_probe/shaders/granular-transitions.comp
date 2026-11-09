@@ -64,6 +64,7 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+// SPATIAL_GRID
 int headerValue(int i) {
     return int(words[p.header + i]);
 }
@@ -122,18 +123,10 @@ void writeVector(int a, int i, dvec3 v) {
 ivec3 gridDimensions() {
     return ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z));
 }
-int cell(ivec3 c) {
-    return (c.z * headerValue(H_SIZE_Y) + c.y) * headerValue(H_SIZE_X) + c.x;
-}
-ivec3 cellCoordinates(int c) {
-    return ivec3(c % headerValue(H_SIZE_X), c / headerValue(H_SIZE_X) % headerValue(H_SIZE_Y), c / (headerValue(H_SIZE_X) * headerValue(H_SIZE_Y)));
-}
-ivec3 positionCell(dvec3 x) {
-    return clamp(ivec3(floor(x / p.cellSize)), ivec3(0), gridDimensions() - 1);
-}
-int columnOf(int c) {
-    return c % headerValue(H_SIZE_X) + c / (headerValue(H_SIZE_X) * headerValue(H_SIZE_Y)) * headerValue(H_SIZE_X);
-}
+int cell(ivec3 c) { return gridCell(c); }
+ivec3 cellCoordinates(int c) { return gridPosition(c); }
+ivec3 positionCell(dvec3 x) { return clamp(ivec3(floor(x / p.cellSize)), ivec3(0), gridDimensions() - 1); }
+int columnOf(int c) { return gridColumn(c); }
 int activeCount() {
     return int(words[sourceFieldOffset(GRANULAR_COUNTS)]);
 }
@@ -149,7 +142,7 @@ int sourceCell(int row) {
                                         : int(words[sourceFieldOffset(GRANULAR_DEPOSIT_CELL) + row - headerValue(H_PARTICLE_CAPACITY)]);
 }
 bool activeCell(int cellIndex) {
-    return headerValue(H_ACTIVITY_CELLS) < 0 || words[headerValue(H_ACTIVITY_CELLS) + cellIndex] != 0u;
+    return cellIndex >= 0 && (headerValue(H_ACTIVITY_CELLS) < 0 || words[headerValue(H_ACTIVITY_CELLS) + cellIndex] != 0u);
 }
 int columnRow(int e) {
     return readFieldInt(FIELD_COLUMN_ENTRIES, e);
@@ -204,6 +197,7 @@ bool hasBedAbove(int c) {
     ivec3 q = cellCoordinates(c);
     for (int y = q.y; y + 1 < headerValue(H_SIZE_Y); y++) {
         int lower = cell(ivec3(q.x, y, q.z)), upper = cell(ivec3(q.x, y + 1, q.z));
+        if (lower < 0 || upper < 0) break;
         uint lowerOpen = (~words[headerValue(H_MASKS) + lower] & MICROCELL_TOP_MASK) >> 2;
         uint upperOpen = ~words[headerValue(H_MASKS) + upper] & MICROCELL_BOTTOM_MASK;
         if ((lowerOpen & upperOpen) == 0u)
@@ -214,7 +208,7 @@ bool hasBedAbove(int c) {
     return false;
 }
 bool exposedSurface(int c) {
-    return read(FIELD_CELL_BULK, c) > 0.0 && !hasBedAbove(c);
+    return c >= 0 && read(FIELD_CELL_BULK, c) > 0.0 && !hasBedAbove(c);
 }
 bool sphereFits(dvec3 position, double radius, int exclude) {
     if (any(lessThan(position, dvec3(radius))) || any(greaterThan(position, dvec3(gridDimensions()) * p.cellSize - radius)))
@@ -224,7 +218,8 @@ bool sphereFits(dvec3 position, double radius, int exclude) {
         for (int y = low.y; y <= high.y; y++)
             for (int x = low.x; x <= high.x; x++) {
                 ivec3 c = ivec3(x, y, z);
-                uint mask = words[headerValue(H_MASKS) + cell(c)];
+                int index = cell(c);
+                uint mask = index < 0 ? 255u : words[headerValue(H_MASKS) + index];
                 for (int bit = 0; bit < 8; bit++)
                     if ((mask & (1u << bit)) != 0u) {
                         dvec3 lo = (dvec3(c) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize,
@@ -237,7 +232,8 @@ bool sphereFits(dvec3 position, double radius, int exclude) {
     // avoids simultaneous release overlap across independently processed columns.
     for (int z = max(0, low.z - 1); z <= min(headerValue(H_SIZE_Z) - 1, high.z + 1); z++)
         for (int x = max(0, low.x - 1); x <= min(headerValue(H_SIZE_X) - 1, high.x + 1); x++) {
-            int col = z * headerValue(H_SIZE_X) + x;
+            int col = gridColumnAt(x,z);
+            if (col < 0) continue;
             for (int e = readFieldInt(FIELD_COLUMN_OFFSETS, col); e < readFieldInt(FIELD_COLUMN_OFFSETS, col + 1); e++) {
                 int row = columnRow(e);
                 if (row >= headerValue(H_PARTICLE_CAPACITY) || row == exclude)
@@ -256,7 +252,8 @@ bool bedFits(int c, double b, int excluded) {
     double top = bedHeight(c, b);
     for (int z = max(0, q.z - 1); z <= min(headerValue(H_SIZE_Z) - 1, q.z + 1); z++)
         for (int x = max(0, q.x - 1); x <= min(headerValue(H_SIZE_X) - 1, q.x + 1); x++) {
-            int col = z * headerValue(H_SIZE_X) + x;
+            int col = gridColumnAt(x,z);
+            if (col < 0) continue;
             for (int e = readFieldInt(FIELD_COLUMN_OFFSETS, col); e < readFieldInt(FIELD_COLUMN_OFFSETS, col + 1); e++) {
                 int row = columnRow(e);
                 if (row >= headerValue(H_PARTICLE_CAPACITY) || row == excluded)
@@ -279,7 +276,8 @@ bool pathOpen(dvec3 a, dvec3 b, double radius) {
         for (int y = low.y; y <= high.y; y++)
             for (int x = low.x; x <= high.x; x++) {
                 ivec3 c = ivec3(x, y, z);
-                uint mask = words[headerValue(H_MASKS) + cell(c)];
+                int index = cell(c);
+                uint mask = index < 0 ? 255u : words[headerValue(H_MASKS) + index];
                 for (int bit = 0; bit < 8; bit++)
                     if ((mask & (1u << bit)) != 0u) {
                         dvec3 lo = (dvec3(c) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize -
@@ -310,7 +308,8 @@ void cellState(int c, double bulk, double kilograms, double solid) {
 }
 void settleColumn(int column) {
     bool changed = false;
-    int x = column % headerValue(H_SIZE_X), z = column / headerValue(H_SIZE_X);
+    ivec2 columnPosition = gridColumnPosition(column);
+    int x = columnPosition.x, z = columnPosition.y;
     for (int e = readFieldInt(FIELD_COLUMN_OFFSETS, column); e < readFieldInt(FIELD_COLUMN_OFFSETS, column + 1); e++) {
         int row = columnRow(e);
         if (row >= headerValue(H_PARTICLE_CAPACITY) || !activeCell(sourceCell(row)))
@@ -321,6 +320,7 @@ void settleColumn(int column) {
         int particleCellY = int(floor(position.y / p.cellSize));
         for (int y = 0; y <= min(particleCellY, headerValue(H_SIZE_Y) - 1); y++) {
             int c = cell(ivec3(x, y, z));
+            if (c < 0) continue;
             if (read(FIELD_CELL_BULK, c) > 0.0)
                 support = max(support, bedHeight(c, read(FIELD_CELL_BULK, c)));
             uint mask = words[headerValue(H_MASKS) + c];
@@ -367,7 +367,7 @@ void settleColumn(int column) {
     }
     bool allActive = true;
     for (int y = 0; y < headerValue(H_SIZE_Y); y++)
-        allActive = allActive && activeCell(cell(ivec3(x, y, z)));
+        { int c=cell(ivec3(x,y,z)); if(c>=0) allActive = allActive && activeCell(c); }
     words[targetFieldOffset(GRANULAR_STABLE_AGE) + column] = allActive
                                                 ? (changed ? 0u : min(20u, words[sourceFieldOffset(GRANULAR_STABLE_AGE) + column] + 1u))
                                                 : words[sourceFieldOffset(GRANULAR_STABLE_AGE) + column];
@@ -397,7 +397,7 @@ void relaxSurface(int from, int to, int sourceCellIndex) {
     if (takenMass <= 0l)
         return;
     ivec3 sourceCoord = cellCoordinates(sourceCellIndex);
-    ivec2 targetColumn = ivec2(to % headerValue(H_SIZE_X), to / headerValue(H_SIZE_X));
+    ivec2 targetColumn = gridColumnPosition(to);
     double sourceHeight = bedHeight(sourceCellIndex, read(FIELD_CELL_BULK, sourceCellIndex));
     double radius = sphereRadius(movedVolume), lowestHeight = sourceHeight;
     dvec3 start = (dvec3(sourceCoord) + .5) * p.cellSize;
@@ -405,6 +405,7 @@ void relaxSurface(int from, int to, int sourceCellIndex) {
     int targetCell = -1;
     for (int y = sourceCoord.y; y >= 0; y--) {
         int c = cell(ivec3(targetColumn.x, y, targetColumn.y));
+        if (c < 0) continue;
         double bulk = read(FIELD_CELL_BULK, c), newBulk = bulk + bulkPortion(row, movedVolume);
         if (!activeCell(c) || newBulk > read(FIELD_AVAILABLE_BULK, c) || hasBedAbove(c))
             continue;
@@ -442,32 +443,25 @@ void relaxSurface(int from, int to, int sourceCellIndex) {
 }
 void relaxPair(int column) {
     int axis = p.color / 2, parity = p.color % 2;
-    ivec2 a = ivec2(column % headerValue(H_SIZE_X), column / headerValue(H_SIZE_X));
+    ivec2 a = gridColumnPosition(column);
     if ((a[axis] & 1) != parity)
         return;
     ivec2 b = a;
     b[axis]++;
     if (b.x >= headerValue(H_SIZE_X) || b.y >= headerValue(H_SIZE_Z))
         return;
-    int other = b.y * headerValue(H_SIZE_X) + b.x;
+    int other = gridColumnAt(b.x,b.y);
+    if (other < 0) return;
     for (int y = headerValue(H_SIZE_Y) - 1; y >= 0; y--) {
         relaxSurface(column, other, cell(ivec3(a.x, y, a.y)));
         relaxSurface(other, column, cell(ivec3(b.x, y, b.y)));
     }
 }
-int nx() {
-    return (headerValue(H_SIZE_X) + 1) * headerValue(H_SIZE_Y) * headerValue(H_SIZE_Z);
-}
-int ny() {
-    return headerValue(H_SIZE_X) * (headerValue(H_SIZE_Y) + 1) * headerValue(H_SIZE_Z);
-}
-int faceAt(int axis, ivec3 c) {
-    ivec3 d = gridDimensions();
-    d[axis]++;
-    return (axis == 0 ? 0 : axis == 1 ? nx() : nx() + ny()) + (c.z * d.y + c.y) * d.x + c.x;
-}
+int nx() { return gridFaceOffset(1); }
+int ny() { return gridFaceOffset(2) - gridFaceOffset(1); }
+int faceAt(int axis, ivec3 c) { return gridFaceAt(c,axis); }
 double faceComponent(int f, int k) {
-    return readDouble(headerValue(H_FACES) + 2 * (FACE_RECORD_COMPONENTS * f + k));
+    return f < 0 ? 0.0 : readDouble(headerValue(H_FACES) + 2 * (FACE_RECORD_COMPONENTS * f + k));
 }
 void writeFaceComponent(int f, int k, double x) {
     writeDouble(headerValue(H_FACES) + 2 * (FACE_RECORD_COMPONENTS * f + k), x);
@@ -618,7 +612,7 @@ void wakeSurface(int column, int c) {
     atomicAdd(words[fieldOffset(FIELD_CONTROL) + 4], 1u);
 }
 void wakeColumn(int column) {
-    ivec2 xy = ivec2(column % headerValue(H_SIZE_X), column / headerValue(H_SIZE_X));
+    ivec2 xy = gridColumnPosition(column);
     if ((xy.x & 1) + 2 * (xy.y & 1) != p.color)
         return;
     for (int y = headerValue(H_SIZE_Y) - 1; y >= 0; y--)
@@ -788,7 +782,7 @@ void main() {
     if (p.stage == STAGE_INITIALIZE) {
         if (id < 12)
             writeFieldInt(FIELD_CONTROL, id, 0);
-        if (id < headerValue(H_SIZE_X) * headerValue(H_SIZE_Z)) {
+        if (id < gridColumns()) {
             writeFieldInt(FIELD_COLUMN_COUNTS, id, 0);
             writeFieldInt(FIELD_COLUMN_CURSORS, id, 0);
         }
@@ -821,7 +815,9 @@ void main() {
     if (p.stage == STAGE_COUNT_COLUMNS) {
         if (!live(id))
             return;
-        int c = sourceCell(id), col = columnOf(c);
+        int c = sourceCell(id);
+        if (c < 0) { reportInvalidState(); return; }
+        int col = columnOf(c);
         writeFieldInt(FIELD_MODE, id, id < headerValue(H_PARTICLE_CAPACITY) ? MODE_ACTIVE : MODE_DEPOSIT);
         writeFieldInt(FIELD_TARGET, id, c);
         atomicAdd(words[fieldOffset(FIELD_COLUMN_COUNTS) + col], 1u);
@@ -830,7 +826,9 @@ void main() {
     if (p.stage == STAGE_SCATTER_COLUMNS) {
         if (!live(id))
             return;
-        int col = columnOf(sourceCell(id)), slot = int(atomicAdd(words[fieldOffset(FIELD_COLUMN_CURSORS) + col], 1u));
+        int c = sourceCell(id);
+        if (c < 0) { reportInvalidState(); return; }
+        int col = columnOf(c), slot = int(atomicAdd(words[fieldOffset(FIELD_COLUMN_CURSORS) + col], 1u));
         writeFieldInt(FIELD_COLUMN_ENTRIES, readFieldInt(FIELD_COLUMN_OFFSETS, col) + slot, id);
         return;
     }

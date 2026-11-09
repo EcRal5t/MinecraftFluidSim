@@ -12,6 +12,7 @@ import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularPhaseTransferEngine;
 import mmm.units.SolverUnitScale;
 import java.util.List;
+import mmm.spatial.SpatialGrid;
 import mmm.units.SignedDyadic;
 import mmm.chemistry.ChemicalTransferLedger;
 import java.util.ArrayList;
@@ -52,6 +53,8 @@ public final class HostFluidState {
 	final int sizeY;
 	final int sizeZ;
 	final int cellCount;
+	final SpatialGrid grid;
+	final FluidDefinitions definitions;
 	final FluidSolverConfig config;
 	final SolverUnitScale unitScale;
 	final DomainGeometry geometry;
@@ -121,26 +124,36 @@ public final class HostFluidState {
 	final DomainCapabilities domainCapabilities = new DomainCapabilities(this);
 	final DomainPhaseInventory domainPhaseInventory = new DomainPhaseInventory(this);
 
-	public HostFluidState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
-		this(sizeX,sizeY,sizeZ,config,null);
+	public HostFluidState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,FluidDefinitions definitions) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),config,definitions,null);
 	}
-	HostFluidState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, FixedGeometrySnapshot fixedGeometry) {
+	HostFluidState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,FluidDefinitions definitions, FixedGeometrySnapshot fixedGeometry) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),config,definitions,fixedGeometry);
+	}
+	public HostFluidState(SpatialGrid grid, FluidSolverConfig config,FluidDefinitions definitions) {
+		this(grid,config,definitions,null);
+	}
+	HostFluidState(SpatialGrid grid, FluidSolverConfig config,FluidDefinitions definitions, FixedGeometrySnapshot fixedGeometry) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("All dimensions must be at least two cells");
+		this.grid=grid;
+		this.definitions=java.util.Objects.requireNonNull(definitions);
+		this.gasState.network=new AirNetwork(definitions.gas());
 		this.sizeX = sizeX;
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
-		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		this.cellCount = grid.cellCount();
 		this.config = config;
 		this.unitScale = SolverUnitScale.forCellSize(config.cellSize());
 		HostFluidState domain = this;
 		this.gasBoundary = new GasPressureBoundary(domain);
 		this.liquidCells = new LiquidCellInventory(cellCount, null);
 
-		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, fixedGeometry);
+		this.geometry = new DomainGeometry(grid, fixedGeometry);
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
 		this.liquidGrid = new CellLiquidGrid(cellCount);
 		this.volume = new float[cellCount];
-		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
+		this.mac = new MacVelocityGrid(grid);
 		this.cellMacStage = new CellMacStage(domain);
 		this.tension = new SurfaceTensionFields(this);
 		this.pendingPhaseMotion = new PendingPhaseMotionWork(cellCount);
@@ -159,7 +172,7 @@ public final class HostFluidState {
 						}
 
 	// External observations and operations.
-	public void bindMaterialDefinitions(MaterialRegistry definitions) { LiquidMaterialBinding.bind(this, definitions); }
+	public void bindMaterialDefinitions(MaterialRegistry definitions) { LiquidMaterialBinding.bind(this, this.definitions.material(definitions)); }
 	public LiquidCellInventory.Snapshot exportLiquidCellState() { return liquidCells.snapshot(); }
 	/** Impulse exerted by fixed walls on liquid during the latest logical step, in kg*m/s. */
 	public double lastLiquidBoundaryImpulseX() { return lastLiquidBoundaryImpulseX; }
@@ -317,10 +330,9 @@ public final class HostFluidState {
 	public float setSolid(int x, int y, int z, boolean value) { return domainCollision.setSolid(x, y, z, value); }
 	public float setSolidMicroMask(int x, int y, int z, int mask) { return domainCollision.setSolidMicroMask(x, y, z, mask); }
 	public FlipChemicalParticleState exportChemicalParticleState() { return domainCollision.exportChemicalParticleState(); }
-	public ChemicalDisplacement setSolidMicroMaskChemical(int x, int y, int z, int mask) { return domainCollision.setSolidMicroMaskChemical(x, y, z, mask); }
-	public MaterialDisplacement setSolidMicroMaskMaterial(int x, int y, int z, int mask) { return domainCollision.setSolidMicroMaskMaterial(x, y, z, mask); }
 	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) { return domainCollision.planCollisionEdits(edits); }
 	public void beginCollisionEdits(CollisionEditPlan plan) { domainCollision.beginCollisionEdits(plan); }
+	public float applyCollisionEdits(List<CollisionEdit> edits) { return domainCollision.applyCollisionEdits(edits); }
 	public boolean isSolid(int x, int y, int z) { return domainCollision.isSolid(x, y, z); }
 	public int solidMicroMask(int x, int y, int z) { return domainCollision.solidMicroMask(x, y, z); }
 	public float solidVolumeFraction(int x, int y, int z) { return domainCollision.solidVolumeFraction(x, y, z); }
@@ -347,7 +359,11 @@ public final class HostFluidState {
 	public double containerExtractableVolumeNear(int x, int y, int z, int radius, int material) {
 		return transferPlanner.extractableVolume(x, y, z, radius, material);
 	}
-	public void bindMaterialRegistry(FluidMaterialRegistry registry) { domainCollision.bindMaterialRegistry(registry); }
+	public void bindMaterialRegistry(FluidMaterialRegistry registry) {
+		for (var material : registry.materials()) if (!definitions.material().entry(material.id()).material().equals(material))
+			throw new IllegalArgumentException("Liquid material differs from world definition: " + material.id());
+		domainCollision.bindMaterialRegistry(registry);
+	}
 	public float maximumParticleSpeed() { return domainCollision.maximumParticleSpeed(); }
 	public float maximumPressure() { return domainCollision.maximumPressure(); }
 	public byte[] copyQuantizedVolume() { return domainCollision.copyQuantizedVolume(); }
@@ -362,22 +378,22 @@ public final class HostFluidState {
 	public RegionChemistry chemistry() { return domainCapabilities.chemistry(); }
 	public ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() { return domainCapabilities.copyChemicalDisplaySnapshot(); }
 	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) { return domainCapabilities.chemicalLedgerForMarkerRange(fromInclusive, toExclusive); }
-	public void bindChemistry(ChemicalRegistry registry) { domainCapabilities.bindChemistry(registry); }
+	public void bindChemistry(ChemicalRegistry registry) { domainCapabilities.bindChemistry(definitions.chemistry(registry)); }
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
-	) { domainCapabilities.bindThermal(registry, liquidRegistry, initialTemperatureK); }
+	) { domainCapabilities.bindThermal(definitions.thermal(registry), liquidRegistry, initialTemperatureK); }
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK,
 			int maximumTransportSubsteps
-	) { domainCapabilities.bindThermal(registry, liquidRegistry, initialTemperatureK, maximumTransportSubsteps); }
+	) { domainCapabilities.bindThermal(definitions.thermal(registry), liquidRegistry, initialTemperatureK, maximumTransportSubsteps); }
 	public void restoreThermalParticleState(
 			FlipThermalParticleState state, ThermalRegistry registry
-	) { domainCapabilities.restoreThermalParticleState(state, registry); }
+	) { domainCapabilities.restoreThermalParticleState(state, definitions.thermal(registry)); }
 	public void restoreThermalParticleState(
 			FlipThermalParticleState state, ThermalRegistry registry, int maximumTransportSubsteps
-	) { domainCapabilities.restoreThermalParticleState(state, registry, maximumTransportSubsteps); }
-	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry, int maximumTransportSubsteps) { domainCapabilities.restoreThermalOwnerState(state, registry, maximumTransportSubsteps); }
-	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry) { domainCapabilities.restoreThermalOwnerState(state, registry); }
+	) { domainCapabilities.restoreThermalParticleState(state, definitions.thermal(registry), maximumTransportSubsteps); }
+	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry, int maximumTransportSubsteps) { domainCapabilities.restoreThermalOwnerState(state, definitions.thermal(registry), maximumTransportSubsteps); }
+	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry) { domainCapabilities.restoreThermalOwnerState(state, definitions.thermal(registry)); }
 	public ThermalOwnerSnapshot exportThermalOwnerState() { return domainCapabilities.exportThermalOwnerState(); }
 	public FlipThermalParticleState exportThermalParticleState() { return domainCapabilities.exportThermalParticleState(); }
 	public void setThermalTemperatureInCell(int x, int y, int z, double temperatureK) { domainCapabilities.setThermalTemperatureInCell(x, y, z, temperatureK); }
@@ -397,6 +413,8 @@ public final class HostFluidState {
 	public double totalCoherentMass() { return domainCapabilities.totalCoherentMass(); }
 	public boolean replaceThermalBoundaryTemperatures(double[] temperaturesK) { return domainCapabilities.replaceThermalBoundaryTemperatures(temperaturesK); }
 	public int sizeX() { return domainPhaseInventory.sizeX(); }
+	public SpatialGrid grid() { return grid; }
+	public FluidDefinitions definitions() { return definitions; }
 	public int sizeY() { return domainPhaseInventory.sizeY(); }
 	public int sizeZ() { return domainPhaseInventory.sizeZ(); }
 	public int particleCount() { return domainPhaseInventory.particleCount(); }
@@ -411,12 +429,11 @@ public final class HostFluidState {
 	}
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) { domainPhaseInventory.setGasNodeStandardVolume(nodeId, standardVolume); }
 	public void sealDomainBoundary() { domainPhaseInventory.sealDomainBoundary(); }
-	public void bindGasRegistry(GasRegistry registry) { domainPhaseInventory.bindGasRegistry(registry); }
+	public void bindGasRegistry(GasRegistry registry) { domainPhaseInventory.bindGasRegistry(definitions.gas(registry)); }
 	public void resetAmbientGas() { DomainGasInventory.resetAmbient(this); }
-	public GasStateSnapshot bootstrapGasState(String chemicalRegistryFingerprint) { return domainPhaseInventory.bootstrapGasState(chemicalRegistryFingerprint); }
-	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) { domainPhaseInventory.restoreGasState(state, registry); }
-	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) { domainPhaseInventory.restoreGasState(state, registry, thermal); }
-	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, mmm.thermal.ThermalOwnerSnapshot thermal) { domainPhaseInventory.restoreGasState(state, registry, thermal); }
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry) { domainPhaseInventory.restoreGasState(state, definitions.gas(registry)); }
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) { domainPhaseInventory.restoreGasState(state, definitions.gas(registry), thermal); }
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, mmm.thermal.ThermalOwnerSnapshot thermal) { domainPhaseInventory.restoreGasState(state, definitions.gas(registry), thermal); }
 	public boolean gasPressureActive() { return domainPhaseInventory.gasPressureActive(); }
 	public double gasNodeTemperatureK(int nodeId) { return domainPhaseInventory.gasNodeTemperatureK(nodeId); }
 	public double gasNodeGaugePressurePa(int nodeId) { return domainPhaseInventory.gasNodeGaugePressurePa(nodeId); }
@@ -480,11 +497,11 @@ public final class HostFluidState {
 	public RegionChemistry.ReactionStats lastChemicalReactionStats() { return domainPhaseInventory.lastChemicalReactionStats(); }
 	public void setPrecipitationEnabled(boolean enabled) { domainPhaseInventory.setPrecipitationEnabled(enabled); }
 	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
-			MaterialRegistry materialDefinitions) { domainPhaseInventory.bindGranular(registry, liquidRegistry, materialDefinitions); }
+			MaterialRegistry materialDefinitions) { domainPhaseInventory.bindGranular(definitions.granular(registry), liquidRegistry, definitions.material(materialDefinitions)); }
 	public void restoreGranularState(
 			GranularStateSnapshot snapshot, GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
 			MaterialRegistry materialDefinitions
-	) { domainPhaseInventory.restoreGranularState(snapshot, registry, liquidRegistry, materialDefinitions); }
+	) { domainPhaseInventory.restoreGranularState(snapshot, definitions.granular(registry), liquidRegistry, definitions.material(materialDefinitions)); }
 	public GranularInsertion tryInsertExactGranular(
 			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,
 			long solidVolumeSvq, long massUnits

@@ -52,13 +52,7 @@ public record FluidRegionFootprint(
 				|| minimumInterior.getZ() > maximumInterior.getZ()) {
 			throw new IllegalArgumentException("Invalid controller-region bounds");
 		}
-		for (int chunkZ = minimumInterior.getZ() >> 4; chunkZ <= maximumInterior.getZ() >> 4; chunkZ++) {
-			for (int chunkX = minimumInterior.getX() >> 4; chunkX <= maximumInterior.getX() >> 4; chunkX++) {
-				if (!requiredChunks.contains(ChunkPos.pack(chunkX, chunkZ))) {
-					throw new IllegalArgumentException("Required chunks must cover the complete dense solver bounds");
-				}
-			}
-		}
+
 	}
 
 	public FluidRegionFootprint withReturnedBlocks(Set<Long> returned) {
@@ -102,10 +96,6 @@ public record FluidRegionFootprint(
 
 	public int blockSizeZ() {
 		return Math.addExact(Math.subtractExact(maximumInterior.getZ(), minimumInterior.getZ()), 1);
-	}
-
-	public long denseBlockCapacity() {
-		return Math.multiplyExact(Math.multiplyExact((long) blockSizeX(), blockSizeY()), blockSizeZ());
 	}
 
 	public boolean requiresChunk(int chunkX, int chunkZ) {

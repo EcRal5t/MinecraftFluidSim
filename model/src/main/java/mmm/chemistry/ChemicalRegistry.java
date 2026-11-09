@@ -198,11 +198,20 @@ public final class ChemicalRegistry {
 					.append(Integer.toUnsignedString(definition.baseArgb())).append('|')
 					.append(definition.diffusivityM2PerS() == null ? "" : Double.toHexString(definition.diffusivityM2PerS())).append('|')
 					.append(definition.effectiveVolumeM3PerMol() == null ? "" : Double.toHexString(definition.effectiveVolumeM3PerMol())).append('|');
+			var liquid = definition.liquidProperties();
+			if (liquid != null) out.append("liquid|").append(Double.toHexString(liquid.referenceDensityKgPerM3())).append('|')
+					.append(Double.toHexString(liquid.heatCapacityJPerKgK())).append('|')
+					.append(Double.toHexString(liquid.conductivityWPerMK())).append('|')
+					.append(Double.toHexString(liquid.viscosityPaS())).append('|');
 			appendMap(out, definition.composition());
 		}
 		for (ChemicalPhaseDefinition definition : phases) {
 			out.append("P|").append(definition.id()).append('|').append(definition.materialId()).append('|')
 					.append(String.join(",", definition.allowedSpecies())).append('|');
+			var correction=definition.viscosityCorrection();
+			if(correction!=null)out.append("viscosity|").append(Double.toHexString(correction.a())).append('|')
+					.append(Double.toHexString(correction.b())).append('|').append(Double.toHexString(correction.maximumMolality())).append('|')
+					.append(Double.toHexString(correction.referenceTemperatureK())).append('|').append(Double.toHexString(correction.temperatureToleranceK())).append('|');
 			appendRationalMap(out, definition.defaultConcentrationMolPerCubicMeter());
 		}
 		for (ChemicalReaction definition : reactions) {

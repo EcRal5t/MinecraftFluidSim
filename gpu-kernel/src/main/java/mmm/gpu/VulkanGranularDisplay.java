@@ -31,7 +31,7 @@ final class VulkanGranularDisplay implements AutoCloseable {
             var samples=new java.util.ArrayList<mmm.granular.GranularDisplaySnapshot.ParcelSample>();
             for(int i=0;i<count;i++){int off=4+4*cells+8*i,a=b.getInt(off),v=b.getInt(off+4);samples.add(new mmm.granular.GranularDisplaySnapshot.ParcelSample(a&65535,a>>>16,v&65535,(v>>>16)&255,v>>>24));}
             var palette=state.definitions().materialIds().stream().map(id->new mmm.granular.GranularDisplaySnapshot.MaterialEntry(id,registry.material(registry.materialHandle(id)).baseArgb())).toList();
-            return new mmm.granular.GranularDisplaySnapshot(state.sizeX(),state.sizeY(),state.sizeZ(),h,registry.fingerprint(),palette,fill,porosity,material,samples);
+            return new mmm.granular.GranularDisplaySnapshot(state.grid(),h,registry.fingerprint(),palette,fill,porosity,material,samples);
         }
     }
     static Layout layout(VulkanGranularStateLayout state,VulkanGranularGeometry.Layout geometry,long base,long alignment){

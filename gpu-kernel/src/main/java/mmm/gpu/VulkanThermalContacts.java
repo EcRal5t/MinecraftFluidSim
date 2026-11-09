@@ -14,6 +14,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Actual inventory owners, spatial thermal samples, and finite-volume conduction contacts. */
 final class VulkanThermalContacts implements AutoCloseable {
+    static final int LIQUID_CALORIC_WORD=159;
     /** Header word positions shared with the shader. */
     private enum Header {
         LIQUID_CAPACITY(0),
@@ -96,7 +97,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         PLIC_CELLS(149),
         CONDUCTION_HEADER(151),
         ACTIVITY_CELLS(152), LIQUID_SPECIES_OFFSETS(153), LIQUID_SPECIES_HANDLES(154),
-        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158);
+        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158), LIQUID_CALORIC(LIQUID_CALORIC_WORD);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -109,7 +110,7 @@ final class VulkanThermalContacts implements AutoCloseable {
 
     private static final int WORK_FIELDS = 48;
     private static String shaderLayout() {
-        return headerDefines() + "#define ETHANOL_CONDUCTIVITY " + mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_CONDUCTIVITY_W_M_K + "LF\n" + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values())
+        return headerDefines() + VulkanLiquidThermodynamics.shaderLayout() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values())
             + "#define CONDUCTION_FIELDS " + VulkanThermalConduction.WORK_FIELDS + "\n"
             + VulkanShaderLayout.fields("CONDUCTION_", VulkanThermalConduction.Field.values());
     }
@@ -223,6 +224,7 @@ final class VulkanThermalContacts implements AutoCloseable {
             d[Header.AQUEOUS_MATERIAL.word]=input.liquidThermal().tables().aqueousMaterial();
             d[Header.ETHANOL_SPECIES.word]=input.liquidThermal().tables().ethanolSpecies();
             d[Header.PLIC_WALL_GEOMETRY.word]=wallGeometryWord;
+            d[Header.LIQUID_CALORIC.word]=Math.toIntExact(input.liquidThermal().header().offset()/4);
             for(Field f:Field.values())d[WORK_FIELDS+f.ordinal()]=word(f);
             var fields=new VulkanThermalConduction.Field[]{VulkanThermalConduction.Field.COUNTS,VulkanThermalConduction.Field.OWNER_ENERGY,VulkanThermalConduction.Field.OWNER_INITIAL_T,VulkanThermalConduction.Field.TERM_OFFSETS,VulkanThermalConduction.Field.TERM_MATERIAL,VulkanThermalConduction.Field.TERM_MASS,VulkanThermalConduction.Field.CONTACT_A,VulkanThermalConduction.Field.CONTACT_B,VulkanThermalConduction.Field.CONTACT_G,VulkanThermalConduction.Field.CONTACT_BATH_T};
             for(int i=0;i<fields.length;i++)d[Header.CONDUCTION_COUNTS.word+i]=conduction.word(fields[i]);d[Header.CONDUCTION_OWNER_CAPACITY.word]=conduction.owners;d[Header.CONDUCTION_TERM_CAPACITY.word]=conduction.terms;d[Header.CONDUCTION_CONTACT_CAPACITY.word]=conduction.contacts;

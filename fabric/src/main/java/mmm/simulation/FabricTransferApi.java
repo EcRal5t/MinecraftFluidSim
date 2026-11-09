@@ -128,7 +128,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			var before=ContainerItemMapper.fingerprint(actor.item());
 			var after=ContainerItemMapper.fingerprint(world.bindActualContainerProfile(outcome.stack()));
 			var settlement=journal(request,actor,region,before,after,ContainerItemMapper.fingerprint(operation.sourceStack()),outcome);
-			var manifest=ContainerTransferManifests.from(settlement);
+			var manifest=ContainerTransferManifests.from(settlement,world.resolveMaterial("mmm:water").referenceDensity());
 			long tick=tick();plans.values().removeIf(value->value.view().expiresAtServerTick()<tick);
 			if(plans.size()>=128) return result(TransferStatus.UNAVAILABLE,"Public transfer plan budget is full");
 			var view=new TransferPlan(UUID.randomUUID(),sessionId,tick+200,request,actor.state().instanceId(),actor.state().generation(),region.checkpointGeneration(),manifest);
@@ -194,7 +194,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			var entry=store.entry(operationId);
 			if(entry==null) return result(TransferStatus.RECEIPT_UNAVAILABLE,"Operation is unknown or outside the retained receipt range");
 			if(entry.state()==PublicTransferReceiptStore.State.PENDING) return result(TransferStatus.PENDING,"Operation awaits container WAL recovery");
-			var receipt=entry.receipt();
+			var receipt=entry.receipt(world.resolveMaterial("mmm:water").referenceDensity());
 			return new TransferResult(receipt.committed()?TransferStatus.COMMITTED:TransferStatus.NOT_COMMITTED,null,receipt,receipt.actorAfterGeneration(),"Durable operation receipt");
 		} catch(IOException | RuntimeException invalid) { return result(TransferStatus.UNAVAILABLE,detail(invalid)); }
 	}

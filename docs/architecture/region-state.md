@@ -193,11 +193,9 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 - 已提交 profile 要求的材料、化学、颗粒、气体、热能和相变后待机械推进格集合；
 - manifest、section 与各独立库存的总账和 CRC。
 
-所有 required payload 必须属于同一 region、dimension 和 generation。
-材料与物种索引绑定规范 palette 和注册表；平滑密度、PLIC、曲率、mesh 与 UI 读数由恢复后的库存派生。
-最近真实压力投影随 solver runtime 扩展保存，供后续力学推进使用。
-`PendingPhaseMotionCodec` 以 `mmm:pending_phase_motion` Manifest 扩展保存格总数和有序格索引，空集合省略扩展。
-集合恢复沿用 `PendingPhaseMotionState` 的网格与索引契约。完全汽化格可携带待推进标记，其气体、内能和空间归属由对应库存载荷恢复；正式 checkpoint 校验和域恢复采用同一格集合定义。
+所有必需载荷属于同一 region、dimension 和 generation。solver runtime 扩展保存空间块成员，恢复时按块坐标重建紧凑格网；液体记录使用 section 内格坐标，共享面动量使用轴和面坐标，颗粒沉积、凝聚物、反应待续和待推进相运动使用稳定格坐标。颗粒调度列按水平坐标恢复。完全汽化格的待推进标记与该格气体和内能一起保留，空待推进集合省略扩展。
+
+材料与物种索引绑定规范 palette 和注册表；平滑密度、PLIC、曲率、mesh 与 UI 读数由恢复后的库存派生。最近真实压力投影随 solver runtime 扩展保存，供后续力学推进使用。
 设备状态按代次导出完整库存；宿主编辑以私有副本规划后提交设备候选。
 液体几何身份随快照、候选和提交传递，仅体积或分量变化才更新；内能更新保留该身份。
 冷恢复同时读取保存的相占据与单元库存，核对容量和各固定连通分量的体积后重建派生几何。

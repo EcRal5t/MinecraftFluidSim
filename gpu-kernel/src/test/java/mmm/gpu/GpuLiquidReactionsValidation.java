@@ -20,12 +20,12 @@ public final class GpuLiquidReactionsValidation {
         for(int scenario=0;scenario<6;scenario++)run(device,scenario);
     }
     private static void run(int device,int scenario){
-        var chemistry=(scenario==0||scenario==5)?BuiltinChemicalDefinitions.REGISTRY:kineticRegistry(scenario);var baseGranular=BuiltinGranularDefinitions.createRegistry();
-        var granular=new mmm.granular.GranularRegistry(baseGranular.materials(),baseGranular.carriers(),baseGranular.reactions(),chemistry);var gas=BuiltinGasDefinitions.createRegistry();
+        var chemistry=(scenario==0||scenario==5)?mmm.fluid.TestFluidDefinitions.load().chemistry():kineticRegistry(scenario);var baseGranular=mmm.fluid.TestFluidDefinitions.load().granular();
+        var granular=new mmm.granular.GranularRegistry(baseGranular.materials(),baseGranular.carriers(),baseGranular.reactions(),chemistry);var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         var material=new ThermalMaterialDefinition("mmm:reaction_water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,0,0,
                 List.of(new ThermalMaterialDefinition.CaloricSegment(1,2000,4200)));
         var thermal=new ThermalRegistry(List.of(material),List.of(),List.of(),List.of(),chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
-        var fluid=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:water",0,90)));
+        var fluid=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:water",0,90, 0xff197ae8)));
         long initial=scenario==0?100:scenario==3?10:scenario==5?1_000_000:100_000;
         var initialSpecies=new java.util.TreeMap<Integer,Long>();
         if(scenario==5){
@@ -55,7 +55,7 @@ public final class GpuLiquidReactionsValidation {
             liquid.importState(bytes,inventory,momentum);
             if(scenario==4)bytes.putDouble(Math.toIntExact(speciesReference)+8*chemistry.speciesHandle("test:kinetic_b"),-.1);
             definitions.initialize(bytes);caloric.initializeHeaderAndTables(bytes);progress.initializeHeader(bytes);layout.initializeHeaderAndTables(bytes);
-            var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024);
+            var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024,liquid.grid());
             try {
                 storage.initialize(bytes,0);
                 for(int step=0;step<(scenario==0?2:scenario==5?3:100);step++){
@@ -74,7 +74,7 @@ public final class GpuLiquidReactionsValidation {
                         var saved=progress.export(column->checkpoint.duplicate().position(Math.toIntExact(column.offset())).slice().order(ByteOrder.LITTLE_ENDIAN));
                         // Rebuild the persisted kinetic columns from stable identities before resuming.
                         for(var chunk:progress.stateChunks(saved))checkpoint.duplicate().position(Math.toIntExact(chunk.offset())).put(chunk.bytes().duplicate());
-                        storage.close();storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024);storage.initialize(checkpoint,step+1);
+                        storage.close();storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024,liquid.grid());storage.initialize(checkpoint,step+1);
                     }
                 }
                 var actual=ByteBuffer.allocate(Math.toIntExact(liquid.bytes())).order(ByteOrder.LITTLE_ENDIAN);
@@ -105,7 +105,7 @@ public final class GpuLiquidReactionsValidation {
         }
     }
     private static ChemicalRegistry kineticRegistry(int scenario){
-        var source=BuiltinChemicalDefinitions.REGISTRY;
+        var source=mmm.fluid.TestFluidDefinitions.load().chemistry();
         var species=new java.util.ArrayList<>(source.species());
         for(String id:List.of("test:kinetic_a","test:kinetic_b","test:kinetic_c"))
             species.add(new ChemicalSpecies(id,Map.of("H",2,"O",1),0,ExactRational.parse("18/1000"),0xffeeeeee));

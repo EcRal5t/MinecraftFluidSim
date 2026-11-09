@@ -6,6 +6,7 @@ import mmm.fluid.air.GasInventory;
 import mmm.fluid.air.SpatialGasState;
 import mmm.fluid.air.GasRegistry;
 import mmm.chemistry.ChemicalRegistry;
+import mmm.spatial.SpatialGrid;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -57,22 +58,23 @@ public final class VulkanGasStateLayout {
                     gas.components().stream().map(mmm.fluid.air.GasComponentDefinition::allowedSpecies).toList());
         }
     }
-    private final int sizeX, sizeY, sizeZ, nodes, components, species;
+    private final SpatialGrid grid;
+    private final int nodes, components, species;
     private final Definitions definitions;
     private final long alignment, baseOffset, bytes, endOffset;
     private final EnumMap<Field, Column> columns = new EnumMap<>(Field.class);
 
-    public VulkanGasStateLayout(int sizeX, int sizeY, int sizeZ, int nodeCount,
+    public VulkanGasStateLayout(SpatialGrid grid, int nodeCount,
                                 Definitions definitions, long storageAlignment) {
-        this(sizeX,sizeY,sizeZ,nodeCount,definitions,0,storageAlignment);
+        this(grid,nodeCount,definitions,0,storageAlignment);
     }
 
-    public VulkanGasStateLayout(int sizeX, int sizeY, int sizeZ, int nodeCount,
+    public VulkanGasStateLayout(SpatialGrid grid, int nodeCount,
                                 Definitions definitions, long baseOffset, long storageAlignment) {
-        if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || nodeCount < 0
-                || definitions == null || baseOffset < 0 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
+        if (grid == null || nodeCount < grid.cellCount() || definitions == null || baseOffset < 0
+                || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
             throw new IllegalArgumentException("Invalid resident gas layout");
-        this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+        this.grid = grid;
         nodes = nodeCount; components = Math.multiplyExact(Math.addExact(nodeCount,4),definitions.componentIds().size()); species = Math.multiplyExact(Math.addExact(nodeCount,4),definitions.speciesStride()); this.definitions = definitions;
         alignment = Math.max(8, storageAlignment);
         this.baseOffset = align(baseOffset);
@@ -98,9 +100,10 @@ public final class VulkanGasStateLayout {
     public long baseOffset() { return baseOffset; }
     public long endOffset() { return endOffset; }
     public long alignment() { return alignment; }
-    public int sizeX() { return sizeX; }
-    public int sizeY() { return sizeY; }
-    public int sizeZ() { return sizeZ; }
+    public SpatialGrid grid() { return grid; }
+    public int sizeX() { return grid.sizeX(); }
+    public int sizeY() { return grid.sizeY(); }
+    public int sizeZ() { return grid.sizeZ(); }
     public int nodeCapacity() { return nodes; }
     public int componentCapacity() { return components; }
     public int speciesCapacity() { return species; }
@@ -115,8 +118,8 @@ public final class VulkanGasStateLayout {
 
     /** Fixed cell addresses retain vacuum and fully liquid cells as empty inventory rows. */
     public void importSpatialState(ByteBuffer destination, SpatialGasState state) {
-        int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-        if (state.sizeX()!=sizeX || state.sizeY()!=sizeY || state.sizeZ()!=sizeZ || nodes < cells
+        int cells = grid.cellCount();
+        if (!state.grid().equals(grid) || nodes < cells
                 || !state.registryFingerprint().equals(definitions.registryFingerprint())
                 || !state.chemicalRegistryFingerprint().equals(definitions.chemicalRegistryFingerprint()))
             throw new IllegalArgumentException("Spatial gas identity or dimensions differ from resident layout");
@@ -188,7 +191,7 @@ public final class VulkanGasStateLayout {
 
     public SpatialGasState exportSpatialState(ByteBuffer source) {
         var decoded=decode(source);
-        int cells=Math.multiplyExact(Math.multiplyExact(sizeX,sizeY),sizeZ);
+        int cells=grid.cellCount();
         if (decoded.nodes!=cells || decoded.energy==null)
             throw new IllegalArgumentException("Spatial gas requires one inventory and energy row per cell");
         var inventory=new ArrayList<GasInventory>(cells);
@@ -196,7 +199,7 @@ public final class VulkanGasStateLayout {
             inventory.add(new GasInventory(decoded.rows.get(cell).stream()
                     .map(e->new GasComponentAmount(e.componentId(),e.standardVolumeNanos(),e.massUnits(),e.species(),e.massResidualUnits())).toList()));
         }
-        return new SpatialGasState(sizeX,sizeY,sizeZ,definitions.registryFingerprint(),definitions.chemicalRegistryFingerprint(),
+        return new SpatialGasState(grid,definitions.registryFingerprint(),definitions.chemicalRegistryFingerprint(),
                 inventory,decoded.energy,new GasAuditLedger(decoded.rows.get(cells)),new GasAuditLedger(decoded.rows.get(cells+1)),
                 new GasAuditLedger(decoded.rows.get(cells+2)),new GasAuditLedger(decoded.rows.get(cells+3)));
     }
@@ -204,7 +207,7 @@ public final class VulkanGasStateLayout {
     /** Resizes/repositions device columns while retaining their actual logical counts. */
     void copyColumns(VkCommandBuffer command, GpuBuffer source, VulkanGasStateLayout oldLayout,
                      GpuBuffer destination, MemoryStack stack) {
-        if(sizeX!=oldLayout.sizeX||sizeY!=oldLayout.sizeY||sizeZ!=oldLayout.sizeZ
+        if(!grid.equals(oldLayout.grid)
                 ||nodes<oldLayout.nodes||components<oldLayout.components||species<oldLayout.species
                 ||!definitions.equals(oldLayout.definitions))
             throw new IllegalArgumentException("Gas device resize must retain shape, definitions and column capacity");

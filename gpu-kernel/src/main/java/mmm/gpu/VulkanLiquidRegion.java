@@ -80,7 +80,14 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     offsets[material*stride+species]=thermal.speciesOffset(host,chemistry.species(species).id()).referenceInternalEnergyJPerMol()
                             .divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).toDouble();
             }
-            return new MechanicalDefinitions(stockCapacity,speciesCapacity,limbCapacity,scratchLimbsPerWindow,quantumExponent,phases,masses,reference,offsets,stride,VulkanLiquidThermodynamics.tables(fluid,thermal),VulkanLiquidViscosity.tables(fluid,constitutive),VulkanLiquidForces.tables(fluid,constitutive),VulkanSurfaceTension.tables(fluid),noSlip);
+            var ethanol=chemistry.hasSpecies(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)
+                    ?chemistry.species(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)):null;
+            var liquid=ethanol==null?null:ethanol.liquidProperties();
+            var caloric=VulkanLiquidThermodynamics.tables(fluid,thermal).withAqueous(
+                    fluid.materials().stream().map(m->m.id()).toList().indexOf("mmm:water"),
+                    liquid==null?-1:chemistry.speciesHandle(ethanol.id()),liquid==null?0:ethanol.molarMassKgPerMol().toDouble(),
+                    liquid==null?0:liquid.heatCapacityJPerKgK(),liquid==null?0:liquid.conductivityWPerMK());
+            return new MechanicalDefinitions(stockCapacity,speciesCapacity,limbCapacity,scratchLimbsPerWindow,quantumExponent,phases,masses,reference,offsets,stride,caloric,VulkanLiquidViscosity.tables(fluid,constitutive,chemistry),VulkanLiquidForces.tables(fluid,constitutive),VulkanSurfaceTension.tables(fluid),noSlip);
         }
 
         MechanicalDefinitions capacities(int stocks,int species,int limbs,int windowLimbs) {
@@ -90,10 +97,6 @@ final class VulkanLiquidRegion implements AutoCloseable {
     record GasConfiguration(mmm.fluid.air.SpatialGasState initial,VulkanGasThermodynamics.Tables tables,
                             int nodeCapacity,double cellSize,boolean sealedExterior,
                             VulkanGasAmbient.AmbientTables ambient,long[] speciesMasses) {
-        static GasConfiguration forState(mmm.fluid.air.SpatialGasState initial,VulkanGasThermodynamics.Tables tables,double cellSize,
-                                         boolean sealedExterior,VulkanGasAmbient.AmbientTables ambient) {
-            return forState(initial,tables,cellSize,sealedExterior,ambient,mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
-        }
         static GasConfiguration forState(mmm.fluid.air.SpatialGasState initial,VulkanGasThermodynamics.Tables tables,double cellSize,
                                          boolean sealedExterior,VulkanGasAmbient.AmbientTables ambient,mmm.chemistry.ChemicalRegistry chemistry) {
             long[] masses=new long[tables.definitions().speciesIds().size()];
@@ -161,15 +164,15 @@ final class VulkanLiquidRegion implements AutoCloseable {
         this.mixtureKernel=new VulkanMixtureState(context);
         maximumRange=context.maxStorageBufferRange();
         var liquid=definitions==null?VulkanLiquidStateLayout.forState(inventory,momentum,context.storageOffsetAlignment())
-                :new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),definitions.stockCapacity(),
+                :new VulkanLiquidStateLayout(momentum.grid(),definitions.stockCapacity(),
                         definitions.speciesCapacity(),Math.max(definitions.limbCapacity(),VulkanLiquidStateLayout.requiredVolumeCapacity(inventory,Math.max(definitions.stockCapacity(),Math.multiplyExact(inventory.cellCount(),definitions.materialPhases().length)),definitions.materialPhases().length)),context.storageOffsetAlignment(),definitions.materialPhases().length);
-        if(!fixed.matchesShape(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ())||occupiedSolid.length!=liquid.cellCount())
+        if(!fixed.grid().equals(liquid.grid())||occupiedSolid.length!=liquid.cellCount())
             throw new IllegalArgumentException("Resident liquid geometry differs from its grid");
         workspace=new VulkanLiquidWorkspace(this,liquid,definitions);
         kernels=definitions==null?null:new Kernels(context,gasConfiguration!=null,granularConfiguration!=null,thermalConfiguration!=null,coherentConfiguration!=null,this.reactionConfiguration==null?null:this.reactionConfiguration.chemistry());
         VulkanRegionStorage created=null;
         try {
-            created=new VulkanRegionStorage(context,workspace.bytes,1024*1024);
+            created=new VulkanRegionStorage(context,workspace.bytes,1024*1024,liquid.grid());
             created.initialize(workspace.bytes,0,writer->importRoundoff=initialize(writer,inventory,momentum,fixed,occupiedSolid,gasConfiguration,granularConfiguration,thermalConfiguration,coherentConfiguration,deviceConfiguration,this.reactionConfiguration));
         }catch(RuntimeException|Error failure) {
             if(created!=null)try{created.close();}catch(RuntimeException|Error closing){failure.addSuppressed(closing);}
@@ -191,6 +194,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             throw new IllegalArgumentException("Liquid import exceeds resident capacity");
         var v=inventory.volumes();var encoded=l.encodeVolumes(inventory);
         writer.put(l.column(COUNTS),new int[]{inventory.stockCount(),inventory.speciesHandles().length,encoded.used()});
+        writer.put(workspace.hierarchyTopology(),workspace.hierarchy.topologyData());
         writer.put(l.column(CELL_OFFSETS),inventory.cellOffsets());writer.put(l.column(MATERIALS),inventory.materials());writer.put(l.column(SUPPORT_MASKS),inventory.supportMasks());
         writer.put(l.column(VOLUME_OFFSETS),encoded.offsets());writer.put(l.column(VOLUME_COUNTS),encoded.counts());writer.put(l.column(VOLUME_EXPONENTS),encoded.exponents());writer.put(l.column(VOLUME_LIMBS),encoded.limbs());
         writer.put(l.column(MASS_UNITS),inventory.massUnits());writer.put(l.column(ENERGY_BITS),inventory.energyBits());writer.put(l.column(MIXTURE_PRESENT),inventory.mixturePresent());
@@ -292,7 +296,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         List<mmm.thermal.CoherentPhaseStore.Group> coherent(){var s=layout.transport.coherent.state;return s.exportState(read(s.baseOffset(),s.bytes()));}
         VulkanThermalDeviceLayout.State devices(){var s=layout.transport.devices.state;return s.exportState(read(s.baseOffset(),s.bytes()));}
         mmm.fluid.air.SpatialGasState gas(){
-            var s=layout.transport.gas.state;var local=new VulkanGasStateLayout(s.sizeX(),s.sizeY(),s.sizeZ(),s.nodeCapacity(),s.definitions(),8);
+            var s=layout.transport.gas.state;var local=new VulkanGasStateLayout(s.grid(),s.nodeCapacity(),s.definitions(),8);
             var b=ByteBuffer.allocate(Math.toIntExact(local.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             for(var f:VulkanGasStateLayout.Field.values()){var c=s.column(f);if(c.bytes()>0)storage.read(capture,c.offset(),b.slice(Math.toIntExact(local.column(f).offset()),Math.toIntExact(c.bytes())));}
             return local.exportSpatialState(b);
@@ -458,9 +462,9 @@ final class VulkanLiquidRegion implements AutoCloseable {
     private boolean fitsImport(VulkanFluidStateCodec.ImportData data) {
         var l=workspace.liquid;var t=workspace.transport;var d=data.definitions();
         if(t==null||d==null
-                ||!data.fixed().matchesShape(l.sizeX(),l.sizeY(),l.sizeZ())||data.occupiedSolid().length!=l.cellCount()
+                ||!data.fixed().grid().equals(l.grid())||data.occupiedSolid().length!=l.cellCount()
                 ||data.inventory().cellCount()!=l.cellCount()
-                ||data.momentum().sizeX()!=l.sizeX()||data.momentum().sizeY()!=l.sizeY()||data.momentum().sizeZ()!=l.sizeZ())return false;
+                ||!data.momentum().grid().equals(l.grid()))return false;
         var bodyConfiguration=importBodyConfiguration(data);
         if(data.bodies().bodies().size()>workspace.bodyCapacity||bodyConfiguration.cellEntries()>workspace.bodyEntries)return false;
         var old=t.definitions;

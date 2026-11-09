@@ -79,7 +79,7 @@ final class DomainInventory {
     HostMixtureEdit prepareCondensedClear(CondensedClearPlan plan,boolean clearGranular){
         long[] occupied=new long[domain.cellCount];
         if(!clearGranular&&domain.granularState!=null){
-            var coupling=new mmm.granular.GranularCouplingFields(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize());
+            var coupling=new mmm.granular.GranularCouplingFields(domain.grid,domain.config.cellSize());
             coupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);occupied=coupling.copySolidSvq();
         }
         occupied=domain.entityBodyCoupling.addTo(occupied);
@@ -190,7 +190,7 @@ final class DomainInventory {
 		domain.domainFlowFields.validateVolumeEdit(volume, maxRadius);
 		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0L);
 		long massUnits = domain.unitScale.massUnitsForNormalized((double) volume * (domain.materialRegistry == null
-				? domain.config.density() : domain.materialRegistry.material(materialHandle).referenceDensity()));
+				? domain.definitions().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity() : domain.materialRegistry.material(materialHandle).referenceDensity()));
 		if (massUnits == 0) return new ExactVolumeTransfer(false, 0, 0L);
 		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, massUnits, maxRadius, materialHandle,
 				externalSource, internalEnergy);

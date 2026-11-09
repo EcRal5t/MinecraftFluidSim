@@ -123,10 +123,9 @@ final class GranularMechanicalStage {
 		double support = 0, wet = 0, density = 0, viscosity = 0, maximumSlipDiameter = Double.POSITIVE_INFINITY;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int cx = x0 + ox, cy = y0 + oy, cz = z0 + oz;
-			if (cx < 0 || cx >= domain.sizeX || cy < 0 || cy >= domain.sizeY || cz < 0 || cz >= domain.sizeZ) continue;
+			int cell=domain.grid.cell(cx,cy,cz);if(cell<0)continue;
 			double weight = (ox == 0 ? 1 - fx : fx) * (oy == 0 ? 1 - fy : fy) * (oz == 0 ? 1 - fz : fz);
 			support += weight;
-			int cell = (cz * domain.sizeY + cy) * domain.sizeX + cx;
 			double capacity = sourceSolid==null?domain.domainCollision.effectiveOpenCellVolume(cell)
 					:domain.geometry.cutCells.openCellVolume(cell)-Math.scalb((double)sourceSolid[cell],-24);
 			if (weight <= 0 || capacity <= 0 || !properties.hasLiquid(cell)) continue;
@@ -163,7 +162,8 @@ final class GranularMechanicalStage {
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
-			int face = (z * ny + y) * nx + x;
+			int global=domain.grid.faceAt(x,y,z,axis);if(global<0)continue;
+			int face=global-domain.grid.faceOffset(axis);
 			if (!(faceMass[face] > 0.0F) || !domain.domainFlowFields.granularCarrierFaceActive(axis, x, y, z)) continue;
 			double weight = domain.trilinearWeight(ox, oy, oz, fx, fy, fz);
 			double massWeight = weight * faceMass[face];

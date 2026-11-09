@@ -10,8 +10,19 @@ public record ChemicalPhaseDefinition(
 		String id,
 		String materialId,
 		List<String> allowedSpecies,
-		Map<String, ExactRational> defaultConcentrationMolPerCubicMeter
+		Map<String, ExactRational> defaultConcentrationMolPerCubicMeter,
+		ViscosityCorrection viscosityCorrection
 ) {
+	public record ViscosityCorrection(double a,double b,double maximumMolality,double referenceTemperatureK,double temperatureToleranceK) {
+		public ViscosityCorrection {
+			if (!(Double.isFinite(a) && a>=0 && Double.isFinite(b) && b>=0 && Double.isFinite(maximumMolality) && maximumMolality>0
+					&& Double.isFinite(referenceTemperatureK) && referenceTemperatureK>0 && Double.isFinite(temperatureToleranceK) && temperatureToleranceK>=0))
+				throw new IllegalArgumentException("Liquid viscosity correction is invalid");
+		}
+	}
+	public ChemicalPhaseDefinition(String id,String materialId,List<String> allowedSpecies,Map<String,ExactRational> defaults) {
+		this(id,materialId,allowedSpecies,defaults,null);
+	}
 	public ChemicalPhaseDefinition {
 		ChemicalIds.requireId(id, "chemical phase id");
 		ChemicalIds.requireId(materialId, "mechanical material id");

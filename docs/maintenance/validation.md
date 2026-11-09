@@ -13,7 +13,7 @@
 ./gradlew.bat :fabric:runGpuProductionDemoValidation -PgpuDemo=<场景> -PgpuDemoSteps=<步数> --console=plain
 ```
 
-本轮 S1—S7 的功能证据集中在[仿真能力验证](#simulation-capabilities)。普通墙、周期投料、规定运动、局部气体及统一相间交换沿同一生产候选推进；组合流程使用实际物料容器、取样、提取和 checkpoint 续算。
+本轮 S1—S8 的功能证据集中在[仿真能力验证](#simulation-capabilities)和[稀疏空间域验证](#spatial-domain)。普通墙、周期投料、规定运动、局部气体及统一相间交换沿同一生产候选推进；组合流程使用实际物料容器、取样、提取和 checkpoint 续算。
 
 游戏内工艺入口为 `/mmm process feed <间隔tick>`、`/mmm process drive <秒数>`、`/mmm process sample`、`/mmm process stop`。机械驱动器方块安装在区域外壳，点击启动、潜行点击停止；区域状态使用 `/mmm regions checkpoint` 保存。
 
@@ -113,6 +113,44 @@
 
 <a id="simulation-capabilities"></a>
 ## 仿真能力补全验证
+
+<a id="spatial-domain"></a>
+### 稀疏空间域与材料数据
+
+空间域对比入口使用正式 Vulkan 后端和世界 JSON 定义：
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuSpatialDomainValidation --offline --console=plain --max-workers=1
+```
+
+2026-11-09，RTX 5070 Ti 上运行 8 步，将相同流动与温差从单块内部平移到跨块通道。稀疏 L 形域实际驻留 1152 格，包围盒为 2304 格；缺失块保持缺失。两份整数质量守恒，跨块液体转移 3.12082 个归一化格容；对应单元最大体积差为 0.000185132 格容、温差为 0.00349018 K。中途恢复 checkpoint 后继续推进；人为卸载跨块通路一侧时，整个物理组的液体、气体、内能及 MAC 动量保持不变。日志 `build/s8-followup.log` 中此任务通过，同批 Fabric 测试编译的结果单独登记。
+
+设备候选、拒绝、采用、查询、展示、实体运动及 checkpoint 的 `runGpuResidentStateValidation` 通过，记录 `build/s8-runtime.log`。同批颗粒沉积、再启动和松弛通过，固体 SVQ 与整数质量保持不变。`runGpuActivityMaskValidation` 通过，活动组正常推进，暂停组保存各相库存、热量和动量，记录 `build/s8-host-activity.log`。
+
+六条工艺使用跨计算块的通道与投料位置，沿已有入口运行；冷凝为 1200 步。每条流程检查容器投料、物质与能量收支、停止、取样、保存与恢复续算，全部通过。加热、析出、冷凝及驱动记录于 `build/s8-process.log`，吸收与碳化记录于 `build/s8-process-targeted.log`。冷壁样品为 4.114 mL，乙醇摩尔分率从原料的 0.23591 提高到 0.34829。
+
+每次 `motion.step` 的墙钟耗时包含冷导入首步，容器 WAL、采样、存档和绘制在计时外：
+
+| 工艺 | 步数 | 中位数 ms | P95 ms | 最大 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 加热 | 20 | 17.000 | 31.501 | 220.106 |
+| 吸收与脱除 | 40 | 18.030 | 39.472 | 227.822 |
+| 结晶 | 20 | 37.991 | 77.464 | 118.604 |
+| 蒸发与冷凝 | 1200 | 12.148 | 16.826 | 1643.850 |
+| 碳化 | 20 | 17.255 | 37.300 | 153.322 |
+| 规定运动驱动 | 40 | 13.429 | 20.759 | 101.643 |
+
+小场景仍有冷导入及相变长步尖峰，后续集中优化。完整步流程与原 64³ 后端预算分别评价。
+
+`:gpu-kernel:runGpuLiquidDiffusionValidation` 通过：修改世界定义中的水密度、液体及氮气热容，宿主实际库存和 GPU 物性表随定义更新；同一入口的有限扩散、末份溶质、垂向动量和携能交接通过。记录 `build/s8-data-diffusion.log`。
+
+宿主 `region-state` 整组通过，包含实际缺块的 L 形域发布 HEAD、读取 NBT 并恢复液体、局部气体、颗粒、热状态及非零共享面动量；完整库存总账与块成员保持一致。世界自定义物性、能力包和启动恢复同批通过，记录 `build/s8-host-region-accepted.log`。`LiquidCellInventoryValidation` 的稀疏坐标、唯一共享面及颗粒精确分份通过，记录 `build/s8-host-spatial.log`。归属事务、协议／客户端几何和封闭空间扫描分别通过，记录 `build/s8-host-ownership.log`、`build/s8-host-protocol.log`、`build/s8-host-boundary.log`。
+
+`containers`、`lifecycle` 整组通过，包含容器库存、20 项持久事务、共享墙登记、生命周期和实体输入，记录 `build/s8-host-containers.log`、`build/s8-host-lifecycle.log`。`assemble verifyArchitecture` 通过，架构检查扫描 598 个生产源，依赖方向与单元库存写入职责通过，记录 `build/s8-delivery-build.log`。
+
+最终 `assemble verifyArchitecture :fabric:runHostValidation -PhostValidation=shape` 通过，记录 `build/s8-delivery-final.log`。楼梯放置使用 310 K 的正式化学、气体及热定义，实际搬迁 6 格液体，体积、整数质量、全部物种和液体携能保持；气体缩容功进入机械功账，总内能与热审计精确闭合。库存验证中的零质量尾量及稀疏空间合同随后通过，记录 `build/s8-host-spatial.log`。交付产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
+新拓扑完整生产 64³／0.5 m 基准沿下文同一命令执行，预热 5 步、测量 10 步。2026-11-09 实测中位数 **137.567 ms**、最大 **234.404 ms**、GPU 均值 **97.867 ms**；单 bank 工作区 **3,760,883,808 B**，设备分配总量 10793.2 MiB。实际子步数为 `[1,1,1,1,1,2,2,2,2,2]`，每步提交 15–27 次。记录 `build/s8-production64.log`。当前未达到 50 ms 预算，较 2026-11-05 生产基线更慢；功能交付后需整体降低完整步计算与提交成本。
 
 S1 的针对性入口：
 

@@ -72,10 +72,10 @@ final class VulkanGranularStateLayout {
         State(Definitions definitions,List<Particle> particles,List<Deposit> deposits,List<Row> externalSource,List<Row> escapedSink){this(definitions,particles,deposits,externalSource,escapedSink,new Dynamics(0,new int[0]));}
         State{particles=List.copyOf(particles);deposits=List.copyOf(deposits);externalSource=List.copyOf(externalSource);escapedSink=List.copyOf(escapedSink);}
         State withDynamics(mmm.granular.GranularDepositDynamics.State scheduler){return new State(definitions,particles,deposits,externalSource,escapedSink,new Dynamics(scheduler.logicalStep(),scheduler.stableAge()));}
-        mmm.granular.GranularDepositDynamics.State schedulerState(int sizeX,int sizeY,int sizeZ){
-            int[] ages=dynamics.stableAge().length==0?new int[sizeX*sizeZ]:dynamics.stableAge();
-            if(ages.length!=sizeX*sizeZ)throw new IllegalArgumentException("Granular scheduler dimensions differ");
-            boolean[] occupied=new boolean[ages.length];for(var d:deposits)occupied[d.cell()%sizeX+d.cell()/(sizeX*sizeY)*sizeX]=true;
+        mmm.granular.GranularDepositDynamics.State schedulerState(mmm.spatial.SpatialGrid grid){
+            int[] ages=dynamics.stableAge().length==0?new int[grid.columnCount()]:dynamics.stableAge();
+            if(ages.length!=grid.columnCount())throw new IllegalArgumentException("Granular scheduler dimensions differ");
+            boolean[] occupied=new boolean[ages.length];for(var d:deposits)occupied[grid.columnOfCell(d.cell())]=true;
             int[] queue=java.util.stream.IntStream.range(0,ages.length).filter(i->occupied[i]&&ages[i]<mmm.granular.GranularDepositDynamics.SLEEP_LOGICAL_STEPS).toArray();
             return new mmm.granular.GranularDepositDynamics.State(dynamics.logicalStep(),ages,queue);
         }
@@ -95,7 +95,7 @@ final class VulkanGranularStateLayout {
             return compare!=0?compare:Long.compareUnsigned(a.massResidualUnits(),b.massResidualUnits());
         }
         /** CPU handoff uses its float parcel geometry; the lossless resident checkpoint above retains binary64. */
-        mmm.granular.GranularStateSnapshot toSnapshot(int sizeX,int sizeY,int sizeZ,double cellSize){
+        mmm.granular.GranularStateSnapshot toSnapshot(mmm.spatial.SpatialGrid grid,double cellSize){
             if(cellSize!=.5)throw new IllegalArgumentException("CPU granular snapshots use 0.5 m cells");
             var order=(java.util.Comparator<mmm.granular.GranularStateSnapshot.StableComposition>)State::compareComposition;
             var unique=new java.util.TreeSet<mmm.granular.GranularStateSnapshot.StableComposition>(order);
@@ -105,7 +105,7 @@ final class VulkanGranularStateLayout {
             for(var d:deposits){var c=composition(d.inventory());bedComposition.add(c);if(c!=null)unique.add(c);}
             var compositions=List.copyOf(unique);var active=new ArrayList<mmm.granular.GranularStateSnapshot.ActiveParcel>();
             var beds=new ArrayList<mmm.granular.GranularStateSnapshot.DepositGroup>();var totals=new java.util.TreeMap<String,Long>();
-            long volume=0,mass=0;var kernel=new mmm.granular.GranularKernel(sizeX,sizeY,sizeZ,cellSize);
+            long volume=0,mass=0;var kernel=new mmm.granular.GranularKernel(grid,cellSize);
             for(int i=0;i<particles.size();i++){
                 var p=particles.get(i);var row=p.inventory();float x=(float)p.x(),y=(float)p.y(),z=(float)p.z();
                 kernel.capture(x,y,z,row.solidVolumeSvq());int mask=0;
@@ -133,7 +133,7 @@ final class VulkanGranularStateLayout {
             beds.sort(java.util.Comparator.comparingInt(mmm.granular.GranularStateSnapshot.DepositGroup::cell)
                     .thenComparingInt(mmm.granular.GranularStateSnapshot.DepositGroup::materialPaletteIndex)
                     .thenComparingInt(mmm.granular.GranularStateSnapshot.DepositGroup::solidCompositionIndex));
-            return new mmm.granular.GranularStateSnapshot(sizeX,sizeY,sizeZ,definitions.registryFingerprint(),definitions.chemicalRegistryFingerprint(),
+            return new mmm.granular.GranularStateSnapshot(grid,definitions.registryFingerprint(),definitions.chemicalRegistryFingerprint(),
                     definitions.materialIds(),compositions,totals,active,beds,volume,mass,toAudit(externalSource),toAudit(escapedSink));
         }
         private mmm.granular.GranularStateSnapshot.StableComposition composition(Row row){
@@ -152,7 +152,7 @@ final class VulkanGranularStateLayout {
             if(activeEnergy.length!=snapshot.activeParcels().size()||depositEnergy.length!=snapshot.depositGroups().size())throw new IllegalArgumentException("Granular thermal rows differ from inventory");
             var definitions=new Definitions(snapshot.registryFingerprint(),snapshot.chemicalRegistryFingerprint(),snapshot.materialPalette(),speciesIds);
             var ps=new ArrayList<Particle>();var ds=new ArrayList<Deposit>();
-            var kernel=new mmm.granular.GranularKernel(snapshot.sizeX(),snapshot.sizeY(),snapshot.sizeZ(),cellSize);
+            var kernel=new mmm.granular.GranularKernel(snapshot.grid(),cellSize);
             for(int i=0;i<activeEnergy.length;i++){var p=snapshot.activeParcels().get(i);kernel.capture(p.x(),p.y(),p.z(),p.solidVolumeSvq());
                 int[] cells=new int[8];long[] quotas=new long[8];java.util.Arrays.fill(cells,-1);
                 for(int k=0;k<kernel.size();k++){cells[k]=kernel.cell(k);quotas[k]=kernel.floor(k)+((p.ceilMask()>>>k)&1);}
@@ -179,15 +179,17 @@ final class VulkanGranularStateLayout {
         }
     }
     private final int sizeX,sizeY,sizeZ,particles,deposits,species,rows;
+    private final mmm.spatial.SpatialGrid grid;
     private final Definitions definitions;
     private final long baseOffset,endOffset,alignment;
     private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
-    VulkanGranularStateLayout(int sizeX,int sizeY,int sizeZ,int particleCapacity,int depositCapacity,
+    VulkanGranularStateLayout(mmm.spatial.SpatialGrid grid,int particleCapacity,int depositCapacity,
                              int speciesCapacity,Definitions definitions,long baseOffset,long alignment){
-        if(sizeX<=0||sizeY<=0||sizeZ<=0||particleCapacity<0||depositCapacity<0||speciesCapacity<0||definitions==null
+        int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
+        if(particleCapacity<0||depositCapacity<0||speciesCapacity<0||definitions==null
                 ||baseOffset<0||alignment<8||(alignment&(alignment-1))!=0)
             throw new IllegalArgumentException("Invalid resident granular layout");
-        this.sizeX=sizeX;this.sizeY=sizeY;this.sizeZ=sizeZ;particles=particleCapacity;deposits=depositCapacity;
+        this.grid=grid;this.sizeX=sizeX;this.sizeY=sizeY;this.sizeZ=sizeZ;particles=particleCapacity;deposits=depositCapacity;
         species=speciesCapacity;this.definitions=definitions;this.alignment=alignment;
         rows=Math.addExact(Math.addExact(particles,deposits),Math.multiplyExact(2,definitions.materialIds().size()));
         this.baseOffset=align(baseOffset);long cursor=this.baseOffset;
@@ -201,7 +203,7 @@ final class VulkanGranularStateLayout {
                 case SPECIES_HANDLES,SPECIES_AMOUNTS->species;
                 case DEPOSIT_CELL,DEPOSIT_POROSITY->deposits;
                 case LOGICAL_STEP->1;
-                case STABLE_AGE->Math.multiplyExact(sizeX,sizeZ);
+                case STABLE_AGE->grid.columnCount();
                 default->rows;
             };
             var column=new VulkanLiquidStateLayout.Column(align(cursor),count,field.width);
@@ -212,7 +214,8 @@ final class VulkanGranularStateLayout {
     VulkanLiquidStateLayout.Column column(Field field){return columns.get(field);}
     int word(Field field){return Math.toIntExact(column(field).offset()/4);}
     int sizeX(){return sizeX;}int sizeY(){return sizeY;}int sizeZ(){return sizeZ;}
-    int cells(){return Math.multiplyExact(Math.multiplyExact(sizeX,sizeY),sizeZ);}
+    mmm.spatial.SpatialGrid grid(){return grid;}
+    int cells(){return grid.cellCount();}
     int particleCapacity(){return particles;}int depositCapacity(){return deposits;}int speciesCapacity(){return species;}
     int rowCapacity(){return rows;}int depositRow(int ordinal){return particles+ordinal;}
     int auditRow(boolean escaped,int material){return particles+deposits+(escaped?definitions.materialIds().size():0)+material;}
@@ -222,7 +225,7 @@ final class VulkanGranularStateLayout {
         if(!definitions.equals(state.definitions())||state.particles().size()>particles||state.deposits().size()>deposits)
             throw new IllegalArgumentException("Granular input exceeds layout or changes definitions");
         var b=view(destination);int[] speciesCursor={0};
-        if(state.dynamics().stableAge().length!=0&&state.dynamics().stableAge().length!=sizeX*sizeZ)throw new IllegalArgumentException("Granular dynamics dimensions differ");
+        if(state.dynamics().stableAge().length!=0&&state.dynamics().stableAge().length!=grid.columnCount())throw new IllegalArgumentException("Granular dynamics dimensions differ");
         putLong(b,Field.LOGICAL_STEP,0,state.dynamics().logicalStep());
         var ages=state.dynamics().stableAge();for(int i=0;i<ages.length;i++)putInt(b,Field.STABLE_AGE,i,ages[i]);
         putInt(b,Field.COUNTS,0,state.particles().size());putInt(b,Field.COUNTS,1,state.deposits().size());
@@ -251,12 +254,12 @@ final class VulkanGranularStateLayout {
                     number(b,Field.VELOCITY,3*i),number(b,Field.VELOCITY,3*i+1),number(b,Field.VELOCITY,3*i+2),getInt(b,Field.CONTACT_AGE,i),getInt(b,Field.FLAGS,i),cells,quota));}
         for(int i=0;i<beds;i++)ds.add(new Deposit(readRow(b,particles+i),getInt(b,Field.DEPOSIT_CELL,i),Float.intBitsToFloat(getInt(b,Field.DEPOSIT_POROSITY,i))));
         for(int m=0;m<definitions.materialIds().size();m++){int a=auditRow(false,m),c=auditRow(true,m);if(getLong(b,Field.SOLID_VOLUME_SVQ,a)>0)external.add(readRow(b,a));if(getLong(b,Field.SOLID_VOLUME_SVQ,c)>0)escaped.add(readRow(b,c));}
-        int[] ages=new int[sizeX*sizeZ];for(int i=0;i<ages.length;i++)ages[i]=getInt(b,Field.STABLE_AGE,i);
+        int[] ages=new int[grid.columnCount()];for(int i=0;i<ages.length;i++)ages[i]=getInt(b,Field.STABLE_AGE,i);
         return new State(definitions,ps,ds,external,escaped,new Dynamics(getLong(b,Field.LOGICAL_STEP,0),ages));
     }
     void copyColumns(VkCommandBuffer command,GpuBuffer input,VulkanGranularStateLayout old,GpuBuffer output,MemoryStack stack){
         if(particles<old.particles||deposits<old.deposits||species<old.species||!definitions.equals(old.definitions)
-                ||sizeX!=old.sizeX||sizeY!=old.sizeY||sizeZ!=old.sizeZ)
+                ||!grid.equals(old.grid))
             throw new IllegalArgumentException("Granular migration shrinks inventory capacity or changes definitions");
         if(particles==old.particles&&deposits==old.deposits){
             var copies=VkBufferCopy.calloc(Field.values().length,stack);int count=0;for(var f:Field.values()){

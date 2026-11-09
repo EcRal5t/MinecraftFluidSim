@@ -16,6 +16,7 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 	private final ServerLevel level;
 	private final java.util.function.IntPredicate availableCell;
 	private final java.util.function.IntUnaryOperator previousMask;
+    private final mmm.spatial.SpatialGrid grid;
 
 	MinecraftCollisionWorldPort(ServerLevel level) {
 		this(level, (mmm.fluid.HostFluidState)null);
@@ -24,52 +25,47 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 	MinecraftCollisionWorldPort(ServerLevel level, mmm.fluid.HostFluidState previous) {
 		this.level = java.util.Objects.requireNonNull(level, "level");
 		this.availableCell = previous==null?null:previous::groupAvailable;
-		this.previousMask = previous==null?null:cell->previous.solidMicroMask(cell%previous.sizeX(),cell/previous.sizeX()%previous.sizeY(),cell/(previous.sizeX()*previous.sizeY()));
+        this.grid = previous == null ? null : previous.grid();
+        this.previousMask = previous==null?null:cell->previous.solidMicroMask(grid.x(cell),grid.y(cell),grid.z(cell));
 	}
 
 	MinecraftCollisionWorldPort(ServerLevel level, FluidRegion region) {
 		this.level = java.util.Objects.requireNonNull(level);
 		this.availableCell = region::groupAvailable;
-		this.previousMask = cell->region.solidMicroMask(cell%region.sizeX(),cell/region.sizeX()%region.sizeY(),cell/(region.sizeX()*region.sizeY()));
+        this.grid = region.grid();
+        this.previousMask = cell->region.solidMicroMask(grid.x(cell),grid.y(cell),grid.z(cell));
 	}
 
 	@Override public CollisionField capture(CollisionRegion region) {
 		if (!level.dimension().identifier().toString().equals(region.dimensionId())) {
 			throw new IllegalArgumentException("Collision port dimension mismatch");
 		}
-		byte[] masks = new byte[Math.multiplyExact(Math.multiplyExact(
-				region.cellsX(), region.cellsY()), region.cellsZ())];
-		var shapeMasks = new java.util.IdentityHashMap<VoxelShape, byte[]>();
-		for (int blockZ = 0; blockZ < region.blocksZ(); blockZ++) {
-			for (int blockY = 0; blockY < region.blocksY(); blockY++) {
-				for (int blockX = 0; blockX < region.blocksX(); blockX++) {
-					boolean interior = region.isInteriorBlock(blockX, blockY, blockZ);
-					BlockPos position = new BlockPos(region.originX() + blockX,
-							region.originY() + blockY, region.originZ() + blockZ);
-					boolean available = MinecraftGroupAvailability.loaded(level, position);
-					BlockState state = interior && available ? level.getBlockState(position) : null;
-					boolean full = !interior || !available || state.isCollisionShapeFullBlock(level, position);
-					VoxelShape shape = full ? Shapes.block() : state.getCollisionShape(level, position);
-					byte[] blockMasks = full ? null : shapeMasks.computeIfAbsent(shape,
-							value -> sampleBlockMasks(value, region.cellsPerBlock()));
-					for (int localZ = 0; localZ < region.cellsPerBlock(); localZ++) {
-						for (int localY = 0; localY < region.cellsPerBlock(); localY++) {
-							for (int localX = 0; localX < region.cellsPerBlock(); localX++) {
-								int cellX = blockX * region.cellsPerBlock() + localX;
-								int cellY = blockY * region.cellsPerBlock() + localY;
-								int cellZ = blockZ * region.cellsPerBlock() + localZ;
-								masks[(cellZ * region.cellsY() + cellY) * region.cellsX() + cellX] =
-										previousMask != null && (!available || !availableCell.test((cellZ * region.cellsY() + cellY) * region.cellsX() + cellX))
-                                        ? (byte) previousMask.applyAsInt((cellZ * region.cellsY() + cellY) * region.cellsX() + cellX)
-                                        : full ? (byte) 0xff : blockMasks[(localZ * region.cellsPerBlock() + localY)
-												* region.cellsPerBlock() + localX];
-							}
-						}
-					}
-				}
-			}
-		}
-		return new CollisionField(region.cellsX(), region.cellsY(), region.cellsZ(), masks);
+		var topology = region.grid();
+        if (grid != null && !grid.equals(topology))
+            throw new IllegalArgumentException("Collision port topology differs from capture");
+        byte[] masks = new byte[topology.cellCount()];
+        var shapeMasks = new java.util.IdentityHashMap<VoxelShape, byte[]>();
+        var blockMasks = new java.util.HashMap<BlockPos, byte[]>();
+        int n = region.cellsPerBlock();
+        for (int cell=0;cell<topology.cellCount();cell++) {
+            int x=topology.x(cell),y=topology.y(cell),z=topology.z(cell);
+            int bx=x/n,by=y/n,bz=z/n;
+            BlockPos position=new BlockPos(region.originX()+bx,region.originY()+by,region.originZ()+bz);
+            boolean available=MinecraftGroupAvailability.loaded(level,position);
+            if (previousMask!=null && (!available || !availableCell.test(cell))) {
+                masks[cell]=(byte)previousMask.applyAsInt(cell); continue;
+            }
+            if (!region.isInteriorBlock(bx,by,bz) || !available) { masks[cell]=(byte)255; continue; }
+            byte[] block=blockMasks.get(position);
+            if (block==null) {
+                BlockState state=level.getBlockState(position);
+                VoxelShape shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
+                block=shapeMasks.computeIfAbsent(shape,value->sampleBlockMasks(value,n));
+                blockMasks.put(position,block);
+            }
+            masks[cell]=block[((z%n)*n+y%n)*n+x%n];
+        }
+        return new CollisionField(topology,masks);
 	}
 
 	static byte[] sampleBlockMasks(VoxelShape shape, int cellsPerBlock) {

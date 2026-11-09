@@ -84,7 +84,7 @@ public final class FluidRegionLifecycleValidation {
 	private static void validatePoolWallHandoff() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		var thermal = registries.thermal();
-		var host = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
+		var host = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load());
 		host.sealDomainBoundary();
 		host.bindMaterialRegistry(registries.liquids());
 		host.bindGasRegistry(registries.gas());
@@ -131,7 +131,7 @@ public final class FluidRegionLifecycleValidation {
 		var result = MmmRuntimeFactory.initializeSolverBackend(() -> backend, candidate -> { throw failure; });
 		require(closed.get() && result.unavailableReason().contains(failure.getMessage())
 				&& failure.getSuppressed().length == 1, "Warmup failure must release device and preserve its reason");
-		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host);
 		region.solverBackend(result);
 		require(region.pauseForUnavailableDevice() && !region.canStep(), "Failed warmup allowed region advancement");
@@ -143,7 +143,7 @@ public final class FluidRegionLifecycleValidation {
 	}
 
 	private static void validateUnavailableDevicePreservesHostState() {
-		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		host.setVolume(0, 0, 0, .5F);
 		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host);
 		region.setPaused(false);
@@ -160,7 +160,7 @@ public final class FluidRegionLifecycleValidation {
 		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
 				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
-		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		host.setVolume(0, 0, 0, .5F);
 		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host, footprint);
 		var backend = new LossBackend();
@@ -181,7 +181,7 @@ public final class FluidRegionLifecycleValidation {
 		require(region.hostSnapshot().totalVolumeExact() == .75 && !region.paused(),
 				"recovery did not restore the published inventory and operator intent");
 
-		var queryHost = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		var queryHost = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		var queryRegion = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, queryHost, footprint);
 		var queryBackend = new LossBackend();
 		queryRegion.solverBackend(queryBackend);
@@ -282,7 +282,7 @@ public final class FluidRegionLifecycleValidation {
 		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
 				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
-		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F,1000,0,.05F,48,1e-4F,.002F));
+		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F,0,.05F,48,1e-4F,.002F), mmm.fluid.TestFluidDefinitions.load());
 		domain.setSolidMicroMask(0,0,0,15);
 		var region = new FluidRegion(new UUID(127,131), DIMENSION, BlockPos.ZERO, domain, footprint);
 		require(signals.signal(DIMENSION, controller)==0 && manager.add(region).accepted()
@@ -387,12 +387,13 @@ public final class FluidRegionLifecycleValidation {
 		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
 				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
-		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 48, 1e-5F, 1e-4F));
+		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F, 0, .05F, 48, 1e-5F, 1e-4F), mmm.fluid.TestFluidDefinitions.load());
 		domain.setVolume(0, 0, 0, .5F);
 		var region = new FluidRegion(new UUID(83L, 89L), DIMENSION, BlockPos.ZERO, domain, footprint);
 		require(manager.addAndSelect(region).accepted(), "controller summary fixture was not admitted");
 		var profile = TestProfiles.pure();
-		var operations = new FluidRegionOperations(root, manager, false, true, profile, null, null, null, null,
+		var operations = new FluidRegionOperations(root, manager, false, true, profile, mmm.fluid.TestFluidDefinitions.load().chemistry(), mmm.fluid.TestFluidDefinitions.load().granular(),
+                mmm.fluid.TestFluidDefinitions.load().thermal(), mmm.fluid.TestFluidDefinitions.load().gas(),
 				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, TestProfiles.materialRegistry());
 		require(operations.checkpoint(region) == 1L, "controller summary fixture did not publish its initial state");
 		var queries = new ControllerQueryUseCase(new ControllerSummaryAdapter(manager, operations, profile, null,
@@ -431,13 +432,15 @@ public final class FluidRegionLifecycleValidation {
 				&& region.availabilityReason() == RegionAvailabilityReason.BOUNDARY_OPEN,
 				"unloaded pause changed availability or retained a solver");
 		var reopenedManager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
-		var reopened = new FluidRegionOperations(root, reopenedManager, false, true, profile, null, null, null, null,
+		var reopened = new FluidRegionOperations(root, reopenedManager, false, true, profile, mmm.fluid.TestFluidDefinitions.load().chemistry(), mmm.fluid.TestFluidDefinitions.load().granular(),
+                mmm.fluid.TestFluidDefinitions.load().thermal(), mmm.fluid.TestFluidDefinitions.load().gas(),
 				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, TestProfiles.materialRegistry());
 		var restored = reopenedManager.region(region.id());
 		require(restored != null && restored.paused(), "unloaded pause was lost after metadata reload");
 		reopened.setUnloadedRunIntent(restored, false);
 		var finalManager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
-		new FluidRegionOperations(root, finalManager, false, true, profile, null, null, null, null,
+		new FluidRegionOperations(root, finalManager, false, true, profile, mmm.fluid.TestFluidDefinitions.load().chemistry(), mmm.fluid.TestFluidDefinitions.load().granular(),
+                mmm.fluid.TestFluidDefinitions.load().thermal(), mmm.fluid.TestFluidDefinitions.load().gas(),
 				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, TestProfiles.materialRegistry());
 		require(!finalManager.region(region.id()).paused(), "unloaded resume was lost after metadata reload");
 		try (var paths = java.nio.file.Files.walk(root)) {
@@ -524,7 +527,7 @@ public final class FluidRegionLifecycleValidation {
 
 	private static void validateHydrostaticSleepPreservesMarkerLedger() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		HostFluidState domain = new HostFluidState(6, 5, 4, config);
+		HostFluidState domain = new HostFluidState(6, 5, 4, config, mmm.fluid.TestFluidDefinitions.load());
 		domain.restoreParticleState(new FlipParticleState(
 				6, 5, 4, config.cellSize(), 2, 0.1875F,
 				new float[] {
@@ -555,7 +558,7 @@ public final class FluidRegionLifecycleValidation {
 	}
 
 	private static void validateInternalConductionWakesMotion() {
-		HostFluidState domain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		HostFluidState domain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
 				domain);
 		region.setPaused(false);
@@ -614,7 +617,7 @@ public final class FluidRegionLifecycleValidation {
 		require(!lifecycle.canStep() && lifecycle.state() == FluidRegionLifecycle.State.REDUCED,
 				"operator pause was confused with scheduling state");
 
-		HostFluidState retryDomain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		HostFluidState retryDomain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		FluidRegion retryRegion = new FluidRegion(new UUID(11L, 13L), DIMENSION, BlockPos.ZERO,
 				retryDomain);
 		retryRegion.blockPerformance("three accepted steps exceeded the wall-time guard");

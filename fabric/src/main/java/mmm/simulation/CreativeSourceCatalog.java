@@ -4,7 +4,6 @@ import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ChemicalMixtureRecord;
 import mmm.chemistry.ChemicalTransferLedger;
-import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidMaterial;
 import mmm.granular.BuiltinGranularDefinitions;
 import mmm.granular.GranularTransferLedger;
@@ -19,7 +18,6 @@ import mmm.worldprofile.WorldCapability;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
-import java.util.TreeMap;
 
 /** Resolves whitelisted creative intent against the committed world registries on the server thread. */
 final class CreativeSourceCatalog {
@@ -54,17 +52,17 @@ final class CreativeSourceCatalog {
 		String name = descriptor.templateStableId().substring("mmm:source/material/".length());
 		FluidMixture mixture;
 		if (name.equals("water_oil")) {
-			FluidMaterial water = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
-			FluidMaterial oil = world.resolveMaterial(BuiltinFluidMaterials.OIL.id());
+			FluidMaterial water = world.resolveMaterial("mmm:water");
+			FluidMaterial oil = world.resolveMaterial("mmm:oil");
 			long first = LIQUID_AMOUNT / 2L;
 			mixture = new FluidMixture(List.of(
 					new FluidMixture.Component(water.id(), first, mmm.units.Mass.fromKilograms(0.5 * water.referenceDensity())),
 					new FluidMixture.Component(oil.id(), LIQUID_AMOUNT - first, mmm.units.Mass.fromKilograms(0.5 * oil.referenceDensity()))));
 		} else {
 			String materialId = switch (name) {
-				case "water" -> BuiltinFluidMaterials.WATER.id();
-				case "oil" -> BuiltinFluidMaterials.OIL.id();
-				case "mercury" -> BuiltinFluidMaterials.MERCURY.id();
+				case "water" -> "mmm:water";
+				case "oil" -> "mmm:oil";
+				case "mercury" -> "mmm:mercury";
 				default -> throw new IllegalArgumentException("creative material template is not whitelisted");
 			};
 			FluidMaterial material = world.resolveMaterial(materialId);
@@ -92,20 +90,23 @@ final class CreativeSourceCatalog {
 			default -> throw new IllegalArgumentException("creative reagent template is not whitelisted");
 		};
 		var registry = world.chemicalRegistry();
-		TreeMap<String, Long> amounts = new TreeMap<>();
-		if (species.equals(BuiltinChemicalDefinitions.H2O)) amounts.put(species, 55_555_555_556L);
-		else if (species.equals(BuiltinChemicalDefinitions.ETHANOL)) amounts.put(species, 17_152_173_913L);
-		else {
-			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
-			amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
+		FluidMaterial carrier = world.resolveMaterial("mmm:water");
+		double density = species.equals(BuiltinChemicalDefinitions.ETHANOL)
+				? registry.species(registry.speciesHandle(species)).liquidProperties().referenceDensityKgPerM3()
+				: carrier.referenceDensity();
+		long massUnits = mmm.units.Mass.fromKilograms(density);
+		ChemicalMixtureRecord mixture;
+		if (species.equals(BuiltinChemicalDefinitions.H2O) || species.equals(BuiltinChemicalDefinitions.ETHANOL)) {
+			long unitMass = registry.speciesMassUnits(registry.speciesHandle(species), 1);
+			long amount = massUnits / unitMass;
+			mixture = ChemicalMixtureRecord.fromStableAmounts(registry, java.util.Map.of(species, amount), massUnits - amount * unitMass);
+		} else {
+			mixture = ChemicalMixtureRecord.fromSolutesAndSolventMass(registry,
+					java.util.Map.of(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000))),
+					BuiltinChemicalDefinitions.H2O, massUnits);
 		}
-		FluidMaterial carrier = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
-		double mass = species.equals(BuiltinChemicalDefinitions.ETHANOL) ? BuiltinChemicalDefinitions.ETHANOL_REFERENCE_DENSITY_KG_M3 : carrier.referenceDensity();
-		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
-		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
-				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				carrier.id(), 1.0, mmm.units.Mass.fromKilograms(mass), mixture.massResidualUnits(), mixture.stableAmounts(registry))));
+				carrier.id(), 1.0, massUnits, mixture.massResidualUnits(), mixture.stableAmounts(registry))));
 		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(
 				ChemicalContents.fromLedger(ledger, registry, LIQUID_AMOUNT)));
 		world.attachLiquidThermalContents(stack, temperature(descriptor));

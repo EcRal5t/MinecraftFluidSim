@@ -45,7 +45,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         SECONDARY_BEGIN(40),
         SECONDARY_COUNTS(41),
         MINIMUM_TEMPERATURE(44),
-        AQUEOUS_MATERIAL(46), ETHANOL_SPECIES(47);
+        AQUEOUS_MATERIAL(46), ETHANOL_SPECIES(47), ETHANOL_HEAT_CAPACITY(48), ETHANOL_MOLAR_MASS(50), ETHANOL_CONDUCTIVITY(52);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -53,9 +53,8 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         var result = new StringBuilder();
         for (var field : Header.values())
             result.append("#define CAL_").append(field.name()).append(' ').append(field.word).append('\n');
-        result.append("#define CAL_ETHANOL_CP ").append(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K).append("LF\n");
-        result.append("double caloricEthanolMass(double mass,double quanta){return min(mass,quanta*1e-6LF*.046LF);}\n");
-        result.append("double caloricCapacity(double mass,double ethanolMass,double pureCp){return (mass-ethanolMass)*pureCp+ethanolMass*CAL_ETHANOL_CP;}\n");
+        result.append("double caloricEthanolMass(double mass,double quanta,double molarMass){return min(mass,quanta*1e-6LF*molarMass); }\n");
+        result.append("double caloricCapacity(double mass,double ethanolMass,double pureCp,double constituentCp){return (mass-ethanolMass)*pureCp+ethanolMass*constituentCp; }\n");
         return result.toString();
     }
 
@@ -89,12 +88,12 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                 layout.word(VulkanThermalDeviceLayout.Field.SPECIES_HANDLES),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_AMOUNTS));}
     }
     record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible,
-                  int aqueousMaterial,int ethanolSpecies) {
+                  int aqueousMaterial,int ethanolSpecies,double ethanolMolarMass,double ethanolHeatCapacity,double ethanolConductivity) {
         Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible) {
-            this(offsets,upper,capacity,referenceTemperature,coldSensible,-1,-1);
+            this(offsets,upper,capacity,referenceTemperature,coldSensible,-1,-1,0.0,0.0,0.0);
         }
-        Tables withAqueous(int material,int species) {
-            return new Tables(offsets,upper,capacity,referenceTemperature,coldSensible,material,species);
+        Tables withAqueous(int material,int species,double molarMass,double heatCapacity,double conductivity) {
+            return new Tables(offsets,upper,capacity,referenceTemperature,coldSensible,material,species,molarMass,heatCapacity,conductivity);
         }
     }
     static Tables tables(FluidMaterialRegistry fluid,ThermalRegistry thermal) {
@@ -128,7 +127,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                   VulkanLiquidStateLayout.Column coldEnergies,VulkanLiquidStateLayout.Column cellTemperatures,
                   VulkanLiquidStateLayout.Column cellHeatCapacities,long endOffset) {
         ByteBuffer headerBytes() {
-            var out=ByteBuffer.allocateDirect(192).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[48];
+            var out=ByteBuffer.allocateDirect(216).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[54];
             data[Header.ROWS.word]=inventory.rows();data[Header.MATERIAL_COUNT.word]=tables.referenceTemperature().length;data[Header.SPECIES_STRIDE.word]=speciesStride;
             data[Header.MATERIAL_REFERENCE.word]=materialReferenceWordOffset;data[Header.SPECIES_REFERENCE.word]=speciesReferenceWordOffset;data[Header.SEGMENT_OFFSETS.word]=word(offsets);data[Header.SEGMENT_UPPER.word]=word(upper);
             data[Header.SEGMENT_CAPACITY.word]=word(capacity);data[Header.REFERENCE_TEMPERATURE.word]=word(referenceTemperature);data[Header.COLD_SENSIBLE.word]=word(coldSensible);
@@ -139,7 +138,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
             data[Header.SPECIES_HANDLES.word]=inventory.speciesHandlesWord();data[Header.SPECIES_AMOUNTS.word]=inventory.speciesAmountsWord();
             data[Header.SECONDARY_BEGIN.word]=inventory.secondaryBegin();data[Header.SECONDARY_COUNTS.word]=inventory.secondaryCountsWord();
             data[Header.AQUEOUS_MATERIAL.word]=tables.aqueousMaterial();data[Header.ETHANOL_SPECIES.word]=tables.ethanolSpecies();
-            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4 * Header.MINIMUM_TEMPERATURE.word,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);return out;
+            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4 * Header.MINIMUM_TEMPERATURE.word,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);out.putDouble(4 * Header.ETHANOL_HEAT_CAPACITY.word,tables.ethanolHeatCapacity());out.putDouble(4 * Header.ETHANOL_MOLAR_MASS.word,tables.ethanolMolarMass());out.putDouble(4 * Header.ETHANOL_CONDUCTIVITY.word,tables.ethanolConductivity());return out;
         }
         void initializeHeaderAndTables(ByteBuffer destination) {
             destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
@@ -173,7 +172,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                          int speciesStride,long scratchBase,long alignment) {
         if(alignment<8||(alignment&(alignment-1))!=0||materialReferenceWordOffset<0
                 ||speciesReferenceWordOffset<0||speciesStride<0)throw new IllegalArgumentException("Invalid liquid caloric layout");
-        long[] cursor={scratchBase};var header=column(cursor,48,4,alignment);var offsets=column(cursor,tables.offsets().length,4,alignment);
+        long[] cursor={scratchBase};var header=column(cursor,54,4,alignment);var offsets=column(cursor,tables.offsets().length,4,alignment);
         var upper=column(cursor,tables.upper().length,8,alignment);var capacity=column(cursor,tables.capacity().length,8,alignment);
         var reference=column(cursor,tables.referenceTemperature().length,8,alignment);var cold=column(cursor,tables.coldSensible().length,8,alignment);
         var temperatures=column(cursor,inventory.rows(),8,alignment);var capacities=column(cursor,inventory.rows(),8,alignment);

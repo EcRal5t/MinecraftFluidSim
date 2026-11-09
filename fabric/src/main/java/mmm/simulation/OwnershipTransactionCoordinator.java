@@ -229,7 +229,7 @@ final class OwnershipTransactionCoordinator {
 			int z0 = (pos.getZ() - region.origin().getZ()) * cellsPerBlock;
 			var cells = new ArrayList<Integer>();
 			for (int z = z0; z < z0 + cellsPerBlock; z++) for (int y = y0; y < y0 + cellsPerBlock; y++)
-				for (int x = x0; x < x0 + cellsPerBlock; x++) cells.add(x + domain.sizeX() * (y + domain.sizeY() * z));
+				for (int x = x0; x < x0 + cellsPerBlock; x++) { int cell = domain.grid().cell(x,y,z); if (cell >= 0) cells.add(cell); }
 			if (domain.returnNativeWaterCells(cells)) {
 				returned.add(new OwnershipJournal.BlockEntry(block.packedPosition(), NbtUtils.writeBlockState(Blocks.WATER.defaultBlockState())));
 				returnedPositions.add(block.packedPosition());

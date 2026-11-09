@@ -33,7 +33,7 @@ import java.util.List;
 /** Exact container quantities, actual cell transfer transactions and complete recovery. */
 public final class M6ContainerValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+			0.5F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	private static final long BUCKET = ContainerFluidLedger.NANOS_PER_BLOCK;
 	private static int passed;
 
@@ -165,12 +165,12 @@ public final class M6ContainerValidation {
 		ThermalMaterialDefinition solution = thermalLiquid("test:thermal/solution", "mmm:water", 100.0);
 		ThermalRegistry registry = new ThermalRegistry(List.of(solution), List.of(new ThermalSpeciesOffset(
 				"test:thermal_offset/water", BuiltinChemicalDefinitions.H2O, solution.id(), ExactRational.of(12))),
-				List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
-		ChemicalContents source = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+				List.of(), mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint(), "");
+		ChemicalContents source = new ChemicalContents(mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint(),
 				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group("mmm:water", BUCKET,
 				mmm.units.Mass.fromKilograms(18.0), mmm.units.Mass.fromKilograms(0.0), List.of(
 				new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
-		ChemicalContents.Split inventory = source.split(333_333_333L, BuiltinChemicalDefinitions.REGISTRY);
+		ChemicalContents.Split inventory = source.split(333_333_333L, mmm.fluid.TestFluidDefinitions.load().chemistry());
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		double sourceEnergy = state.internalEnergyAtTemperature(registry.materialHandle(solution.id()),
 				source.totalMass(), java.util.Map.of(BuiltinChemicalDefinitions.H2O,
@@ -185,7 +185,7 @@ public final class M6ContainerValidation {
 				inventory.inserted()) - 320.0) < 1.0E-12,
 				"chemical thermal split ignored selected mass or species reference energy");
 		for (long selectedNanos : new long[] {1L, BUCKET - 1L}) {
-			var tinyInventory = source.split(selectedNanos, BuiltinChemicalDefinitions.REGISTRY);
+			var tinyInventory = source.split(selectedNanos, mmm.fluid.TestFluidDefinitions.load().chemistry());
 			var tinyEnergy = LiquidContainerThermodynamics.split(registry, thermal, source,
 					tinyInventory.inserted(), tinyInventory.remaining());
 			var smaller = selectedNanos == 1L ? tinyInventory.inserted() : tinyInventory.remaining();
@@ -205,9 +205,9 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testGranularContents() {
-		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		GranularRegistry registry = mmm.fluid.TestFluidDefinitions.load().granular();
 		SolidCompositionRecord solid = SolidCompositionRecord.fromStableAmounts(
-				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
+				mmm.fluid.TestFluidDefinitions.load().chemistry(), java.util.Map.of(
 						BuiltinChemicalDefinitions.CL_MINUS, 640L,
 						BuiltinChemicalDefinitions.NA_PLUS, 640L), 0L);
 		List<GranularContents.SpeciesAmount> species = java.util.Map.of(
@@ -218,15 +218,15 @@ public final class M6ContainerValidation {
 		GranularContents contents = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_CUBIC_METER, List.of(
 				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, 65_536L, mmm.units.Mass.fromKilograms(127.5)),
 				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, 10L,
-						mmm.units.Mass.fromKilograms(solid.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
+						mmm.units.Mass.fromKilograms(solid.totalMass(mmm.fluid.TestFluidDefinitions.load().chemistry())),
 						Double.doubleToRawLongBits(0.0), species)));
-		contents.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
-		var split = contents.split(32_773L, BuiltinChemicalDefinitions.REGISTRY);
+		contents.validateAgainst(registry, mmm.fluid.TestFluidDefinitions.load().chemistry());
+		var split = contents.split(32_773L, mmm.fluid.TestFluidDefinitions.load().chemistry());
 		check(split.inserted().totalSolidVolumeSvq() == 32_773L
 				&& split.inserted().totalMassUnits() + split.remaining().totalMassUnits() == contents.totalMassUnits(),
 				"bounded granular selection lost SVQ or integer mass");
-		split.inserted().validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
-		split.remaining().validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+		split.inserted().validateAgainst(registry, mmm.fluid.TestFluidDefinitions.load().chemistry());
+		split.remaining().validateAgainst(registry, mmm.fluid.TestFluidDefinitions.load().chemistry());
 		for (int i = 0; i < contents.groups().size(); i++) {
 			var original = contents.groups().get(i);
 			var chosen = split.inserted().groups().get(i);
@@ -248,7 +248,7 @@ public final class M6ContainerValidation {
 				"granular contents canonical round-trip changed exact inventory");
 		try {
 			new GranularContents("0".repeat(64), SolidVolume.SVQ_PER_CUBIC_METER, decoded.groups())
-					.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+					.validateAgainst(registry, mmm.fluid.TestFluidDefinitions.load().chemistry());
 			throw new AssertionError("Expected foreign granular registry rejection");
 		} catch (IllegalArgumentException expected) {
 			// expected
@@ -303,7 +303,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testConversions() {
-		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
 		domain.setVolume(4, 2, 4, 0.625F);
@@ -367,7 +367,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactInsert() {
-		var domain=new HostFluidState(6,4,6,CONFIG);domain.setSolid(0,0,0,true);
+		var domain=new HostFluidState(6,4,6,CONFIG, mmm.fluid.TestFluidDefinitions.load());domain.setSolid(0,0,0,true);
 		var inserted=domain.tryInsertExactVolume(3,2,3,.375F,2);
 		check(inserted.transferred()&&inserted.volume()==.375
 				&&inventoryVolume(domain).equals(SignedDyadic.of(inserted.volume()))&&domain.totalMassUnits()==inserted.massUnits(),
@@ -377,7 +377,7 @@ public final class M6ContainerValidation {
 		check(compressed.transferred()&&domain.totalMassUnits()==before.liquid().stocks().stream().mapToLong(mmm.inventory.LiquidCellInventory.Stock::massUnits).sum()+compressed.massUnits()
 				&&inventoryVolume(domain).equals(SignedDyadic.of(100.375)),"Compressed insertion lost material");
 		check(domain.pressure(3,2,3)>0,"Compressed source did not produce pressure");
-		var compact=new HostFluidState(6,4,6,CONFIG);
+		var compact=new HostFluidState(6,4,6,CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		var addition=compact.tryInsertExactVolume(3,2,3,1,2);
 		check(addition.transferred()&&inventoryVolume(compact).equals(SignedDyadic.of(1))&&compact.totalMassUnits()==addition.massUnits(),
 				"Insertion depended on the old display sampling budget");
@@ -389,7 +389,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactExtract() {
-		var domain=new HostFluidState(6,4,6,CONFIG);
+		var domain=new HostFluidState(6,4,6,CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		check(domain.tryInsertExactVolume(3,2,3,.375F,2).transferred(),"Extraction setup failed");
 		var source=domain.captureAuthoritativeState();var volume=inventoryVolume(domain);long mass=domain.totalMassUnits();
 		check(!domain.tryExtractExactVolume(3,2,3,.5F,2).transferred(),"Extraction exceeded available stock");
@@ -402,7 +402,7 @@ public final class M6ContainerValidation {
 		check(domain.tryExtractExactVolume(3,2,3,0,2).transferred(),"Zero-volume extraction failed");
 		FluidDomainStateAssertions.assertSameState(source,domain.captureAuthoritativeState(),"Zero-volume extraction");
 
-		var coarse=new HostFluidState(4,4,4,CONFIG);
+		var coarse=new HostFluidState(4,4,4,CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		check(coarse.tryInsertExactVolume(1,1,1,.125F,0).transferred(),"Small-transfer setup failed");
 		var original=coarse.captureAuthoritativeState();
 		// Display positions and float volume samples can stay unchanged while exact stock moves.
@@ -444,7 +444,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactMaterialMass() {
-		HostFluidState residual = new HostFluidState(4, 4, 4, CONFIG);
+		HostFluidState residual = new HostFluidState(4, 4, 4, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		FluidDomainContracts.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
 		check(seeded.transferred(), "could not seed a small inventory");
 		FluidDomainContracts.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
@@ -453,10 +453,10 @@ public final class M6ContainerValidation {
 				"exact extraction zeroed a positive sub-micro residual: transferred=" + tiny.transferred()
 						+ ", removed=" + tiny.volume() + ", residual=" + residual.totalVolumeExact());
 
-		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG);
+		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
-				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
-				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material())));
 
 		double insertedMass = 123.456789012345;
 		FluidDomainContracts.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
@@ -495,10 +495,10 @@ public final class M6ContainerValidation {
 			// expected: persisted strings are bounded before splitting or allocation
 		}
 
-		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG);
+		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
-				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
-				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),
+				mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material())));
 
 		List<FluidDomainContracts.MaterialPortion> portions = List.of(
 				new FluidDomainContracts.MaterialPortion(1, 3.2, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(256.125)),
@@ -545,7 +545,7 @@ public final class M6ContainerValidation {
 			// A malformed item must be rejected during construction, before tooltip/WAL callers.
 		}
 
-		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG);
+		HostFluidState domain = new HostFluidState(4, 4, 4, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		try {
 			domain.tryInsertExactMixture(2, 2, 2,
 					List.of(new FluidDomainContracts.MaterialPortion(0, Double.NaN, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
@@ -562,7 +562,7 @@ public final class M6ContainerValidation {
 	 * debits at most the container's balance. The combined ledger drift stays tiny and bounded.
 	 */
 	private static void testBucketRoundTrip() {
-		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG);
+		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		// Initial pour: a full bucket empties into the region.
 		var units = mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize());
 		long containerNanos = BUCKET;

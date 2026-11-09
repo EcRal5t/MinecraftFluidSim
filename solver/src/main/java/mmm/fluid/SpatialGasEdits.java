@@ -22,7 +22,7 @@ final class SpatialGasEdits {
                 domain.domainCapabilities.spatialGasModel().requireInventoryEnergy(after.cells().get(cell),energies[cell]);
                 work=work.add(entry.getValue());rounding=rounding.add(SignedDyadic.of(energies[cell]).subtract(exact));
             }
-            var next=new SpatialGasState(after.sizeX(),after.sizeY(),after.sizeZ(),after.registryFingerprint(),after.chemicalRegistryFingerprint(),
+            var next=new SpatialGasState(after.grid(),after.registryFingerprint(),after.chemicalRegistryFingerprint(),
                     after.cells(),energies,after.externalSource(),after.escapedSink(),after.phaseSource(),after.phaseSink());
             return new Plan(before,next,work,escapedEnergy,rounding,transfers);
         }
@@ -127,7 +127,7 @@ final class SpatialGasEdits {
             }
             energy[cell]=finalEnergy;gasWork=gasWork.add(SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(oldEnergy)));
         }
-        var next=new SpatialGasState(state.sizeX(),state.sizeY(),state.sizeZ(),state.registryFingerprint(),state.chemicalRegistryFingerprint(),
+        var next=new SpatialGasState(state.grid(),state.registryFingerprint(),state.chemicalRegistryFingerprint(),
                 inventories,energy,state.externalSource(),sink,state.phaseSource(),state.phaseSink());
         return new Plan(state,next,gasWork,escaped,roundoff,List.copyOf(transfers));
     }
@@ -144,8 +144,8 @@ final class SpatialGasEdits {
             }
         }
         var cut=domain.geometry.cutCells;
-        if(masks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
-        var phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
+        if(masks!=null){cut=new FlipCutCellGeometry(domain.grid);cut.restoreMicroMasks(masks);}
+        var phase=new FlipPressurePhaseGeometry(domain.grid);
         phase.rebuildOccupancy(new mmm.inventory.PhaseOccupancyState(liquid),cut,pore,null);return phase;
     }
     private static double dryFace(HostFluidState domain,FlipPressurePhaseGeometry oldPhase,FlipPressurePhaseGeometry futurePhase,int cell,int target,int side){
@@ -187,9 +187,7 @@ final class SpatialGasEdits {
         return new Connectivity(labels,List.copyOf(groups));
     }
     private static int neighbor(HostFluidState domain,int cell,int side){
-        int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY),step=(side&1)==0?-1:1;
-        switch(side/2){case 0->x+=step;case 1->y+=step;default->z+=step;}
-        return x<0||y<0||z<0||x>=domain.sizeX||y>=domain.sizeY||z>=domain.sizeZ?-1:x+domain.sizeX*(y+domain.sizeY*z);
+        return domain.grid.neighbor(cell,side);
     }
     private static double capacity(HostFluidState domain,int cell,long[] occupied,byte[] masks){
         int mask=masks==null?domain.geometry.cutCells.mask(cell):Byte.toUnsignedInt(masks[cell]);

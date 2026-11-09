@@ -22,6 +22,9 @@ final class VulkanLiquidWorkspace {
         final VulkanPressureMultigrid.Layout hierarchy;
         final VulkanMixtureState.Layout mixture;
         final VulkanLiquidStateLayout.Column multigridColumn;
+        VulkanLiquidStateLayout.Column hierarchyTopology(){
+            return new VulkanLiquidStateLayout.Column(multigridColumn.offset()+4L*hierarchy.topologyOffset(),hierarchy.topologyData().length,4);
+        }
         final Transport transport;
         final long bytes;
         final int contactCapacity;
@@ -69,7 +72,7 @@ final class VulkanLiquidWorkspace {
             this.liquid=liquid;this.contactCapacity=contactCapacity;this.thermalContactCapacity=thermalContactCapacity;this.thermalBathCapacity=thermalBathCapacity;this.granularReserves=granularReserves;
         int cells = liquid.cellCount(),rows=Math.addExact(cells,
                 granularReserves==null?0:Math.multiplyExact(3,granularReserves.particles()));
-        hierarchy = VulkanPressureMultigrid.layout(liquid.sizeX(), liquid.sizeY(), liquid.sizeZ(),rows);
+        hierarchy = VulkanPressureMultigrid.layout(liquid.grid(),rows);
         int faces = Math.addExact(Math.addExact(liquid.column(MOMENTUM_X).count(),
                 liquid.column(MOMENTUM_Y).count()), liquid.column(MOMENTUM_Z).count());
         long cursor = align(liquid.bytes());
@@ -476,7 +479,7 @@ final class VulkanLiquidWorkspace {
             if(required[2]>transport.materials.scratchLimbCapacity())windowLimbs=growCount(windowLimbs,ceil(required[2],windows));
             if(stocks==liquid.stockCapacity()&&species==liquid.speciesCapacity()&&limbs==liquid.limbCapacity()&&windowLimbs==definitions.scratchLimbsPerWindow())
                 throw new IllegalStateException("Device capacity error 64 after "+capacityStage+" reported no larger CSR requirement: "+java.util.Arrays.toString(required));
-            return new VulkanLiquidWorkspace(region,new VulkanLiquidStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),stocks,species,limbs,liquid.alignment(),liquid.materialCount()),
+            return new VulkanLiquidWorkspace(region,new VulkanLiquidStateLayout(liquid.grid(),stocks,species,limbs,liquid.alignment(),liquid.materialCount()),
                     definitions.capacities(stocks,species,limbs,windowLimbs),contactCapacity,thermalContactCapacity,thermalBathCapacity,granularReserves,coherentSpeciesCapacity);
         }
         VulkanLiquidWorkspace growContacts(int required){return new VulkanLiquidWorkspace(region,liquid,transport.definitions,growCount(contactCapacity,required),thermalContactCapacity,thermalBathCapacity,granularReserves,coherentSpeciesCapacity);}
@@ -489,7 +492,7 @@ final class VulkanLiquidWorkspace {
             int species=growCount(liquid.speciesCapacity(),required.species),limbs=growCount(liquid.limbCapacity(),required.limbs);
             var next=granularReserves==null?null:new GranularReserves(growCount(granularReserves.particles(),required.particles),growCount(granularReserves.deposits(),required.deposits),growCount(granularReserves.species(),required.solidSpecies));
             if(species==liquid.speciesCapacity()&&limbs==liquid.limbCapacity()&&java.util.Objects.equals(next,granularReserves)&&coherentSpecies==coherentSpeciesCapacity)throw new IllegalStateException("Reaction feedback did not grow inventory capacity");
-            return new VulkanLiquidWorkspace(region,new VulkanLiquidStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),liquid.stockCapacity(),species,limbs,liquid.alignment(),liquid.materialCount()),
+            return new VulkanLiquidWorkspace(region,new VulkanLiquidStateLayout(liquid.grid(),liquid.stockCapacity(),species,limbs,liquid.alignment(),liquid.materialCount()),
                     transport.definitions.capacities(liquid.stockCapacity(),species,limbs,transport.definitions.scratchLimbsPerWindow()),contactCapacity,thermalContactCapacity,thermalBathCapacity,next,coherentSpecies);
         }
         VulkanLiquidWorkspace growGranular(int[] required){var r=granularReserves;var next=new GranularReserves(growCount(r.particles(),required[0]),growCount(r.deposits(),required[1]),growCount(r.species(),required[2]));
@@ -500,6 +503,7 @@ final class VulkanLiquidWorkspace {
             if(persistentCopies==null){
                 var plan=new VulkanBufferCopyPlan.Builder();
                 for(var field:VulkanLiquidStateLayout.Field.values()){var c=liquid.column(field);plan.copy(c,c);}
+                plan.copy(hierarchyTopology(),hierarchyTopology());
                 for(var field:new GeometryField[]{GeometryField.FIXED_MASKS,GeometryField.OCCUPIED_SOLID}){var c=geometry.get(field);plan.copy(c,c);}
                 var warm=pressureColumns.get(PressureField.PRESSURE);plan.copy(warm,warm);
                 if(transport==null){var c=mixture.header();plan.copy(c,c);}
@@ -537,6 +541,7 @@ final class VulkanLiquidWorkspace {
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
             liquid.copyColumns(command,source.liquid,input,output,stack);
+            copyColumn(command,input,source.hierarchyTopology(),output,hierarchyTopology(),stack);
             for(var field:new GeometryField[]{GeometryField.FIXED_MASKS,GeometryField.OCCUPIED_SOLID})
                 copyColumn(command,input,source.geometry.get(field),output,geometry.get(field),stack);
             copyColumn(command,input,source.pressureColumns.get(PressureField.PRESSURE),output,pressureColumns.get(PressureField.PRESSURE),stack);
@@ -625,8 +630,8 @@ final class VulkanLiquidWorkspace {
             routes=new VulkanLiquidRouteLayout(stocks,Math.multiplyExact(liquid.speciesCapacity(),7),cursor[0],liquid.alignment());
             volumes=VulkanLiquidCellVolumes.layout(liquid,Math.addExact(liquid.limbCapacity(),cells),definitions.quantumExponent(),routes.endOffset(),liquid.alignment());
             sourceThermal=VulkanLiquidThermodynamics.layout(liquid,definitions.thermal(),word(materialReference),word(speciesReference),definitions.speciesStride(),volumes.endOffset(),liquid.alignment());
-            sourceEntity=bodyCapacity==0?null:new VulkanEntityBodyCoupling.Layout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),bodyCapacity,bodyEntries,pressureColumns.get(PressureField.ROWS).count(),geometry.get(GeometryField.FIXED_MASKS),geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.OCCUPIED_SOLID),sourceThermal.endOffset(),liquid.alignment());
-            entity=sourceEntity==null?null:new VulkanEntityBodyCoupling.Layout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),bodyCapacity,bodyEntries,pressureColumns.get(PressureField.ROWS).count(),geometry.get(GeometryField.FIXED_MASKS),geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.OCCUPIED_SOLID),sourceEntity.endOffset(),liquid.alignment());
+            sourceEntity=bodyCapacity==0?null:new VulkanEntityBodyCoupling.Layout(liquid.grid(),bodyCapacity,bodyEntries,pressureColumns.get(PressureField.ROWS).count(),geometry.get(GeometryField.FIXED_MASKS),geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.OCCUPIED_SOLID),sourceThermal.endOffset(),liquid.alignment());
+            entity=sourceEntity==null?null:new VulkanEntityBodyCoupling.Layout(liquid.grid(),bodyCapacity,bodyEntries,pressureColumns.get(PressureField.ROWS).count(),geometry.get(GeometryField.FIXED_MASKS),geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.OCCUPIED_SOLID),sourceEntity.endOffset(),liquid.alignment());
             viscosity=new VulkanLiquidViscosity.Layout(liquid,geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),geometry.get(GeometryField.WALL_GEOMETRY),word(sourceThermal.temperatures()),word(activityFaces),word(activityCells),
                     definitions.viscosity(),entity==null?null:entity.prescribedContacts(),definitions.noSlip(),entity==null?sourceThermal.endOffset():entity.endOffset(),liquid.alignment());
             forces=VulkanLiquidForces.layout(liquid,definitions.forces(),word(sourceThermal.cellTemperatures()),word(geometry.get(GeometryField.FACES)),-1,word(activityFaces),viscosity.endOffset(),liquid.alignment());
@@ -743,7 +748,7 @@ final class VulkanLiquidWorkspace {
             if(gas!=null) {
                 gasTables(writer,gas.thermo);
                 var source=gasConfiguration.initial();
-                var local=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),liquid.cellCount(),gas.state.definitions(),8);
+                var local=new VulkanGasStateLayout(liquid.grid(),liquid.cellCount(),gas.state.definitions(),8);
                 var data=ByteBuffer.allocate(Math.toIntExact(local.bytes())).order(ByteOrder.LITTLE_ENDIAN);
                 local.importSpatialState(data,source);
                 for(var field:VulkanGasStateLayout.Field.values()){var c=local.column(field);if(c.bytes()>0)writer.put(gas.state.column(field).offset(),data.slice(Math.toIntExact(c.offset()),Math.toIntExact(c.bytes())));}

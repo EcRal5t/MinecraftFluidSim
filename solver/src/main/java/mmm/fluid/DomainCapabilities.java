@@ -89,7 +89,7 @@ final class DomainCapabilities {
 		inventory.planAdditions(additions).commit();
 		domain.liquidCells = inventory;
 		domain.chemistry = candidate;
-		if(localGas!=null)domain.gasState.spatial=new mmm.fluid.air.SpatialGasState(localGas.sizeX(),localGas.sizeY(),localGas.sizeZ(),localGas.registryFingerprint(),registry.fingerprint(),
+		if(localGas!=null)domain.gasState.spatial=new mmm.fluid.air.SpatialGasState(localGas.grid(),localGas.registryFingerprint(),registry.fingerprint(),
 				localGas.cells(),localGas.internalEnergy(),localGas.externalSource(),localGas.escapedSink(),localGas.phaseSource(),localGas.phaseSink());
 		for (var stock : domain.liquidCells.stocks()) domain.chemistry.markDirtyCell(stock.key().cell());
 		domain.markCellInventoryChanged();
@@ -107,7 +107,7 @@ final class DomainCapabilities {
 		if (!prepareThermalBinding(registry, liquidRegistry, initialTemperatureK)) return;
 		if (domain.gasState.frame != null) domain.gasInitialization.refresh();
 		domain.thermalState = FluidThermalBinding.create(registry, domain.materialRegistry, initialTemperatureK,
-				domain.liquidCells.physicalSize(), domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
+				domain.liquidCells.physicalSize(), domain.grid, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
 				maximumTransportSubsteps);
 		finishThermalBinding();
 		if(domain.gasState.spatial==null) initializeSpatialGas();
@@ -145,7 +145,7 @@ final class DomainCapabilities {
 				inventories.add(stock);
 				energies[cell] = stock.isEmpty() ? 0 : model.internalEnergyAtTemperature(stock, temperature);
 			}
-			var state = new mmm.fluid.air.SpatialGasState(domain.sizeX, domain.sizeY, domain.sizeZ,
+			var state = new mmm.fluid.air.SpatialGasState(domain.grid,
 					network.registry().fingerprint(), domain.chemistry == null ? "" : domain.chemistry.registry().fingerprint(),
 					inventories, energies, mmm.fluid.air.GasRegionAudit.aggregate(inventories), mmm.fluid.air.GasAuditLedger.EMPTY,
 					mmm.fluid.air.GasAuditLedger.EMPTY, mmm.fluid.air.GasAuditLedger.EMPTY);
@@ -166,27 +166,15 @@ final class DomainCapabilities {
 	}
 	mmm.thermal.GasThermalModel spatialGasModel(){
 		var registry=domain.gasState.network.registry();
-		var thermal=domain.thermalState==null?null:domain.thermalState.registry();
+		var thermal=domain.definitions.thermal();
 		if(cachedGasModel!=null&&registry==cachedGasRegistry&&thermal==cachedThermalRegistry)return cachedGasModel;
 		cachedGasRegistry=registry;cachedThermalRegistry=thermal;
-		if(thermal!=null)return cachedGasModel=new mmm.thermal.GasThermalModel(thermal,registry);
-		var materials=new java.util.ArrayList<mmm.thermal.ThermalMaterialDefinition>();
-		var offsets=new java.util.ArrayList<mmm.thermal.ThermalSpeciesOffset>();
-		for(var component:registry.components()){
-			String id="mmm:isothermal_"+component.id().replace(':','_');
-			materials.add(new mmm.thermal.ThermalMaterialDefinition(
-				id,mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
-				component.id(),293.15,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(
-				mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,100000,1000))));
-			for(String species:component.allowedSpecies())offsets.add(new mmm.thermal.ThermalSpeciesOffset(
-					"mmm:isothermal_offset_"+offsets.size(),species,id,mmm.chemistry.ExactRational.ZERO));
-		}
-		return cachedGasModel=new mmm.thermal.GasThermalModel(new mmm.thermal.ThermalRegistry(materials,offsets,List.of(),"",""),registry);
+		return cachedGasModel=new mmm.thermal.GasThermalModel(thermal,registry);
 	}
 	private void bindSpatialGasEnergy(double temperature){
 		var old=domain.gasState.spatial;var model=spatialGasModel();double[] energies=new double[old.cellCount()];
 		for(int cell=0;cell<energies.length;cell++)if(!old.cells().get(cell).isEmpty())energies[cell]=model.internalEnergyAtTemperature(old.cells().get(cell),temperature);
-		domain.gasState.spatial=new mmm.fluid.air.SpatialGasState(old.sizeX(),old.sizeY(),old.sizeZ(),old.registryFingerprint(),old.chemicalRegistryFingerprint(),
+		domain.gasState.spatial=new mmm.fluid.air.SpatialGasState(old.grid(),old.registryFingerprint(),old.chemicalRegistryFingerprint(),
 				old.cells(),energies,old.externalSource(),old.escapedSink(),old.phaseSource(),old.phaseSink());
 		domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger().withExternalSourceEnergy(SignedDyadic.sum(energies)));
 		domain.phaseOccupancyDirty=true;domain.pressureSystem.invalidateGeometry();
@@ -214,8 +202,8 @@ final class DomainCapabilities {
 	}
 	private void finishThermalBinding() {
 		if (domain.granularCoupling == null) {
-			domain.granularCoupling = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
-			domain.granularNextCoupling = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+			domain.granularCoupling = new GranularCouplingFields(domain.grid,domain.config.cellSize());
+			domain.granularNextCoupling = new GranularCouplingFields(domain.grid,domain.config.cellSize());
 		}
 		refreshCoherentOccupancy();
 		domain.gridDirty = domain.velocityGridDirty = true;domain.pressureSystem.invalidateGeometry();
@@ -269,7 +257,7 @@ final class DomainCapabilities {
 		}
 		var liquidEnergy = domain.liquidCells.planPhysicalEnergyUpdate(state.copyInternalEnergy());
 		ThermalDomainState candidate = FluidThermalBinding.createOwnerRestoreTarget(registry, domain.materialRegistry, initialTemperature,
-				domain.liquidCells.physicalSize(), domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
+				domain.liquidCells.physicalSize(), domain.grid, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
 				maximumTransportSubsteps);
 		FluidThermalBinding.restore(candidate, state, thermalMarkerContext(), domain.gasState.network);
 		liquidEnergy.commit();
@@ -293,7 +281,7 @@ final class DomainCapabilities {
 		if (!prepareThermalBinding(registry, domain.materialRegistry, state.insertionTemperatureK()))
 			throw new IllegalStateException("Thermal restore target is already bound");
 		var candidate = FluidThermalBinding.createOwnerRestoreTarget(registry, domain.materialRegistry, state.insertionTemperatureK(),
-				domain.liquidCells.physicalSize(), domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
+				domain.liquidCells.physicalSize(), domain.grid, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
 				maximumTransportSubsteps);
 		candidate.restoreOwnerState(state, thermalMarkerContext(), domain.gasState.network,
 				domain.gasState.spatial==null?SignedDyadic.ZERO:SignedDyadic.sum(domain.gasState.spatial.internalEnergy()));

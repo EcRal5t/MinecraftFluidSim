@@ -27,18 +27,18 @@ final class GranularSurfaceGeometry {
 		FluidMaterialSnapshotPayload state = payload.material();
 		Emitter emitter = new Emitter(vertices, camera, state, textured, sprites);
 		float h = state.cellSize();
-		for (int z = 0; z < state.sizeZ(); z++) for (int y = 0; y < state.sizeY(); y++) {
-			for (int x = 0; x < state.sizeX(); x++) {
-				int cell = granularIndex(state, x, y, z);
-				float fill = Byte.toUnsignedInt(frame.bulkFill()[cell]) / 255.0F;
-				if (fill <= 0.0F) continue;
-				int material = frame.topMaterial()[cell];
-				int color = payload.granularMaterials().get(material).argb();
-				float porosity = Byte.toUnsignedInt(frame.porosity()[cell]) / 255.0F;
-				renderDepositCell(emitter, state, frame.bulkFill(), x, y, z, h, fill, color,
-						0.94F + 0.04F * (1.0F - porosity));
-			}
-		}
+		var grid = state.geometry().grid();
+        for (int cell = 0; cell < grid.cellCount(); cell++) {
+            int x=grid.x(cell),y=grid.y(cell),z=grid.z(cell);
+            float fill = Byte.toUnsignedInt(frame.bulkFill()[cell]) / 255.0F;
+            if (fill <= 0.0F) continue;
+            int material = frame.topMaterial()[cell];
+            int color = payload.granularMaterials().get(material).argb();
+            float porosity = Byte.toUnsignedInt(frame.porosity()[cell]) / 255.0F;
+            renderDepositCell(emitter, state, frame.bulkFill(), x, y, z, h, fill, color,
+                    0.94F + 0.04F * (1.0F - porosity));
+        }
+
 		for (var sample : payload.activeParcels()) {
 			float centerX = sample.xQ() / 65_535.0F * state.sizeX() * h;
 			float centerY = sample.yQ() / 65_535.0F * state.sizeY() * h;
@@ -92,11 +92,12 @@ final class GranularSurfaceGeometry {
 		if (x < 0 || x >= state.sizeX() || y < 0 || y >= state.sizeY() || z < 0 || z >= state.sizeZ()) {
 			return 0.0F;
 		}
-		return Byte.toUnsignedInt(bulk[granularIndex(state, x, y, z)]) / 255.0F;
+		int index = granularIndex(state,x,y,z);
+        return index < 0 ? 0.0F : Byte.toUnsignedInt(bulk[index]) / 255.0F;
 	}
 
 	private static int granularIndex(FluidMaterialSnapshotPayload state, int x, int y, int z) {
-		return (z * state.sizeY() + y) * state.sizeX() + x;
+		return state.geometry().grid().cell(x,y,z);
 	}
 
     private static void box(Emitter emitter,float x0,float y0,float z0,float x1,float y1,float z1,

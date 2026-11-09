@@ -19,6 +19,7 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+// SPATIAL_GRID
 // PLIC_FACE_LIBRARY
 int headerWord(int index) {
     return int(words[p.header + index]);
@@ -31,15 +32,9 @@ void writeDouble(int at, double value) {
     words[at] = bits.x;
     words[at + 1] = bits.y;
 }
-ivec3 dimensions() {
-    return ivec3(headerWord(GEO_H_SIZE_X), headerWord(GEO_H_SIZE_Y), headerWord(GEO_H_SIZE_Z));
-}
-bool inside(ivec3 position) {
-    return all(greaterThanEqual(position, ivec3(0))) && all(lessThan(position, dimensions()));
-}
-int indexOf(ivec3 position) {
-    return (position.z * headerWord(GEO_H_SIZE_Y) + position.y) * headerWord(GEO_H_SIZE_X) + position.x;
-}
+ivec3 dimensions() { return gridShape(); }
+bool inside(ivec3 position) { return gridCell(position)>=0; }
+int indexOf(ivec3 position) { return gridCell(position); }
 uint support(int cell) {
     return (~words[headerWord(GEO_H_MASKS) + cell]) & 255u;
 }
@@ -70,22 +65,7 @@ void captureLocalCell(int cell) {
     if (compact) mask = 1u << findLSB(open);
     words[headerWord(GEO_H_DRY_MASKS) + cell] = mask;
 }
-ivec3 faceEndpoints(int face) {
-    int xFaces = (headerWord(GEO_H_SIZE_X) + 1) * headerWord(GEO_H_SIZE_Y) * headerWord(GEO_H_SIZE_Z),
-        yFaces = headerWord(GEO_H_SIZE_X) * (headerWord(GEO_H_SIZE_Y) + 1) * headerWord(GEO_H_SIZE_Z);
-    int axis = face < xFaces            ? 0
-               : face < xFaces + yFaces ? 1
-                                        : 2,
-        local = face - (axis == 0   ? 0
-                        : axis == 1 ? xFaces
-                                    : xFaces + yFaces);
-    ivec3 shape = dimensions();
-    shape[axis]++;
-    ivec3 position = ivec3(local % shape.x, local / shape.x % shape.y, local / (shape.x * shape.y)), step = ivec3(0);
-    step[axis] = 1;
-    return ivec3(inside(position - step) ? indexOf(position - step) : -1, inside(position) ? indexOf(position) : -1,
-                 axis);
-}
+ivec3 faceEndpoints(int face) { return gridFaceEndpoints(face); }
 float fraction(int cell, int micro) {
     return uintBitsToFloat(words[headerWord(GEO_H_MICRO_FRACTIONS) + 8 * cell + micro]);
 }

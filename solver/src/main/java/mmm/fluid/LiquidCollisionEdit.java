@@ -1,9 +1,9 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.LiquidTransportRoutes;
 
 import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalTransferLedger;
 import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -16,16 +16,13 @@ final class LiquidCollisionEdit {
 	final SpatialGasEdits.Plan localGas;
 	final FixedGeometrySnapshot fixedGeometry;
 	final List<List<LiquidCellInventory.Stock>> displaced;
-	final SignedDyadic removedEnergy, energyRoundoff;
+	final SignedDyadic energyRoundoff;
 	private LiquidCollisionEdit(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum,
 	                            SpatialGasEdits.Plan localGas, FixedGeometrySnapshot fixedGeometry,
 	                            List<List<LiquidCellInventory.Stock>> displaced) {
 		this.inventory = inventory; this.momentum = momentum; this.localGas=localGas;
 		this.fixedGeometry = fixedGeometry; this.displaced = List.copyOf(displaced);
-		var observed = SignedDyadic.ZERO;
-		for (var row : displaced) for (var stock : row) observed = observed.add(SignedDyadic.of(stock.internalEnergy()));
-		this.removedEnergy = observed;
-		energyRoundoff = inventory.energyChange().add(observed).subtract(inventory.mechanicalHeat());
+		energyRoundoff = inventory.energyChange().subtract(inventory.mechanicalHeat());
 	}
 
 	static LiquidCollisionEdit prepare(HostFluidState domain, List<FluidDomainContracts.CollisionEdit> edits,
@@ -47,21 +44,16 @@ final class LiquidCollisionEdit {
 		var changedKeys = new java.util.TreeSet<LiquidCellInventory.Key>();
 		var eraseAll = new ArrayList<LiquidCellInventory.Edit>();
 		var retainedAll = new ArrayList<LiquidCellInventory.Stock>();
+		for (var edit : edits) masks[domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z())] = (byte) edit.mask();
 		for (var edit : edits) {
-			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z()); masks[cell] = (byte) edit.mask();
+			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
 			var source = domain.liquidCells.stocksInCell(cell);
 			var components = LiquidCellInventory.connectedSupports(edit.mask());
 			var capacities = CellRemapMicroTopology.capacities(edit.mask(), SignedDyadic.of(Integer.bitCount(~edit.mask() & 255), -3)
 					.subtract(SignedDyadic.of(occupied[cell], -24)));
 			var proposed = new SignedDyadic[source.size()][components.size()];
 			for (int i = 0; i < source.size(); i++) {
-				var stock = source.get(i); int mask = stock.key().supportMask();
-				var weights = new double[components.size() + 1]; var bounds = new SignedDyadic[weights.length];
-				Arrays.fill(bounds, stock.volume());
-				for (int j = 0; j < components.size(); j++) weights[j] = Integer.bitCount(mask & components.get(j));
-				weights[components.size()] = Integer.bitCount(mask & edit.mask());
-				var shares = LiquidCellInventory.allocateVolumes(stock.volume(), bounds, weights);
-				for (int j = 0; j < components.size(); j++) proposed[i][j] = shares[j];
+				if (!components.isEmpty()) proposed[i][0] = source.get(i).volume();
 			}
 			// Joint component limits include the retained solid occupancy before any phase is partitioned.
 			for (int j = 0; j < components.size(); j++) {
@@ -106,19 +98,7 @@ final class LiquidCollisionEdit {
 			eraseAll.addAll(erase); retainedAll.addAll(retained); removed.add(List.copyOf(escaped));
 		}
 		candidate.planEdits(eraseAll).commit(); candidate.planAdditions(retainedAll).commit();
-		// Public displacement payloads are validated before any collision owner is published.
-		var totalChemistry = domain.chemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
-		for (var row : removed) {
-			var chemical = totalChemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
-			var material = domain.materialRegistry == null ? null : new FluidDomainContracts.RemovedMaterialLedger(domain.materialRegistry.size());
-			for (var stock : row) {
-				if (chemical != null) chemical.add(domain.materialRegistry.material(stock.key().material()).id(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
-				if (material != null) material.add(stock.key().material(), stock.volumeFraction(), stock.massUnits());
-			}
-			if (chemical != null) totalChemistry.add(chemical.build());
-			if (material != null) material.build();
-		}
-		if (totalChemistry != null) domain.chemistry.requireCanRecordEscapedSink(totalChemistry.build());
+		routeDisplaced(domain, candidate, masks, occupied, removed, changedKeys);
 		var inventoryEdits = new ArrayList<LiquidCellInventory.Edit>();
 		for (var key : changedKeys) inventoryEdits.add(new LiquidCellInventory.Edit(key, candidate.stock(key)));
 		var plan = domain.liquidCells.planEdits(inventoryEdits);
@@ -127,18 +107,71 @@ final class LiquidCollisionEdit {
 		long[] beforeOccupied=domain.occupiedSolidSvq();for(int cell=0;cell<domain.cellCount;cell++)if(beforeOccupied[cell]!=occupied[cell])changed.add(cell);
 		var edit=HostMixtureEdit.prepare(domain,plan,occupied,masks,List.copyOf(changed));
 		plan=edit.inventory();var momentum=edit.momentum();var localGas=edit.gas();
-		var fixed=FixedGeometrySnapshot.fromMasks(domain.sizeX,domain.sizeY,domain.sizeZ,masks);
+		var fixed=FixedGeometrySnapshot.fromMasks(domain.grid,masks);
 		return new LiquidCollisionEdit(plan, momentum, localGas, fixed, removed);
 	}
 
-	float report(int index, HostFluidState domain, ChemicalTransferLedger.Builder chemistry,
-	             FluidDomainContracts.RemovedMaterialLedger materials, FluidDomainContracts.RemovedThermalEnergy energy) {
+	private static void routeDisplaced(HostFluidState domain, LiquidCellInventory candidate, byte[] masks,
+	                                   long[] occupied, List<List<LiquidCellInventory.Stock>> displaced,
+	                                   java.util.Set<LiquidCellInventory.Key> changedKeys) {
+		var sources = displaced.stream().flatMap(List::stream).toList();
+		if (sources.isEmpty()) return;
+		var transit = new LiquidCellInventory(domain.cellCount, domain.liquidCells.chemicalRegistry());
+		transit.planAdditions(sources).commit();
+		var routes = LiquidTransportRoutes.builder(sources.size(), sources.size());
+		var rooms = new java.util.HashMap<Long, SignedDyadic>();
+		for (var source : transit.stocks()) {
+			int start = source.key().cell();
+			var remaining = source.volume();
+			int[] firstFace = new int[domain.cellCount]; Arrays.fill(firstFace, -1);
+			boolean[] seen = new boolean[domain.cellCount]; seen[start] = true;
+			var queue = new java.util.ArrayDeque<Integer>(); queue.add(start);
+			routes.source(source);
+			while (!queue.isEmpty() && remaining.signum() > 0) {
+				int cell = queue.removeFirst();
+				if (cell != start && domain.groupAvailable(cell)) {
+					int mask = Byte.toUnsignedInt(masks[cell]);
+					var supports = LiquidCellInventory.connectedSupports(mask);
+					var capacity = CellRemapMicroTopology.capacities(mask, SignedDyadic.of(Integer.bitCount(~mask & 255), -3)
+							.subtract(SignedDyadic.of(occupied[cell], -24)));
+					for (int i = 0; i < supports.size() && remaining.signum() > 0; i++) {
+						int support = supports.get(i); long key = (long) cell << 8 | support;
+						var room = rooms.get(key);
+						if (room == null) {
+							room = capacity[i];
+							for (var stock : candidate.stocksInCell(cell)) if (stock.key().supportMask() == support) room = room.subtract(stock.volume());
+						}
+						var amount = room.compareTo(remaining) < 0 ? room : remaining;
+						if (amount.signum() > 0) {
+							routes.route(firstFace[cell], cell, support, amount);
+							changedKeys.add(new LiquidCellInventory.Key(cell, source.key().material(), support));
+							remaining = remaining.subtract(amount); room = room.subtract(amount);
+						}
+						rooms.put(key, room);
+					}
+				}
+				int x = domain.grid.x(cell), y = domain.grid.y(cell), z = domain.grid.z(cell);
+				for (int side = 0; side < 6; side++) {
+					int next = domain.grid.neighbor(cell, side);
+					if (next < 0 || seen[next] || !domain.groupAvailable(next)) continue;
+					int dx = domain.grid.x(next)-x, dy = domain.grid.y(next)-y, dz = domain.grid.z(next)-z;
+					if (domain.domainFlowFields.pressureOpenFaceFromCell(cell, next, dx, dy, dz) <= 0) continue;
+					seen[next] = true;
+					firstFace[next] = cell == start ? domain.grid.face(cell, side) : firstFace[cell];
+					queue.addLast(next);
+				}
+			}
+			if (remaining.signum() != 0)
+				throw new FluidDomainContracts.CollisionEditBlockedException("Collision displacement has no reachable capacity", null);
+		}
+		var routed = transit.planRoutes(routes.build(), FluidThermalBinding.liquidEnergyPartitioner(domain)).future();
+		candidate.planAdditions(routed.stocks()).commit();
+	}
+
+	float report(int index) {
 		double volume = 0;
 		for (var stock : displaced.get(index)) {
 			volume += stock.volumeFraction();
-			if (chemistry != null) chemistry.add(domain.materialRegistry.material(stock.key().material()).id(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
-			if (materials != null) materials.add(stock.key().material(), stock.volumeFraction(), stock.massUnits());
-			if (energy != null) energy.add(stock.internalEnergy());
 		}
 		return (float) volume;
 	}

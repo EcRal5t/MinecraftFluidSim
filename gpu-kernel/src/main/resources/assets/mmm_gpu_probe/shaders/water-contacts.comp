@@ -4,6 +4,7 @@
 const double MASS_UNIT_KG = 1e-10;
 const int STAGE_COMPUTE_RANGES = 0;
 // HOST_LAYOUT
+// SPATIAL_GRID
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint words[]; };
 layout(binding=1,std430) buffer Projection { uint outWords[]; };
@@ -11,7 +12,7 @@ layout(push_constant) uniform Params { int stage;int count;int unused;int unused
 int headerValue(int i){return int(outWords[i]);}double readDouble(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
 double readProjectionDouble(int a){return packDouble2x32(uvec2(outWords[a],outWords[a+1]));}void store(int a,double x){uvec2 bits=unpackDouble2x32(x);outWords[a]=bits.x;outWords[a+1]=bits.y;}
 int64_t readInt64(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-ivec3 cellCoordinates(int c){return ivec3(c%headerValue(H_SIZE_X),c/headerValue(H_SIZE_X)%headerValue(H_SIZE_Y),c/(headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)));}
+ivec3 cellCoordinates(int c){return gridPosition(c);}
 dvec4 plane(int c){return dvec4(readDouble(headerValue(H_PLANES)+8*c),readDouble(headerValue(H_PLANES)+8*c+2),readDouble(headerValue(H_PLANES)+8*c+4),readDouble(headerValue(H_PLANES)+8*c+6));}
 double geometryComponent(int c,int k){return readDouble(headerValue(H_GEOMETRY_CELLS)+2*(4*c+k));}
 double clippedVolumeFraction(dvec3 n,double offset){

@@ -105,7 +105,8 @@ final class VulkanCellObservation implements AutoCloseable {
     synchronized Cell capture(VulkanLiquidRegion.Capture capture, VulkanFluidStateCodec codec, int x, int y, int z) {
         var in = capture.readoutInputs();
         var liquid = in.liquid();
-        if (x < 0 || y < 0 || z < 0 || x >= liquid.sizeX() || y >= liquid.sizeY() || z >= liquid.sizeZ())
+        int cell = liquid.grid().cell(x, y, z);
+        if (cell < 0)
             throw new IllegalArgumentException("Cell observation lies outside region");
         var chemical = codec.template().chemicalRegistry();
         int materials = codec.fluids().size(), species = chemical == null ? 0 : chemical.species().size();
@@ -129,7 +130,7 @@ final class VulkanCellObservation implements AutoCloseable {
         }
         int[] h = new int[Header.values().length];
         java.util.Arrays.fill(h, -1);
-        h[Header.CELL.ordinal()] = x + liquid.sizeX() * (y + liquid.sizeY() * z);
+        h[Header.CELL.ordinal()] = cell;
         h[Header.MATERIAL_COUNT.ordinal()] = materials;
         h[Header.SPECIES_COUNT.ordinal()] = species;
         h[Header.CELL_OFFSETS.ordinal()] = word(liquid.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS));

@@ -245,6 +245,6 @@ public final class DemoInteractionValidation {
 		public boolean setPaused(boolean paused) { if (failPause) return false; manager.selected().setPaused(paused); return true; }
 		public int step() { if (failStep) return 0; steps++; return 1; }
 		private ResourceKey<Level> key() { return ResourceKey.create(Registries.DIMENSION, Identifier.parse(dimension)); }
-		private HostFluidState domain() { return new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 48, 1e-4F, .002F)); }
+		private HostFluidState domain() { return new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 9.81F, .05F, 48, 1e-4F, .002F), mmm.fluid.TestFluidDefinitions.load()); }
 	}
 }

@@ -6,6 +6,7 @@ const int STAGE_COMPUTE_NORMALS = 2;
 const int STAGE_COMPUTE_CURVATURE = 3;
 const int STAGE_APPLY_FACES = 4;
 const uint ERROR_SURFACE_TENSION = 262144u;
+// SPATIAL_GRID
 // HOST_LAYOUT
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Candidate { uint words[]; };
@@ -16,11 +17,21 @@ double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 void store(int at,double v){if(isnan(v)||isinf(v))atomicOr(errors,ERROR_SURFACE_TENSION);uvec2 b=unpackDouble2x32(v);words[at]=b.x;words[at+1]=b.y;}
 ivec3 shape(){return ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z));}
 ivec3 unit(int axis){ivec3 e=ivec3(0);e[axis]=1;return e;}
-bool inside(ivec3 q){return all(greaterThanEqual(q,ivec3(0)))&&all(lessThan(q,shape()));}
-int cell(ivec3 q){return (q.z*headerValue(H_SIZE_Y)+q.y)*headerValue(H_SIZE_X)+q.x;}
-ivec3 position(int c){return ivec3(c%headerValue(H_SIZE_X),c/headerValue(H_SIZE_X)%headerValue(H_SIZE_Y),c/(headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)));}
-int faceBase(int axis){return axis==0?0:(headerValue(H_SIZE_X)+1)*headerValue(H_SIZE_Y)*headerValue(H_SIZE_Z)+(axis==2?headerValue(H_SIZE_X)*(headerValue(H_SIZE_Y)+1)*headerValue(H_SIZE_Z):0);}
-int face(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return faceBase(axis)+(q.z*s.y+q.y)*s.x+q.x;}
+bool inside(ivec3 q){
+    return gridCell(q)>=0;
+}
+int cell(ivec3 q){
+    return gridCell(q);
+}
+ivec3 position(int c){
+    return gridPosition(c);
+}
+int faceBase(int axis){
+    return gridFaceOffset(axis);
+}
+int face(ivec3 q,int axis){
+    return gridFaceAt(q,axis);
+}
 double geometry(int c,int component){return value(headerValue(H_GEOMETRY_CELLS)+8*c+2*component);}
 bool isSolidCell(int c){return geometry(c,2)<=0.0;}
 double liquidFill(int c){return geometry(c,3);}
@@ -60,7 +71,8 @@ void smoothColour(int c){
 void computeNormals(int c){
     dvec3 n=dvec3(0.0);ivec3 q=position(c);
     if(!isSolidCell(c))for(int axis=0;axis<3;axis++){
-        dvec2 plus=cellColour(cell(clamp(q+unit(axis),ivec3(0),shape()-1)),true),minus=cellColour(cell(clamp(q-unit(axis),ivec3(0),shape()-1)),true);
+        int a=gridNeighbor(c,2*axis+1),b=gridNeighbor(c,2*axis);
+        dvec2 plus=cellColour(a<0?c:a,true),minus=cellColour(b<0?c:b,true);
         n[axis]=p.pair<0?plus.x-minus.x:minus.x*plus.y-plus.x*minus.y;
     }
     double magnitude=length(n);n=magnitude>0.0?n/magnitude:dvec3(0,0,1);
@@ -100,7 +112,7 @@ bool contactLine(ivec3 q,int axis,int side,double wet){
     return false;
 }
 double neighborNormal(ivec3 q,int axis,int side){
-    ivec3 peer=q+unit(axis)*(2*side-1);int c=cell(q),sampledCell=cell(clamp(peer,ivec3(0),shape()-1));double local=normalComponent(c,axis);
+    ivec3 peer=q+unit(axis)*(2*side-1);int c=cell(q),sampledCell=cell(peer);if(sampledCell<0)sampledCell=c;double local=normalComponent(c,axis);
     if(p.pair<0){
         int f=face(q+(side==1?unit(axis):ivec3(0)),axis);double open=inside(peer)?value(headerValue(H_FACES)+8*f+4):0.0;
         if(open<1.0){double wet=wallWet(q,axis,side),wall=wet<=0.0?0.0:contactLine(q,axis,side,wet)?double(2*side-1)*contactAngleCosine(c):local;
@@ -112,20 +124,20 @@ int reflect(int position,int size){int r=((position%(2*size))+2*size)%(2*size);r
 ivec3 reflected(ivec3 q){return ivec3(reflect(q.x,headerValue(H_SIZE_X)),reflect(q.y,headerValue(H_SIZE_Y)),reflect(q.z,headerValue(H_SIZE_Z)));}
 double heightSample(ivec3 q,int axis,int offset){
     q+=unit(axis)*offset;bool exterior=!inside(q);int c=cell(reflected(q));
-    if(fixedMicrocellMask(c)!=0u||geometry(c,2)!=1.0)return reportInvalidState();
+    if(c<0||fixedMicrocellMask(c)!=0u||geometry(c,2)!=1.0)return reportInvalidState();
     double result=liquidFill(c);if(exterior&&result>0.0&&contactAngleCosine(c)!=0.0)return reportInvalidState();return result;
 }
 bool wetFace(ivec3 q,int axis,int offset,int side,int orientation){
     double wet=heightSample(q,axis,offset);if(!(wet>0.0))return false;if(wet==1.0)return true;
     q+=unit(axis)*offset;int r=((q[axis]%(2*shape()[axis]))+2*shape()[axis])%(2*shape()[axis]);
     if(r>=shape()[axis]){side=1-side;orientation=-orientation;}
-    int c=cell(reflected(q));if(geometry(c,0)!=wet)return false;vec4 pl=plane(c);double n=double(pl[axis]);
+    int c=cell(reflected(q));if(c<0||geometry(c,0)!=wet)return false;vec4 pl=plane(c);double n=double(pl[axis]);
     if(orientation!=0&&n*double(orientation)<=0.0)return false;
     return n*double(side)+max(double(pl[(axis+1)%3]),0.0)+max(double(pl[(axis+2)%3]),0.0)<=double(pl.w);
 }
 bool wallBase(ivec3 q,int axis,int offset,int side,int target){
     q+=unit(axis)*offset;if(!((side==0&&q[axis]==0)||(side==1&&q[axis]==shape()[axis]-1)))return false;
-    int c=cell(reflected(q));if(contactAngleCosine(target)!=0.0||contactAngleCosine(c)!=0.0||geometry(c,0)!=liquidFill(c))return false;
+    int c=cell(reflected(q));if(c<0||contactAngleCosine(target)!=0.0||contactAngleCosine(c)!=0.0||geometry(c,0)!=liquidFill(c))return false;
     for(int a=0;a<2;a++)for(int b=0;b<2;b++)if(portArea(c,axis,side,a,b)>0.0)return true;
     return false;
 }
@@ -174,8 +186,8 @@ void computeCurvature(int c){
     store(headerValue(H_CURVATURE)+2*c,result);if(p.pair<0)store(headerValue(H_CAPILLARY_PRESSURE)+2*c,value(headerValue(H_CELL_TENSION)+2*c)*result);
 }
 void applyFace(int index){
-    int axis=index<faceBase(1)?0:index<faceBase(2)?1:2,local=index-faceBase(axis);ivec3 size=shape()+unit(axis);
-    ivec3 right=ivec3(local%size.x,local/size.x%size.y,local/(size.x*size.y)),left=right-unit(axis);
+    int axis=gridFaceEndpoints(index).z;
+    ivec3 right=gridFacePosition(index),left=right-unit(axis);
     if(!inside(left)||!inside(right))return;int at=headerValue(H_FACES)+8*index;
     if(headerValue(H_ACTIVITY_FACES)>=0&&words[headerValue(H_ACTIVITY_FACES)+index]==0u)return;
     if(headerValue(H_FLAGS)>=0&&(int(words[headerValue(H_FLAGS)+index])&3)!=1)return;
@@ -192,7 +204,7 @@ void applyFace(int index){
 }
 void main(){
     int item=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(errors!=0u)return;
-    if(p.stage==STAGE_APPLY_FACES){if(item<faceBase(2)+headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)*(headerValue(H_SIZE_Z)+1))applyFace(item);return;}
+    if(p.stage==STAGE_APPLY_FACES){if(item<gridFaces())applyFace(item);return;}
     if(item>=headerValue(H_CELLS))return;
     if(p.stage==STAGE_INITIALIZE)initializeCell(item);else if(p.stage==STAGE_SMOOTH_COLOUR)smoothColour(item);else if(p.stage==STAGE_COMPUTE_NORMALS)computeNormals(item);else if(p.stage==STAGE_COMPUTE_CURVATURE)computeCurvature(item);else pairColour(item);
 }

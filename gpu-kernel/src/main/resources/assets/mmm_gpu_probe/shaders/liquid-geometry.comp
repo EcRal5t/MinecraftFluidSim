@@ -29,6 +29,7 @@ layout(push_constant) uniform Metadata {
     float ambientCellMass;
 }
 pc;
+// SPATIAL_GRID
 // HOST_LAYOUT
 // PLIC_FACE_LIBRARY
 layout(std430, binding = B_OFFSETS) readonly buffer Offsets {
@@ -77,13 +78,13 @@ layout(std430, binding = B_FLUX_PREFERENCES) buffer FluxPreferences {
     dvec2 faceFlux[];
 };
 int cellIndex(ivec3 p) {
-    return (p.z * pc.sy + p.y) * pc.sx + p.x;
+    return gridCell(p);
 }
 bool inside(ivec3 p) {
-    return all(greaterThanEqual(p, ivec3(0))) && all(lessThan(p, ivec3(pc.sx, pc.sy, pc.sz)));
+    return gridCell(p)>=0;
 }
 ivec3 position(int i) {
-    return ivec3(i % pc.sx, i / pc.sx % pc.sy, i / (pc.sx * pc.sy));
+    return gridPosition(i);
 }
 float sampleCellFill(ivec3 p, float fallback) {
     if (!inside(p))
@@ -115,7 +116,8 @@ bool solidMicro(ivec3 micro) {
         return pc.sealedExterior != 0;
     ivec3 c = micro / 2, local = micro - 2 * c;
     int bit = local.x | (local.y << 1) | (local.z << 2);
-    return (masks[cellIndex(c)] & (1u << bit)) != 0u;
+    int cell=cellIndex(c);
+    return cell<0 ? pc.sealedExterior!=0 : (masks[cell] & (1u << bit)) != 0u;
 }
 void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
     for (int face = 0; face < 6; face++) {
@@ -222,16 +224,8 @@ double portArea(double fill, dvec4 plane, int axis, int side, int firstPort, int
     return plicWetPort(plane, axis, double(side), bit);
 }
 void faceGeometry(int face) {
-    int xCount = (pc.sx + 1) * pc.sy * pc.sz, yCount = pc.sx * (pc.sy + 1) * pc.sz;
-    int axis = face < xCount            ? 0
-               : face < xCount + yCount ? 1
-                                     : 2,
-        localFace = face - (axis == 0   ? 0
-                     : axis == 1 ? xCount
-                                 : xCount + yCount);
-    ivec3 faceShape = ivec3(pc.sx, pc.sy, pc.sz);
-    faceShape[axis]++;
-    ivec3 rightPosition = ivec3(localFace % faceShape.x, localFace / faceShape.x % faceShape.y, localFace / (faceShape.x * faceShape.y)), axisStep = ivec3(0);
+    int axis=gridFaceEndpoints(face).z,localFace=face-gridFaceOffset(axis);
+    ivec3 rightPosition=gridFacePosition(face),axisStep=ivec3(0);
     axisStep[axis] = 1;
     if (!inside(rightPosition) || !inside(rightPosition - axisStep)) {
         bool interiorRight = inside(rightPosition);
@@ -289,16 +283,8 @@ void faceGeometry(int face) {
 // Signed swept volume through the donor's open microboxes and its axis-aligned liquid plane.
 void transportPreference(int face) {
     faceFlux[face] = dvec2(0);
-    int xCount = (pc.sx + 1) * pc.sy * pc.sz, yCount = pc.sx * (pc.sy + 1) * pc.sz;
-    int axis = face < xCount            ? 0
-               : face < xCount + yCount ? 1
-                                     : 2,
-        localFace = face - (axis == 0   ? 0
-                     : axis == 1 ? xCount
-                                 : xCount + yCount);
-    ivec3 faceShape = ivec3(pc.sx, pc.sy, pc.sz);
-    faceShape[axis]++;
-    ivec3 right = ivec3(localFace % faceShape.x, localFace / faceShape.x % faceShape.y, localFace / (faceShape.x * faceShape.y)), left = right;
+    int axis=gridFaceEndpoints(face).z;
+    ivec3 right=gridFacePosition(face),left=right;
     left[axis]--;
     if (!inside(left) || !inside(right))
         return;
@@ -340,16 +326,7 @@ void transportPreference(int face) {
 
 // Face mass and openings belong to the completed geometry; MAC momentum is current.
 void refreshVelocity(int face) {
-    int xCount = (pc.sx + 1) * pc.sy * pc.sz, yCount = pc.sx * (pc.sy + 1) * pc.sz;
-    int axis = face < xCount            ? 0
-               : face < xCount + yCount ? 1
-                                        : 2,
-        local = face - (axis == 0   ? 0
-                        : axis == 1 ? xCount
-                                    : xCount + yCount);
-    ivec3 dims = ivec3(pc.sx, pc.sy, pc.sz);
-    dims[axis]++;
-    ivec3 at = ivec3(local % dims.x, local / dims.x % dims.y, local / (dims.x * dims.y));
+    int axis=gridFaceEndpoints(face).z,local=face-gridFaceOffset(axis);
     double mass = faces[face][FACE_MASS];
     faces[face][FACE_VELOCITY] = faces[face][FACE_OPEN_AREA] > 0.0 && mass > 0.0 ? (axis == 0   ? momentumX[local]
                                                                      : axis == 1 ? momentumY[local]
@@ -362,7 +339,7 @@ void main() {
     if (errors != 0u)
         return;
     int i = int(gl_GlobalInvocationID.x);
-    int count = pc.sx * pc.sy * pc.sz;
+    int count = gridCells();
     if (pc.stage == STAGE_CELL_TOTALS) {
         if (i < count)
             prepareCellTotals(i);
@@ -370,7 +347,7 @@ void main() {
         if (i < count)
             reconstructInterface(i);
     } else {
-        int countFaces = (pc.sx + 1) * pc.sy * pc.sz + pc.sx * (pc.sy + 1) * pc.sz + pc.sx * pc.sy * (pc.sz + 1);
+        int countFaces = gridFaces();
         if (i < countFaces) {
             if (pc.stage == STAGE_FACE_GEOMETRY)
                 faceGeometry(i);

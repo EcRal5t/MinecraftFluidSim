@@ -12,7 +12,7 @@ double caloricStateTemperature(int header, int material, double mass, double eth
         segment++;
     if (remaining >= 0.0LF) {
         for (;; segment++) {
-            capacity = caloricCapacity(mass, ethanol, caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment));
+            capacity = caloricCapacity(mass, ethanol, caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment),caloricStateRead(header+CAL_ETHANOL_HEAT_CAPACITY));
             double upper = caloricStateRead(int(words[header + CAL_SEGMENT_UPPER]) + 2 * segment);
             double span = (upper - temperature) * capacity;
             if (segment == last || remaining < span) { temperature += remaining / capacity; break; }
@@ -21,7 +21,7 @@ double caloricStateTemperature(int header, int material, double mass, double eth
     } else {
         remaining = -remaining;
         for (;; segment--) {
-            capacity = caloricCapacity(mass, ethanol, caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment));
+            capacity = caloricCapacity(mass, ethanol, caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment),caloricStateRead(header+CAL_ETHANOL_HEAT_CAPACITY));
             double lower = segment == first ? 0.0LF : caloricStateRead(int(words[header + CAL_SEGMENT_UPPER]) + 2 * (segment - 1));
             double span = (temperature - lower) * capacity;
             if (segment == first || remaining <= span) { temperature -= remaining / capacity; break; }

@@ -22,6 +22,7 @@ layout(push_constant) uniform Params {
 p;
 bool activeCell(int cell);
 bool activeFace(int face);
+// SPATIAL_GRID
 // HOST_LAYOUT
 const uint ERROR_INVALID_STATE = 536870912u;
 const double MASS_UNIT_KG = 1e-10;
@@ -145,7 +146,7 @@ double reference(int kind, int row, int s) {
 double ethanolMass(int kind,int row) {
     int sp=caloricHeaderWord(0,CAL_ETHANOL_SPECIES);
     if(kind!=0 || material(kind,row)!=caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL) || sp<0)return 0.0LF;
-    return caloricEthanolMass(double(mass(kind,row))*MASS_UNIT_KG,double(species(kind,row,sp)));
+    return caloricEthanolMass(double(mass(kind,row))*MASS_UNIT_KG,double(species(kind,row,sp)),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
 }
 double cold(int kind, int row) {
     if (mass(kind, row) == 0l)
@@ -154,7 +155,7 @@ double cold(int kind, int row) {
     if(ethanol>0.0LF){
         int m=material(kind,row);double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
         double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
-        result+=ethanol*((minimum-refT)*CAL_ETHANOL_CP-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
+        result+=ethanol*((minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
     }
     for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
         int64_t speciesAmount = species(kind, row, s);
@@ -168,7 +169,7 @@ double capacity(int kind, int row, double t) {
         last = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
     while (at < last && t >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
-    return caloricCapacity(double(mass(kind,row))*MASS_UNIT_KG,ethanolMass(kind,row),readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at));
+    return caloricCapacity(double(mass(kind,row))*MASS_UNIT_KG,ethanolMass(kind,row),readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY));
 }
 double sensible(int kind, int row, double t) {
     int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
@@ -183,7 +184,7 @@ double sensible(int kind, int row, double t) {
     }
     double kg=double(mass(kind,row))*MASS_UNIT_KG,ethanol=ethanolMass(kind,row);
     double minimum=readDouble(headerWord(kind==0?H_LIQUID_CALORIC:H_SOLID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
-    return (kg-ethanol)*result+ethanol*CAL_ETHANOL_CP*(t-minimum);
+    return (kg-ethanol)*result+ethanol*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)*(t-minimum);
 }
 // DYADIC_LIBRARY
 uint dyadicWord(int bank, int at) {
@@ -285,8 +286,8 @@ void importRows(int row) {
             ivec3 q = ivec3(floor(readDouble(granularField(GRANULAR_POSITION) + 6 * row) / size),
                             floor(readDouble(granularField(GRANULAR_POSITION) + 6 * row + 2) / size),
                             floor(readDouble(granularField(GRANULAR_POSITION) + 6 * row + 4) / size));
-            q = clamp(q, ivec3(0), ivec3(headerWord(H_SIZE_X) - 1, headerWord(H_SIZE_Y) - 1, headerWord(H_SIZE_Z) - 1));
-            cell = (q.z * headerWord(H_SIZE_Y) + q.y) * headerWord(H_SIZE_X) + q.x;
+            cell = gridCell(q);
+            if (cell < 0) { atomicOr(errors, ERROR_INVALID_STATE); return; }
         } else
             cell = int(words[granularField(GRANULAR_DEPOSIT_CELL) + row - headerWord(H_PARTICLE_CAPACITY)]);
         words[workField(FIELD_CELL) + row] = uint(cell);
@@ -349,7 +350,7 @@ double transferCold(int first, int end, int solid, int rule, int64_t batches, bo
                     if(s==caloricHeaderWord(0,CAL_ETHANOL_SPECIES) && material(0,row)==caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL)){
                         int m=material(0,row);double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
                         double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
-                        result-=double(part)*1e-6LF*.046LF*((minimum-refT)*CAL_ETHANOL_CP-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
+                        result-=double(part)*1e-6LF*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS)*((minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
                     }
                 }
                 prefix = next;
@@ -384,7 +385,7 @@ int newDeposit(int c, int material) {
     return row;
 }
 double centerY(int c) {
-    return (double(c / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y)) + .5LF) * readDouble(p.header + H_CELL_SIZE);
+    return (double(gridPosition(c).y) + .5LF) * readDouble(p.header + H_CELL_SIZE);
 }
 dvec2 bed(int c) {
     double m = 0.0, bulk = 0.0;
@@ -398,7 +399,7 @@ dvec2 bed(int c) {
     return dvec2(m, bulk);
 }
 double bedY(int c, double bulk) {
-    return (double(c / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y)) +
+    return (double(gridPosition(c).y) +
             .5LF * bulk * ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT))) *
            readDouble(p.header + H_CELL_SIZE);
 }
@@ -779,35 +780,12 @@ void phaseStatus() {
     if (words[base] == 1u)
         words[workField(FIELD_CONTROL)] = 1u;
 }
-ivec3 shape() {
-    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
-}
-ivec3 axisUnit(int axis) {
-    ivec3 q = ivec3(0);
-    q[axis] = 1;
-    return q;
-}
-int faceBase(int axis) {
-    ivec3 s = shape();
-    return axis == 0 ? 0 : (s.x + 1) * s.y * s.z + (axis == 2 ? s.x * (s.y + 1) * s.z : 0);
-}
-int cellId(ivec3 q) {
-    ivec3 s = shape();
-    return any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, s)) ? -1 : (q.z * s.y + q.y) * s.x + q.x;
-}
-void faceCells(int id, out int axis, out int a, out int b) {
-    axis = id < faceBase(1) ? 0 : id < faceBase(2) ? 1 : 2;
-    int local = id - faceBase(axis);
-    ivec3 s = shape() + axisUnit(axis), q = ivec3(local % s.x, local / s.x % s.y, local / (s.x * s.y));
-    a = cellId(q - axisUnit(axis));
-    b = cellId(q);
-}
-int cellFace(int c, int axis, int side) {
-    ivec3 s = shape(), q = ivec3(c % s.x, c / s.x % s.y, c / (s.x * s.y));
-    q[axis] += side;
-    s[axis]++;
-    return faceBase(axis) + (q.z * s.y + q.y) * s.x + q.x;
-}
+ivec3 shape() { return gridShape(); }
+ivec3 axisUnit(int axis) { ivec3 q=ivec3(0);q[axis]=1;return q; }
+int faceBase(int axis) { return gridFaceOffset(axis); }
+int cellId(ivec3 q) { return gridCell(q); }
+void faceCells(int id,out int axis,out int a,out int b) { ivec3 e=gridFaceEndpoints(id);a=e.x;b=e.y;axis=e.z; }
+int cellFace(int c,int axis,int side) { return gridFace(c,2*axis+side); }
 double oldMass(int c) {
     return c < 0 ? 0.0LF : double(readInt64(workField(FIELD_CELL_OLD_MASS) + 2 * c)) * MASS_UNIT_KG;
 }

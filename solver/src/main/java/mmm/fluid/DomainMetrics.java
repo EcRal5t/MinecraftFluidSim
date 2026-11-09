@@ -65,7 +65,7 @@ final class DomainMetrics {
 	float centerOfMassX() {
 		double weighted = 0; long mass = 0;
 		for (var stock : domain.liquidCells.physicalStocks()) {
-			weighted += (stock.key().cell() % domain.sizeX + .5) * stock.massUnits();
+			weighted += (domain.grid.x(stock.key().cell()) + .5) * stock.massUnits();
 			mass = Math.addExact(mass, stock.massUnits());
 		}
 		return mass == 0 ? Float.NaN : (float) (weighted / mass);
@@ -149,9 +149,9 @@ final class DomainMetrics {
 		if(domain.gasState.spatial!=null){
 			if(domain.gasState.sealedDomainBoundary)return false;
 			for(int cell=0;cell<domain.cellCount;cell++){
-				int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY),mask=domain.geometry.cutCells.mask(cell);
-				for(int bit=0;bit<8;bit++)if((mask&(1<<bit))==0 && ((x==0&&(bit&1)==0)||(x==domain.sizeX-1&&(bit&1)!=0)
-						||(y==0&&(bit&2)==0)||(y==domain.sizeY-1&&(bit&2)!=0)||(z==0&&(bit&4)==0)||(z==domain.sizeZ-1&&(bit&4)!=0)))return true;
+				int mask=domain.geometry.cutCells.mask(cell);
+				for(int bit=0;bit<8;bit++)if((mask&(1<<bit))==0)
+					for(int axis=0;axis<3;axis++)if(domain.grid.neighbor(cell,2*axis+((bit>>axis)&1))<0)return true;
 			}
 			return false;
 		}

@@ -5,6 +5,7 @@ const int STAGE_CLEAR_ENERGY_CHANGES = 0;
 const int STAGE_SPLIT_HEAT = 1;
 const uint ERROR_MECHANICAL_ENERGY = 65536u;
 // HOST_LAYOUT
+// SPATIAL_GRID
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source {uint source[];};
 layout(binding=1,std430) buffer Candidate {uint words[];};
@@ -16,8 +17,7 @@ void store(int a,double v){if(isnan(v)||isinf(v))atomicOr(errors,ERROR_MECHANICA
 int64_t oldQuantity(int a){return int64_t(uint64_t(source[a])|(uint64_t(source[a+1])<<32));}
 int64_t quantity(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
 int64_t addMass(int64_t a,int64_t b){if(b<int64_t(0)||a>int64_t(0x7fffffffffffffffUL)-b){atomicOr(errors,ERROR_MECHANICAL_ENERGY);return a;}return a+b;}
-int incomingSource(int c,int slot){if(slot==0)return c;ivec3 at=ivec3(c%headerValue(H_SIZE_X),c/headerValue(H_SIZE_X)%headerValue(H_SIZE_Y),c/(headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)));int axis=(slot-1)/2;
- at[axis]+=(slot&1)!=0?1:-1;if(at[axis]<0||at[axis]>=ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z))[axis])return -1;return (at.z*headerValue(H_SIZE_Y)+at.y)*headerValue(H_SIZE_X)+at.x;}
+int incomingSource(int c,int slot){return slot==0?c:gridNeighbor(c,(slot-1)^1);}
 void splitSourceHeat(int cell){
  int first=int(source[src(L_CELL_OFFSETS)+cell]),last=int(source[src(L_CELL_OFFSETS)+cell+1]);int64_t total=int64_t(0),accepted=int64_t(0);int finalRoute=-1;
  for(int stock=first;stock<last;stock++){total=addMass(total,oldQuantity(src(L_MASS_UNITS)+2*stock));for(int route=int(words[headerValue(H_ROUTE_OFFSETS)+stock]);route<int(words[headerValue(H_ROUTE_OFFSETS)+stock+1]);route++){

@@ -39,7 +39,7 @@ final class RegionStateIntegrity {
 				if (stock.mixture() != null) { writeInts(out,stock.mixture().copySpeciesHandles()); writeLongs(out,stock.mixture().copyAmounts()); out.writeLong(stock.mixture().massResidualUnits()); }
 			}
 			out.writeInt(section.faceMomentum().size());
-			for (var face : section.faceMomentum()) { out.writeInt(face.axis()); out.writeInt(face.face()); out.writeLong(Double.doubleToRawLongBits(face.kilogramMetersPerSecond())); }
+			for (var face : section.faceMomentum()) { out.writeInt(face.axis());out.writeInt(face.x());out.writeInt(face.y());out.writeInt(face.z());out.writeLong(Double.doubleToRawLongBits(face.kilogramMetersPerSecond())); }
 			writeBytes(out, section.solidMask());
 			writeExtensions(out, section.extensions());
 		});
@@ -121,13 +121,12 @@ final class RegionStateIntegrity {
 		out.writeInt(materials.size());
 		for (FluidMaterial material : materials) {
 			out.writeUTF(material.id()); out.writeLong(Double.doubleToRawLongBits(material.referenceDensity()));
-			out.writeUTF(material.miscibilityGroup());
+			out.writeUTF(material.miscibilityGroup()); out.writeInt(material.displayArgb());
 		}
 	}
 
 	private static void writeConfig(DataOutputStream out, FluidSolverConfig config) throws IOException {
 		out.writeInt(Float.floatToRawIntBits(config.cellSize()));
-		out.writeInt(Float.floatToRawIntBits(config.density()));
 		out.writeInt(Float.floatToRawIntBits(config.gravity()));
 		out.writeInt(Float.floatToRawIntBits(config.timeStep()));
 		out.writeInt(config.maxPressureIterations());

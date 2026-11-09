@@ -16,6 +16,7 @@ repositories {
 dependencies {
 	api project(':model')
 	implementation "org.ejml:ejml-dsparse:${project.ejml_version}"
+	testImplementation "com.google.code.gson:gson:2.14.0"
 }
 
 java {

@@ -91,7 +91,7 @@ final class GpuGasFixture {
         System.out.printf("gas_seed cells=%d nodes=%d components=%d species=%d distinct_states=%d%n",cells,nodes,component,species,cache.size());return active;
     }
     static FixtureGas gasDefinitions() {
-        var gas=BuiltinGasDefinitions.createRegistry();var chemistry=BuiltinChemicalDefinitions.REGISTRY;
+        var gas=mmm.fluid.TestFluidDefinitions.load().gas();var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();
         var nitrogen=new ThermalMaterialDefinition("mmm:bench_nitrogen",ThermalMaterialDefinition.CarrierKind.GAS,BuiltinGasDefinitions.NITROGEN,
                 280,15000,0,List.of(new ThermalMaterialDefinition.CaloricSegment(100,320,720),new ThermalMaterialDefinition.CaloricSegment(320,600,800),new ThermalMaterialDefinition.CaloricSegment(600,1500,950)));
         var oxygen=new ThermalMaterialDefinition("mmm:bench_oxygen",ThermalMaterialDefinition.CarrierKind.GAS,BuiltinGasDefinitions.OXYGEN,

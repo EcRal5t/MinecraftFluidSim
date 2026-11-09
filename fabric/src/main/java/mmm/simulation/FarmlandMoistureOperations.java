@@ -38,7 +38,22 @@ public final class FarmlandMoistureOperations {
 	private BlockPos writingPosition;
 	private ServerLevel writingLevel;
 	private net.minecraft.world.level.block.state.BlockState writingState;
-	private static final class Scan { long nextTick; long cursor; }
+	private static final class Scan {
+		long nextTick;
+		int cursor;
+		final List<BlockPos> positions;
+
+		Scan(mmm.simulation.controller.FluidRegionFootprint footprint) {
+			var adjacent = new TreeSet<Long>();
+			for (long packed : footprint.interiorBlocks()) {
+				var block = BlockPos.of(packed);
+				for (int z = -1; z <= 1; z++) for (int y = -1; y <= 0; y++) {
+					for (int x = -1; x <= 1; x++) adjacent.add(block.offset(x, y, z).asLong());
+				}
+			}
+			positions = adjacent.stream().map(BlockPos::of).toList();
+		}
+	}
 
 	FarmlandMoistureOperations(MinecraftServer server,Path root,FluidRegionManager regions,
 			FluidRegionOperations operations,MinecraftRegionAvailability availability,
@@ -83,14 +98,13 @@ public final class FarmlandMoistureOperations {
 	public boolean tickAvailable(ServerLevel level,FluidRegion region) {
 		if(hasPending(region.id())) return false;
 		if(region.paused() || !region.controllerManaged() || !region.solverLoaded()) return true;
-		var scan=scans.computeIfAbsent(region.id(),ignored->new Scan());
+		var scan=scans.computeIfAbsent(region.id(),ignored->new Scan(region.footprint()));
 		long tick=level.getGameTime(); if(tick<scan.nextTick) return true; scan.nextTick=tick+20;
-		var footprint=region.footprint(); var min=footprint.minimumInterior(); var max=footprint.maximumInterior();
-		int sx=max.getX()-min.getX()+3, sy=max.getY()-min.getY()+2, sz=max.getZ()-min.getZ()+3;
-		long count=(long)sx*sy*sz; var plots=new ArrayList<BlockPos>();
-		for(int checked=0;checked<Math.min(256L,count) && plots.size()<16;checked++) {
-			long index=scan.cursor++%count;
-			var position=new BlockPos(min.getX()-1+(int)(index%sx),min.getY()-1+(int)(index/sx%sy),min.getZ()-1+(int)(index/sx/sy));
+		int count = scan.positions.size();
+		var plots = new ArrayList<BlockPos>();
+		for(int checked=0;checked<Math.min(256,count) && plots.size()<16;checked++) {
+			var position = scan.positions.get(scan.cursor);
+			scan.cursor = (scan.cursor + 1) % count;
 			if(!level.hasChunkAt(position) || !MinecraftGroupAvailability.boxAvailable(region,new net.minecraft.world.phys.AABB(position).inflate(1))) continue;
 			var state=level.getBlockState(position);
 			if(state.is(Blocks.FARMLAND) && state.getValue(FarmlandBlock.MOISTURE)<7

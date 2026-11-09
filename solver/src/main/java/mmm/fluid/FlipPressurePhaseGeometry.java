@@ -3,6 +3,7 @@ package mmm.fluid;
 import mmm.granular.GranularCouplingFields;
 import mmm.inventory.PhaseOccupancyState;
 import mmm.units.SignedDyadic;
+import mmm.spatial.SpatialGrid;
 
 /** One coarse PLIC per fixed open component, shared by transport and gas geometry. */
 final class FlipPressurePhaseGeometry {
@@ -11,6 +12,7 @@ final class FlipPressurePhaseGeometry {
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
+	private final SpatialGrid grid;
 	private final double[] fraction;
 	private final float[] normalX;
 	private final float[] normalY;
@@ -40,13 +42,18 @@ final class FlipPressurePhaseGeometry {
 	private final double[] clippedX = new double[16], clippedY = new double[16];
 
 	FlipPressurePhaseGeometry(int sizeX, int sizeY, int sizeZ) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ));
+	}
+	FlipPressurePhaseGeometry(SpatialGrid grid) {
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) {
 			throw new IllegalArgumentException("Pressure phase grid is too small");
 		}
 		this.sizeX = sizeX;
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
-		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		this.grid = grid;
+		int cellCount = grid.cellCount();
 		this.fraction = new double[cellCount];
 		this.normalX = new float[cellCount];
 		this.normalY = new float[cellCount];
@@ -133,7 +140,7 @@ final class FlipPressurePhaseGeometry {
 	private void buildOccupancyCells(PhaseOccupancyState state,FlipCutCellGeometry cut,double[] pore,
 	                                 FlipPressurePhaseGeometry captured,GasComponentCapacity.Prepared capacity){
 		for(int cell=0;cell<fraction.length;cell++){
-			int x=cell%sizeX,y=cell/sizeX%sizeY,z=cell/(sizeX*sizeY),support=(~collisionMask(cell))&255;
+			int x=grid.x(cell),y=grid.y(cell),z=grid.z(cell),support=(~collisionMask(cell))&255;
 			double fill=fraction[cell];
 			if(support==0){occupancyCells[cell]=CLOSED;continue;}
 			double porosity=poreVolumes[cell].toDouble()/(Integer.bitCount(support)*.125);
@@ -267,6 +274,7 @@ final class FlipPressurePhaseGeometry {
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
+			if(cell<0)continue;
 			PhaseLiquidGeometryEdit edit = overlay == null ? null : overlay[cell];
 			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
 			if (captured != null && sameLocalStock[cell]
@@ -317,6 +325,7 @@ final class FlipPressurePhaseGeometry {
 	/** Scalar arrays belong to this copy; immutable component certificates can be shared. */
 	private FlipPressurePhaseGeometry(FlipPressurePhaseGeometry source) {
 		sizeX = source.sizeX; sizeY = source.sizeY; sizeZ = source.sizeZ;
+		grid = source.grid;
 		fraction = source.fraction.clone();
 		normalX = source.normalX.clone(); normalY = source.normalY.clone(); normalZ = source.normalZ.clone();
 		planeOffset = source.planeOffset.clone(); offsetBrackets = source.offsetBrackets.clone();
@@ -337,7 +346,7 @@ final class FlipPressurePhaseGeometry {
 		double open = poreVolumes[edit.cell()].toDouble();
 		fraction[edit.cell()] = solid[edit.cell()] || open <= 0 ? 0 : clamp(edit.volume().toDouble() / open, 0, 1);
 		for (int cell : cells) {
-			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
+			int x = grid.x(cell), y = grid.y(cell), z = grid.z(cell);
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0; planeOffset[cell] = 0;
 			offsetBrackets[cell] = null; components[cell] = null;
 			if (solid[cell] || !(fraction[cell] > 0) || fraction[cell] >= 1) continue;
@@ -505,10 +514,7 @@ final class FlipPressurePhaseGeometry {
 			double centerProjection = 0.5 * ((double) normalX[fluid] + normalY[fluid] + normalZ[fluid]);
 			distance = (planeOffset[fluid] - centerProjection) / outward;
 		}
-		int x = fluid % sizeX;
-		int yz = fluid / sizeX;
-		int y = yz % sizeY;
-		int z = yz / sizeY;
+		int x = grid.x(fluid), y = grid.y(fluid), z = grid.z(fluid);
 		int nx = x + directionX, ny = y + directionY, nz = z + directionZ;
 		if (inside(nx, ny, nz)) distance += fraction[cellIndex(nx, ny, nz)];
 		if (!(distance > 0.0F)) {
@@ -525,11 +531,11 @@ final class FlipPressurePhaseGeometry {
 
 
 	private boolean inside(int x, int y, int z) {
-		return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ;
+		return grid.cell(x,y,z)>=0;
 	}
 
 	private int cellIndex(int x, int y, int z) {
-		return (z * sizeY + y) * sizeX + x;
+		return grid.cell(x,y,z);
 	}
 
 	private static double clamp(double value, double minimum, double maximum) {

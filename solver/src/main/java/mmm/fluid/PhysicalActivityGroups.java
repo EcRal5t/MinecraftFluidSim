@@ -145,10 +145,11 @@ final class PhysicalActivityGroups {
 			thermal[cell]=thermalQuiet[cell]<QUIET_STEPS;
 		}
 		for(int cell=0;cell<count;cell++)if(parent[cell]>=0) {
-			int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
-			if(x+1<domain.sizeX&&geometry.faceOpen(0)[domain.domainFlowFields.xFaceIndex(x+1,y,z)]>0)coupleCells(cell,cell+1);
-			if(y+1<domain.sizeY&&geometry.faceOpen(1)[domain.domainFlowFields.yFaceIndex(x,y+1,z)]>0)coupleCells(cell,cell+domain.sizeX);
-			if(z+1<domain.sizeZ&&geometry.faceOpen(2)[domain.domainFlowFields.zFaceIndex(x,y,z+1)]>0)coupleCells(cell,cell+domain.sizeX*domain.sizeY);
+			for(int axis=0;axis<3;axis++){
+				int next=domain.grid.neighbor(cell,2*axis+1);
+				int face=domain.grid.face(cell,2*axis+1)-domain.grid.faceOffset(axis);
+				if(next>=0&&geometry.faceOpen(axis)[face]>0)coupleCells(cell,next);
+			}
 		}
 		if(previous.geometry!=geometry)thermalConnections=List.of();
 		for(var cells:connections)joinCells(cells,false);
@@ -168,8 +169,8 @@ final class PhysicalActivityGroups {
 			for(int cell:cells)keepMechanicsAwake(cell);
 		}
 		if(domain.granularDepositDynamics!=null)for(int column:domain.granularDepositDynamics.captureState().queuedColumns()) {
-			int x=column%domain.sizeX,z=column/domain.sizeX;
-			for(int y=0;y<domain.sizeY;y++)keepMechanicsAwake(x+domain.sizeX*(y+domain.sizeY*z));
+			int x=domain.grid.columnX(column),z=domain.grid.columnZ(column);
+			for(int y=0;y<domain.sizeY;y++){int cell=domain.grid.cell(x,y,z);if(cell>=0)keepMechanicsAwake(cell);}
 		}
 		startLiquid=domain.liquidCells.snapshot();startAuxiliary=auxiliary();
 		for(int cell=0;cell<count;cell++)if(parent[cell]>=0) {
@@ -264,8 +265,8 @@ final class PhysicalActivityGroups {
 		for(int z=Math.max(0,(int)Math.floor(b.minimumZ()/h));z<=Math.min(domain.sizeZ-1,(int)Math.ceil(b.maximumZ()/h)-1);z++)
 		for(int y=Math.max(0,(int)Math.floor(b.minimumY()/h));y<=Math.min(domain.sizeY-1,(int)Math.ceil(b.maximumY()/h)-1);y++)
 		for(int x=Math.max(0,(int)Math.floor(b.minimumX()/h));x<=Math.min(domain.sizeX-1,(int)Math.ceil(b.maximumX()/h)-1);x++) {
-			int cell=x+domain.sizeX*(y+domain.sizeY*z);
-			if(parent[cell]>=0)cells.add(cell);
+			int cell=domain.grid.cell(x,y,z);
+			if(cell>=0&&parent[cell]>=0)cells.add(cell);
 		}
 		return cells.stream().mapToInt(Integer::intValue).toArray();
 	}
@@ -275,18 +276,18 @@ final class PhysicalActivityGroups {
 		int[] cells=new int[8];int count=0;
 		for(int dz=0;dz<2;dz++)for(int dy=0;dy<2;dy++)for(int dx=0;dx<2;dx++) {
 			int a=ix+dx,b=iy+dy,c=iz+dz;
-			if(a>=0&&a<domain.sizeX&&b>=0&&b<domain.sizeY&&c>=0&&c<domain.sizeZ)cells[count++]=a+domain.sizeX*(b+domain.sizeY*c);
+			int cell=domain.grid.cell(a,b,c);if(cell>=0)cells[count++]=cell;
 		}
 		return Arrays.copyOf(cells,count);
 	}
 
 	private double cellSpeed(int cell) {
-		int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);double maximum=0;
+		double maximum=0;
 		for(int axis=0;axis<3;axis++) {
-			int first=axis==0?domain.domainFlowFields.xFaceIndex(x,y,z):axis==1?domain.domainFlowFields.yFaceIndex(x,y,z):domain.domainFlowFields.zFaceIndex(x,y,z);
-			int stride=axis==0?1:axis==1?domain.sizeX:domain.sizeX*domain.sizeY;
+			int first=domain.grid.face(cell,2*axis)-domain.grid.faceOffset(axis);
+			int second=domain.grid.face(cell,2*axis+1)-domain.grid.faceOffset(axis);
 			float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
-			maximum=Math.max(maximum,Math.max(Math.abs(velocity[first]),Math.abs(velocity[first+stride])));
+			maximum=Math.max(maximum,Math.max(Math.abs(velocity[first]),Math.abs(velocity[second])));
 		}
 		return maximum;
 	}
@@ -294,9 +295,8 @@ final class PhysicalActivityGroups {
 	private long[] auxiliary() {
 		long[] values=new long[domain.cellCount];
 		for(int cell=0;cell<domain.cellCount;cell++) {
-			int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
 			for(int axis=0;axis<3;axis++) {
-				int face=axis==0?domain.domainFlowFields.xFaceIndex(x,y,z):axis==1?domain.domainFlowFields.yFaceIndex(x,y,z):domain.domainFlowFields.zFaceIndex(x,y,z);
+				int face=domain.grid.face(cell,2*axis)-domain.grid.faceOffset(axis);
 				double[] momentum=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
 				values[cell]=31*values[cell]+Double.doubleToLongBits(momentum[face]);
 			}

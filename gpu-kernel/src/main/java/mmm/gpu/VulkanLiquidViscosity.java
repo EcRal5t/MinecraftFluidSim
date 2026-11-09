@@ -37,7 +37,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         CONTACT_VELOCITIES, CONTACT_CAPACITY, BODY_COUNT, ACTIVITY_CELLS,
         AQUEOUS_MATERIAL, WATER_SPECIES, SODIUM_SPECIES, CHLORIDE_SPECIES, SALT_SPECIES
     }
-    private static final int STOCK_FIELDS = 24, WORK_FIELDS = 48, COLOUR_OFFSETS = 80, HEADER_WORDS = 112;
+    private static final int STOCK_FIELDS = 24, WORK_FIELDS = 48, COLOUR_OFFSETS = 80, HEADER_WORDS = 128;
     private static String shaderLayout() {
         var definitions = new StringBuilder();
         for (var stage : Stage.values())
@@ -46,12 +46,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             definitions.append("#define H_").append(header.name()).append(' ').append(header.ordinal()).append('\n');
         definitions.append("#define STOCK_FIELDS ").append(STOCK_FIELDS).append('\n');
         definitions.append("#define WORK_FIELDS ").append(WORK_FIELDS).append('\n');
-        definitions.append("#define NACL_VISCOSITY_A ").append(mmm.chemistry.AqueousMixtureProperties.VISCOSITY_A).append("LF\n");
-        definitions.append("#define NACL_VISCOSITY_B ").append(mmm.chemistry.AqueousMixtureProperties.VISCOSITY_B).append("LF\n");
-        definitions.append("#define NACL_MAX_MOLALITY ").append(mmm.chemistry.AqueousMixtureProperties.MAX_SALT_MOLALITY).append("LF\n");
-        definitions.append("#define NACL_REFERENCE_TEMPERATURE ").append(mmm.chemistry.AqueousMixtureProperties.REFERENCE_TEMPERATURE_K).append("LF\n");
-        definitions.append("#define H_ETHANOL_SPECIES 111\n");
-        definitions.append("#define ETHANOL_VISCOSITY ").append(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_VISCOSITY_PA_S).append("LF\n");
+        definitions.append("#define H_ETHANOL_SPECIES 111\n#define H_ETHANOL_VISCOSITY 112\n#define H_ETHANOL_MOLAR_MASS 114\n#define H_WATER_MOLAR_MASS 116\n#define H_SALT_A 118\n#define H_SALT_B 120\n#define H_SALT_MAX_MOLALITY 122\n#define H_SALT_REFERENCE_TEMPERATURE 124\n#define H_SALT_TEMPERATURE_TOLERANCE 126\n");
         definitions.append("#define COLOUR_OFFSETS ").append(COLOUR_OFFSETS).append('\n');
         for (var field : VulkanLiquidStateLayout.Field.values())
             definitions.append("#define STOCK_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
@@ -59,10 +54,10 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             definitions.append("#define FIELD_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
         return definitions.toString();
     }
-    record Tables(int[] offsets,double[] segments,int aqueousMaterial,int waterSpecies,int sodiumSpecies,int chlorideSpecies,int saltSpecies,int ethanolSpecies) {
-        Tables(int[] offsets,double[] segments){this(offsets,segments,-1,-1,-1,-1,-1,-1);}
+    record Tables(int[] offsets,double[] segments,int aqueousMaterial,int waterSpecies,int sodiumSpecies,int chlorideSpecies,int saltSpecies,int ethanolSpecies,double ethanolMolarMass,double waterMolarMass,double ethanolViscosity,mmm.chemistry.ChemicalPhaseDefinition.ViscosityCorrection correction) {
+        Tables(int[] offsets,double[] segments){this(offsets,segments,-1,-1,-1,-1,-1,-1,0,0,0,null);}
         Tables(int[] offsets,double[] segments,int aqueousMaterial,int waterSpecies,int sodiumSpecies,int chlorideSpecies,int saltSpecies){
-            this(offsets,segments,aqueousMaterial,waterSpecies,sodiumSpecies,chlorideSpecies,saltSpecies,-1);
+            this(offsets,segments,aqueousMaterial,waterSpecies,sodiumSpecies,chlorideSpecies,saltSpecies,-1,0,0,0,null);
         }
     }
     static Tables tables(FluidMaterialRegistry fluids,MaterialRegistry materials) {
@@ -78,10 +73,19 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         }
         var ids=chemistry==null?List.<String>of():chemistry.species().stream().map(mmm.chemistry.ChemicalSpecies::id).toList();
         int aqueous=-1;for(int i=0;i<fluids.materials().size();i++)if(fluids.material(i).id().equals("mmm:water"))aqueous=i;
+        var ethanol=chemistry!=null&&chemistry.hasSpecies(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)
+                ?chemistry.species(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)):null;
+        var water=chemistry!=null&&chemistry.hasSpecies(mmm.chemistry.BuiltinChemicalDefinitions.H2O)
+                ?chemistry.species(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.H2O)):null;
+        var liquid=ethanol==null?null:ethanol.liquidProperties();
+        var correction=chemistry==null?null:chemistry.phases().stream().filter(p->p.materialId().equals("mmm:water"))
+                .map(mmm.chemistry.ChemicalPhaseDefinition::viscosityCorrection).filter(java.util.Objects::nonNull).findFirst().orElse(null);
         return new Tables(offsets,values.stream().mapToDouble(Double::doubleValue).toArray(),aqueous,
                 ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.H2O),ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS),
                 ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS),ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.NACL),
-                ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL));
+                liquid==null?-1:ids.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL),
+                liquid==null?0:ethanol.molarMassKgPerMol().toDouble(),water==null?0:water.molarMassKgPerMol().toDouble(),
+                liquid==null?0:liquid.viscosityPaS(),correction);
     }
     /** Face CSR stores geometry area/distance in metres; body velocity is a three-component SI vector.
      * The contact geometry producer includes only tangential wet area and uses stable body order. */
@@ -154,7 +158,10 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             for(var field:VulkanLiquidStateLayout.Field.values())data[STOCK_FIELDS+field.ordinal()]=word(sourceLayout.column(field));
             for(var field:Field.values())data[WORK_FIELDS+field.ordinal()]=word(column(field));
             for(int colour=0;colour<colourOffsets.length;colour++)data[COLOUR_OFFSETS+colour]=colourOffsets[colour];
-            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);return out;
+            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);
+            out.putDouble(4*112,tables.ethanolViscosity()).putDouble(4*114,tables.ethanolMolarMass()).putDouble(4*116,tables.waterMolarMass());
+            var correction=tables.correction();
+            if(correction!=null)out.putDouble(4*118,correction.a()).putDouble(4*120,correction.b()).putDouble(4*122,correction.maximumMolality()).putDouble(4*124,correction.referenceTemperatureK()).putDouble(4*126,correction.temperatureToleranceK());return out;
         }
         void initializeHeaderAndTables(ByteBuffer arena){
             arena.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
@@ -192,13 +199,17 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     }
     private static int colourCells(Layout layout,int colour) {return layout.colourOffsets[colour+1]-layout.colourOffsets[colour];}
     private static int colourCells(VulkanLiquidStateLayout source,int colour) {
-        int[] dims={source.sizeX(),source.sizeY(),source.sizeZ()};
-        if(colour<6){int axis=colour/2;dims[axis]=(dims[axis]+1-(colour&1))/2;}
-        else {int pair=(colour-6)/4,bits=(colour-6)%4;
-            int a=pair==2?1:0,b=pair==0?1:2;
-            dims[a]=(dims[a]+1-(bits&1))/2;dims[b]=(dims[b]+1-(bits>>1))/2;
+        var grid=source.grid();int count=0;
+        for(int block=0;block<grid.blockCount();block++){
+            int[] dims={grid.blockSize(block,0),grid.blockSize(block,1),grid.blockSize(block,2)};
+            if(colour<6){int axis=colour/2;dims[axis]=(dims[axis]+1-(colour&1))/2;}
+            else {int pair=(colour-6)/4,bits=(colour-6)%4;
+                int a=pair==2?1:0,b=pair==0?1:2;
+                dims[a]=(dims[a]+1-(bits&1))/2;dims[b]=(dims[b]+1-(bits>>1))/2;
+            }
+            count=Math.addExact(count,dims[0]*dims[1]*dims[2]);
         }
-        return Math.multiplyExact(Math.multiplyExact(dims[0],dims[1]),dims[2]);
+        return count;
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int colour,int count,double h,double dt){
         if(count==0)return;int groups=(count+127)/128;

@@ -47,8 +47,9 @@ public final class GpuWetWallValidation {
             near(viscous.conductance, 2 * half.conductance, 1e-9, "viscosity response");
             double saltMoles=Math.round(1000*.5*.5*.5*.5*10000)*1e-6;
             double molarity=saltMoles/(.5*.5*.5*.5*1000);
-            near(saline.viscosity, 1 + mmm.chemistry.AqueousMixtureProperties.VISCOSITY_A*Math.sqrt(molarity)
-                    + mmm.chemistry.AqueousMixtureProperties.VISCOSITY_B*molarity, 1e-10, "dilute salt viscosity");
+            var correction=saltCorrection();
+            near(saline.viscosity, 1 + correction.a()*Math.sqrt(molarity)
+                    + correction.b()*molarity, 1e-10, "dilute salt viscosity");
             near(larger.conductance, 2 * half.conductance, 1e-9, "geometric length response");
             if (!(half.heat > 0 && half.finalK < half.initialK))
                 throw new AssertionError("Wall shear must dissipate moving liquid energy");
@@ -88,8 +89,9 @@ public final class GpuWetWallValidation {
                 new DeviceDyadicArray(volumeOffsets, signs, exponents, limbs), masses, energy,
                 mixture, speciesOffsets, speciesHandles, speciesAmounts, residual);
         double[] xMomentum = new double[(sx + 1) * sy * sz];
+        var grid=mmm.spatial.SpatialGrid.rectangular(sx,sy,sz);
         for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 1; x < sx; x++)
-            xMomentum[(z * sy + y) * (sx + 1) + x] = mass * speed;
+            xMomentum[grid.faceAt(x,y,z,0)] = mass * speed;
         var momentum = new MacMomentumState(sx, sy, sz, xMomentum, new double[sx * (sy + 1) * sz], new double[sx * sy * (sz + 1)]);
         long alignment = Math.max(8, context.storageOffsetAlignment());
         var liquid = VulkanLiquidStateLayout.forState(inventory, momentum, alignment);
@@ -98,13 +100,14 @@ public final class GpuWetWallValidation {
         var temperature = new VulkanLiquidStateLayout.Column(temperatureOffset, n, 8);
         var viscous = new VulkanLiquidViscosity.Layout(liquid, geometry.cells(), geometry.faces(), geometry.walls(),
                 Math.toIntExact(temperature.offset() / 4), -1,
-                saline?new VulkanLiquidViscosity.Tables(new int[]{0,1},new double[]{273,1000,mu,mu},0,0,1,2,3)
+                saline?new VulkanLiquidViscosity.Tables(new int[]{0,1},new double[]{273,1000,mu,mu},0,0,1,2,3,-1,0,
+                        mmm.fluid.TestFluidDefinitions.load().chemistry().species(mmm.fluid.TestFluidDefinitions.load().chemistry().speciesHandle("mmm:h2o")).molarMassKgPerMol().toDouble(),0,saltCorrection())
                         :new VulkanLiquidViscosity.Tables(new int[]{0, 1}, new double[]{273, 1000, mu, mu}),
                 null, true, temperature.offset() + temperature.bindingBytes(), alignment);
         var initial = ByteBuffer.allocate(Math.toIntExact(viscous.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
         liquid.importState(initial, inventory, momentum); viscous.initializeHeaderAndTables(initial);
         for (int c = 0; c < n; c++) initial.putDouble(Math.toIntExact(temperature.offset() + 8L * c), saline?298.15:293.15);
-        try (var storage = new VulkanRegionStorage(context, viscous.endOffset(), 1024 * 1024)) {
+        try (var storage = new VulkanRegionStorage(context, viscous.endOffset(), 1024 * 1024,liquid.grid())) {
             storage.initialize(initial, 0);
             try (var capture = storage.capture(); var candidate = storage.prepare(capture)) {
                 var feedback = candidate.beginBatch((cmd, input, output, errors, staging, stack) -> {
@@ -138,6 +141,10 @@ public final class GpuWetWallValidation {
     private static ByteBuffer read(VulkanRegionStorage.Candidate candidate, VulkanLiquidStateLayout.Column column) {
         var out = ByteBuffer.allocate(Math.toIntExact(column.bytes())).order(ByteOrder.LITTLE_ENDIAN);
         candidate.read(column.offset(), out); return out;
+    }
+    private static mmm.chemistry.ChemicalPhaseDefinition.ViscosityCorrection saltCorrection(){
+        return mmm.fluid.TestFluidDefinitions.load().chemistry().phases().stream().filter(phase->phase.materialId().equals("mmm:water"))
+                .map(mmm.chemistry.ChemicalPhaseDefinition::viscosityCorrection).filter(java.util.Objects::nonNull).findFirst().orElseThrow();
     }
     private static double sum(ByteBuffer buffer) { double result = 0; for (int i = 0; i < buffer.capacity(); i += 8) result += buffer.getDouble(i); return result; }
     private static void near(double actual, double expected, double tolerance, String label) {

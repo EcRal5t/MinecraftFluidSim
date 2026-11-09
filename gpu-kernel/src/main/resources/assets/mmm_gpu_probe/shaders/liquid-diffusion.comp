@@ -7,6 +7,7 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=0,std430) buffer LongArena { int64_t longs[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; int parity; } p;
+// SPATIAL_GRID
 // HOST_LAYOUT
 // PHASE_ROWS_LIBRARY
 const uint ERROR_DIFFUSION=134217728u;
@@ -17,14 +18,14 @@ double rd(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 void wr(int at,double v){if(isnan(v)||isinf(v))atomicOr(errors,ERROR_DIFFUSION);uvec2 b=unpackDouble2x32(v);words[at]=b.x;words[at+1]=b.y;}
 int64_t ri(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
 void wi(int at,int64_t v){words[at]=uint(v);words[at+1]=uint(uint64_t(v)>>32);}
-ivec3 shape(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}
-ivec3 xyz(int c){ivec3 s=shape();return ivec3(c%s.x,c/s.x%s.y,c/(s.x*s.y));}
-int cell(ivec3 q){ivec3 s=shape();return any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s))?-1:(q.z*s.y+q.y)*s.x+q.x;}
+ivec3 shape(){return gridShape();}
+ivec3 xyz(int c){return gridPosition(c);}
+int cell(ivec3 q){return gridCell(q);}
 ivec3 unit(int a){ivec3 q=ivec3(0);q[a]=1;return q;}
-int faceBase(int axis){ivec3 s=shape();return axis==0?0:(s.x+1)*s.y*s.z+(axis==2?s.x*(s.y+1)*s.z:0);}
-int face(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return faceBase(axis)+(q.z*s.y+q.y)*s.x+q.x;}
-int cellFace(int c,int axis,int side){ivec3 q=xyz(c);q[axis]+=side;return face(q,axis);}
-void faceCells(int id,out int axis,out int a,out int b){axis=id<faceBase(1)?0:id<faceBase(2)?1:2;int n=id-faceBase(axis);ivec3 s=shape()+unit(axis),q=ivec3(n%s.x,n/s.x%s.y,n/(s.x*s.y));a=cell(q-unit(axis));b=cell(q);}
+int faceBase(int axis){return gridFaceOffset(axis);}
+int face(ivec3 q,int axis){return gridFaceAt(q,axis);}
+int cellFace(int c,int axis,int side){return gridFace(c,2*axis+side);}
+void faceCells(int id,out int axis,out int a,out int b){ivec3 e=gridFaceEndpoints(id);a=e.x;b=e.y;axis=e.z;}
 bool activeCell(int c){return h(H_ACTIVE_CELLS)<0||words[h(H_ACTIVE_CELLS)+c]!=0u;}
 bool activeFace(int id){return h(H_ACTIVE_FACES)<0||words[h(H_ACTIVE_FACES)+id]!=0u;}
 double cvelocity(int c,int axis){return .5LF*(rd(h(H_GEOMETRY)+8*cellFace(c,axis,0)+2)+rd(h(H_GEOMETRY)+8*cellFace(c,axis,1)+2));}
@@ -36,15 +37,15 @@ double carried(int row,int m,int s1,int s2,int n1,int n2,int64_t q,int64_t units
  int cal=h(H_CALORIC),first=int(words[int(words[cal+CAL_SEGMENT_OFFSETS])+m]),last=int(words[int(words[cal+CAL_SEGMENT_OFFSETS])+m+1])-1;
  double mass=double(phaseRowMass(h(H_ROWS),row))*1e-10LF,remaining=sensible(row,m);
  int ethanolSpecies=int(words[cal+CAL_ETHANOL_SPECIES]);double ethanol=0.0;
- if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)ethanol=caloricEthanolMass(mass,double(phaseRowSpecies(h(H_ROWS),row,ethanolSpecies)));
+ if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)ethanol=caloricEthanolMass(mass,double(phaseRowSpecies(h(H_ROWS),row,ethanolSpecies)),rd(h(H_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
  double capacity=0.0LF,t=caloricStateTemperature(cal,m,mass,ethanol,remaining,capacity);
  double refT=rd(int(words[cal+CAL_REFERENCE_TEMPERATURE])+2*m),lo=min(refT,t),hi=max(refT,t),waterSensible=0.0;
  for(int i=first;i<=last&&lo<hi;i++){double upper=i==last?hi:min(hi,rd(int(words[cal+CAL_SEGMENT_UPPER])+2*i));if(upper>lo){waterSensible+=(upper-lo)*rd(int(words[cal+CAL_SEGMENT_CAPACITY])+2*i);lo=upper;}}
  if(t<refT)waterSensible=-waterSensible;
  double moved=double(units)*1e-10LF,movedEthanol=0.0;
  if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)
-  movedEthanol=caloricEthanolMass(moved,double(q)*double((s1==ethanolSpecies?n1:0)+(s2==ethanolSpecies?n2:0)));
- return moved*materialReference(m)+(moved-movedEthanol)*waterSensible+movedEthanol*CAL_ETHANOL_CP*(t-refT)
+  movedEthanol=caloricEthanolMass(moved,double(q)*double((s1==ethanolSpecies?n1:0)+(s2==ethanolSpecies?n2:0)),rd(h(H_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
+ return moved*materialReference(m)+(moved-movedEthanol)*waterSensible+movedEthanol*rd(h(H_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)*(t-refT)
    +double(q)*double(n1)*speciesReference(m,s1)+(s2>=0?double(q)*double(n2)*speciesReference(m,s2):0.0LF);
 }
 int pendingIndex(int anchor,int r){return f(FIELD_PENDING_INDEX)+anchor*h(H_RULES)+r;}
@@ -69,7 +70,7 @@ int reservePending(int anchor,int r,int material,int ordinal){
 }
 void applyFace(int a){
  int axis=p.parity/2,parity=p.parity&1;ivec3 q=xyz(a);if((q[axis]&1)!=parity||q[axis]+1>=shape()[axis]||!activeCell(a))return;
- int b=cell(q+unit(axis)),edge=cellFace(a,axis,1);if(!activeCell(b)||!activeFace(edge))return;
+ int b=cell(q+unit(axis)),edge=cellFace(a,axis,1);if(b<0||!activeCell(b)||!activeFace(edge))return;
  double hsize=rd(p.header+H_CELL_SIZE),wet=rd(h(H_GEOMETRY)+8*edge+6),dt=rd(p.header+H_DURATION);
  if(!(wet>0.0LF&&dt>0.0LF&&hsize>0.0LF))return;
  for(int r=0;r<h(H_RULES);r++){

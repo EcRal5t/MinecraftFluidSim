@@ -8,6 +8,7 @@ import mmm.model.region.RegionSectionState;
 import mmm.application.RegionCatalog;
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.HostFluidState;
+import mmm.fluid.FluidDefinitions;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
@@ -42,6 +43,7 @@ final class RegionRepositoryAdapter {
 	private final RegionGenerationStore files;
 	private final OwnershipStore ownershipStore;
 	private final WorldCapabilityProfile profile;
+	private final FluidDefinitions definitions;
 	private final ChemicalRegistry chemicalRegistry;
 	private final GranularRegistry granularRegistry;
 	private final ThermalRegistry thermalRegistry;
@@ -67,19 +69,14 @@ final class RegionRepositoryAdapter {
 			int maximumThermalSubsteps, MaterialRegistry materialDefinitions
 	) {
 		Objects.requireNonNull(profile, "profile");
-		if (profile.hasCapability(WorldCapability.MATERIALS)
-				&& (materialDefinitions == null || !profile.registryFingerprints().material().equals(materialDefinitions.fingerprint()))) {
-			throw new IllegalArgumentException("Material definitions differ from the committed world profile");
-		}
-		requireRegistry(profile, WorldCapability.CHEMISTRY, chemicalRegistry);
-		requireRegistry(profile, WorldCapability.GRANULAR, granularRegistry);
-		if (profile.hasCapability(WorldCapability.THERMAL)) {
-			if (thermalRegistry == null || gasRegistry == null) {
-				throw new IllegalArgumentException("Thermal capability requires thermal and gas registries");
-			}
-		} else if (thermalRegistry != null || gasRegistry != null) {
-			throw new IllegalArgumentException("Thermal registries are present without the thermal capability");
-		}
+		definitions = new FluidDefinitions(materialDefinitions, chemicalRegistry, gasRegistry, granularRegistry, thermalRegistry);
+		var fingerprints=profile.registryFingerprints();
+		if (!fingerprints.material().equals(materialDefinitions.fingerprint())
+				|| !fingerprints.chemical().equals(chemicalRegistry.fingerprint())
+				|| !fingerprints.granular().equals(granularRegistry.fingerprint())
+				|| !fingerprints.gas().equals(gasRegistry.fingerprint())
+				|| !fingerprints.thermal().equals(thermalRegistry.fingerprint()))
+			throw new IllegalArgumentException("World definitions differ from the committed profile");
 		files = switch (profile.regionLayoutId()) {
 			case "pure", "material" -> new RegionGenerationStore(worldRoot);
 			case "chemical" -> new RegionGenerationStore(worldRoot, chemicalRegistry);
@@ -623,7 +620,7 @@ final class RegionRepositoryAdapter {
 	private void restoreFeatureGeneration(FluidRegion region, RegionState state, RegionGenerationStore.ReadView readView) throws IOException {
 		var restorer=new RegionCheckpointRestorer(state.checkpoint());long generation=state.manifest().checkpointGeneration();
 		try {
-			var authoritative=restorer.reconstructAuthoritativeState(chemicalRegistry,granularRegistry,thermalRegistry,gasRegistry,materialDefinitions);
+			var authoritative=restorer.reconstructAuthoritativeState(definitions);
 			if (authoritative.sealedDomainBoundary() != (region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED))
 				throw new IOException("Saved gas exterior does not match the region kind");
 			if (readView != null) files.verifyReadView(readView);
@@ -659,12 +656,6 @@ final class RegionRepositoryAdapter {
 				|| manifest.sizeY() != Math.multiplyExact(manifest.footprint().blockSizeY(), cellsPerBlock)
 				|| manifest.sizeZ() != Math.multiplyExact(manifest.footprint().blockSizeZ(), cellsPerBlock)) {
 			throw new IOException("Persisted solver grid does not match its visible controller footprint");
-		}
-	}
-	private static void requireRegistry(WorldCapabilityProfile profile, WorldCapability capability, Object registry) {
-		if (profile.hasCapability(capability) != (registry != null)) {
-			throw new IllegalArgumentException("Registry " + capability.stableId()
-					+ " does not match the world capability profile");
 		}
 	}
 }

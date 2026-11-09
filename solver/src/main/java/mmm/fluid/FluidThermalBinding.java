@@ -39,12 +39,12 @@ final class FluidThermalBinding {
 
 	static ThermalDomainState create(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
-			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
+			int initialCapacity, mmm.spatial.SpatialGrid grid, float cellSize,
 			ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
 	) {
 		MaterialMappings mappings = mappings(registry, liquids, initialTemperatureK, markers);
 		return new ThermalDomainState(registry, mappings.liquid(), mappings.granular(),
-				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers,
+				initialTemperatureK, initialCapacity, grid,cellSize, markers,
 				airNetwork, maximumTransportSubsteps);
 	}
 
@@ -80,11 +80,11 @@ final class FluidThermalBinding {
 	}
 
 	static ThermalDomainState createOwnerRestoreTarget(ThermalRegistry registry, FluidMaterialRegistry liquids,
-			double insertionTemperatureK,int initialCapacity,int sizeX,int sizeY,int sizeZ,float cellSize,
+			double insertionTemperatureK,int initialCapacity,mmm.spatial.SpatialGrid grid,float cellSize,
 			ThermalCarrierContext owners,AirNetwork network,int maximumTransportSubsteps) {
 		var mappings = mappings(registry,liquids,insertionTemperatureK,owners);
 		return ThermalDomainState.restoreOwnerTarget(registry,mappings.liquid(),mappings.granular(),insertionTemperatureK,
-				initialCapacity,sizeX,sizeY,sizeZ,cellSize,owners,network,maximumTransportSubsteps);
+				initialCapacity,grid,cellSize,owners,network,maximumTransportSubsteps);
 	}
 
 	private record MaterialMappings(int[] liquid, int[] granular) { }
@@ -94,7 +94,7 @@ final class FluidThermalBinding {
 			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
 			ThermalCarrierContext markers, AirNetwork airNetwork
 	) {
-		return create(registry, liquids, initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ,
+		return create(registry, liquids, initialTemperatureK, initialCapacity, mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ),
 				cellSize, markers, airNetwork, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 	}
 

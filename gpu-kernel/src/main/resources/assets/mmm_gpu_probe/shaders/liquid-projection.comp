@@ -1,6 +1,7 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 
+// SPATIAL_GRID
 const int STAGE_ASSEMBLE_PRESSURE = 1;
 const int STAGE_PREDICT_COUPLED = 3;
 const uint ERROR_PRESSURE_PROJECTION = 8u;
@@ -67,27 +68,16 @@ layout(std430, binding = 11) readonly buffer MixtureStates {
 };
 
 int cellCount() {
-    return pc.sx * pc.sy * pc.sz;
+    return gridCells();
 }
 int xFaces() {
-    return (pc.sx + 1) * pc.sy * pc.sz;
+    return gridFaceCount(0);
 }
 int yFaces() {
-    return pc.sx * (pc.sy + 1) * pc.sz;
-}
-int cellIndex(ivec3 p) {
-    return (p.z * pc.sy + p.y) * pc.sx + p.x;
-}
-bool inside(ivec3 p) {
-    return all(greaterThanEqual(p, ivec3(0))) && all(lessThan(p, ivec3(pc.sx, pc.sy, pc.sz)));
+    return gridFaceCount(1);
 }
 bool pressureCell(int c) {
     return activeCells[c] != 0u && cells[c][CELL_MASS] > 0.0 && cells[c][CELL_PORE_VOLUME] > 0.0;
-}
-int faceIndex(ivec3 p, int axis) {
-    ivec3 shape = ivec3(pc.sx, pc.sy, pc.sz);
-    shape[axis]++;
-    return (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces()) + (p.z * shape.y + p.y) * shape.x + p.x;
 }
 double facePressureCoefficient(int face) {
     return activeFaces[face] != 0u && faces[face][FACE_MASS] > 0.0 ? faces[face][FACE_OPEN_AREA] / double(pc.h) : 0.0;
@@ -109,26 +99,19 @@ void predictFaceVelocity(int face) {
 
 }
 
-// The regular-grid block supplies the preconditioner for the common pressure operator.
+// Resident cell rows supply the preconditioner for the common pressure operator.
 void assemblePressureRow(int row) {
-    ivec3 cellPosition = ivec3(row % pc.sx, row / pc.sx % pc.sy, row / (pc.sx * pc.sy));
     int rowStart = PRESSURE_ROW_ENTRIES * row;
     starts[row] = rowStart;
     columns[rowStart] = row;
     double diagonal = 0.0, rightHandSide = 0.0;
     bool enabled = pressureCell(row);
     for (int side = 0; side < 6; side++) {
-        int axis = side / 2;
         bool upper = (side & 1) != 0;
-        ivec3 adjacent = cellPosition;
-        adjacent[axis] += upper ? 1 : -1;
-        ivec3 facePosition = cellPosition;
-        if (upper)
-            facePosition[axis]++;
-        int face = faceIndex(facePosition, axis), peer = inside(adjacent) ? cellIndex(adjacent) : row;
+        int face = gridFace(row, side), peer = gridNeighbor(row, side);
         double pressureCoefficient = facePressureCoefficient(face), faceDiagonal = pressureCoefficient * pressureCoefficient * inverseFaceInertia(face);
-        columns[rowStart + 1 + side] = peer;
-        values[rowStart + 1 + side] = enabled && inside(adjacent) && pressureCell(peer) ? -faceDiagonal : 0.0;
+        columns[rowStart + 1 + side] = peer >= 0 ? peer : row;
+        values[rowStart + 1 + side] = enabled && peer >= 0 && pressureCell(peer) ? -faceDiagonal : 0.0;
         if (enabled) {
             diagonal += faceDiagonal;
             rightHandSide += (upper ? -1.0 : 1.0) * pressureCoefficient * faces[face][FACE_VELOCITY] / double(pc.dt);
@@ -155,7 +138,7 @@ void main() {
             assemblePressureRow(id);
         return;
     }
-    if (id >= xFaces() + yFaces() + pc.sx * pc.sy * (pc.sz + 1))
+    if (id >= gridFaces())
         return;
     if (pc.stage == STAGE_PREDICT_COUPLED)
         predictFaceVelocity(id);

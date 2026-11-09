@@ -201,16 +201,8 @@ public final class FluidMaterialSurfaceMesher {
     int bit = piece.micro() >> axis & 1;
     if (bit == 0 && sign == 1 || bit == 1 && sign == -1)
       return 8 * piece.cell() + (piece.micro() ^ 1 << axis);
-    int coordinate =
-        axis == 0
-            ? piece.cell() % input.sizeX()
-            : axis == 1
-                ? piece.cell() / input.sizeX() % input.sizeY()
-                : piece.cell() / (input.sizeX() * input.sizeY());
-    int length = axis == 0 ? input.sizeX() : axis == 1 ? input.sizeY() : input.sizeZ();
-    if (coordinate + sign < 0 || coordinate + sign >= length) return -1;
-    int stride = axis == 0 ? 1 : axis == 1 ? input.sizeX() : input.sizeX() * input.sizeY();
-    return 8 * (piece.cell() + sign * stride) + (piece.micro() ^ 1 << axis);
+    int adjacent = input.grid().neighbor(piece.cell(), face);
+    return adjacent < 0 ? -1 : 8 * adjacent + (piece.micro() ^ 1 << axis);
   }
 
   private static List<Integer> candidates(
@@ -226,13 +218,9 @@ public final class FluidMaterialSurfaceMesher {
 
   private static List<Plane> relativePlanes(
       FluidSurfaceInput input, FluidSurfaceInput.Piece first, FluidSurfaceInput.Piece second) {
-    int dx = second.cell() % input.sizeX() - first.cell() % input.sizeX();
-    int dy =
-        second.cell() / input.sizeX() % input.sizeY()
-            - first.cell() / input.sizeX() % input.sizeY();
-    int dz =
-        second.cell() / (input.sizeX() * input.sizeY())
-            - first.cell() / (input.sizeX() * input.sizeY());
+    int dx = input.grid().x(second.cell()) - input.grid().x(first.cell());
+    int dy = input.grid().y(second.cell()) - input.grid().y(first.cell());
+    int dz = input.grid().z(second.cell()) - input.grid().z(first.cell());
     var result = new ArrayList<Plane>();
     for (var p : SurfacePolyhedron.planes(second))
       result.add(
@@ -273,9 +261,9 @@ public final class FluidMaterialSurfaceMesher {
 
   private static Point world(FluidSurfaceInput input, int cell, Point p) {
     return new Point(
-        (cell % input.sizeX() + p.x()) * input.cellSize(),
-        (cell / input.sizeX() % input.sizeY() + p.y()) * input.cellSize(),
-        (cell / (input.sizeX() * input.sizeY()) + p.z()) * input.cellSize());
+        (input.grid().x(cell) + p.x()) * input.cellSize(),
+        (input.grid().y(cell) + p.y()) * input.cellSize(),
+        (input.grid().z(cell) + p.z()) * input.cellSize());
   }
 
   public static int dominantMaterialAt(FluidMaterialRenderSnapshot snapshot, Point point) {

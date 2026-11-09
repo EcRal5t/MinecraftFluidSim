@@ -32,7 +32,7 @@ final class VulkanLiquidProjection implements AutoCloseable {
         stage(command, sx, sy, sz, parameters, 1,pressureRows);
     }
     private void stage(VkCommandBuffer command, int sx, int sy, int sz, Parameters p, int stage,int pressureRows) {
-        int count = stage == 1 ? sx * sy * sz : (sx + 1) * sy * sz + sx * (sy + 1) * sz + sx * sy * (sz + 1);
+        int count = stage == 1 ? bindings.grid().cellCount() : bindings.grid().faceCount();
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             var constants = stack.malloc(36);

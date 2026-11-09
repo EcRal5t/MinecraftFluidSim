@@ -98,18 +98,10 @@ public final class WorldCapabilityProfileValidation {
 	}
 
 	private static void bindingMismatchIsRejected() {
-		EnumSet<WorldCapability> full = EnumSet.allOf(WorldCapability.class);
-		expectIllegal("gas is required", () -> WorldCapabilityProfile.of(full,
-				bindings(RegistryKind.MATERIAL, RegistryKind.CHEMICAL, RegistryKind.GRANULAR, RegistryKind.THERMAL)));
-		expectIllegal("chemical must be empty", () -> WorldCapabilityProfile.of(
-				EnumSet.of(WorldCapability.MATERIALS),
-				bindings(RegistryKind.MATERIAL, RegistryKind.CHEMICAL)));
-		expectIllegal("material must be empty", () -> WorldCapabilityProfile.of(
-				Set.of(),
-				bindings(RegistryKind.MATERIAL)));
-		expectIllegal("gas must be empty", () -> WorldCapabilityProfile.of(
-				EnumSet.of(WorldCapability.MATERIALS),
-				bindings(RegistryKind.MATERIAL, RegistryKind.GAS)));
+		for (RegistryKind kind : RegistryKind.values()) {
+			var incomplete=bindings(RegistryKind.values()).with(kind, "");
+			expectIllegal("World registry binding is missing", () -> WorldCapabilityProfile.of(Set.of(), incomplete));
+		}
 	}
 
 	private static void malformedFingerprintsAreRejected() {
@@ -173,7 +165,7 @@ public final class WorldCapabilityProfileValidation {
 					"missing profile registry binding was ignored");
 
 			WorldCapabilityProfile materialOnly = WorldCapabilityProfile.of(
-					EnumSet.of(WorldCapability.MATERIALS), bindings(RegistryKind.MATERIAL));
+					EnumSet.of(WorldCapability.MATERIALS), bindings(RegistryKind.values()));
 			CompoundTag duplicateCapability = WorldCapabilityProfileCodec.encode(materialOnly);
 			CompoundTag repeated = new CompoundTag();
 			repeated.putString("Id", WorldCapability.MATERIALS.stableId());
@@ -286,17 +278,7 @@ public final class WorldCapabilityProfileValidation {
 	}
 
 	private static RegistryFingerprintSet bindingsFor(Set<WorldCapability> capabilities) {
-		boolean condensedThermal = capabilities.contains(WorldCapability.THERMAL)
-				|| capabilities.contains(WorldCapability.PHASECHANGE);
-		List<RegistryKind> bound = new ArrayList<>();
-		if (capabilities.contains(WorldCapability.MATERIALS)) bound.add(RegistryKind.MATERIAL);
-		if (capabilities.contains(WorldCapability.CHEMISTRY)) bound.add(RegistryKind.CHEMICAL);
-		if (capabilities.contains(WorldCapability.GRANULAR)) bound.add(RegistryKind.GRANULAR);
-		if (condensedThermal) {
-			bound.add(RegistryKind.GAS);
-			bound.add(RegistryKind.THERMAL);
-		}
-		return bindings(bound.toArray(RegistryKind[]::new));
+		return bindings(RegistryKind.values());
 	}
 
 	private static RegistryFingerprintSet bindings(RegistryKind... kinds) {

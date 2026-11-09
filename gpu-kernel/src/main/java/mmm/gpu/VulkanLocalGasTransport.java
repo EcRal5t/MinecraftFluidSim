@@ -25,8 +25,8 @@ final class VulkanLocalGasTransport implements AutoCloseable {
             this.pressureWord=pressureWord;this.activityCells=activityCells;this.activityFaces=activityFaces;
             this.sealedExterior=sealedExterior;this.ambient=java.util.Objects.requireNonNull(ambient);this.speciesMasses=speciesMasses.clone();
             if(speciesMasses.length!=source.definitions().speciesIds().size())throw new IllegalArgumentException("Gas species mass table differs");
-            cells=Math.multiplyExact(Math.multiplyExact(source.sizeX(),source.sizeY()),source.sizeZ());
-            faces=(source.sizeX()+1)*source.sizeY()*source.sizeZ()+source.sizeX()*(source.sizeY()+1)*source.sizeZ()+source.sizeX()*source.sizeY()*(source.sizeZ()+1);
+            cells=source.grid().cellCount();
+            faces=source.grid().faceCount();
             if(source.nodeCapacity()<cells||eos.gas()!=source||mixture.inputs().cells()!=cells||faceFlux<0||projectedVelocity<0||velocityStride<1||pressureWord<0||base<mixture.endOffset())throw new IllegalArgumentException("Invalid production gas transport layout");
             long cursor=base;int components=source.definitions().componentIds().size(),species=source.definitions().speciesStride();
             for(Field f:Field.values()) {

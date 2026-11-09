@@ -31,7 +31,7 @@ final class GranularTransferPlanner {
 
 	GranularTransferPlanner(HostFluidState domain) {
 		this.domain = domain;
-		insertionKernel = new GranularKernel(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+		insertionKernel = new GranularKernel(domain.grid,domain.config.cellSize());
 	}
 
 	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
@@ -59,7 +59,7 @@ final class GranularTransferPlanner {
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long[] previousSolid = domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 		long[] plannedSolid = previousSolid.clone();
-		var admission = new GranularSpawnAdmission(domain.sizeX, domain.sizeY, domain.sizeZ,
+		var admission = new GranularSpawnAdmission(domain.grid,
 				domain.config.cellSize(), granular.parcels, 1);
 		GranularCouplingFields.Position position = null;
 		for (int attempt = 0; attempt < 16 && position == null; attempt++) {
@@ -166,7 +166,7 @@ final class GranularTransferPlanner {
 		int releaseCellCount = releaseCellCount(insertionCells, ledger);
 		long[] previousSolid = domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 		long[] plannedSolid = previousSolid.clone();
-		var admission = new GranularSpawnAdmission(domain.sizeX, domain.sizeY, domain.sizeZ,
+		var admission = new GranularSpawnAdmission(domain.grid,
 				domain.config.cellSize(), granular.parcels, drafts.size());
 		int[] plannedParcelCounts = new int[domain.cellCount];
 		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
@@ -192,8 +192,7 @@ final class GranularTransferPlanner {
 					candidateOrdinal = candidateAttempt;
 				}
 				FluidDomainContracts.CellCandidate candidate = insertionCells.get(candidateOrdinal);
-				int candidateX = candidate.index() % domain.sizeX, candidateYz = candidate.index() / domain.sizeX;
-				int candidateY = candidateYz % domain.sizeY, candidateZ = candidateYz / domain.sizeY;
+				int candidateX=domain.grid.x(candidate.index()),candidateY=domain.grid.y(candidate.index()),candidateZ=domain.grid.z(candidate.index());
 				for (int attempt = 0; attempt < 16; attempt++) {
 					long sequence = plannedParcelCounts[candidate.index()] + attempt * 16_384L;
 					GranularCouplingFields.Position spawn = domain.granularCollision.planSpawnPosition(
@@ -332,8 +331,7 @@ final class GranularTransferPlanner {
 	}
 
 	private int insertionDistance(FluidDomainContracts.CellCandidate candidate, int centerY) {
-		int yz = candidate.index() / domain.sizeX;
-		int deltaY = yz % domain.sizeY - centerY;
+		int deltaY = domain.grid.y(candidate.index()) - centerY;
 		return candidate.distanceSquared() + 8 * deltaY * deltaY;
 	}
 
@@ -459,7 +457,7 @@ final class GranularTransferPlanner {
 			if (remainingParcels.size() != 1) throw new IllegalStateException("Granular extraction has multiple partial active carriers");
 			var entry = remainingParcels.entrySet().iterator().next(); int ordinal = entry.getKey();
 			var next = entry.getValue(); var source = granular.parcels.parcel(ordinal);
-			var kernel = new GranularKernel(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+			var kernel = new GranularKernel(domain.grid,domain.config.cellSize());
 			kernel.capture(next.x(), next.y(), next.z(), next.solidVolumeSvq());
 			java.util.function.IntToLongFunction available = cell -> domain.domainInventoryGeometry.granularGeometricOpenSvq(cell)
 					- (domain.gasState.spatial==null?mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]):0) - futureSolid[cell];

@@ -17,31 +17,38 @@ import java.util.*;
 public final class RegionCheckpointRestorer {
 	private static final String CHEMICAL_AUDIT_EXTENSION="mmm:chemical_audit";
 	private final RegionManifest manifest; private final List<RegionSectionState> sections; private boolean validated;
+	private SolverRuntimeCodec.Data runtime;
 	public RegionCheckpointRestorer(RegionCheckpoint checkpoint){manifest=checkpoint.manifest();sections=checkpoint.sections();}
 
-	public FluidDomainState reconstructAuthoritativeState(ChemicalRegistry chemistry,GranularRegistry granular,
-			ThermalRegistry thermal,GasRegistry gas,MaterialRegistry materials) throws IOException {
-		validateCheckpoint(); int cells=manifest.sizeX()*manifest.sizeY()*manifest.sizeZ();
-		var runtime=runtime();var liquid=reconstructLiquid(chemistry);var momentum=reconstructMomentum();
+	public FluidDomainState reconstructAuthoritativeState(FluidDefinitions definitions) throws IOException {
+		Objects.requireNonNull(definitions);
+		var chemistry=definitions.chemistry();var granular=definitions.granular();var thermal=definitions.thermal();
+		var gas=definitions.gas();var materials=definitions.material();
+		validateCheckpoint();var runtime=runtime();int cells=runtime.grid().cellCount();
+		var activeChemistry=manifest.hasChemicalState()?chemistry:null;
+		var liquid=reconstructLiquid(activeChemistry);var momentum=reconstructMomentum();
 		var chemicalAudit=manifest.hasChemicalState()?decodeChemicalAuditExtension():new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY);
 		var solids=manifest.hasGranularState()?reconstructGranular(granular):null;
-		var gasRegistry=gas==null?BuiltinGasDefinitions.createRegistry():gas;
+		var gasRegistry=gas;
 		boolean local=manifest.hasGasState()&&spatialGasPayload();
-		var localGas=local?reconstructSpatialGas(gasRegistry,chemistry):null;
+		var localGas=local?reconstructSpatialGas(gasRegistry,activeChemistry):null;
 		if(manifest.hasGasState()&&!local)throw new IOException("Gas checkpoint requires local spatial inventory");
 		var heat=manifest.hasThermalState()?reconstructThermalOwners(thermal):null;
 		if(localGas!=null&&thermal!=null){var model=new GasThermalModel(thermal,gasRegistry);try{
 			for(int cell=0;cell<localGas.cellCount();cell++)model.requireInventoryEnergy(localGas.cells().get(cell),localGas.energyAt(cell));
 		}catch(IllegalArgumentException invalid){throw new IOException("Spatial gas thermal state is invalid",invalid);}}
 		if(heat!=null){var liquidU=SignedDyadic.ZERO;for(var stock:liquid.stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));if(localGas!=null)liquidU=liquidU.add(SignedDyadic.sum(localGas.internalEnergy()));heat.requireClosed(liquidU,cells);}
-		try{return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),runtime.entityBodies(),manifest.materialPalette(),
+		try{return new FluidDomainState(runtime.grid(),manifest.solverConfig(),definitions,runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),runtime.entityBodies(),manifest.materialPalette(),
 				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,runtime.cursor(),
 				runtime.massTransferPending(),
 				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,FluidDomainState.GasContinuation.spatial(localGas),heat==null?null:thermal,heat,
 				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseMotion(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
 		}catch(IllegalArgumentException invalid){throw new IOException("Invalid complete cell/MAC region state",invalid);}
 	}
-	private SolverRuntimeCodec.Data runtime()throws IOException{return new SolverRuntimeCodec().decode(requiredExtension(manifest.extensions(),SolverRuntimeCodec.MANIFEST_EXTENSION).payload(),manifest.sizeX()*manifest.sizeY()*manifest.sizeZ());}
+	private SolverRuntimeCodec.Data runtime()throws IOException{
+		if(runtime==null)runtime=new SolverRuntimeCodec().decode(requiredExtension(manifest.extensions(),SolverRuntimeCodec.MANIFEST_EXTENSION).payload(),manifest.sizeX(),manifest.sizeY(),manifest.sizeZ());
+		return runtime;
+	}
 	public LiquidCellInventory.Snapshot reconstructLiquid(ChemicalRegistry chemistry)throws IOException {
 		validateCheckpoint();
 		// Saved mixture entries use registry ordinals. Every reader must establish the
@@ -50,18 +57,34 @@ public final class RegionCheckpointRestorer {
 				||!manifest.registryFingerprint().equals(chemistry.fingerprint())
 				||!manifest.speciesPalette().equals(chemistry.species().stream().map(ChemicalSpecies::id).toList())))
 			throw new IOException("Chemical registry fingerprint or species palette differs from checkpoint");
-		var rows=new ArrayList<List<LiquidCellInventory.Stock>>();int cells=manifest.sizeX()*manifest.sizeY()*manifest.sizeZ();for(int i=0;i<cells;i++)rows.add(new ArrayList<>());
-		for(var section:sections)for(var stock:section.liquidStocks())rows.get(stock.key().cell()).add(stock);
+		var rows=new ArrayList<List<LiquidCellInventory.Stock>>();int cells=runtime().grid().cellCount();for(int i=0;i<cells;i++)rows.add(new ArrayList<>());
+		for(var stock:restoredStocks())rows.get(stock.key().cell()).add(stock);
 		try{return new LiquidCellInventory(new LiquidCellInventory.Snapshot(rows),chemistry).snapshot();}catch(IllegalArgumentException invalid){throw new IOException("Invalid liquid cell quantities",invalid);}
 	}
+	private List<LiquidCellInventory.Stock> restoredStocks() throws IOException {
+		var result=new ArrayList<LiquidCellInventory.Stock>();var grid=runtime().grid();
+		for(var section:sections)for(var stock:section.liquidStocks()){
+			int local=stock.key().cell(),sx=section.sizeX(),sy=section.sizeY();
+			int cell=grid.cell(section.localStartX()+local%sx,section.localStartY()+local/sx%sy,section.localStartZ()+local/(sx*sy));
+			if(cell<0)throw new IOException("Liquid stock is outside the stored grid");
+			var key=new LiquidCellInventory.Key(cell,stock.key().material(),stock.key().supportMask());
+			result.add(new LiquidCellInventory.Stock(key,stock.volume(),stock.massUnits(),stock.mixture(),stock.internalEnergy()));
+		}
+		result.sort(Comparator.comparing(LiquidCellInventory.Stock::key));return result;
+	}
 	public MacMomentumState reconstructMomentum()throws IOException {
-		validateCheckpoint();int nx=manifest.sizeX(),ny=manifest.sizeY(),nz=manifest.sizeZ();double[][] values={new double[(nx+1)*ny*nz],new double[nx*(ny+1)*nz],new double[nx*ny*(nz+1)]};
-		for(var section:sections)for(var face:section.faceMomentum())values[face.axis()][face.face()]=face.kilogramMetersPerSecond();return new MacMomentumState(nx,ny,nz,values[0],values[1],values[2]);
+		validateCheckpoint();var grid=runtime().grid();double[][] values={new double[grid.faceCount(0)],new double[grid.faceCount(1)],new double[grid.faceCount(2)]};
+		for(var section:sections)for(var face:section.faceMomentum()){
+			int index=grid.faceAt(face.x(),face.y(),face.z(),face.axis());
+			if(index<0)throw new IOException("MAC face is outside the stored grid");
+			values[face.axis()][index-grid.faceOffset(face.axis())]=face.kilogramMetersPerSecond();
+		}
+		return new MacMomentumState(grid,values[0],values[1],values[2]);
 	}
 	public PhaseOccupancyState reconstructPhaseOccupancy() throws IOException {
 		validateCheckpoint();
-		int nx=manifest.sizeX(),ny=manifest.sizeY();
-		double[] volumes=new double[Math.multiplyExact(8,Math.multiplyExact(Math.multiplyExact(nx,ny),manifest.sizeZ()))];
+		var grid=runtime().grid();
+		double[] volumes=new double[Math.multiplyExact(8,grid.cellCount())];
 		var codec=new PhaseOccupancyCodec();
 		for(var section:sections){
 			int count=Math.multiplyExact(Math.multiplyExact(section.sizeX(),section.sizeY()),section.sizeZ());
@@ -70,33 +93,35 @@ public final class RegionCheckpointRestorer {
 			for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)
 				for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)
 					for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++){
-						int cell=x+nx*(y+ny*z);System.arraycopy(slice,8*local++,volumes,8*cell,8);
+						int cell=grid.cell(x,y,z);if(cell>=0)System.arraycopy(slice,8*local,volumes,8*cell,8);local++;
 					}
 		}
 		try{return new PhaseOccupancyState(volumes);}
 		catch(IllegalArgumentException invalid){throw new IOException("Invalid persisted phase occupancy",invalid);}
 	}
 	public FixedGeometrySnapshot reconstructFixedGeometry()throws IOException {
-		validateCheckpoint();int nx=manifest.sizeX(),ny=manifest.sizeY();byte[] masks=new byte[nx*ny*manifest.sizeZ()];
-		for(var section:sections){byte[] slice=section.solidMask();int local=0;for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++)masks[x+nx*(y+ny*z)]=slice[local++];}return FixedGeometrySnapshot.fromMasks(nx,ny,manifest.sizeZ(),masks);
+		validateCheckpoint();var grid=runtime().grid();byte[] masks=new byte[grid.cellCount()];
+		for(var section:sections){byte[] slice=section.solidMask();int local=0;for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++){int cell=grid.cell(x,y,z);if(cell>=0)masks[cell]=slice[local];local++;}}return FixedGeometrySnapshot.fromMasks(grid,masks);
 	}
 	/** Diagnostic sampling views; restore services use reconstructAuthoritativeState. */
-	public FlipParticleState reconstruct()throws IOException{if(manifest.layout().hasMaterials())throw new IOException("Material state requires its palette");return debugState(null).particles();}
-	public FlipMaterialParticleState reconstructMaterial()throws IOException{if(!manifest.layout().hasMaterials()||manifest.hasChemicalState())throw new IOException("Material diagnostic layout differs");return debugState(null).materials();}
-	public FlipChemicalParticleState reconstructChemical(ChemicalRegistry chemistry)throws IOException{if(!manifest.hasChemicalState())throw new IOException("Chemical diagnostic layout differs");return debugState(chemistry).chemicals();}
-	private FluidDomainState debugState(ChemicalRegistry chemistry)throws IOException {
+	public FlipParticleState reconstruct(FluidDefinitions definitions)throws IOException{if(manifest.layout().hasMaterials())throw new IOException("Material state requires its palette");return debugState(definitions,null).particles();}
+	public FlipMaterialParticleState reconstructMaterial(FluidDefinitions definitions)throws IOException{if(!manifest.layout().hasMaterials()||manifest.hasChemicalState())throw new IOException("Material diagnostic layout differs");return debugState(definitions,null).materials();}
+	public FlipChemicalParticleState reconstructChemical(FluidDefinitions definitions)throws IOException{if(!manifest.hasChemicalState())throw new IOException("Chemical diagnostic layout differs");return debugState(definitions,definitions.chemistry()).chemicals();}
+	private FluidDomainState debugState(FluidDefinitions definitions,ChemicalRegistry chemistry)throws IOException {
 		var run=runtime();var audit=chemistry==null?new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY):decodeChemicalAuditExtension();
-		return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),run.entityBodies(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),run.massTransferPending(),null,null,null,false,BuiltinGasDefinitions.createRegistry(),manifest.hasGasState()?FluidDomainState.GasContinuation.spatial(reconstructSpatialGasPayload(null,null)):null,null,null,0,null,null,null,null);
+		return new FluidDomainState(run.grid(),manifest.solverConfig(),definitions,run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),run.entityBodies(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),run.massTransferPending(),null,null,null,false,definitions.gas(),manifest.hasGasState()?FluidDomainState.GasContinuation.spatial(reconstructSpatialGasPayload(null,null)):null,null,null,0,null,null,null,null);
 	}
-	public SpatialGasState reconstructSpatialGas(GasRegistry gas,ChemicalRegistry chemistry)throws IOException {validateCheckpoint();return reconstructSpatialGasPayload(gas,chemistry);}
+	public SpatialGasState reconstructSpatialGas(GasRegistry gas,ChemicalRegistry chemistry)throws IOException {
+		validateCheckpoint();return reconstructSpatialGasPayload(gas,manifest.hasChemicalState()?chemistry:null);
+	}
 	private boolean spatialGasPayload() throws IOException {return GasRegionStateCodec.isSpatial(requiredExtension(manifest.extensions(),GasRegionStateCodec.MANIFEST_EXTENSION).payload());}
 	public boolean hasSpatialGas() throws IOException { return manifest.hasGasState() && spatialGasPayload(); }
 	public ThermalOwnerSnapshot reconstructThermalOwners(ThermalRegistry registry)throws IOException {
 		validateCheckpoint();var codec=new ThermalRegionStateCodec();var thermal=codec.decodeManifest(requiredExtension(manifest.extensions(),ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
 		if(registry==null||!registry.fingerprint().equals(thermal.registryFingerprint()))throw new IOException("Thermal registry differs");
 		double[] active=new double[thermal.activeParcelCount()];boolean[] seen=new boolean[active.length];var deposits=new ArrayList<ThermalDepositEnergy>();var coherent=new ArrayList<CoherentPhaseStore.Group>();
-		for(var section:sections){var data=codec.decodeSection(requiredExtension(section.extensions(),ThermalRegionStateCodec.SECTION_EXTENSION).payload(),section.stockCount(),GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
-			if(manifest.hasGranularState()) {var solid=new GranularRegionStateCodec().decodeSection(requiredExtension(section.extensions(),GranularRegionStateCodec.SECTION_EXTENSION).payload(),GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
+		for(var section:sections){var data=codec.decodeSection(requiredExtension(section.extensions(),ThermalRegionStateCodec.SECTION_EXTENSION).payload(),section.stockCount(),GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,runtime().grid());
+			if(manifest.hasGranularState()) {var solid=new GranularRegionStateCodec().decodeSection(requiredExtension(section.extensions(),GranularRegionStateCodec.SECTION_EXTENSION).payload(),GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,runtime().grid());
 				long[] au=data.activeParcelEnergyBits(),du=data.depositGroupEnergyBits();for(int i=0;i<solid.active().size();i++){int ordinal=solid.active().get(i).ordinal();if(ordinal>=active.length||seen[ordinal])throw new IOException("Thermal granular ordinal differs");seen[ordinal]=true;active[ordinal]=Double.longBitsToDouble(au[i]);}
 				for(int i=0;i<solid.deposits().size();i++)deposits.add(new ThermalDepositEnergy(solid.deposits().get(i),Double.longBitsToDouble(du[i])));
 			}
@@ -106,8 +131,8 @@ public final class RegionCheckpointRestorer {
 		return new ThermalOwnerSnapshot(registry.fingerprint(),thermal.insertionTemperatureK(),active,deposits.stream().mapToDouble(ThermalDepositEnergy::energy).toArray(),toDoubles(thermal.gasNodeEnergyBits()),coherent,thermal.audit());
 	}
 	public FlipThermalParticleState reconstructThermal(ThermalRegistry registry)throws IOException {
-		var owners=reconstructThermalOwners(registry);double[] liquid=sections.stream().flatMap(section->section.liquidStocks().stream()).sorted(Comparator.comparing(LiquidCellInventory.Stock::key)).filter(stock->stock.massUnits()>0).mapToDouble(LiquidCellInventory.Stock::internalEnergy).toArray();
-		return new FlipThermalParticleState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig().cellSize(),liquid.length,registry.fingerprint(),owners.insertionTemperatureK(),liquid,owners.copyActiveParcelEnergy(),owners.copyDepositEnergy(),owners.coherentGroups(),reconstructSpatialGasPayload(null,null).internalEnergy(),owners.audit());
+		var owners=reconstructThermalOwners(registry);double[] liquid=restoredStocks().stream().filter(stock->stock.massUnits()>0).mapToDouble(LiquidCellInventory.Stock::internalEnergy).toArray();
+		return new FlipThermalParticleState(runtime().grid(),manifest.solverConfig().cellSize(),liquid.length,registry.fingerprint(),owners.insertionTemperatureK(),liquid,owners.copyActiveParcelEnergy(),owners.copyDepositEnergy(),owners.coherentGroups(),reconstructSpatialGasPayload(null,null).internalEnergy(),owners.audit());
 	}
 	public FlipThermalParticleState reconstructThermal(ThermalRegistry thermal,GasRegistry gas,ChemicalRegistry chemistry)throws IOException {
 		var result=reconstructThermal(thermal);var model=new GasThermalModel(thermal,gas);
@@ -117,7 +142,7 @@ public final class RegionCheckpointRestorer {
 	private record ThermalDepositEnergy(GranularStateSnapshot.DepositGroup group,double energy){private static final Comparator<ThermalDepositEnergy> ORDER=Comparator.comparingInt((ThermalDepositEnergy entry)->entry.group().cell()).thenComparingInt(entry->entry.group().materialPaletteIndex()).thenComparingInt(entry->entry.group().solidCompositionIndex());}
 	/** Sparse absence is the canonical empty record; presence is valid only in a complete thermal generation. */
 	public PendingPhaseMotionState reconstructPendingPhaseMotion() throws IOException {
-		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
+		int cellCount = runtime().grid().cellCount();
 		if (!hasExtension(manifest.extensions(), PendingPhaseMotionCodec.MANIFEST_EXTENSION)) {
 			return new PendingPhaseMotionState(cellCount, List.of());
 		}
@@ -125,7 +150,7 @@ public final class RegionCheckpointRestorer {
 			throw new IOException("Pending phase volume is only valid in a thermal region-state");
 		}
 		return new PendingPhaseMotionCodec().decode(requiredExtension(
-				manifest.extensions(), PendingPhaseMotionCodec.MANIFEST_EXTENSION).payload(), cellCount);
+				manifest.extensions(), PendingPhaseMotionCodec.MANIFEST_EXTENSION).payload(),runtime().grid());
 	}
 
 	/** Sparse absence is the canonical empty inventory; device energy exists only in thermal state. */
@@ -166,7 +191,7 @@ public final class RegionCheckpointRestorer {
 		for (RegionSectionState section : sections) {
 			GranularRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
-					granular.activeBudget(), granular.depositGroupBudget());
+					granular.activeBudget(), granular.depositGroupBudget(),runtime().grid());
 			int previousActiveOrdinal = -1;
 			for (GranularRegionStateCodec.ActiveEntry entry : data.active()) {
 				if (entry.ordinal() < 0 || entry.ordinal() >= active.length || seenActive[entry.ordinal()]) {
@@ -189,7 +214,7 @@ public final class RegionCheckpointRestorer {
 		long totalSvq = Math.addExact(granular.activeSvq(), granular.depositSvq());
 		long totalMassUnits = GranularStateSnapshot.canonicalTotalMassUnits(Arrays.asList(active), deposits);
 		try {
-			return new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
+			return new GranularStateSnapshot(runtime().grid(),
 					granular.registryFingerprint(), granular.chemicalRegistryFingerprint(), granular.materialPalette(),
 					granular.solidCompositions(), granular.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					totalSvq, totalMassUnits, granular.externalSource(), granular.escapedSink());
@@ -214,17 +239,18 @@ public final class RegionCheckpointRestorer {
 			throw new IOException("Spatial gas chemical identity differs from region");
 		if(registry!=null&&!data.registryFingerprint().equals(registry.fingerprint()))throw new IOException("Spatial gas registry differs");
 		if(chemicalRegistry!=null&&!data.chemicalRegistryFingerprint().equals(chemicalRegistry.fingerprint()))throw new IOException("Spatial gas chemistry differs");
-		int sx=manifest.sizeX(),sy=manifest.sizeY(),sz=manifest.sizeZ(),cells=Math.multiplyExact(Math.multiplyExact(sx,sy),sz);
+		var grid=runtime().grid();int cells=grid.cellCount();
 		var inventory=new ArrayList<GasInventory>(Collections.nCopies(cells,GasInventory.EMPTY));double[] energy=new double[cells];boolean[] seen=new boolean[cells];
 		for(var section:sections){
 			int nx=section.sizeX(),ny=section.sizeY(),nz=section.sizeZ(),count=Math.multiplyExact(Math.multiplyExact(nx,ny),nz);
 			var entries=codec.decodeSpatialSection(requiredExtension(section.extensions(),GasRegionStateCodec.SECTION_EXTENSION).payload(),count);
 			for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++){
-				int cell=section.localStartX()+x+sx*(section.localStartY()+y+sy*(section.localStartZ()+z));
-				if(cell<0||cell>=cells||seen[cell])throw new IOException("Spatial gas section coverage overlaps");seen[cell]=true;
+				int cell=grid.cell(section.localStartX()+x,section.localStartY()+y,section.localStartZ()+z);
+				if(cell>=0){if(seen[cell])throw new IOException("Spatial gas section coverage overlaps");seen[cell]=true;}
 			}
 			for(var entry:entries){int local=entry.cell(),x=local%nx,y=local/nx%ny,z=local/(nx*ny);
-				int cell=section.localStartX()+x+sx*(section.localStartY()+y+sy*(section.localStartZ()+z));
+				int cell=grid.cell(section.localStartX()+x,section.localStartY()+y,section.localStartZ()+z);
+				if(cell<0)throw new IOException("Spatial gas entry is outside the stored grid");
 				inventory.set(cell,entry.inventory());energy[cell]=entry.energy();
 				if(registry!=null)validateGasInventoryRegistry(entry.inventory(),registry,chemicalRegistry);
 			}
@@ -236,7 +262,7 @@ public final class RegionCheckpointRestorer {
 					||!SignedDyadic.sum(energy).equals(data.energy()))throw new IOException("Spatial gas inventory or energy audit differs");
 			if(registry!=null){validateGasAuditRegistry(data.externalSource(),registry,chemicalRegistry);validateGasAuditRegistry(data.escapedSink(),registry,chemicalRegistry);
 				validateGasAuditRegistry(data.phaseSource(),registry,chemicalRegistry);validateGasAuditRegistry(data.phaseSink(),registry,chemicalRegistry);}
-			return new SpatialGasState(sx,sy,sz,data.registryFingerprint(),data.chemicalRegistryFingerprint(),inventory,energy,
+			return new SpatialGasState(grid,data.registryFingerprint(),data.chemicalRegistryFingerprint(),inventory,energy,
 					data.externalSource(),data.escapedSink(),data.phaseSource(),data.phaseSink());
 		} catch(IllegalArgumentException|ArithmeticException invalid){throw new IOException("Invalid spatial gas inventory",invalid);}
 	}
@@ -257,10 +283,9 @@ public final class RegionCheckpointRestorer {
 	}
 
 	private void validateGranularDepositSection(RegionSectionState section, int cell) throws IOException {
-		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
+		var grid=runtime().grid();int cellCount = grid.cellCount();
 		if (cell < 0 || cell >= cellCount) throw new IOException("Granular deposit cell is outside region bounds");
-		int x = cell % manifest.sizeX(), yz = cell / manifest.sizeX();
-		int y = yz % manifest.sizeY(), z = yz / manifest.sizeY();
+		int x = grid.x(cell), y = grid.y(cell), z = grid.z(cell);
 		float h = manifest.solverConfig().cellSize();
 		validateGranularSectionPosition(section, (x + 0.5F) * h, (y + 0.5F) * h, (z + 0.5F) * h);
 	}

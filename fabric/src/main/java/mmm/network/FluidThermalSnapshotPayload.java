@@ -42,7 +42,7 @@ public record FluidThermalSnapshotPayload(
 			throw new IllegalArgumentException("Thermal snapshot cannot duplicate chemical and granular display layers");
 		}
 		if (material.isSnapshot()) {
-			int cells = Math.multiplyExact(Math.multiplyExact(material.sizeX(), material.sizeY()), material.sizeZ());
+			int cells = material.geometry().grid().cellCount();
 			if (cells > MAX_CELLS || !registryFingerprint.matches("[0-9a-f]{64}")
 					|| cellTemperatureQ.length != cells || coherentFraction.length != cells || debugFlags.length != cells
 					|| gasNodes.size() > GasLimits.MAX_NODES_PER_REGION) {

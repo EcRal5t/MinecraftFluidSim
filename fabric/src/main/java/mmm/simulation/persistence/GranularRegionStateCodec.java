@@ -203,7 +203,7 @@ final class GranularRegionStateCodec {
 		return new GranularAuditLedger(entries);
 	}
 
-	byte[] encodeSection(SectionData data) {
+	byte[] encodeSection(SectionData data,mmm.spatial.SpatialGrid grid) {
 		return encode(out -> {
 			out.writeInt(SECTION_MAGIC); out.writeInt(PAYLOAD_VERSION);
 			out.writeInt(data.active().size());
@@ -220,14 +220,15 @@ final class GranularRegionStateCodec {
 			}
 			out.writeInt(data.deposits().size());
 			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
-				out.writeInt(group.cell()); out.writeInt(group.porosityQ()); out.writeInt(group.materialPaletteIndex());
+				out.writeInt(grid.x(group.cell()));out.writeInt(grid.y(group.cell()));out.writeInt(grid.z(group.cell()));
+				out.writeInt(group.porosityQ()); out.writeInt(group.materialPaletteIndex());
 				out.writeInt(group.solidCompositionIndex()); out.writeLong(group.solidVolumeSvq());
 				out.writeLong(group.massUnits());
 			}
 		});
 	}
 
-	SectionData decodeSection(byte[] bytes, int activeBudget, int depositBudget) throws IOException {
+	SectionData decodeSection(byte[] bytes, int activeBudget, int depositBudget,mmm.spatial.SpatialGrid grid) throws IOException {
 		try (DataInputStream input = input(bytes)) {
 			if (input.readInt() != SECTION_MAGIC) {
 				throw new IOException("Unknown granular section payload");
@@ -246,9 +247,11 @@ final class GranularRegionStateCodec {
 			}
 			int depositCount = bounded(input.readInt(), 0, depositBudget, "section deposit entries");
 			List<GranularStateSnapshot.DepositGroup> deposits = new ArrayList<>(depositCount);
-			for (int index = 0; index < depositCount; index++) deposits.add(new GranularStateSnapshot.DepositGroup(
-					input.readInt(), input.readInt(), input.readInt(), input.readInt(), input.readLong(),
-					input.readLong()));
+			for (int index = 0; index < depositCount; index++) {
+				int cell=grid.cell(input.readInt(),input.readInt(),input.readInt());
+				if(cell<0)throw new IOException("Granular deposit is outside its spatial grid");
+				deposits.add(new GranularStateSnapshot.DepositGroup(cell,input.readInt(),input.readInt(),input.readInt(),input.readLong(),input.readLong()));
+			}
 			requireEnd(input);
 			return new SectionData(List.copyOf(active), List.copyOf(deposits));
 		} catch (EOFException truncated) { throw new IOException("Truncated granular section payload", truncated); }

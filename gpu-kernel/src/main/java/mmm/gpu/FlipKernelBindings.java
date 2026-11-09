@@ -34,6 +34,8 @@ final class FlipKernelBindings implements AutoCloseable {
 
 	private final VulkanDeviceContext context;
 	private final int bindingCount;
+    private final boolean spatial;
+    private mmm.spatial.SpatialGrid grid;
 	private long descriptorLayout;
 	private long pipelineLayout;
 	private long shaderModule;
@@ -62,7 +64,11 @@ final class FlipKernelBindings implements AutoCloseable {
 
 	private FlipKernelBindings(VulkanDeviceContext context, int bindingCount, String source, int pushBytes, Integer specialization) {
 		this.context = context;
-		this.bindingCount = bindingCount;
+        spatial=source.contains("// SPATIAL_GRID");
+		this.bindingCount = bindingCount+(spatial?1:0);
+        if(spatial)source=source.replace("// SPATIAL_GRID",VulkanLiquidPhaseRows.resource("spatial-grid.glsl")
+                .replace("SPATIAL_GRID_BINDING",Integer.toString(bindingCount))
+                .replace("// SPATIAL_ADDRESS",VulkanLiquidPhaseRows.resource("spatial-address.glsl")));
 		try {
 			create(source, pushBytes, specialization);
 		} catch (RuntimeException | LinkageError exception) {
@@ -73,6 +79,7 @@ final class FlipKernelBindings implements AutoCloseable {
 	}
 
 	long pipelineLayout() { return pipelineLayout; }
+    mmm.spatial.SpatialGrid grid(){return grid;}
 
 	void bind(VkCommandBuffer commandBuffer, MemoryStack stack) {
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -169,6 +176,12 @@ final class FlipKernelBindings implements AutoCloseable {
 	}
 
 	void rebindRanges(List<BufferRange> buffers) {
+        if(spatial){
+            var topology=buffers.stream().map(BufferRange::buffer).filter(buffer->buffer.grid()!=null).findFirst()
+                    .orElseThrow(()->new IllegalArgumentException("Spatial kernel requires a grid-bound state buffer"));
+            grid=topology.grid();
+            var expanded=new java.util.ArrayList<>(buffers);expanded.add(topology.gridRange());buffers=expanded;
+        }
 		if (buffers.size() != bindingCount) throw new IllegalArgumentException("Compute binding count differs");
         var key=buffers.stream().map(range->new BindingKey(new BufferIdentity(range.buffer()),range.offset(),range.bytes())).toList();var cached=descriptorSets.get(key);
         if(cached!=null){descriptorSet=cached;return;}

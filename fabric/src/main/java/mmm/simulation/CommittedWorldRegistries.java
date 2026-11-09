@@ -26,6 +26,7 @@ import java.util.TreeMap;
 public final class CommittedWorldRegistries {
 	private final WorldStartupCoordinator.Result startup;
 	private final WorldCapabilityProfile profile;
+	private final mmm.fluid.FluidDefinitions definitions;
 	private final MaterialRegistry material;
 	private final ChemicalRegistry chemical;
 	private final GranularRegistry granular;
@@ -41,9 +42,15 @@ public final class CommittedWorldRegistries {
 		this.granular = registries == null ? null : registries.granular();
 		this.gas = registries == null ? null : registries.gas();
 		this.thermal = registries == null ? null : registries.thermal();
+		this.definitions = registries == null ? null : new mmm.fluid.FluidDefinitions(material,chemical,gas,granular,thermal);
 	}
 
 	public WorldCapabilityProfile profile() { return profile; }
+
+	public mmm.fluid.FluidDefinitions definitions() {
+		if (definitions == null) throw new IllegalStateException("World physical definitions are unavailable");
+		return definitions;
+	}
 
 	public boolean hasCapability(WorldCapability capability) {
 		return profile.hasCapability(capability);
@@ -76,13 +83,25 @@ public final class CommittedWorldRegistries {
 		return thermal;
 	}
 
-	ChemicalRegistry chemicalOrNull() { return chemical; }
-	GranularRegistry granularOrNull() { return granular; }
-	GasRegistry gasOrNull() { return gas; }
-	ThermalRegistry thermalOrNull() { return thermal; }
+	ChemicalRegistry chemicalOrNull() { return profile != null && profile.hasCapability(WorldCapability.CHEMISTRY) ? chemical : null; }
+	GranularRegistry granularOrNull() { return profile != null && profile.hasCapability(WorldCapability.GRANULAR) ? granular : null; }
+	GasRegistry gasOrNull() { return profile != null && profile.hasCapability(WorldCapability.THERMAL) ? gas : null; }
+	ThermalRegistry thermalOrNull() { return profile != null && profile.hasCapability(WorldCapability.THERMAL) ? thermal : null; }
 
 	public FluidMaterial resolveMaterial(String stableId) {
 		return materialRegistry().entry(stableId).material();
+	}
+
+	public ItemStack creativeMaterial(String name) {
+		var descriptor = new mmm.transfer.CreativeSourceDescriptor("mmm:source/material/" + name,
+				mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, null);
+		return CreativeSourceCatalog.resolve(this, descriptor).actualStack();
+	}
+
+	public ItemStack creativeReagent(String name) {
+		var descriptor = new mmm.transfer.CreativeSourceDescriptor("mmm:source/reagent/" + name,
+				mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, null);
+		return CreativeSourceCatalog.resolve(this, descriptor).actualStack();
 	}
 
 	public String thermalRegistryFingerprint() {
@@ -152,7 +171,7 @@ public final class CommittedWorldRegistries {
 
 	void bindConfiguredState(HostFluidState domain, int maximumThermalSubstepsPerStep, MaterialRegistry definitions) {
 		if (hasCapability(WorldCapability.MATERIALS)) {
-			FluidRegionFactory.bindDefaultMaterialState(domain);
+			FluidRegionFactory.bindDefaultMaterialState(domain, definitions);
 			domain.bindMaterialDefinitions(definitions);
 		}
 		if (hasCapability(WorldCapability.CHEMISTRY) && !domain.hasChemistryState()) {

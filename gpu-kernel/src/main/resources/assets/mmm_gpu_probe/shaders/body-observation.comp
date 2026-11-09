@@ -2,6 +2,7 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 // HOST_LAYOUT
+// SPATIAL_GRID
 const int WORKGROUP_SIZE = 128;
 const int SAMPLE_FIELD_COUNT = 13;
 const int STAGE_SAMPLE_CELLS = 0;
@@ -42,9 +43,8 @@ int64_t readInteger(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1
 double cellGeometry(int cellIndex,int fieldIndex){return readDouble(headerWord(H_GEOMETRY_CELLS)+2*(GEOMETRY_FIELD_COUNT*cellIndex+fieldIndex));}
 double cellSize(){return readObservationDouble(CELL_SIZE_WORD);}double gravity(){return readObservationDouble(GRAVITY_WORD);}
 dvec3 bodyMinimum(){return dvec3(readObservationDouble(BODY_MINIMUM_WORD),readObservationDouble(BODY_MINIMUM_WORD+2),readObservationDouble(BODY_MINIMUM_WORD+4));}dvec3 bodyMaximum(){return dvec3(readObservationDouble(BODY_MAXIMUM_WORD),readObservationDouble(BODY_MAXIMUM_WORD+2),readObservationDouble(BODY_MAXIMUM_WORD+4));}
-ivec3 gridDimensions(){return ivec3(headerWord(H_SIZE_X),headerWord(H_SIZE_Y),headerWord(H_SIZE_Z));}int cellIndexAt(ivec3 cellCoordinate){return (cellCoordinate.z*headerWord(H_SIZE_Y)+cellCoordinate.y)*headerWord(H_SIZE_X)+cellCoordinate.x;}
-int xFaceCount(){return (headerWord(H_SIZE_X)+1)*headerWord(H_SIZE_Y)*headerWord(H_SIZE_Z);}int yFaceCount(){return headerWord(H_SIZE_X)*(headerWord(H_SIZE_Y)+1)*headerWord(H_SIZE_Z);}
-int faceIndexAt(int axis,ivec3 cellCoordinate){ivec3 faceDimensions=gridDimensions();faceDimensions[axis]++;return (axis==0?0:axis==1?xFaceCount():xFaceCount()+yFaceCount())+(cellCoordinate.z*faceDimensions.y+cellCoordinate.y)*faceDimensions.x+cellCoordinate.x;}
+int cellIndexAt(ivec3 cellCoordinate){return gridCell(cellCoordinate);}
+int faceIndexAt(int axis,ivec3 cellCoordinate){return gridFaceAt(cellCoordinate,axis);}
 double faceVelocity(int faceIndex){return readDouble(headerWord(H_FACES)+2*(4*faceIndex+1));}
 double power(double x,int n){double result=1.0;for(int i=0;i<n;i++)result*=x;return result;}
 // Fraction and first moments of a unit box below one plane. Inclusion-exclusion is evaluated
@@ -80,7 +80,7 @@ double materialLayerHeight(int cellIndex,double volume,dvec4 plane,double poreFr
 }
 double gasGaugePressure(int cellIndex){if(headerWord(H_GAS_THERMAL)<0||headerWord(H_GAS_CELL_NODES)<0)return 0.0;int node=int(words[headerWord(H_GAS_CELL_NODES)+cellIndex])-1;return node<0?0.0:readDouble(headerWord(H_GAS_THERMAL)+2*(9*node+1))-ATMOSPHERIC_PRESSURE_PA;}
 void sampleCell(int cellIndex,ivec3 coord,out double sampleValues[SAMPLE_FIELD_COUNT]){
- for(int i=0;i<SAMPLE_FIELD_COUNT;i++)sampleValues[i]=0.0;double volume=cellGeometry(cellIndex,GEOMETRY_VOLUME),availableVolume=cellGeometry(cellIndex,GEOMETRY_AVAILABLE_VOLUME);if(availableVolume<=0.0)return;
+ for(int i=0;i<SAMPLE_FIELD_COUNT;i++)sampleValues[i]=0.0;if(cellIndex<0)return;double volume=cellGeometry(cellIndex,GEOMETRY_VOLUME),availableVolume=cellGeometry(cellIndex,GEOMETRY_AVAILABLE_VOLUME);if(availableVolume<=0.0)return;
  double size=cellSize(),cellVolumeM3=size*size*size,cellAreaM2=size*size,density=volume>0.0?cellGeometry(cellIndex,GEOMETRY_MASS)/(volume*cellVolumeM3):0.0;uint mask=words[headerWord(H_MASKS)+cellIndex];
  double open=double(bitCount((~mask)&255u))*.125,poreFraction=open>0.0?availableVolume/open:0.0;if(poreFraction<=0.0)return;
  dvec4 plane=dvec4(readDouble(headerWord(H_PLANES)+8*cellIndex),readDouble(headerWord(H_PLANES)+8*cellIndex+2),readDouble(headerWord(H_PLANES)+8*cellIndex+4),readDouble(headerWord(H_PLANES)+8*cellIndex+6));

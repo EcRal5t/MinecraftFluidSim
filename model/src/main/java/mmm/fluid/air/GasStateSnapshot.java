@@ -1,15 +1,13 @@
 package mmm.fluid.air;
 
-import mmm.units.SignedDyadic;
+import mmm.spatial.SpatialGrid;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Stable-handle-free gas topology/inventory handoff used at the region persistence boundary. */
 public record GasStateSnapshot(
-		int sizeX,
-		int sizeY,
-		int sizeZ,
+		SpatialGrid grid,
 		String registryFingerprint,
 		String chemicalRegistryFingerprint,
 		List<Node> nodes,
@@ -28,12 +26,12 @@ public record GasStateSnapshot(
 	}
 
 	public GasStateSnapshot {
-		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0
+		if (grid == null
 				|| registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
 				|| chemicalRegistryFingerprint == null
 				|| !(chemicalRegistryFingerprint.isEmpty() || chemicalRegistryFingerprint.matches("[0-9a-f]{64}"))
 				|| nodes == null
-				|| pieceNodeOrdinal == null || pieceNodeOrdinal.length != pieceCount(sizeX, sizeY, sizeZ)
+				|| pieceNodeOrdinal == null || pieceNodeOrdinal.length != Math.multiplyExact(8, grid.cellCount())
 				|| externalSource == null || escapedSink == null || phaseSource == null || phaseSink == null) {
 			throw new IllegalArgumentException("Invalid gas state identity or dimensions");
 		}
@@ -79,9 +77,9 @@ public record GasStateSnapshot(
 	}
 
 	/** Captures an already canonical runtime, preserving the inventory and thermal node order. */
-	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimePieceNodeId, AirNetwork network,
+	public static GasStateSnapshot capture(SpatialGrid grid, int[] runtimePieceNodeId, AirNetwork network,
 	                                      String chemicalRegistryFingerprint) {
-		if (runtimePieceNodeId == null || runtimePieceNodeId.length != pieceCount(sizeX, sizeY, sizeZ) || network == null) {
+		if (runtimePieceNodeId == null || runtimePieceNodeId.length != Math.multiplyExact(grid.cellCount(), 8) || network == null) {
 			throw new IllegalArgumentException("Gas runtime topology is unavailable");
 		}
 		int nodeCount = network.nodeCount();
@@ -100,14 +98,12 @@ public record GasStateSnapshot(
 				throw new IllegalArgumentException("Gas runtime nodes are not in canonical minimum-piece order");
 			nodes.add(new Node(keys[node], network.inventory(node))); previousKey = keys[node];
 		}
-		return new GasStateSnapshot(sizeX, sizeY, sizeZ, network.registry().fingerprint(), chemicalRegistryFingerprint,
+		return new GasStateSnapshot(grid, network.registry().fingerprint(), chemicalRegistryFingerprint,
 				List.copyOf(nodes), runtimePieceNodeId, network.externalSource(), network.escapedSink(),
 				network.phaseSource(), network.phaseSink());
 	}
 
-	private static int pieceCount(int x, int y, int z) {
-		if (x <= 0 || y <= 0 || z <= 0) throw new IllegalArgumentException("Gas dimensions must be positive");
-		try { return Math.multiplyExact(8, Math.multiplyExact(Math.multiplyExact(x, y), z)); }
-		catch (ArithmeticException overflow) { throw new IllegalArgumentException("Gas piece dimensions overflow", overflow); }
-	}
+	public int sizeX() { return grid.sizeX(); }
+	public int sizeY() { return grid.sizeY(); }
+	public int sizeZ() { return grid.sizeZ(); }
 }

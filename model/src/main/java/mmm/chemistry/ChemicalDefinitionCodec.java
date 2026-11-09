@@ -25,16 +25,26 @@ public final class ChemicalDefinitionCodec {
 		var fields = new ArrayList<>(List.of("composition", "charge", "molar_mass_kg_per_mol", "base_argb"));
 		if (root.has("diffusivity_m2_per_s")) fields.add("diffusivity_m2_per_s");
 		if (root.has("effective_volume_m3_per_mol")) fields.add("effective_volume_m3_per_mol");
+		if (root.has("liquid_properties")) fields.add("liquid_properties");
 		requireOnly(root, fields.toArray(String[]::new));
 		return new ChemicalSpecies(stableId, integerMap(root, "composition"),
 				exactInteger(root, "charge"), exact(root, "molar_mass_kg_per_mol"), color(root, "base_argb"),
 				root.has("diffusivity_m2_per_s") ? exact(root, "diffusivity_m2_per_s").toDouble() : null,
-				root.has("effective_volume_m3_per_mol") ? exact(root, "effective_volume_m3_per_mol").toDouble() : null);
+				root.has("effective_volume_m3_per_mol") ? exact(root, "effective_volume_m3_per_mol").toDouble() : null,
+				root.has("liquid_properties") ? liquidProperties(object(root, "liquid_properties")) : null);
+	}
+
+	private static ChemicalSpecies.LiquidProperties liquidProperties(JsonObject root) {
+		requireOnly(root, "reference_density_kg_per_m3", "heat_capacity_j_per_kg_k", "conductivity_w_per_m_k", "viscosity_pa_s");
+		return new ChemicalSpecies.LiquidProperties(exact(root, "reference_density_kg_per_m3").toDouble(),
+				exact(root, "heat_capacity_j_per_kg_k").toDouble(), exact(root, "conductivity_w_per_m_k").toDouble(),
+				exact(root, "viscosity_pa_s").toDouble());
 	}
 
 	public static ChemicalPhaseDefinition decodePhase(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "material", "allowed_species", "default_concentration_mol_per_m3");
+		if (root.has("viscosity_correction")) requireOnly(root, "material", "allowed_species", "default_concentration_mol_per_m3", "viscosity_correction");
+		else requireOnly(root, "material", "allowed_species", "default_concentration_mol_per_m3");
 		JsonArray source = array(root, "allowed_species");
 		List<String> allowed = new ArrayList<>(source.size());
 		for (JsonElement element : source) allowed.add(string(element, "allowed_species entry"));
@@ -43,7 +53,13 @@ public final class ChemicalDefinitionCodec {
 			defaults.put(entry.getKey(), exact(entry.getValue(), "default_concentration_mol_per_m3." + entry.getKey()));
 		}
 		return new ChemicalPhaseDefinition(stableId, string(required(root, "material"), "material"),
-				allowed, defaults);
+				allowed, defaults, root.has("viscosity_correction") ? viscosityCorrection(object(root,"viscosity_correction")) : null);
+	}
+
+	private static ChemicalPhaseDefinition.ViscosityCorrection viscosityCorrection(JsonObject root) {
+		requireOnly(root,"a","b","maximum_molality","reference_temperature_k","temperature_tolerance_k");
+		return new ChemicalPhaseDefinition.ViscosityCorrection(exact(root,"a").toDouble(),exact(root,"b").toDouble(),
+				exact(root,"maximum_molality").toDouble(),exact(root,"reference_temperature_k").toDouble(),exact(root,"temperature_tolerance_k").toDouble());
 	}
 
 	public static ChemicalReaction decodeReaction(String stableId, Reader input) {

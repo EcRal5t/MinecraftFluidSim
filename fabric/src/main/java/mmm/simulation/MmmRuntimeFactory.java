@@ -37,6 +37,7 @@ public final class MmmRuntimeFactory {
 		WorldStartupCoordinator.Result startup = WorldStartupCoordinator.start(worldRoot,
 				() -> RegistryBundleLoader.loadDefinitions(server));
 		logStartup(startup);
+		if (!startup.profileProven()) throw new IllegalStateException(startup.blockingSummary());
 
 		FluidServerConfig config = startup.config();
 		RegistryBundleLoader.RegistryBundle registries = startup.registries();
@@ -81,7 +82,8 @@ public final class MmmRuntimeFactory {
 		MinecraftTakeoverAdapter takeover = new MinecraftTakeoverAdapter();
 		MinecraftDebugScaffolding scaffolding = new MinecraftDebugScaffolding();
 		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(
-				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK);
+				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK,
+				worldRegistries.resolveMaterial("mmm:water").referenceDensity());
 		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
 				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep());
 		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
@@ -131,6 +133,7 @@ public final class MmmRuntimeFactory {
 						}
 					}
 					@Override public void stepMotion(FluidRegion region) { motion.step(region, List.of()); }
+					@Override public CommittedWorldRegistries worldRegistries() { return worldRegistries; }
 					@Override public void bindCapabilityState(HostFluidState domain) {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep());
 					}
@@ -195,7 +198,7 @@ public final class MmmRuntimeFactory {
 			CommittedWorldRegistries worldRegistries) {
 		if (startup.creationLocked() || !startup.profileProven() || backend.unavailableReason() != null) return;
 		long started = System.nanoTime();
-		HostFluidState domain = FluidRegionFactory.createDomain(1, 1, 1);
+		HostFluidState domain = FluidRegionFactory.createDomain(1, 1, 1, worldRegistries);
 		worldRegistries.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep());
 		backend.prepare(domain.captureAuthoritativeState());
 		MmmMod.LOGGER.info("Matter, Motion & Mechanics solver preparation: {} ms",

@@ -2,6 +2,7 @@ package mmm.fluid;
 
 import java.util.List;
 import mmm.units.SignedDyadic;
+import mmm.spatial.SpatialGrid;
 
 /**
  * Immutable multi-material CPU handoff. Stable material definitions and exact marker mass are physical state;
@@ -20,6 +21,13 @@ public final class FlipMaterialParticleState {
 			double volumeLedger, long massLedger, List<FluidMaterial> materials,
 			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
 			long[] particleMassUnits, int[] materialPaletteIndex
+	) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize,particleCount,volumeLedger,massLedger,materials,
+				positionVolume,particleVelocities,solidMask,particleMassUnits,materialPaletteIndex);
+	}
+	public FlipMaterialParticleState(
+			SpatialGrid grid,float cellSize,int particleCount,double volumeLedger,long massLedger,List<FluidMaterial> materials,
+			float[] positionVolume,float[] particleVelocities,byte[] solidMask,long[] particleMassUnits,int[] materialPaletteIndex
 	) {
 		if (!(Double.isFinite(volumeLedger) && volumeLedger >= 0.0)
 				|| massLedger < 0) {
@@ -51,7 +59,7 @@ public final class FlipMaterialParticleState {
 			throw new IllegalArgumentException("Material marker mass ledger mismatch");
 		}
 		particles = new FlipParticleState(
-				sizeX, sizeY, sizeZ, cellSize, particleCount, (float) volume,
+				grid, cellSize, particleCount, (float) volume,
 				positionVolume, particleVelocities, particleMassUnits, solidMask
 		);
 		totalVolume = volume;
@@ -60,6 +68,7 @@ public final class FlipMaterialParticleState {
 	}
 
 	public int sizeX() { return particles.sizeX(); }
+	public SpatialGrid grid() { return particles.grid(); }
 	public int sizeY() { return particles.sizeY(); }
 	public int sizeZ() { return particles.sizeZ(); }
 	public float cellSize() { return particles.cellSize(); }

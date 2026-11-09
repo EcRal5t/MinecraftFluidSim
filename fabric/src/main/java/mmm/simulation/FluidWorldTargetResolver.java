@@ -177,7 +177,7 @@ final class FluidWorldTargetResolver {
 					? Mth.floor(block[axis]/h) : Mth.floor(Math.nextDown((block[axis]+1.0)/h));
 		}
 		if (!inBounds(region, cell[0], cell[1], cell[2])
-				|| !region.groupAvailable((cell[2]*region.sizeY()+cell[1])*region.sizeX()+cell[0])) return null;
+				|| (region.grid().cell(cell[0],cell[1],cell[2]) < 0 || !region.groupAvailable(region.grid().cell(cell[0],cell[1],cell[2])))) return null;
 		return cell;
 	}
 
@@ -304,7 +304,7 @@ final class FluidWorldTargetResolver {
 		int x = Mth.floor((point.x - origin.getX()) / cellSize);
 		int y = Mth.floor((point.y - origin.getY()) / cellSize);
 		int z = Mth.floor((point.z - origin.getZ()) / cellSize);
-		return inBounds(region, x, y, z) && region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x) ? new CellTarget(x, y, z) : null;
+		return region.grid().cell(x,y,z) >= 0 && region.groupAvailable(region.grid().cell(x,y,z)) ? new CellTarget(x, y, z) : null;
 	}
 
 	private static boolean inBounds(FluidRegion region, int x, int y, int z) {

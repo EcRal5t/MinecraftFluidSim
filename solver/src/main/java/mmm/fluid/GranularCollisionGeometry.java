@@ -11,9 +11,11 @@ final class GranularCollisionGeometry {
 	private final double h;
 	private final FlipCutCellGeometry cutCells;
 	private final GranularDepositStore deposits;
+	private final mmm.spatial.SpatialGrid grid;
 
 	GranularCollisionGeometry(int x, int y, int z, float h, FlipCutCellGeometry cutCells, GranularDepositStore deposits) {
 		this.sizes = new int[]{x, y, z}; this.h = h; this.cutCells = cutCells; this.deposits = deposits;
+		this.grid=cutCells.snapshot().grid();
 	}
 
 	void forEachBox(double[] minimum, double[] maximum, BiConsumer<double[], double[]> action) {
@@ -24,14 +26,14 @@ final class GranularCollisionGeometry {
 			BiConsumer<double[], double[]> action) {
 		double micro = h / 2; int[] lo = lower(minimum, micro), hi = upper(maximum, micro, 2);
 		for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
-			int mask = cutCells.mask(((z / 2) * sizes[1] + y / 2) * sizes[0] + x / 2);
+			int cell=grid.cell(x/2,y/2,z/2);int mask=cell<0?255:cutCells.mask(cell);
 			if ((mask & 1 << ((x & 1) + 2 * (y & 1) + 4 * (z & 1))) != 0)
 				action.accept(new double[]{x * micro, y * micro, z * micro}, new double[]{(x + 1) * micro, (y + 1) * micro, (z + 1) * micro});
 		}
 		if (deposits == null) return;
 		lo = lower(minimum, h); hi = upper(maximum, h, 1);
 		for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
-			int cell = (z * sizes[1] + y) * sizes[0] + x;
+			int cell = grid.cell(x,y,z);if(cell<0)continue;
 			if (skipBed.test(cell)) continue;
 			long bulk = deposits.cellBulkVolumeSvq(cell);
 			if (bulk > 0) action.accept(new double[]{x * h, y * h, z * h},
@@ -81,7 +83,7 @@ final class GranularCollisionGeometry {
 	boolean bedGeometryFits(int cell, long bulk) {
 		if (bulk < 0) throw new IllegalArgumentException("Candidate bed bulk is negative");
 		if (bulk > SolidVolume.SVQ_PER_CELL) return false;
-		int mask = cutCells.mask(cell), y = cell / sizes[0] % sizes[1];
+		int mask = cutCells.mask(cell), y = grid.y(cell);
 		double bottom = y * h, top = (y + bulk / (double) SolidVolume.SVQ_PER_CELL) * h;
 		if (bulk == 0) return true;
 		for (int bit = 0; bit < 8; bit++) if ((mask & 1 << bit) != 0) {

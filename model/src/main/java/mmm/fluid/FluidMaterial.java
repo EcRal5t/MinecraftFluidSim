@@ -11,7 +11,8 @@ public record FluidMaterial(
 		double referenceDensity,
 		String miscibilityGroup,
 		double surfaceTension,
-		double contactAngleRadians
+		double contactAngleRadians,
+		int displayArgb
 ) {
 	private static final int MAX_STABLE_ID_LENGTH = 256;
 	private static final double HALF_PI = Math.PI / 2.0;
@@ -36,8 +37,8 @@ public record FluidMaterial(
 	 * degeneration, and a 90-degree angle is the neutral no-curvature contact condition.
 	 */
 	public static FluidMaterial withSurfaceTension(String id, double referenceDensity, String miscibilityGroup,
-	                                               double surfaceTension, double contactAngleDegrees) {
-		return new FluidMaterial(id, referenceDensity, miscibilityGroup, surfaceTension, Math.toRadians(contactAngleDegrees));
+	                                               double surfaceTension, double contactAngleDegrees, int displayArgb) {
+		return new FluidMaterial(id, referenceDensity, miscibilityGroup, surfaceTension, Math.toRadians(contactAngleDegrees), displayArgb);
 	}
 
 	private static void requireKey(String value, String label) {

@@ -40,7 +40,7 @@ final class MaterialSurfaceGeometry {
             boolean composition = textured;
 
             int argb = shadow ? state.materials().get(material).argb() : back && colored.secondMaterial() >= 0 ? colored.secondArgb() : colored.argb();
-            float alpha = composition ? opacity(id) : 0.92F;
+            float alpha = composition ? ((state.materials().get(material).argb() >>> 24) & 255) / 255.0F : 0.92F;
             var position = state.origin().offset((int) Math.floor(center.x()), (int) Math.floor(center.y()), (int) Math.floor(center.z()));
             int light = light(position);
             FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX() - anchor.getX(),
@@ -72,10 +72,6 @@ final class MaterialSurfaceGeometry {
         var level = client == null ? null : client.level;
         return level == null ? 0 : level.getBrightness(LightLayer.BLOCK, position) << 4
                 | level.getBrightness(LightLayer.SKY, position) << 20;
-    }
-
-    private static float opacity(String material) {
-        return switch (material) { case "mmm:water" -> 0.58F; case "mmm:oil" -> 0.80F; case "mmm:mercury" -> 0.98F; default -> 0.82F; };
     }
 
     static List<ColoredTriangle> prepare(FluidMaterialSnapshotPayload state, FluidMaterialRenderSnapshot snapshot,

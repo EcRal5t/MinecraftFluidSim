@@ -46,7 +46,7 @@ public final class MaterialRegistry {
 	public record MaterialEntry(FluidMaterial material, List<ViscositySegment> viscosity,
 			LiquidThermalExpansion.Definition thermalExpansion) {
 		public MaterialEntry(FluidMaterial material, List<ViscositySegment> viscosity) {
-			this(material, viscosity, material == null ? null : LiquidThermalExpansion.find(material.id()));
+			this(material, viscosity, null);
 		}
 		public MaterialEntry {
 			if (material == null) throw new IllegalArgumentException("Material definition is missing");
@@ -265,7 +265,8 @@ public final class MaterialRegistry {
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(material.referenceDensity()))).append('|')
 					.append(material.miscibilityGroup()).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(material.surfaceTension()))).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(material.contactAngleRadians()))).append('\n');
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(material.contactAngleRadians()))).append('|')
+					.append(Integer.toUnsignedString(material.displayArgb())).append('\n');
 			LiquidThermalExpansion.Definition expansion = entry.thermalExpansion();
 			if (expansion != null) out.append("B|").append(material.id()).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.referenceTemperatureK()))).append('|')

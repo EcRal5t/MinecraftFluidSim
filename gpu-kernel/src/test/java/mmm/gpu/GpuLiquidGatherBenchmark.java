@@ -71,7 +71,7 @@ public final class GpuLiquidGatherBenchmark {
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES),stock,Double.doubleToRawLongBits(present?numerator/32.0:0.0));
         }
         put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stocks,4*stocks);put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stocks,2);
-        try(var storage=new VulkanRegionStorage(context,initial.capacity(),1024*1024)){
+        try(var storage=new VulkanRegionStorage(context,initial.capacity(),1024*1024,state.grid())){
             storage.initialize(initial,0);
             try(var source=storage.capture();var candidate=storage.prepare(source)){
                 int error=candidate.execute(0,(command,input,result,errors,staging,stack)->{
@@ -152,7 +152,7 @@ public final class GpuLiquidGatherBenchmark {
         initial.putInt(Math.toIntExact(phaseBase),0).putInt(Math.toIntExact(phaseBase+4),1);
         initial.putInt(Math.toIntExact(acceptedLimb),1);
         for(int cell=0;cell<cells;cell++) {
-            int moving=(cell%grid)%2==0?2:1;
+            int moving=(state.grid().x(cell)&1)==0?2:1;
             for(int slot=0;slot<7;slot++) {
                 int at=Math.toIntExact(acceptedBase+20L*(7*cell+slot));
                 boolean active=slot==0||slot==moving;
@@ -163,10 +163,10 @@ public final class GpuLiquidGatherBenchmark {
         quantityLayout.initializeHeader(initial);
         momentumLayout.initializeHeader(initial);
         roundoffLayout.initializeHeader(initial);heatLayout.initializeHeader(initial);endpointLayout.initializeHeader(initial);
-        int face=0;
         for(int axis=0;axis<3;axis++) {
             int nx=grid+(axis==0?1:0),ny=grid+(axis==1?1:0),nz=grid+(axis==2?1:0);
-            for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++,face++) {
+            for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++) {
+                int face=state.grid().faceAt(x,y,z,axis);
                 int along=axis==0?x:axis==1?y:z;boolean interior=along>0&&along<grid;
                 int at=Math.toIntExact(faceBase+32L*face);
                 initial.putDouble(at,interior?3e-8:1.5e-8).putDouble(at+8,interior?.1*(axis+1)+.001*x:0)
@@ -180,7 +180,7 @@ public final class GpuLiquidGatherBenchmark {
         for(int cell=0;cell<=cells;cell++)put(initial,state,VulkanLiquidStateLayout.Field.CELL_OFFSETS,cell,2*cell);
         for(int stock=0;stock<stocks;stock++) {
             int material=stock%2,cell=stock/2;
-            boolean even=(cell%grid)%2==0;
+            boolean even=(state.grid().x(cell)&1)==0;
             put(initial,state,VulkanLiquidStateLayout.Field.MATERIALS,stock,material);
             put(initial,state,VulkanLiquidStateLayout.Field.SUPPORT_MASKS,stock,255);
             put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stock,4*stock);
@@ -198,7 +198,7 @@ public final class GpuLiquidGatherBenchmark {
         }
         put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stocks,4*stocks);
         put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stocks,stocks);
-        try(var storage=new VulkanRegionStorage(context,bytes,1024*1024)) {
+        try(var storage=new VulkanRegionStorage(context,bytes,1024*1024,state.grid())) {
             storage.initialize(initial,0);
             try(var source=storage.capture()) {
                 for(int i=0;i<5;i++)advance(storage,source,materialRoutes,materialLayout,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);

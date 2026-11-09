@@ -20,7 +20,7 @@ final class FluidDomainStateMapper {
 		if(domain.gasState.spatial==null)domain.domainCapabilities.initializeSpatialGas();
 		domain.ensurePhaseOccupancy();
 		var gas = FluidDomainState.GasContinuation.spatial(domain.gasState.spatial);
-		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,
+		var captured = new FluidDomainState(domain.grid,domain.config,domain.definitions,
 				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.snapshot(),
 				domain.entityBodies,domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
 				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.externalSource(),
@@ -45,7 +45,7 @@ final class FluidDomainStateMapper {
 				? FluidDomainState.CarrierKind.CHEMICAL
 				: domain.materialRegistry != null ? FluidDomainState.CarrierKind.MATERIAL
 				: FluidDomainState.CarrierKind.PURE;
-		return new FluidDomainState.Layout(domain.config, domain.sizeX, domain.sizeY, domain.sizeZ, domain.gasState.sealedDomainBoundary, carrierKind,
+		return new FluidDomainState.Layout(domain.config, domain.definitions, domain.grid, domain.sizeX, domain.sizeY, domain.sizeZ, domain.gasState.sealedDomainBoundary, carrierKind,
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),
 				domain.chemistry == null ? "" : domain.chemistry.registry().fingerprint(),
 				domain.granularState == null ? "" : domain.granularState.registry.fingerprint(),
@@ -59,7 +59,7 @@ final class FluidDomainStateMapper {
 	/** Sampling uses the same liquid/gas face inertia without running pressure or thermal preparation. */
 	static HostFluidState samplingState(FluidDomainState state){
 		if(state.thermalOwner()!=null)return restore(state);
-		var domain=new HostFluidState(state.sizeX(),state.sizeY(),state.sizeZ(),state.config(),state.fixedGeometry());
+		var domain=new HostFluidState(state.grid(),state.config(),state.definitions(),state.fixedGeometry());
 		if(!state.materialPalette().isEmpty())domain.materialRegistry=new FluidMaterialRegistry(state.materialPalette());
 		if(state.chemicalRegistry()!=null){
 			domain.chemistry=new mmm.chemistry.RegionChemistry(state.chemicalRegistry(),domain.cellCount);
@@ -74,8 +74,7 @@ final class FluidDomainStateMapper {
 
 	static HostFluidState restore(FluidDomainState state) {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
-		HostFluidState domain = new HostFluidState(state.sizeX(), state.sizeY(), state.sizeZ(),
-				state.config(),state.fixedGeometry());
+		HostFluidState domain = new HostFluidState(state.grid(),state.config(),state.definitions(),state.fixedGeometry());
 		domain.restoreEntityBodyState(state.entityBodyState());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
 		if (!state.materialPalette().isEmpty()) domain.materialRegistry = new FluidMaterialRegistry(state.materialPalette());

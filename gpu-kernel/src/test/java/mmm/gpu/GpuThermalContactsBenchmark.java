@@ -30,8 +30,8 @@ public final class GpuThermalContactsBenchmark {
             var liquid=VulkanLiquidStateLayout.forState(inventory,fixture.momentum(),a);var geometry=GpuGasFixture.geometry(liquid,a);
             var totals=VulkanLiquidCellVolumes.layout(liquid,2*cells,-40,geometry.endOffset(),a);
             var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),word(geometry.planes()),word(geometry.micro()),true,h,totals.endOffset(),a).withMixture(geometry.mixture());
-            var definitions=GpuGasFixture.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,cells,definitions.definitions(),gasGeometry.endOffset(),a);
-            var gasTables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+            var definitions=GpuGasFixture.gasDefinitions();var gas=new VulkanGasStateLayout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),cells,definitions.definitions(),gasGeometry.endOffset(),a);
+            var gasTables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.fluid.TestFluidDefinitions.load().chemistry());
             var gasThermal=VulkanGasThermodynamics.layout(gas,gasTables,Math.toIntExact(gasGeometry.dryVolumes().offset()/4),gas.endOffset(),a);
             var materials=new java.util.ArrayList<ThermalMaterialDefinition>();
             materials.add(material("water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",4200,.6));
@@ -44,7 +44,7 @@ public final class GpuThermalContactsBenchmark {
             materials.add(material("device_copper",ThermalMaterialDefinition.CarrierKind.DEVICE,"mmm:contacts_device",385,400));
             long[] cursor={gasThermal.endOffset()};var lr=column(cursor,2,8,a);var ls=column(cursor,2,8,a);
             var liquidThermal=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(materials.subList(0,2)),word(lr),word(ls),1,cursor[0],a);
-            var solid=new VulkanGranularStateLayout(grid,grid,grid,1,1,0,new VulkanGranularStateLayout.Definitions("fixture","",List.of("mmm:fine_sand"),List.of()),liquidThermal.endOffset(),a);
+            var solid=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),1,1,0,new VulkanGranularStateLayout.Definitions("fixture","",List.of("mmm:fine_sand"),List.of()),liquidThermal.endOffset(),a);
             cursor[0]=solid.endOffset();var sr=column(cursor,1,8,a);var ss=column(cursor,1,8,a);
             var solidThermal=VulkanLiquidThermodynamics.layout(solid,VulkanLiquidThermodynamics.tables(materials.subList(4,5)),word(sr),word(ss),1,cursor[0],a);
             var coherentGroups=new java.util.ArrayList<mmm.thermal.CoherentPhaseStore.Group>();int coherentIndex=-1;
@@ -78,9 +78,9 @@ public final class GpuThermalContactsBenchmark {
             solid.importState(initial,new VulkanGranularStateLayout.State(solid.definitions(),List.of(new VulkanGranularStateLayout.Particle(activeRow,1,.75,.25,0,0,0,0,0,support,quotas)),List.of(new VulkanGranularStateLayout.Deposit(depositRow,c3,.38f)),List.of(),List.of()));
             double coherentEnergy=coherentGroups.get(coherentIndex).internalEnergy();coherent.importState(initial,coherentGroups);
             for(int c=0;c<cells;c++){initial.putInt(Math.toIntExact(geometry.masks().offset()+4L*c),fixture.fixed().mask(c));
-                for(int direction=0;direction<6;direction++)initial.putDouble(Math.toIntExact(bath.offset()+8L*(6*c+direction)),c%grid==0&&direction==0?330:Double.NaN);}
+                for(int direction=0;direction<6;direction++)initial.putDouble(Math.toIntExact(bath.offset()+8L*(6*c+direction)),liquid.grid().x(c)==0&&direction==0?330:Double.NaN);}
             tail.conduction().initializeHeaderAndTables(initial);tail.contacts().initializeHeaderAndTables(initial);
-            try(var storage=new VulkanRegionStorage(context,tail.bytes(),1024*1024)){
+            try(var storage=new VulkanRegionStorage(context,tail.bytes(),1024*1024,liquid.grid())){
                 storage.initialize(initial,0);prepareSolids(storage,coherentGeometryKernel,granularGeometryKernel,coherentGeometry,granularGeometry,geometry.occupied(),h);
                 try(var source=storage.capture()){GpuGasFixture.advance(context,storage,source,liquidGeometry,totalsKernel,gasGeometryKernel,gasEOS,liquid,geometry,totals,gasGeometry,gasThermal,true,false,true);}
                 int nodes;try(var source=storage.capture()){nodes=GpuGasFixture.seed(storage,source,initial,gas,gasGeometry,definitions);}
@@ -116,8 +116,8 @@ public final class GpuThermalContactsBenchmark {
                     }
                     System.out.printf("device_U_before=%.9g after=%.9g generation=%d exact_audit_closed=true%n",deviceInitialU,finalBody.internalEnergyJ(),finalBody.generation());}
             }
-            var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER,mmm.fluid.BuiltinFluidMaterials.OIL));
-            var constitutive=mmm.fluid.BuiltinFluidMaterials.createRegistry();
+            var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material()));
+            var constitutive=mmm.fluid.TestFluidDefinitions.load().material();
             var mechanical=new VulkanLiquidRegion.MechanicalDefinitions(2*cells,0,8*cells,8,-40,new int[]{0,1},new long[]{0},
                     new double[]{4200*293.15,4200*293.15},new double[]{0,0},1,liquidThermal.tables(),VulkanLiquidViscosity.tables(fluids,constitutive),
                     VulkanLiquidForces.tables(fluids,constitutive),VulkanSurfaceTension.tables(fluids),true);
@@ -125,8 +125,8 @@ public final class GpuThermalContactsBenchmark {
                     new mmm.fluid.air.GasRegistry.AmbientFraction(mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,mmm.chemistry.ExactRational.parse(".7")),
                     new mmm.fluid.air.GasRegistry.AmbientFraction(mmm.fluid.air.BuiltinGasDefinitions.OXYGEN,mmm.chemistry.ExactRational.parse(".3"))));
             var spatial=gas.exportSpatialState(initial);
-            var gasConfig=VulkanLiquidRegion.GasConfiguration.forState(spatial,gasTables,h,true,VulkanGasAmbient.ambientTables(ambient,gas.definitions(),293.15));
-            var granularConfig=new VulkanGranularStateLayout.Configuration(solid.exportState(initial),mmm.granular.BuiltinGranularDefinitions.createRegistry(),solidThermal.tables(),new double[]{800*293.15},new double[]{0},1,8);
+            var gasConfig=VulkanLiquidRegion.GasConfiguration.forState(spatial,gasTables,h,true,VulkanGasAmbient.ambientTables(ambient,gas.definitions(),293.15),mmm.fluid.TestFluidDefinitions.load().chemistry());
+            var granularConfig=new VulkanGranularStateLayout.Configuration(solid.exportState(initial),mmm.fluid.TestFluidDefinitions.load().granular(),solidThermal.tables(),new double[]{800*293.15},new double[]{0},1,8);
             var coherentConfig=new VulkanCoherentStateLayout.Configuration(coherent.definitions(),coherentGroups,coherentThermal.tables(),new double[]{450*293.15},new double[]{0},1);
             var deviceConfig=new VulkanThermalDeviceLayout.Configuration(devices.definitions(),deviceInitial,deviceThermal.tables(),new double[]{385*293.15});
             double[] baths=new double[6*cells];for(int i=0;i<baths.length;i++)baths[i]=initial.getDouble(Math.toIntExact(bath.offset()+8L*i));

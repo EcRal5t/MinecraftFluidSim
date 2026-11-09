@@ -31,30 +31,16 @@ public final class ProductionRegistries {
 
 	private ProductionRegistries() { }
 
-	public static Set load() throws Exception {
-		PackLocationInfo location = new PackLocationInfo("mmm-production-registries",
-				Component.literal("MMM production registries"), PackSource.BUILT_IN, Optional.empty());
-		PackResources pack = new PathPackResources(location, resourceRoot());
-		try (MultiPackResourceManager resources = new MultiPackResourceManager(PackType.SERVER_DATA, List.of(pack))) {
-			ChemicalRegistry chemical = ChemicalDataPackLoader.load(resources);
-			GranularRegistry granular = GranularDataPackLoader.load(resources, chemical);
-			GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-			ThermalRegistry thermal = ThermalDataPackLoader.load(resources, chemical.fingerprint(),
-					granular.fingerprint(), gas.fingerprint());
-			return new Set(BuiltinFluidMaterials.createRegistry(), chemical, granular, gas, thermal);
-		}
-	}
+	public static Set load() {
+        var definitions = mmm.fluid.TestFluidDefinitions.load();
+        return new Set(definitions.material(), definitions.chemistry(), definitions.granular(), definitions.gas(), definitions.thermal());
+    }
 
-	private static Path resourceRoot() throws URISyntaxException {
-		URL water = ProductionRegistries.class.getResource(PROBE_RESOURCE);
-		if (water == null || !water.getProtocol().equals("file")) {
-			throw new AssertionError("Production datapack resources are not available as a validation directory");
-		}
-		Path cursor = Path.of(water.toURI()).toAbsolutePath().normalize();
-		while (cursor != null && !Files.isDirectory(cursor.resolve("data"))) cursor = cursor.getParent();
-		if (cursor == null) throw new AssertionError("Could not resolve the production datapack root");
-		return cursor;
-	}
+    public static List<mmm.fluid.FluidMaterial> palette() {
+        var material = mmm.fluid.TestFluidDefinitions.load().material();
+        return List.of(material.entry("mmm:water").material(), material.entry("mmm:oil").material(),
+                material.entry("mmm:mercury").material());
+    }
 
 	public record Set(
 			MaterialRegistry material,

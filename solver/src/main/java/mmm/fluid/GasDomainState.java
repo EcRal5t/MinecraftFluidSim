@@ -9,7 +9,7 @@ import mmm.fluid.air.AirNetwork;
  * geometry frame stays null until the topology is bootstrapped or restored.
  */
 final class GasDomainState {
-	AirNetwork network = new AirNetwork();
+	AirNetwork network;
 	mmm.fluid.air.SpatialGasState spatial;
 	boolean sealedDomainBoundary;
 	GasRuntimeGeometry frame;

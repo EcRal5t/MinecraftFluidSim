@@ -7,6 +7,7 @@ import mmm.fluid.air.GasInventory;
 import mmm.fluid.air.GasRegistry;
 import mmm.units.SolverUnitScale;
 import mmm.units.SignedDyadic;
+import mmm.spatial.SpatialGrid;
 
 import java.util.List;
 
@@ -78,7 +79,13 @@ public final class ThermalDomainState {
 			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
 	) {
 		this(registry, materialByFluidHandle, materialByGranularHandle, initialTemperatureK, initialCapacity,
-				sizeX, sizeY, sizeZ, cellSize, markers, airNetwork, maximumTransportSubsteps, null, true);
+				SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize, markers, airNetwork, maximumTransportSubsteps, null, true);
+	}
+	public ThermalDomainState(ThermalRegistry registry,int[] materialByFluidHandle,int[] materialByGranularHandle,
+			double initialTemperatureK,int initialCapacity,SpatialGrid grid,float cellSize,ThermalCarrierContext markers,
+			AirNetwork airNetwork,int maximumTransportSubsteps) {
+		this(registry,materialByFluidHandle,materialByGranularHandle,initialTemperatureK,initialCapacity,
+				grid,cellSize,markers,airNetwork,maximumTransportSubsteps,null,true);
 	}
 
 	/** Builds a private restore target with zero granular placeholders and the snapshot's liquid energies. */
@@ -90,8 +97,15 @@ public final class ThermalDomainState {
 	) {
 		if (restoredLiquidEnergy == null) throw new IllegalArgumentException("Restored liquid energy is missing");
 		return new ThermalDomainState(registry, materialByFluidHandle, materialByGranularHandle,
-				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers, airNetwork,
+				initialTemperatureK, initialCapacity, SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize, markers, airNetwork,
 				maximumTransportSubsteps, restoredLiquidEnergy, false);
+	}
+	public static ThermalDomainState restoreTarget(ThermalRegistry registry,int[] materialByFluidHandle,int[] materialByGranularHandle,
+			double initialTemperatureK,int initialCapacity,SpatialGrid grid,float cellSize,ThermalCarrierContext markers,
+			AirNetwork airNetwork,int maximumTransportSubsteps,double[] restoredLiquidEnergy) {
+		if(restoredLiquidEnergy==null)throw new IllegalArgumentException("Restored liquid energy is missing");
+		return new ThermalDomainState(registry,materialByFluidHandle,materialByGranularHandle,initialTemperatureK,initialCapacity,
+				grid,cellSize,markers,airNetwork,maximumTransportSubsteps,restoredLiquidEnergy,false);
 	}
 
 	/** Rebinds caloric caches while retaining the already stored liquid-cell internal energies. */
@@ -99,12 +113,18 @@ public final class ThermalDomainState {
 			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
 			float cellSize, ThermalCarrierContext owners, AirNetwork network, int maximumTransportSubsteps) {
 		return new ThermalDomainState(registry,materialByFluidHandle,materialByGranularHandle,initialTemperatureK,initialCapacity,
-				sizeX,sizeY,sizeZ,cellSize,owners,network,maximumTransportSubsteps,null,false);
+				SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize,owners,network,maximumTransportSubsteps,null,false);
+	}
+	public static ThermalDomainState restoreOwnerTarget(ThermalRegistry registry,int[] materialByFluidHandle,int[] materialByGranularHandle,
+			double initialTemperatureK,int initialCapacity,SpatialGrid grid,float cellSize,ThermalCarrierContext owners,
+			AirNetwork network,int maximumTransportSubsteps) {
+		return new ThermalDomainState(registry,materialByFluidHandle,materialByGranularHandle,initialTemperatureK,initialCapacity,
+				grid,cellSize,owners,network,maximumTransportSubsteps,null,false);
 	}
 
 	private ThermalDomainState(
 			ThermalRegistry registry, int[] materialByFluidHandle, int[] materialByGranularHandle,
-			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
+			double initialTemperatureK, int initialCapacity, SpatialGrid grid,
 			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps,
 			double[] restoredLiquidEnergy, boolean initializeOwners
 	) {
@@ -117,14 +137,14 @@ public final class ThermalDomainState {
 		this.unitScale = SolverUnitScale.forCellSize(cellSize);
 		this.materialByFluidHandle = materialByFluidHandle;
 		this.materialByGranularHandle = materialByGranularHandle;
-		this.cellGrid = new ThermalCellGrid(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ));
+		this.cellGrid = new ThermalCellGrid(grid.cellCount());
 		if(maximumTransportSubsteps<=0||maximumTransportSubsteps>ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS)
 			throw new IllegalArgumentException("Thermal substep budget is invalid");
 		this.maximumTransportSubsteps=maximumTransportSubsteps;
 		CoherentPhaseStore coherentPhases = new CoherentPhaseStore(
-				Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ),
+				grid.cellCount(),
 				Math.min(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION,
-						Math.multiplyExact(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ), 8)));
+						Math.multiplyExact(grid.cellCount(),8)));
 		this.insertionTemperatureK = initialTemperatureK;
 		this.auditState = new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
 		this.liquidEnergy = new LiquidEnergyColumn(registry, stateFunction, unitScale, materialByFluidHandle,

@@ -16,11 +16,11 @@ final class VulkanMixtureFlux implements AutoCloseable {
         final boolean gasEnabled;
         final boolean sealedExterior;
         final long endOffset;
-        Layout(int sx,int sy,int sz,VulkanLiquidStateLayout.Column faceGeometry,VulkanLiquidStateLayout.Column fluxes,
+        Layout(mmm.spatial.SpatialGrid grid,VulkanLiquidStateLayout.Column faceGeometry,VulkanLiquidStateLayout.Column fluxes,
                boolean gasEnabled,VulkanLiquidStateLayout.Column mixture,
                VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column targetSolid,VulkanLiquidStateLayout.Column gasStates,boolean sealedExterior,long base,long alignment) {
-            this.sx=sx;this.sy=sy;this.sz=sz;this.cells=Math.multiplyExact(Math.multiplyExact(sx,sy),sz);
-            this.faces=Math.addExact(Math.addExact((sx+1)*sy*sz,sx*(sy+1)*sz),sx*sy*(sz+1));
+            this.sx=grid.sizeX();this.sy=grid.sizeY();this.sz=grid.sizeZ();this.cells=grid.cellCount();
+            this.faces=grid.faceCount();
             this.faceGeometry=faceGeometry;this.fluxes=fluxes;this.gasEnabled=gasEnabled;
             this.mixture=mixture;this.masks=masks;this.targetSolid=targetSolid;this.gasStates=gasStates;this.sealedExterior=sealedExterior;
             long cursor=align(base,alignment);header=new VulkanLiquidStateLayout.Column(cursor,32,4);cursor=header.offset()+header.bindingBytes();

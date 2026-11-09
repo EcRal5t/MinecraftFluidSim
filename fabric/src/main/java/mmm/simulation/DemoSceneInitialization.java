@@ -8,11 +8,11 @@ public final class DemoSceneInitialization {
 
 	public static void fillFlow(HostFluidState domain) {
 		int subdivisions = FluidRegionFactory.CELLS_PER_BLOCK;
-		float[] volumes = new float[domain.sizeX() * domain.sizeY() * domain.sizeZ()];
+		float[] volumes = new float[domain.grid().cellCount()];
 		for (int z = subdivisions; z < 5 * subdivisions; z++)
 			for (int y = subdivisions; y < 4 * subdivisions; y++)
 				for (int x = subdivisions; x < 3 * subdivisions; x++)
-					if (!domain.isSolid(x, y, z)) volumes[(z * domain.sizeY() + y) * domain.sizeX() + x] = 1.0F;
+					if (domain.grid().cell(x,y,z) >= 0 && !domain.isSolid(x, y, z)) volumes[domain.grid().cell(x,y,z)] = 1.0F;
 		domain.setVolumes(volumes);
 		domain.resetAmbientGas();
 	}

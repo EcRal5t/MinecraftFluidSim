@@ -16,8 +16,8 @@ public final class GpuEntityBodyCouplingBenchmark {
             var fixture=GpuLiquidGeometryBenchmark.fixture(grid,false,h);var liquid=VulkanLiquidStateLayout.forState(fixture.inventory(),fixture.momentum(),a);
             var geometry=GpuGasFixture.geometry(liquid,a);var totals=VulkanLiquidCellVolumes.layout(liquid,2*n,-40,geometry.endOffset(),a);
             var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),word(geometry.planes()),word(geometry.micro()),true,h,totals.endOffset(),a);
-            var definitions=GpuGasFixture.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,n,definitions.definitions(),gasGeometry.endOffset(),a);
-            var thermal=VulkanGasThermodynamics.layout(gas,VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY),Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
+            var definitions=GpuGasFixture.gasDefinitions();var gas=new VulkanGasStateLayout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),n,definitions.definitions(),gasGeometry.endOffset(),a);
+            var thermal=VulkanGasThermodynamics.layout(gas,VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.fluid.TestFluidDefinitions.load().chemistry()),Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
             var mixture=VulkanMixtureState.layout(new VulkanMixtureState.Inputs(n,word(geometry.cells()),4,word(geometry.cells())+2,4,
                     word(geometry.cells())+4,4,thermal,h,dt),thermal.endOffset(),a);
             int size=n;long[] cursor={mixture.endOffset()};var starts=column(cursor,size+1,4,a);var columns=column(cursor,7*n+gas.nodeCapacity(),4,a);var values=column(cursor,columns.count(),8,a);var rows=column(cursor,size,4,a);
@@ -30,7 +30,7 @@ public final class GpuEntityBodyCouplingBenchmark {
             var first=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,1),new mmm.world.MovingBodyFluidCoupling.Bounds(.5,.75,.75,1.25,1.25,1.5),.4,.2,0);
             var second=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,2),new mmm.world.MovingBodyFluidCoupling.Bounds(.75,.875,1,1.5,1.375,1.75),.4,.2,0);
             var config=new VulkanEntityBodyCoupling.Configuration(new mmm.fluid.EntityBodyState(List.of(first,second)),grid,grid,grid,h);
-            var body=new VulkanEntityBodyCoupling.Layout(grid,grid,grid,4,2*config.cellEntries(),size,geometry.masks(),geometry.cells(),geometry.faces(),geometry.occupied(),cursor[0],a);
+            var body=new VulkanEntityBodyCoupling.Layout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),4,2*config.cellEntries(),size,geometry.masks(),geometry.cells(),geometry.faces(),geometry.occupied(),cursor[0],a);
             var viscous=new VulkanLiquidViscosity.Layout(liquid,geometry.cells(),geometry.faces(),geometry.walls(),word(temperatures),-1,
                     new VulkanLiquidViscosity.Tables(new int[]{0,1,2},new double[]{273,1000,.001,.003,273,1000,.05,.1}),body.prescribedContacts(),false,body.endOffset(),a);
             body.bindPressure(mixture,coupled);body.bindViscosity(viscous);body.bindSourceOccupation(body);
@@ -59,7 +59,7 @@ public final class GpuEntityBodyCouplingBenchmark {
             double expectedMu=weighted/totalVolume;
             for(int f=0;f<geometry.faces().count()/4;f++){int offset=Math.toIntExact(geometry.faces().offset()+32L*f);initial.putDouble(offset,100).putDouble(offset+8,0).putDouble(offset+16,1).putDouble(offset+24,1);}
             double expectedUnion=.46875;long exactVolume=0;double sumWork=0;mmm.world.MovingBodyFluidCoupling.Result result=null;
-            try(var storage=new VulkanRegionStorage(context,viscous.endOffset(),1024*1024)){
+            try(var storage=new VulkanRegionStorage(context,viscous.endOffset(),1024*1024,liquid.grid())){
                 storage.initialize(initial,0);for(int step=0;step<4;step++)try(var capture=storage.capture();var candidate=storage.prepare(capture)){
                     long begin=System.nanoTime();var feedback=candidate.beginBatch((cmd,input,output,errors,staging,stack)->{
                         var arena=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);bodiesKernel.rebindRanges(arena,err);viscosityKernel.rebindRanges(new FlipKernelBindings.BufferRange(input),arena,err);
@@ -97,7 +97,7 @@ public final class GpuEntityBodyCouplingBenchmark {
         var occupied=column(cursor,1,8,alignment);var gas=column(cursor,9,8,alignment);
         try(var kernel=new VulkanMixtureFlux(context)){
             for(boolean sealed:new boolean[]{false,true}){
-                var layout=new VulkanMixtureFlux.Layout(1,1,1,geometry,flux,true,mixture,masks,occupied,gas,sealed,cursor[0],alignment);
+                var layout=new VulkanMixtureFlux.Layout(mmm.spatial.SpatialGrid.rectangular(1,1,1),geometry,flux,true,mixture,masks,occupied,gas,sealed,cursor[0],alignment);
                 var initial=ByteBuffer.allocate(Math.toIntExact(layout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
                 initial.duplicate().position(Math.toIntExact(layout.header().offset())).put(layout.headerBytes());
                 initial.putDouble(Math.toIntExact(mixture.offset()+16),.125);
@@ -105,7 +105,7 @@ public final class GpuEntityBodyCouplingBenchmark {
                 initial.putLong(Math.toIntExact(occupied.offset()),16777216L);
                 int face=1;initial.putDouble(Math.toIntExact(geometry.offset()+8L*(4*face+1)),1.0);
                 initial.putDouble(Math.toIntExact(geometry.offset()+8L*(4*face+2)),1.0);
-                try(var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024)){
+                try(var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024,mmm.spatial.SpatialGrid.rectangular(1,1,1))){
                     storage.initialize(initial,0);
                     try(var source=storage.capture();var candidate=storage.prepare(source)){
                         int status=candidate.execute(0,(cmd,input,output,errors,staging,stack)->{
@@ -123,12 +123,12 @@ public final class GpuEntityBodyCouplingBenchmark {
         }
     }
     private static void vacuumClosure(VulkanDeviceContext context){
-        int side=3,cells=27,faces=3*4*3*3,center=13,face=18;long alignment=Math.max(8,context.storageOffsetAlignment());long[] cursor={0};
+        int side=3,cells=27,faces=3*4*3*3,center=13,face=mmm.spatial.SpatialGrid.rectangular(side,side,side).faceAt(2,1,1,0);long alignment=Math.max(8,context.storageOffsetAlignment());long[] cursor={0};
         var geometry=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);
         var mixture=column(cursor,7*cells,8,alignment);var masks=column(cursor,cells,4,alignment);
         var occupied=column(cursor,cells,8,alignment);var gas=column(cursor,9*cells,8,alignment);
-        var layout=new VulkanMixtureFlux.Layout(side,side,side,geometry,flux,true,mixture,masks,occupied,gas,true,cursor[0],alignment);
-        try(var kernel=new VulkanMixtureFlux(context);var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024)){
+        var layout=new VulkanMixtureFlux.Layout(mmm.spatial.SpatialGrid.rectangular(side,side,side),geometry,flux,true,mixture,masks,occupied,gas,true,cursor[0],alignment);
+        try(var kernel=new VulkanMixtureFlux(context);var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024,mmm.spatial.SpatialGrid.rectangular(side,side,side))){
             for(boolean closed:new boolean[]{true,false}){
                 var initial=ByteBuffer.allocate(Math.toIntExact(layout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
                 initial.duplicate().position(Math.toIntExact(layout.header().offset())).put(layout.headerBytes());

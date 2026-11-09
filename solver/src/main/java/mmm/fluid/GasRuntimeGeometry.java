@@ -36,11 +36,11 @@ final class GasRuntimeGeometry {
 		FlipCutCellGeometry cut=null;
 		if(preparedPhase==null||preparedGeometry==null){
 			cut=domain.geometry.cutCells;
-			if(futureMasks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
+			if(futureMasks!=null){cut=new FlipCutCellGeometry(domain.grid);cut.restoreMicroMasks(masks);}
 		}
 		if(preparedPhase==null&&old!=null&&occupancy.geometryIdentity()==old.occupancy.geometryIdentity()
 				&&Arrays.equals(occupiedSvq,old.occupiedSvq)&&old.geometry.matchesCollisionMasks(masks))phase=old.phase;
-		else if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
+		else if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.grid);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
 		else phase=preparedPhase;
 		if(preparedGeometry==null&&old!=null&&phase==old.phase&&future.hasSameGeometry(old.targetCells))geometry=old.geometry;
 		else if(preparedGeometry==null){

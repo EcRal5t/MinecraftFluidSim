@@ -84,10 +84,11 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         final VulkanLiquidStateLayout.Column header;
         final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         final long endOffset;final int[] inputs=new int[32];
-        Layout(int sx,int sy,int sz,int bodyCapacity,int entryCapacity,int pressureRows,
+        Layout(mmm.spatial.SpatialGrid grid,int bodyCapacity,int entryCapacity,int pressureRows,
                VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
                VulkanLiquidStateLayout.Column baseSolid,long base,long alignment){
-            sizeX=sx;sizeY=sy;sizeZ=sz;this.cells=Math.multiplyExact(Math.multiplyExact(sx,sy),sz);this.faces=faces.count()/4;
+            int sx=grid.sizeX(),sy=grid.sizeY(),sz=grid.sizeZ();
+            sizeX=sx;sizeY=sy;sizeZ=sz;this.cells=grid.cellCount();this.faces=grid.faceCount();
             this.bodyCapacity=bodyCapacity;this.entryCapacity=entryCapacity;this.pressureRows=pressureRows;contactCapacity=Math.multiplyExact(6,entryCapacity);
             if(bodyCapacity<0||bodyCapacity>mmm.world.MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP||entryCapacity<0||pressureRows<this.cells
                     ||masks.count()!=this.cells||cells.count()!=4*this.cells||base<0)throw new IllegalArgumentException("Prescribed body layout differs");

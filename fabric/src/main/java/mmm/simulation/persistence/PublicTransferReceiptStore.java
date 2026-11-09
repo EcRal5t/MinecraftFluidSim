@@ -22,13 +22,13 @@ public final class PublicTransferReceiptStore {
 	public record Binding(ActorRef actor,DispenserAddress address,UUID instanceId) { }
 	public enum State { PENDING, COMMITTED, NOT_COMMITTED }
 	public record Entry(TransferRequest request,Binding binding,ContainerTransferJournal settlement,State state) {
-		public TransferReceipt receipt() {
+		public TransferReceipt receipt(double waterDensity) {
 			if(state==State.PENDING) return null;
 			boolean committed=state==State.COMMITTED;
 			return new TransferReceipt(request.operationId(),binding.actor(),binding.instanceId(),
 					request.expectedActorGeneration()+(committed?1:0),request.regionId(),
 					committed?settlement.targetGeneration():settlement.baseGeneration(),committed,
-					committed?ContainerTransferManifests.from(settlement):null);
+					committed?ContainerTransferManifests.from(settlement,waterDensity):null);
 		}
 	}
 	private final Path directory;

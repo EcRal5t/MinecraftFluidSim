@@ -39,7 +39,6 @@ public final class ProtocolSessions {
 				|| (negotiation.capabilities() & FluidProtocol.REQUIRED_CAPABILITIES)
 				!= FluidProtocol.REQUIRED_CAPABILITIES) return null;
 		long required = switch (negotiation.selectedLayout()) {
-			case PURE -> 0L;
 			case MATERIAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT;
 			case CHEMICAL -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_CHEMICAL_SNAPSHOT;
 			case GRANULAR -> FluidProtocol.CAP_MATERIAL_SNAPSHOT | FluidProtocol.CAP_GRANULAR_SNAPSHOT;

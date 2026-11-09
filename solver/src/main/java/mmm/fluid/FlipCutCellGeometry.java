@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import java.util.Arrays;
+import mmm.spatial.SpatialGrid;
 
 /**
  * Copy-on-write editing view of immutable fixed collision geometry.
@@ -18,23 +19,27 @@ final class FlipCutCellGeometry {
 	private final int sizeY;
 	private final int sizeZ;
 	private final int cellCount;
+	private final SpatialGrid grid;
 	private FixedGeometrySnapshot layout;
 	private byte[] writableMasks;
 
 	FlipCutCellGeometry(int sizeX,int sizeY,int sizeZ) {
-		this.sizeX=sizeX;this.sizeY=sizeY;this.sizeZ=sizeZ;
-		cellCount=Math.multiplyExact(Math.multiplyExact(sizeX,sizeY),sizeZ);
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ));
+	}
+	FlipCutCellGeometry(SpatialGrid grid) {
+		this.grid=grid;this.sizeX=grid.sizeX();this.sizeY=grid.sizeY();this.sizeZ=grid.sizeZ();
+		cellCount=grid.cellCount();
 	}
 
 	FixedGeometrySnapshot snapshot() {
 		if(layout==null){
-			layout=FixedGeometrySnapshot.takeMasks(sizeX,sizeY,sizeZ,writableMasks==null?new byte[cellCount]:writableMasks);
+			layout=FixedGeometrySnapshot.takeMasks(grid,writableMasks==null?new byte[cellCount]:writableMasks);
 			writableMasks=null;
 		}
 		return layout;
 	}
 	void restoreSnapshot(FixedGeometrySnapshot snapshot) {
-		if(snapshot==null||!snapshot.matchesShape(sizeX,sizeY,sizeZ))throw new IllegalArgumentException("Fixed collision geometry shape differs");
+		if(snapshot==null||!snapshot.grid().equals(grid))throw new IllegalArgumentException("Fixed collision geometry shape differs");
 		layout=snapshot;writableMasks=null;
 	}
 
@@ -97,7 +102,7 @@ final class FlipCutCellGeometry {
 		double radiusSquared = radius * (double) radius;
 		for (int cz = minZ; cz <= maxZ; cz++) for (int cy = minY; cy <= maxY; cy++) {
 			for (int cx = minX; cx <= maxX; cx++) {
-				int mask = mask(cellIndex(cx, cy, cz));
+				int cell=cellIndex(cx,cy,cz);int mask=cell<0?FULL_MASK:mask(cell);
 				if (mask == 0) continue;
 				for (int bit = 0; bit < 8; bit++) {
 					if ((mask & 1 << bit) == 0) continue;
@@ -127,7 +132,7 @@ final class FlipCutCellGeometry {
 		double microSize = cellSize / (double) MICRO_CELLS_PER_AXIS, radiusSquared = radius * (double) radius;
 		for (int cz = minZ; cz <= maxZ; cz++) for (int cy = minY; cy <= maxY; cy++) {
 			for (int cx = minX; cx <= maxX; cx++) {
-				int mask = mask(cellIndex(cx, cy, cz));
+				int cell=cellIndex(cx,cy,cz);int mask=cell<0?FULL_MASK:mask(cell);
 				if (mask == 0) continue;
 				for (int bit = 0; bit < 8; bit++) {
 					if ((mask & 1 << bit) == 0) continue;
@@ -158,7 +163,8 @@ final class FlipCutCellGeometry {
 		int localX = microX & 1;
 		int localY = microY & 1;
 		int localZ = microZ & 1;
-		return occupied(mask(cellIndex(cellX, cellY, cellZ)), localX, localY, localZ);
+		int cell=cellIndex(cellX,cellY,cellZ);
+		return cell<0||occupied(mask(cell), localX, localY, localZ);
 	}
 
 	private static int microCoordinate(float coordinate, float cellSize, int cellCount) {
@@ -170,8 +176,8 @@ final class FlipCutCellGeometry {
 		return (mask & 1 << (x + 2 * (y + 2 * z))) != 0;
 	}
 
-	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
-	private int xFaceIndex(int x, int y, int z) { return (z * sizeY + y) * (sizeX + 1) + x; }
-	private int yFaceIndex(int x, int y, int z) { return (z * (sizeY + 1) + y) * sizeX + x; }
-	private int zFaceIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
+	private int cellIndex(int x, int y, int z) { return grid.cell(x,y,z); }
+	private int xFaceIndex(int x, int y, int z) { return grid.faceAt(x,y,z,0)-grid.faceOffset(0); }
+	private int yFaceIndex(int x, int y, int z) { return grid.faceAt(x,y,z,1)-grid.faceOffset(1); }
+	private int zFaceIndex(int x, int y, int z) { return grid.faceAt(x,y,z,2)-grid.faceOffset(2); }
 }

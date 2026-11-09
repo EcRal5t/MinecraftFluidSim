@@ -215,8 +215,7 @@ A_pressure = rho_reference * h^3 * H R H^T + A_gas_storage
 
 `GranularLiquidDisplacement.prepare` 准备液体排开，`GranularInventory.WakePlan` 准备床库存取出与活动颗粒追加。
 来源、目标位置、组成、能量及账本全部预检后提交。
-起动势能变化由 `GranularBedPotential` 按实际整数质量、床层形状与目标高度计算。
-`GranularBedShear` 读取床格及上方格开放水平 MAC 面的实际 SI 质量和持久动量，以统一缩放支付该势能变化。
+`GranularBedShear` 读取床格及上方格开放水平 MAC 面的实际 SI 质量和持久动量，以统一缩放支付起动势能变化。
 全部来源在首次颗粒写入前预检，再提交零初速颗粒与预备格面动量；实际动量差作为床面反冲。
 实际动能变化与势能变化之差进入 `GranularDepositDynamics.Stats.mechanicalRounding`，热库存保持原有交接规则。
 颗粒随后由共同压力与阻力加速。

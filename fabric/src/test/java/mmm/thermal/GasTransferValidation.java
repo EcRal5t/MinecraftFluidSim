@@ -28,7 +28,7 @@ public final class GasTransferValidation {
 		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
 		catch (Exception failure) { throw new IllegalStateException("Cannot load gas edit fixture", failure); }
 		var domain = new mmm.fluid.HostFluidState(4, 4, 4,
-				new mmm.fluid.FluidSolverConfig(.5F, 1000, 0, .025F, 200, 1e-5F, .002F));
+				new mmm.fluid.FluidSolverConfig(.5F, 0, .025F, 200, 1e-5F, .002F), mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		domain.setVolume(1, 1, 1, .5F);

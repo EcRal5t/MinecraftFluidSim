@@ -45,7 +45,7 @@ public record FluidChemicalSnapshotPayload(
 			throw new IllegalArgumentException("Chemical snapshot must retain material geometry");
 		}
 		if (material.isSnapshot()) {
-			int cells = Math.multiplyExact(Math.multiplyExact(material.sizeX(), material.sizeY()), material.sizeZ());
+			int cells = material.geometry().grid().cellCount();
 			if (!registryFingerprint.matches("[0-9a-f]{64}") || species.isEmpty()
 					|| species.size() > ChemicalLimits.MAX_SPECIES || cells > MAX_CELLS
 					|| topSpecies.length != cells * ChemicalDisplaySnapshot.TOP_SPECIES

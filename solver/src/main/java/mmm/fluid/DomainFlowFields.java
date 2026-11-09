@@ -9,54 +9,6 @@ import static mmm.fluid.FluidDomainContracts.*;
 final class DomainFlowFields {
 	private final HostFluidState domain;
 	DomainFlowFields(HostFluidState domain) { this.domain = domain; }
-	float pressureDensityScale(int first, int second) {
-		if (isFluid(first) && isFluid(second)) {
-			return (float) (domain.config.density() / materialFaceEffectiveDensity(first, second));
-		}
-		int fluid = isFluid(first) ? first : second;
-		return (float) (domain.config.density() / mechanicalDensity(fluid));
-	}
-	float carrierDensityScale(int first, int second) {
-		boolean firstCarrier = domain.liquidGrid.stockCount[first] > 0;
-		boolean secondCarrier = domain.liquidGrid.stockCount[second] > 0;
-		if (firstCarrier && secondCarrier) {
-			return (float) (domain.config.density() / materialFaceEffectiveDensity(first, second));
-		}
-		int carrier = firstCarrier ? first : second;
-		return (float) (domain.config.density() / mechanicalDensity(carrier));
-	}
-	private double mechanicalDensity(int cell) {
-		return domain.thermalState == null || domain.liquidGrid.stockCount[cell] == 0
-				? domain.liquidGrid.cellDensity[cell] : domain.domainPhaseInventory.derivedCarrierState().density(cell);
-	}
-	double materialFaceEffectiveDensity(int one, int two) {
-		int first = Math.min(one, two), second = Math.max(one, two);
-		double fraction = materialFaceDensityFraction(first, second);
-		return fraction * mechanicalDensity(first) + (1.0 - fraction) * mechanicalDensity(second);
-	}
-	double thermalFaceRelativeBuoyancy(int one, int two, LiquidCarrierProperties properties) {
-		int first = Math.min(one, two), second = Math.max(one, two);
-		if (domain.liquidGrid.stockCount[first] == 0) return properties.relativeBuoyancy(second);
-		if (domain.liquidGrid.stockCount[second] == 0) return properties.relativeBuoyancy(first);
-		double fraction = materialFaceDensityFraction(first, second);
-		double firstMassDensity = fraction * properties.density(first);
-		double secondMassDensity = (1.0 - fraction) * properties.density(second);
-		return (firstMassDensity * properties.relativeBuoyancy(first)
-				+ secondMassDensity * properties.relativeBuoyancy(second)) / (firstMassDensity + secondMassDensity);
-	}
-	private double materialFaceDensityFraction(int first, int second) {
-		double fraction = 0.5;
-		int firstPhase = dominantPhase(first), secondPhase = dominantPhase(second);
-		if (firstPhase != HostFluidState.NO_PHASE && secondPhase != HostFluidState.NO_PHASE && firstPhase != secondPhase) {
-			double firstSigned = phaseFraction(first, firstPhase) - 0.5;
-			double secondSigned = phaseFraction(second, firstPhase) - 0.5;
-			double denominator = firstSigned - secondSigned;
-			if (firstSigned > 0.0 && secondSigned < 0.0) {
-				fraction = firstSigned / denominator;
-			}
-		}
-		return fraction;
-	}
 	int dominantPhase(int cell) {
 		int dominant = HostFluidState.NO_PHASE;
 		double dominantVolume = -1.0;
@@ -78,10 +30,7 @@ final class DomainFlowFields {
 		return 0.0;
 	}
 	float openFaceFromCell(int cell, int directionX, int directionY, int directionZ) {
-		int x = cell % domain.sizeX;
-		int yz = cell / domain.sizeX;
-		int y = yz % domain.sizeY;
-		int z = yz / domain.sizeY;
+		int x = domain.grid.x(cell), y = domain.grid.y(cell), z = domain.grid.z(cell);
 		if (directionX < 0) return domain.geometry.cutCells.xFaceOpen(x, y, z);
 		if (directionX > 0) return domain.geometry.cutCells.xFaceOpen(x + 1, y, z);
 		if (directionY < 0) return domain.geometry.cutCells.yFaceOpen(x, y, z);
@@ -91,7 +40,7 @@ final class DomainFlowFields {
 		throw new IllegalArgumentException("Pressure face direction must be axial");
 	}
 	float pressureOpenFaceFromCell(int cell, int neighbor, int dx, int dy, int dz) {
-		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
+		int x = domain.grid.x(cell), y = domain.grid.y(cell), z = domain.grid.z(cell);
 		if (dx != 0) return pressureXFaceOpen(x + (dx > 0 ? 1 : 0), y, z);
 		if (dy != 0) return pressureYFaceOpen(x, y + (dy > 0 ? 1 : 0), z);
 		return pressureZFaceOpen(x, y, z + (dz > 0 ? 1 : 0));
@@ -114,17 +63,20 @@ final class DomainFlowFields {
 		float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
 		float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
 		float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
-		if (cellX == 0 || domain.geometry.cutCells.fullySolid(cellIndex(cellX - 1, cellY, cellZ))) ox = Math.max(ox, radiusFraction);
-		if (cellX + 1 == domain.sizeX || domain.geometry.cutCells.fullySolid(cellIndex(cellX + 1, cellY, cellZ))) ox = Math.min(ox, 1.0F - radiusFraction);
-		if (cellY == 0 || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY - 1, cellZ))) oy = Math.max(oy, radiusFraction);
-		if (cellY + 1 == domain.sizeY || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY + 1, cellZ))) oy = Math.min(oy, 1.0F - radiusFraction);
-		if (cellZ == 0 || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY, cellZ - 1))) oz = Math.max(oz, radiusFraction);
-		if (cellZ + 1 == domain.sizeZ || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY, cellZ + 1))) oz = Math.min(oz, 1.0F - radiusFraction);
+		if (solidOrMissing(cellX-1,cellY,cellZ)) ox = Math.max(ox, radiusFraction);
+		if (solidOrMissing(cellX+1,cellY,cellZ)) ox = Math.min(ox, 1.0F - radiusFraction);
+		if (solidOrMissing(cellX,cellY-1,cellZ)) oy = Math.max(oy, radiusFraction);
+		if (solidOrMissing(cellX,cellY+1,cellZ)) oy = Math.min(oy, 1.0F - radiusFraction);
+		if (solidOrMissing(cellX,cellY,cellZ-1)) oz = Math.max(oz, radiusFraction);
+		if (solidOrMissing(cellX,cellY,cellZ+1)) oz = Math.min(oz, 1.0F - radiusFraction);
 		float px = (cellX + ox) * h, py = (cellY + oy) * h, pz = (cellZ + oz) * h;
 		if (Math.floor(px / h) != cellX || Math.floor(py / h) != cellY || Math.floor(pz / h) != cellZ
 				|| CellRemapMicroTopology.positionMicro(h, px, py, pz) != slot)
 			throw new IllegalArgumentException("Cell marker slot exceeds its binary32 coordinate representation");
 		return new float[] {px, py, pz};
+	}
+	private boolean solidOrMissing(int x,int y,int z) {
+		int cell=domain.grid.cell(x,y,z);return cell<0||domain.geometry.cutCells.fullySolid(cell);
 	}
 	float exactVolumeInCell(int cellX, int cellY, int cellZ) { return (float) domain.liquidCells.exactCellVolume(cellIndex(cellX, cellY, cellZ)).toDouble(); }
 	mmm.units.SignedDyadic[] availableCellVolumes() {
@@ -154,7 +106,7 @@ final class DomainFlowFields {
 			var current = pending.removeFirst(); int cell = current[0], distance = current[1];
 			result.add(new CellCandidate(cell, distance * distance));
 			if (distance >= radius) continue;
-			int cx = cell % domain.sizeX, cy = cell / domain.sizeX % domain.sizeY, cz = cell / (domain.sizeX * domain.sizeY);
+			int cx = domain.grid.x(cell), cy = domain.grid.y(cell), cz = domain.grid.z(cell);
 			for (int direction = 0; direction < 6; direction++) {
 				int nx = cx + dx[direction], ny = cy + dy[direction], nz = cz + dz[direction];
 				if (!inside(nx, ny, nz)) continue;
@@ -191,26 +143,40 @@ final class DomainFlowFields {
 		return open > 0 && !domain.geometry.cutCells.fullySolid(first) && !domain.geometry.cutCells.fullySolid(second)
 				&& (isFluid(first) || isFluid(second) || carrierFaceActive(first, second, open));
 	}
-	boolean inside(int x, int y, int z) { return x >= 0 && x < domain.sizeX && y >= 0 && y < domain.sizeY && z >= 0 && z < domain.sizeZ; }
-	int cellIndex(int x, int y, int z) { return (z * domain.sizeY + y) * domain.sizeX + x; }
-	int xFaceIndex(int x, int y, int z) { return (z * domain.sizeY + y) * (domain.sizeX + 1) + x; }
-	int yFaceIndex(int x, int y, int z) { return (z * (domain.sizeY + 1) + y) * domain.sizeX + x; }
-	int zFaceIndex(int x, int y, int z) { return (z * domain.sizeY + y) * domain.sizeX + x; }
+	boolean inside(int x, int y, int z) { return domain.grid.cell(x,y,z)>=0; }
+	int cellIndex(int x, int y, int z) { return domain.grid.cell(x,y,z); }
+	int xFaceIndex(int x, int y, int z) { return domain.grid.faceAt(x,y,z,0)-domain.grid.faceOffset(0); }
+	int yFaceIndex(int x, int y, int z) { return domain.grid.faceAt(x,y,z,1)-domain.grid.faceOffset(1); }
+	int zFaceIndex(int x, int y, int z) { return domain.grid.faceAt(x,y,z,2)-domain.grid.faceOffset(2); }
 	int cellIndexChecked(int x, int y, int z) { if (!inside(x, y, z)) throw new IndexOutOfBoundsException(); return cellIndex(x, y, z); }
 	float sampleX(float[] field, float x, float y, float z) {
 		float h = domain.config.cellSize();
-		return trilinearValid(field, domain.mac.velocityValidX, domain.sizeX + 1, domain.sizeY, domain.sizeZ,
+		return sampleFace(field, domain.mac.velocityValidX,0, domain.sizeX + 1, domain.sizeY, domain.sizeZ,
 				x / h, y / h - 0.5F, z / h - 0.5F);
 	}
 	float sampleY(float[] field, float x, float y, float z) {
 		float h = domain.config.cellSize();
-		return trilinearValid(field, domain.mac.velocityValidY, domain.sizeX, domain.sizeY + 1, domain.sizeZ,
+		return sampleFace(field, domain.mac.velocityValidY,1, domain.sizeX, domain.sizeY + 1, domain.sizeZ,
 				x / h - 0.5F, y / h, z / h - 0.5F);
 	}
 	float sampleZ(float[] field, float x, float y, float z) {
 		float h = domain.config.cellSize();
-		return trilinearValid(field, domain.mac.velocityValidZ, domain.sizeX, domain.sizeY, domain.sizeZ + 1,
+		return sampleFace(field, domain.mac.velocityValidZ,2, domain.sizeX, domain.sizeY, domain.sizeZ + 1,
 				x / h - 0.5F, y / h - 0.5F, z / h);
+	}
+	private float sampleFace(float[] values,boolean[] valid,int axis,int nx,int ny,int nz,float x,float y,float z) {
+		float cx=clamp(x,0,nx-1),cy=clamp(y,0,ny-1),cz=clamp(z,0,nz-1);
+		int x0=(int)Math.floor(cx),y0=(int)Math.floor(cy),z0=(int)Math.floor(cz);
+		float weighted=0,total=0;
+		for(int dz=0;dz<2;dz++)for(int dy=0;dy<2;dy++)for(int dx=0;dx<2;dx++){
+			int sx=Math.min(x0+dx,nx-1),sy=Math.min(y0+dy,ny-1),sz=Math.min(z0+dz,nz-1);
+			float weight=(dx==0?1-(cx-x0):cx-x0)*(dy==0?1-(cy-y0):cy-y0)*(dz==0?1-(cz-z0):cz-z0);
+			int face=domain.grid.faceAt(sx,sy,sz,axis);
+			if(face<0||weight<=0)continue;
+			int local=face-domain.grid.faceOffset(axis);
+			if(valid[local]){weighted+=values[local]*weight;total+=weight;}
+		}
+		return total<=1.0E-8F?0:weighted/total;
 	}
 	static float trilinearValid(
 			float[] values, boolean[] valid, int nx, int ny, int nz, float x, float y, float z

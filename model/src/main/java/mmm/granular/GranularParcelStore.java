@@ -103,6 +103,9 @@ public final class GranularParcelStore {
 	public GranularParcelStore(GranularRegistry registry, int capacity, int sizeX, int sizeY, int sizeZ, double cellSize) {
 		this(registry, capacity, new GranularKernel(sizeX, sizeY, sizeZ, cellSize));
 	}
+	public GranularParcelStore(GranularRegistry registry,int capacity,mmm.spatial.SpatialGrid grid,double cellSize) {
+		this(registry,capacity,new GranularKernel(grid,cellSize));
+	}
 	private GranularParcelStore(GranularRegistry registry, int capacity, GranularKernel kernel) {
 		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
 		if (capacity <= 0 || capacity > GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION) {

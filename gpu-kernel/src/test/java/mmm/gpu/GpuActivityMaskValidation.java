@@ -17,37 +17,36 @@ public final class GpuActivityMaskValidation {
     public static void main(String[] args) throws Exception {
         validateActivityGraph();
         int device=Integer.parseInt(args[0]);var definitions=Path.of(args[1]);
-        var chemistry=BuiltinChemicalDefinitions.REGISTRY;var granular=BuiltinGranularDefinitions.createRegistry();var gas=BuiltinGasDefinitions.createRegistry();
+        var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();var granular=mmm.fluid.TestFluidDefinitions.load().granular();var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         var thermal=new ThermalRegistry(GpuThermalPhaseValidation.read(definitions,"thermal_materials",ThermalDefinitionCodec::decodeMaterial),
             GpuThermalPhaseValidation.read(definitions,"thermal_species",ThermalDefinitionCodec::decodeSpecies),
             GpuThermalPhaseValidation.read(definitions,"phase_transitions",ThermalDefinitionCodec::decodeTransition),
             List.of(),List.of(),chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
-        var domain=new HostFluidState(X,Y,Z,new FluidSolverConfig(.5f,1000,9.81f,.05f,200,1e-5f,.002f));
-        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());domain.sealDomainBoundary();
+        var domain=new HostFluidState(X,Y,Z,new FluidSolverConfig(.5f,9.81f,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.withThermal(thermal));
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());domain.sealDomainBoundary();
         for(int z=0;z<Z;z++)for(int y=0;y<Y;y++)domain.setSolidMicroMask(3,y,z,255);
         // An isolated cut cell connects to the active chamber through a partial face.
         domain.setSolidMicroMask(0,3,3,2);domain.setSolidMicroMask(0,2,3,255);domain.setSolidMicroMask(0,3,2,255);
         domain.setVolume(1,2,1,.5f);domain.setVolume(1,1,1,.5f);domain.setVolume(4,2,1,.5f);
         domain.bindChemistry(chemistry);domain.bindGasRegistry(gas);
-        domain.bindGranular(granular,fluids,BuiltinFluidMaterials.createRegistry());
+        domain.bindGranular(granular,fluids,mmm.fluid.TestFluidDefinitions.load().material());
         int sand=granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
         long svq=granular.material(sand).maximumActiveParcelSvq();
         long sandMass=Mass.fromKilograms(granular.material(sand).referenceDensity()*Math.scalb((double)svq,-27));
         var inserted=domain.tryInsertExactGranular(4,1,1,sand,0,svq,sandMass);
         if(!inserted.inserted())throw new AssertionError("Paused granular fixture was not inserted: "+inserted.failure());
-        domain.bindThermal(thermal,fluids,300);
+        domain.bindThermal(domain.definitions().thermal(),fluids,300);
         domain.setThermalTemperatureInCell(1,2,1,330);
         double iceEnergy=new ThermalStateFunction(thermal).internalEnergyAtTemperature(thermal.materialHandle("mmm:ice"),1,Map.of(),300);
         domain.addCoherentPhaseExternal(4,0,2,"mmm:ice",146_000,Mass.fromKilograms(1),null,iceEnergy);
-        domain.bootstrapGasState(chemistry.fingerprint());
         domain.restorePendingPhaseMotionState(new PendingPhaseMotionState(X*Y*Z,
                 List.of(new PendingPhaseMotionState.Entry(index(1,1,1)),new PendingPhaseMotionState.Entry(index(4,1,1)))));
         var retainedBody = new mmm.world.MovingBodyFluidCoupling.Request(java.util.UUID.randomUUID(),
                 new mmm.world.MovingBodyFluidCoupling.Bounds(2.05,.55,1.05,2.3,.8,1.3),0,0,0);
         domain.restoreEntityBodyState(new EntityBodyState(List.of(retainedBody)));
         double[] x=new double[(X+1)*Y*Z],y=new double[X*(Y+1)*Z],z=new double[X*Y*(Z+1)];
-        x[(1*Y+2)*(X+1)+1]=.01;x[(1*Y+2)*(X+1)+5]=.01;
+        x[domain.grid().faceAt(1,2,1,0)]=.01;x[domain.grid().faceAt(5,2,1,0)]=.01;
         domain.restoreMacMomentum(new MacMomentumState(X,Y,Z,x,y,z));
         var initial=domain.captureAuthoritativeState();
         boolean[] active=new boolean[X*Y*Z];for(int c=0;c<active.length;c++)active[c]=c%X<3;
@@ -84,8 +83,6 @@ public final class GpuActivityMaskValidation {
     private static void checkMechanicalCounters(ResidentFluidState state) throws Exception {
         var captureField=state.getClass().getDeclaredField("capture");captureField.setAccessible(true);
         var capture=(VulkanLiquidRegion.Capture)captureField.get(state);
-        var gasField=capture.getClass().getDeclaredField("currentGas");gasField.setAccessible(true);
-        if(!gasField.getBoolean(capture))throw new AssertionError("Fixture must complete phase gas topology");
         var layoutField=capture.getClass().getDeclaredField("layout");layoutField.setAccessible(true);
         var layout=(VulkanLiquidWorkspace)layoutField.get(capture);
         var read=capture.getClass().getDeclaredMethod("read",long.class,long.class);read.setAccessible(true);
@@ -152,10 +149,11 @@ public final class GpuActivityMaskValidation {
                     ||!Arrays.equals(before.thermalOwner().copyDepositEnergy(),after.thermalOwner().copyDepositEnergy())
                     ||!before.thermalOwner().coherentGroups().equals(after.thermalOwner().coherentGroups()))
                 throw new AssertionError("Paused solid inventory or energy changed");
-            int beforeNode=before.gas().cellNodeOrdinal()[index(4,3,1)],afterNode=after.gas().cellNodeOrdinal()[index(4,3,1)];
-            if(beforeNode<=0||afterNode<=0||!before.gas().nodes().get(beforeNode-1).inventory().equals(after.gas().nodes().get(afterNode-1).inventory())
-                    ||Double.doubleToLongBits(before.thermalOwner().copyGasNodeEnergy()[beforeNode-1])!=Double.doubleToLongBits(after.thermalOwner().copyGasNodeEnergy()[afterNode-1]))
-                throw new AssertionError("Paused gas inventory or energy changed");
+            for(int c=0;c<before.grid().cellCount();c++)if(before.grid().x(c)>=4) {
+                if(!before.spatialGas().cells().get(c).equals(after.spatialGas().cells().get(c))
+                        ||Double.doubleToLongBits(before.spatialGas().energyAt(c))!=Double.doubleToLongBits(after.spatialGas().energyAt(c)))
+                    throw new AssertionError("Paused gas inventory or energy changed");
+            }
     }
     private record LiquidTotal(mmm.units.SignedDyadic volume,long mass,mmm.units.SignedDyadic energy,Map<String,Long> species) { }
     private static Map<String,LiquidTotal> liquidTotals(FluidDomainState state,boolean active){
@@ -180,7 +178,7 @@ public final class GpuActivityMaskValidation {
         for(int axis=0;axis<3;axis++){
             int sx=X+(axis==0?1:0),sy=Y+(axis==1?1:0),sz=Z+(axis==2?1:0);
             for(int z=0;z<sz;z++)for(int y=0;y<sy;y++)for(int x=4;x<sx;x++){
-                int i=(z*sy+y)*sx+x;
+                int i=before.grid().faceAt(x,y,z,axis)-before.grid().faceOffset(axis);
                 if(Double.doubleToLongBits(a[axis][i])!=Double.doubleToLongBits(b[axis][i]))
                     throw new AssertionError("Paused face momentum changed: axis="+axis+" index="+i);
             }

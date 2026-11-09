@@ -20,10 +20,10 @@ abstract class ProductionReplayValidationSupport {
 	static final double STEP_BUDGET_MILLIS = 40.0;
 
 	static HostFluidState createPouredControllerDomain() {
-		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig(), mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(
-				domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+				domain, new FluidMaterialRegistry(java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material(),mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:mercury").material())));
 		FluidDomainContracts.VolumeAddition addition = domain.addVolumeNearBudgeted(3, 0, 0, 128.0F, 6);
 		require(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"fixture did not inject the complete 16 m³ source: " + addition);
@@ -44,7 +44,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static HostFluidState createEmptyFullyBoundController(FullCapabilityTestFixture.Registries registries) {
-		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig(), mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -53,12 +53,12 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static HostFluidState createFullyBoundPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
-		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig(), mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
+		float[] volumes=new float[domain.grid().cellCount()];
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
-			volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
+			volumes[domain.grid().cell(x,y,z)]=1;
 		}
 		domain.setVolumes(volumes);
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -67,14 +67,14 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static HostFluidState createFullyBoundCompressedPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
-		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig());
+		HostFluidState domain = new HostFluidState(8, 8, 8, productionConfig(), mmm.fluid.TestFluidDefinitions.load());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
+		float[] volumes=new float[domain.grid().cellCount()];
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
-			volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
+			volumes[domain.grid().cell(x,y,z)]=1;
 		}
 		domain.setVolumes(volumes);
 		return domain;
@@ -82,11 +82,11 @@ abstract class ProductionReplayValidationSupport {
 
 	/** Maximum-fill solver-side shape and capability profile created by {@code /mmm demo} in empty space. */
 	static HostFluidState createFullyBoundDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
-		HostFluidState domain = new HostFluidState(24, 16, 24, productionConfig());
+		HostFluidState domain = new HostFluidState(24, 16, 24, productionConfig(), mmm.fluid.TestFluidDefinitions.load());
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
+		float[] volumes=new float[domain.grid().cellCount()];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
-			volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
+			volumes[domain.grid().cell(x,y,z)]=1;
 		}
 		domain.setVolumes(volumes);
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -98,7 +98,7 @@ abstract class ProductionReplayValidationSupport {
 
 	/** Production {@code /mmm demo} over four full collision layers, matching the world fixture. */
 	static HostFluidState createFullyBoundFloorDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
-		HostFluidState domain = new HostFluidState(24, 16, 24, productionConfig());
+		HostFluidState domain = new HostFluidState(24, 16, 24, productionConfig(), mmm.fluid.TestFluidDefinitions.load());
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		var floor=new java.util.ArrayList<FluidDomainContracts.CollisionEdit>();
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 24; x++) {
@@ -108,7 +108,7 @@ abstract class ProductionReplayValidationSupport {
 		for(FluidDomainContracts.CollisionEdit edit:floor) domain.setSolidMicroMask(edit.x(),edit.y(),edit.z(),edit.mask());
 		float[] volumes=new float[24*16*24];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
-			if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
+			if (!domain.isSolid(x, y, z)) volumes[domain.grid().cell(x,y,z)]=1;
 		}
 		domain.setVolumes(volumes);
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -130,7 +130,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static FluidSolverConfig productionConfig() {
-		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+		return new FluidSolverConfig(0.5F, 9.81F, 1.0F / 20.0F,
 				120, 1.0E-4F, 2.0E-3F);
 	}
 

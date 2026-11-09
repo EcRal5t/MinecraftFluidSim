@@ -48,7 +48,7 @@ public record FluidStepRequest(
 		Objects.requireNonNull(stateAccess, "stateAccess");
 		if (activeCells != null) {
 			var layout = stateAccess.layout();
-			if (activeCells.length != layout.sizeX() * layout.sizeY() * layout.sizeZ())
+			if (activeCells.length != layout.grid().cellCount())
 				throw new IllegalArgumentException("Activity mask differs from the region layout");
 			activeCells = activeCells.clone();
 		}

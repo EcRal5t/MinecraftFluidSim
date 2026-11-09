@@ -181,8 +181,8 @@ public final class FiniteHeatExchangerOperations {
 	}
 	private void requireAvailablePorts(FluidRegion region, BlockPos position, FiniteThermalDeviceDefinition definition, ThermalRegistry registry) {
 		for (var port : ports(region, position, definition, registry)) {
-			int cell = (port.cellZ() * region.sizeY() + port.cellY()) * region.sizeX() + port.cellX();
-			if (!region.groupAvailable(cell)) throw new IllegalStateException("换热器连接的活动组等待区块加载");
+			int cell = region.grid().cell(port.cellX(), port.cellY(), port.cellZ());
+			if (cell < 0 || !region.groupAvailable(cell)) throw new IllegalStateException("换热器连接的活动组等待区块加载");
 		}
 	}
 	private String profile() { return world.profile().profileFingerprint(); }
@@ -374,7 +374,7 @@ public final class FiniteHeatExchangerOperations {
 				else continue;
 				for (var port : requests) devicePorts.add(new mmm.fluid.FluidStateAccess.DevicePort(device.providerId(),device.objectId(),port));
 				connections.add(requests.stream().mapToInt(port ->
-						(port.cellZ() * region.sizeY() + port.cellY()) * region.sizeX() + port.cellX()).distinct().toArray());
+						region.grid().cell(port.cellX(), port.cellY(), port.cellZ())).distinct().toArray());
 			}
 		}
 		region.replaceDevicePorts(devicePorts,connections);
@@ -398,7 +398,7 @@ public final class FiniteHeatExchangerOperations {
 				point[(axis+1)%3]=((axis+1)%3==0?neighbor.getX():(axis+1)%3==1?neighbor.getY():neighbor.getZ())+(a+.5)*h;
 				point[(axis+2)%3]=((axis+2)%3==0?neighbor.getX():(axis+2)%3==1?neighbor.getY():neighbor.getZ())+(b+.5)*h;
 				int x=(int)Math.floor((point[0]-region.origin().getX())/h),y=(int)Math.floor((point[1]-region.origin().getY())/h),z=(int)Math.floor((point[2]-region.origin().getZ())/h);
-				if(x<0||x>=region.sizeX()||y<0||y>=region.sizeY()||z<0||z>=region.sizeZ()) continue;
+				if(region.grid().cell(x,y,z)<0) continue;
 				int face=axis*2+(positive?0:1);
 				requests.add(new FluidDomainContracts.ThermalPortRequest(x,y,z,face,port.wallThicknessMeters(),conductivity,port.fluidFilmThicknessMeters()));
 			}

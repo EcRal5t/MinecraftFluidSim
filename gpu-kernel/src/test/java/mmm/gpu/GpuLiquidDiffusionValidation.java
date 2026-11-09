@@ -14,15 +14,65 @@ import java.util.*;
 /** A real concentration gradient, fixed wall and joint mass/energy/momentum settlement. */
 public final class GpuLiquidDiffusionValidation {
     private GpuLiquidDiffusionValidation() {}
+    private static void validateDataDrivenDefinitions() {
+        var original = mmm.fluid.TestFluidDefinitions.load();
+        var water = original.material().entry("mmm:water");
+        var fluid = water.material();
+        double density = fluid.referenceDensity() * 1.25;
+        var changedFluid = new FluidMaterial(fluid.id(), density, fluid.miscibilityGroup(),
+                fluid.surfaceTension(), fluid.contactAngleRadians(), fluid.displayArgb());
+        var entries = original.material().entries().stream().map(entry ->
+                entry.material().id().equals(fluid.id())
+                        ? new MaterialRegistry.MaterialEntry(changedFluid, entry.viscosity(), entry.thermalExpansion())
+                        : entry).toList();
+        var material = new MaterialRegistry(entries, original.material().pairTensions());
+        var sourceThermal = original.thermal();
+        var thermalMaterials = sourceThermal.materials().stream().map(definition -> {
+            boolean selected = definition.carrierKind() == ThermalMaterialDefinition.CarrierKind.LIQUID
+                    && definition.carrierId().equals("mmm:water")
+                    || definition.carrierKind() == ThermalMaterialDefinition.CarrierKind.GAS
+                    && definition.carrierId().equals(BuiltinGasDefinitions.NITROGEN);
+            if (!selected) return definition;
+            var segments = definition.caloricSegments().stream().map(segment ->
+                    new ThermalMaterialDefinition.CaloricSegment(segment.minimumTemperatureK(),
+                            segment.maximumTemperatureK(), segment.specificHeatJPerKgK() * 1.25)).toList();
+            return new ThermalMaterialDefinition(definition.id(), definition.carrierKind(), definition.carrierId(),
+                    definition.referenceTemperatureK(), definition.referenceSpecificEnergyJPerKg(),
+                    definition.conductivityWPerMeterK(), segments);
+        }).toList();
+        var thermal = new ThermalRegistry(thermalMaterials, sourceThermal.speciesOffsets(), sourceThermal.transitions(),
+                sourceThermal.boundaries(), sourceThermal.finiteDevices(), original.chemistry().fingerprint(),
+                original.granular().fingerprint(), original.gas().fingerprint());
+        var definitions = mmm.fluid.TestFluidDefinitions.withRegistries(material, null, null, null, thermal);
+        var domain = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), definitions);
+        domain.setVolume(0, 0, 0, .5F);
+        var state = domain.captureAuthoritativeState();
+        long mass = state.liquid().rows().get(0).getFirst().massUnits();
+        if (mass != Mass.fromKilograms(.5 * density))
+            throw new AssertionError("Host water inventory ignored the world density");
+        var device = new VulkanFluidStateCodec(state).importData();
+        double liquidCp = definitions.thermal().material(definitions.thermal().materialHandle(
+                ThermalMaterialDefinition.CarrierKind.LIQUID, "mmm:water")).caloricSegments().getFirst().specificHeatJPerKgK();
+        if (device.definitions().thermal().capacity()[0] != liquidCp)
+            throw new AssertionError("Device liquid caloric table ignored the world definition");
+        var gasTables = device.gas().tables();
+        int component = gasTables.definitions().componentIds().indexOf(BuiltinGasDefinitions.NITROGEN);
+        double gasCp = definitions.thermal().material(definitions.thermal().materialHandle(
+                ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN)).caloricSegments().getFirst().specificHeatJPerKgK();
+        if (component < 0 || gasTables.segmentHeatCapacity()[gasTables.segmentOffsets()[component]] != gasCp)
+            throw new AssertionError("Device gas caloric table ignored the world definition");
+    }
+
     public static void main(String[] args){
+        validateDataDrivenDefinitions();
         int device=args.length==0?0:Integer.parseInt(args[0]),side=4,cells=64;
         int a=21,b=22,blocked=25;
-        var chemistry=BuiltinChemicalDefinitions.REGISTRY;
-        var granular=BuiltinGranularDefinitions.createRegistry();var gas=BuiltinGasDefinitions.createRegistry();
+        var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();
+        var granular=mmm.fluid.TestFluidDefinitions.load().granular();var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         var material=new ThermalMaterialDefinition("mmm:diffusion_water",ThermalMaterialDefinition.CarrierKind.LIQUID,
                 "mmm:water",293.15,0,0.6,List.of(new ThermalMaterialDefinition.CaloricSegment(1,2000,4200)));
         var thermal=new ThermalRegistry(List.of(material),List.of(),List.of(),List.of(),chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
-        var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:aqueous",0,90)));
+        var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:aqueous",0,90, 0xff197ae8)));
         var tables=VulkanReactionDefinitions.fromRegistries(chemistry,granular,thermal,gas);
         int water=chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O),ethanol=chemistry.speciesHandle(BuiltinChemicalDefinitions.ETHANOL);
         int[] cellOffsets=new int[cells+1];for(int i=0;i<cells;i++)cellOffsets[i+1]=cellOffsets[i]+(i==a||i==b||i==blocked?1:0);
@@ -52,7 +102,9 @@ public final class GpuLiquidDiffusionValidation {
             long alignment=Math.max(8,context.storageOffsetAlignment());
             var liquid=new VulkanLiquidStateLayout(side,side,side,3,32,32,alignment,1);
             var definitions=tables.layout(liquid.bytes(),alignment);long ref=align(definitions.endOffset(),alignment),speciesRef=align(ref+8,alignment);
-            var caloric=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(fluids,thermal).withAqueous(0,ethanol),Math.toIntExact(ref/4),
+            var ethanolDefinition=chemistry.species(ethanol);
+            var caloric=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(fluids,thermal).withAqueous(0,ethanol,
+                    ethanolDefinition.molarMassKgPerMol().toDouble(),ethanolDefinition.liquidProperties().heatCapacityJPerKgK(),ethanolDefinition.liquidProperties().conductivityWPerMK()),Math.toIntExact(ref/4),
                     Math.toIntExact(speciesRef/4),chemistry.species().size(),speciesRef+8L*chemistry.species().size(),alignment);
             var progress=new VulkanReactionProgressLayout(cells,cells*32,0,definitions,caloric.endOffset(),alignment);
             long geometryOffset=align(progress.endOffset(),alignment);
@@ -64,7 +116,7 @@ public final class GpuLiquidDiffusionValidation {
             bytes.duplicate().position(Math.toIntExact(layout.column(VulkanLiquidDiffusion.Field.HEADER).offset())).put(layout.headerBytes(100));
             bytes.duplicate().position(Math.toIntExact(layout.column(VulkanLiquidDiffusion.Field.RULES).offset())).put(layout.ruleBytes.duplicate());
             for(int i=0;i<geometry.length;i++)bytes.putDouble(Math.toIntExact(geometryOffset+8L*i),geometry[i]);
-            try(var storage=new VulkanRegionStorage(context,layout.endOffset,1024*1024)){
+            try(var storage=new VulkanRegionStorage(context,layout.endOffset,1024*1024,liquid.grid())){
                 storage.initialize(bytes,0);
                 try(var source=storage.capture();var candidate=storage.prepare(source)){
                     int init=candidate.beginBatch((command,input,output,errors,staging,stack)->VulkanRegionStorage.copy(command,input,0,output,0,layout.endOffset,stack),0,0).error();
@@ -156,7 +208,7 @@ public final class GpuLiquidDiffusionValidation {
         bytes.duplicate().position(Math.toIntExact(layout.column(VulkanLiquidDiffusion.Field.HEADER).offset())).put(layout.headerBytes(1000));
         bytes.duplicate().position(Math.toIntExact(layout.column(VulkanLiquidDiffusion.Field.RULES).offset())).put(layout.ruleBytes.duplicate());
         for(int i=0;i<geometry.length;i++)bytes.putDouble(Math.toIntExact(geometryOffset+8L*i),geometry[i]);
-        try(var diffusion=new VulkanLiquidDiffusion(context);var storage=new VulkanRegionStorage(context,layout.endOffset,1024*1024)){
+        try(var diffusion=new VulkanLiquidDiffusion(context);var storage=new VulkanRegionStorage(context,layout.endOffset,1024*1024,liquid.grid())){
             storage.initialize(bytes,0);
             for(int step=0;step<3;step++)try(var source=storage.capture();var candidate=storage.prepare(source)){
                 if(candidate.beginBatch((command,input,output,errors,staging,stack)->VulkanRegionStorage.copy(command,input,0,output,0,layout.endOffset,stack),0,0).error()!=0)
@@ -193,6 +245,6 @@ public final class GpuLiquidDiffusionValidation {
             }}return result;
     }
     private static int cell(int n,int x,int y,int z){return x<0||y<0||z<0||x>=n||y>=n||z>=n?-1:(z*n+y)*n+x;}
-    private static int faceIndex(int n,int axis,int x,int y,int z){int sx=n+(axis==0?1:0),sy=n+(axis==1?1:0);return axis*(n+1)*n*n+(z*sy+y)*sx+x;}
+    private static int faceIndex(int n,int axis,int x,int y,int z){return mmm.spatial.SpatialGrid.rectangular(n,n,n).faceAt(x,y,z,axis);}
     private static long align(long value,long alignment){return (value+alignment-1)&-alignment;}
 }

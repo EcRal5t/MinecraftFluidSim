@@ -89,7 +89,7 @@ public final class ThermalCaloricBounds {
 			for (var portion : portions) {
 				double cv = thermal.material(portion.materialHandle()).caloricSegments().stream()
 						.mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatJPerKgK).min().orElseThrow();
-                if (ethanolRange(portion) != null) cv = Math.min(cv, mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K);
+                if (ethanolRange(portion) != null) cv = Math.min(cv, ethanolDefinition().liquidProperties().heatCapacityJPerKgK());
 				capacity = capacity.add(SignedDyadic.of(portion.massLow()).multiply(SignedDyadic.of(cv)));
 			}
 			if (capacity.signum() == 0) return unboundedTemperature(upper);
@@ -275,27 +275,37 @@ public final class ThermalCaloricBounds {
 		for (PortionRange portion : portions) {
 			var material = thermal.material(portion.materialHandle());
 			double mass = (probe >= material.referenceTemperatureK()) == upper ? portion.massHigh() : portion.massLow();
-			double pure=material.specificHeatAt(probe),correction=compositionMassBound(portion,
-                    mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K-pure,upper);
+			double pure=material.specificHeatAt(probe),correction=ethanolRange(portion)==null?0.0:compositionMassBound(portion,
+                    ethanolDefinition().liquidProperties().heatCapacityJPerKgK()-pure,upper);
             var part=SignedDyadic.of(mass).multiply(SignedDyadic.of(pure)).add(SignedDyadic.of(correction));
             if(part.signum()>0)total=total.add(part);
 		}
 		return total;
 	}
+    private mmm.chemistry.ChemicalSpecies ethanolDefinition() {
+        var chemistry=thermal.chemistry();
+        if(chemistry==null)throw new IllegalArgumentException("Chemical registry is required for liquid mixture properties");
+        var species=chemistry.species(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL));
+        if(species.liquidProperties()==null)throw new IllegalArgumentException("Liquid properties are missing for "+species.id());
+        return species;
+    }
     private QuantaRange ethanolRange(PortionRange portion) {
         var material=thermal.material(portion.materialHandle());
-        return material.carrierKind()==ThermalMaterialDefinition.CarrierKind.LIQUID && material.carrierId().equals("mmm:water")
+        var range=material.carrierKind()==ThermalMaterialDefinition.CarrierKind.LIQUID && material.carrierId().equals("mmm:water")
                 ? portion.species().get(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL) : null;
+        if(range==null)return null;
+        ethanolDefinition();
+        return range;
     }
     private double compositionMassBound(PortionRange portion,double coefficient,boolean upper) {
         QuantaRange range=ethanolRange(portion);if(range==null)return 0.0;
         boolean maximum=(coefficient>=0)==upper;
-        double mass=Math.min(maximum?portion.massHigh():portion.massLow(),(maximum?range.high():range.low())*1e-6*.046);
+        double mass=Math.min(maximum?portion.massHigh():portion.massLow(),(maximum?range.high():range.low())*1e-6*ethanolDefinition().molarMassKgPerMol().toDouble());
         return outward(mass*coefficient,upper);
     }
     private double compositionCorrection(PortionRange portion,ThermalMaterialDefinition material,double temperature,boolean upper) {
         if(ethanolRange(portion)==null)return 0.0;
-        double difference=(temperature-material.referenceTemperatureK())*mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL_HEAT_CAPACITY_J_KG_K
+        double difference=(temperature-material.referenceTemperatureK())*ethanolDefinition().liquidProperties().heatCapacityJPerKgK()
                 -material.sensibleSpecificEnergyAt(temperature);
         return compositionMassBound(portion,difference,upper);
     }

@@ -113,7 +113,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateCellMacCodec() throws Exception {
 		var template=populatedRegion(new UUID(31L,32L)).hostSnapshot().exportParticleState();
-		var source=new HostFluidState(template.sizeX(),template.sizeY(),template.sizeZ(),CONFIG);
+		var source=new HostFluidState(template.sizeX(), template.sizeY(), template.sizeZ(), CONFIG, mmm.fluid.TestFluidDefinitions.load());
 		source.sealDomainBoundary();
 		source.restoreParticleState(template);
 		// Keep the cell inventory unchanged while giving its liquid a spatially distinct saved layout.
@@ -130,7 +130,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		for(var section:state.sections()) sections.add(codec.decodeSection(codec.encodeSection(section)));
 		var decoded=new RegionState(codec.decodeManifest(codec.encodeManifest(state.manifest())),sections);
 		decoded.validate();
-		var restored=HostFluidState.restoreAuthoritativeState(restorer(decoded).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null));
+		var restored=HostFluidState.restoreAuthoritativeState(restorer(decoded).reconstructAuthoritativeState(mmm.fluid.TestFluidDefinitions.withRegistries(null, null, mmm.fluid.TestFluidDefinitions.load().gas(), null, null)));
 		require(before.liquid().stocks().equals(restored.exportLiquidCellState().stocks()),"Cell/MAC codec changed liquid quantities");
 		require(Arrays.equals(before.phaseOccupancy().copyLiquidMicroVolumes(),restored.exportPhaseOccupancyState().copyLiquidMicroVolumes()),
 				"Cell/MAC codec changed saved micro phase occupancy");
@@ -168,9 +168,33 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateThermalCodec() throws Exception {
 		validateFiniteDeviceJournal();
+		sparseCompleteCheckpoint();
 		for(var origin:List.of(new net.minecraft.core.BlockPos(15,16,15),new net.minecraft.core.BlockPos(0,16,0),
 				new net.minecraft.core.BlockPos(16_777_213,16,16_777_213),new net.minecraft.core.BlockPos(-16_777_219,16,-16_777_219)))
 			validateThermalCodec(origin);
+	}
+
+	private static void sparseCompleteCheckpoint() throws Exception {
+		var grid=new mmm.spatial.SpatialGrid(16,16,8,List.of(new mmm.spatial.SpatialGrid.Block(0,0,0),
+				new mmm.spatial.SpatialGrid.Block(1,0,0),new mmm.spatial.SpatialGrid.Block(1,1,0)));
+		var definitions=mmm.fluid.TestFluidDefinitions.load();
+		var domain=new HostFluidState(grid,CONFIG,definitions);
+		var region=fixtureRegion(new UUID(557,563),domain);
+		var registries=mmm.simulation.FullCapabilityTestFixture.load();
+		mmm.simulation.FullCapabilityTestFixture.bindFull(domain,registries,293.15,4);
+		domain.setVolume(9,1,2,.5F);
+		var solid=domain.tryInsertExactGranular(10,2,2,definitions.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND),
+				0,SolidVolume.SVQ_PER_CELL/64,mmm.units.Mass.fromKilograms(.2));
+		require(solid.inserted(),"Sparse checkpoint fixture did not insert granular inventory");
+		var momentum=domain.exportMacMomentum();double[] x=momentum.copyX(),y=momentum.copyY(),z=momentum.copyZ();
+		int water=grid.cell(9,1,2);x[grid.face(water,1)-grid.faceOffset(0)]=.125;
+		domain.restoreMacMomentum(new mmm.fluid.MacMomentumState(grid,x,y,z));
+		var state=RegionCheckpointFixtures.captureThermal(region,1L);
+		Path root=Files.createTempDirectory(Path.of("."),"sparse-complete-region-");
+		var store=new RegionGenerationStore(root,definitions.chemistry(),definitions.granular(),definitions.thermal(),definitions.gas());
+		store.publish(state);var restored=restorer(store.read(region.id())).reconstructAuthoritativeState(definitions);
+		mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(domain.captureAuthoritativeState(),restored,"Sparse checkpoint HEAD");
+		require(restored.grid().equals(grid)&&restored.grid().cell(1,9,1)<0,"Sparse checkpoint changed spatial block membership");
 	}
 
 	private static void validateFiniteDeviceJournal() throws Exception {
@@ -239,21 +263,23 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 	}
 
 	private static void validateThermalCodec(net.minecraft.core.BlockPos origin) throws Exception {
-		FluidRegion templateRegion = populatedRegion(new UUID(27L, 28L));
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material()));
+		GranularRegistry granular = mmm.fluid.TestFluidDefinitions.load().granular();
+		var definitions=mmm.fluid.TestFluidDefinitions.load();
+		ThermalRegistry thermal=definitions.thermal();granular=definitions.granular();
+		FluidRegion templateRegion = populatedRegion(new UUID(27L, 28L),definitions);
 		FluidRegion region = fixtureRegion(templateRegion.id(),TestHostAccess.editable(templateRegion),origin);
 		FlipParticleState pure = TestHostAccess.editable(region).exportParticleState();
 		float[] positions = pure.copyPositionVolume();
 		double[] mass = new double[pure.particleCount()];
 		double totalMass = 0.0;
 		for (int marker = 0; marker < mass.length; marker++) {
-			mass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			mass[marker] = positions[marker * 4 + 3] * mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity();
 			totalMass += mass[marker];
 		}
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		TestHostAccess.editable(region).restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), liquids.materials(), positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 		liquids = TestHostAccess.editable(region).materialRegistry();
-		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long activeSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ, depositSvq = activeSvq - 17L;
 		double activeMass = 3.25, depositMass = 4.75;
@@ -267,18 +293,17 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, mmm.units.Mass.fromKilograms(depositMass))), Math.addExact(activeSvq, depositSvq),
 				mmm.units.Mass.fromKilograms(activeMass + depositMass));
-		TestHostAccess.editable(region).restoreGranularState(granularFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
-		ThermalRegistry thermal = thermalRegistry(liquids, granular);
+		TestHostAccess.editable(region).restoreGranularState(granularFixture, granular, liquids, mmm.fluid.TestFluidDefinitions.load().material());
 		double insertionTemperatureK = Math.nextUp(300.0);
 		TestHostAccess.editable(region).bindThermal(thermal, liquids, insertionTemperatureK);
 		ThermalStateFunction thermalState = new ThermalStateFunction(thermal);
 		FiniteThermalDeviceInventory expectedDevices = new FiniteThermalDeviceInventory(
 				thermal.fingerprint(), List.of(new FiniteThermalDeviceState(
-						"mmm:fabric_block", "mmm:persistence/4/5/6", "mmm:device/persistence",
+						"mmm:fabric_block", "mmm:persistence/4/5/6", "mmm:finite_heat_exchanger",
 						new FiniteThermalBodyState(7L, thermal.fingerprint(),
-								"mmm:thermal/persistence_device", mmm.units.Mass.fromKilograms(2.0),
+								"mmm:copper_heat_exchanger", mmm.units.Mass.fromKilograms(2.0),
 								thermalState.internalEnergyAtTemperature(
-										thermal.materialHandle("mmm:thermal/persistence_device"),
+										thermal.materialHandle("mmm:copper_heat_exchanger"),
 										2.0, java.util.Map.of(), 350.0)))));
 		expectedDevices.requireCompatible(thermal);
 		var sourceBody=expectedDevices.devices().getFirst();
@@ -296,8 +321,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		TestHostAccess.editable(region).setThermalTemperatureInCell(2, 1, 2, 325.0);
 		TestHostAccess.editable(region).setThermalTemperatureInCell(1, 1, 1, 340.0);
 		TestHostAccess.editable(region).setThermalTemperatureInCell(5, 3, 5, 280.0);
-		TestHostAccess.editable(region).addCoherentPhaseExternal(5, 2, 5, "mmm:thermal/persistence_solid",
-				SolidVolume.SVQ_PER_CELL / 8L, mmm.units.Mass.fromKilograms(0.125), null, 6.25);
+		TestHostAccess.editable(region).addCoherentPhaseExternal(5, 2, 5, "mmm:ice",
+				SolidVolume.SVQ_PER_CELL / 8L, mmm.units.Mass.fromKilograms(0.125), null,
+				thermalState.internalEnergyAtTemperature(thermal.materialHandle("mmm:ice"),.125,java.util.Map.of(),280));
 		PendingPhaseMotionState expectedPending = new PendingPhaseMotionState(
 				region.sizeX() * region.sizeY() * region.sizeZ(), List.of(
 				new PendingPhaseMotionState.Entry((1 * region.sizeY() + 1) * region.sizeX() + 1),
@@ -306,21 +332,21 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		FlipThermalParticleState expected = TestHostAccess.editable(region).exportThermalParticleState();
 		require(Double.doubleToRawLongBits(expected.insertionTemperatureK())
 				== Double.doubleToRawLongBits(insertionTemperatureK), "configured insertion temperature was not captured");
-		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		GasRegistry gas = mmm.fluid.TestFluidDefinitions.load().gas();
 		var expectedGas = TestHostAccess.editable(region).captureAuthoritativeState().spatialGas();
 		GranularStateSnapshot expectedGranular = TestHostAccess.editable(region).exportGranularState();
 		double[] expectedOccupancy = TestHostAccess.editable(region).exportPhaseOccupancyState().copyLiquidMicroVolumes();
 
 		RegionState state = RegionCheckpointFixtures.captureThermal(region, 1L);
 		state.validate();
-		assertMaterialStateEquals(TestHostAccess.editable(region).exportMaterialParticleState(), restorer(state).reconstructMaterial());
+		assertMaterialStateEquals(TestHostAccess.editable(region).exportMaterialParticleState(), restorer(state).reconstructMaterial(mmm.fluid.TestFluidDefinitions.load()));
 		assertGranularStateEquals(expectedGranular, restorer(state).reconstructGranular(granular));
 		assertThermalStateEquals(expected, restorer(state).reconstructThermal(thermal));
 		require(restorer(state).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"finite thermal device truth did not round-trip");
 		require(restorer(state).reconstructPendingPhaseMotion().entries().equals(expectedPending.entries()),
 				"pending phase-motion record did not round-trip");
-		var complete = restorer(state).reconstructAuthoritativeState(null,granular,thermal,gas,BuiltinFluidMaterials.createRegistry());
+		var complete = restorer(state).reconstructAuthoritativeState(definitions);
 		var restoredGas=complete.spatialGas();
 		require(expectedGas.cells().equals(restoredGas.cells()) && Arrays.equals(expectedGas.internalEnergy(),restoredGas.internalEnergy())
 				&& expectedGas.externalSource().equals(restoredGas.externalSource()) && expectedGas.escapedSink().equals(restoredGas.escapedSink()),
@@ -359,7 +385,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				3, "test:solid", 8L, Double.doubleToRawLongBits(2.0), composition,
 				Double.doubleToRawLongBits(5.0))), SignedDyadic.of(5.0));
 		ThermalRegionStateCodec.SectionData decodedComposed = thermalCodec.decodeSection(
-				thermalCodec.encodeSection(composed), 0, 0, 0);
+				thermalCodec.encodeSection(composed,TestHostAccess.editable(region).grid()), 0, 0, 0,TestHostAccess.editable(region).grid());
 		require(decodedComposed.coherentGroups().equals(composed.coherentGroups())
 				&& decodedComposed.energy().equals(composed.energy()),
 				"coherent composition did not round-trip the thermal section payload");
@@ -383,7 +409,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		require(restorer(archived).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"Removed region quarantine lost fixed wall inventory or thermal audit");
 		expectIOException(() -> restorer(state).reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
-				List.of(BuiltinFluidMaterials.WATER)))), "foreign thermal registry was accepted");
+				List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material())))), "foreign thermal registry was accepted");
 
 		RegionSectionState original = state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow();
@@ -460,19 +486,19 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 	}
 
 	static void validateGranularCodec() throws Exception {
-		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		GranularRegistry granular = mmm.fluid.TestFluidDefinitions.load().granular();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material()));
 		FluidRegion region = populatedRegion(new UUID(23L, 24L));
 		FlipParticleState pure = TestHostAccess.editable(region).exportParticleState();
 		float[] positions = pure.copyPositionVolume();
 		double[] liquidMass = new double[pure.particleCount()];
 		double totalLiquidMass = 0.0;
 		for (int marker = 0; marker < liquidMass.length; marker++) {
-			liquidMass[marker] = positions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			liquidMass[marker] = positions[marker * 4 + 3] * mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity();
 			totalLiquidMass += liquidMass[marker];
 		}
 		TestHostAccess.editable(region).restoreMaterialParticleState(new FlipMaterialParticleState(pure.sizeX(), pure.sizeY(), pure.sizeZ(),
-				pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalLiquidMass), BuiltinFluidMaterials.DEFAULT_PALETTE,
+				pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalLiquidMass), java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material()),
 				positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(liquidMass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long activeSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ, depositSvq = activeSvq - 17L;
@@ -486,11 +512,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, mmm.units.Mass.fromKilograms(depositMass))), Math.addExact(activeSvq, depositSvq),
 				mmm.units.Mass.fromKilograms(activeMass + depositMass));
-		TestHostAccess.editable(region).restoreGranularState(fixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
+		TestHostAccess.editable(region).restoreGranularState(fixture, granular, liquids, mmm.fluid.TestFluidDefinitions.load().material());
 		GranularStateSnapshot expected = TestHostAccess.editable(region).exportGranularState();
 		RegionState state = RegionCheckpointFixtures.captureGranular(region, 1L);
 		state.validate();
-		assertMaterialStateEquals(TestHostAccess.editable(region).exportMaterialParticleState(), restorer(state).reconstructMaterial());
+		assertMaterialStateEquals(TestHostAccess.editable(region).exportMaterialParticleState(), restorer(state).reconstructMaterial(mmm.fluid.TestFluidDefinitions.load()));
 		assertGranularStateEquals(expected, restorer(state).reconstructGranular(granular));
 
 		RegionStateCodec codec = new RegionStateCodec();
@@ -510,10 +536,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var selectedParcel = new GranularStateSnapshot.ActiveParcel(.5F, .75F, .75F, 0, 0, 0, 3, mmm.units.Mass.fromKilograms(.001), sand, 0, 0, (byte) 0, 2);
 		var selectedSection = new GranularRegionStateCodec.SectionData(
 				List.of(new GranularRegionStateCodec.ActiveEntry(0, selectedParcel)), List.of());
-		byte[] selectedBytes = granularCodec.encodeSection(selectedSection);
-		require(granularCodec.decodeSection(selectedBytes, 1, 0).equals(selectedSection), "Section codec lost the actual noncanonical ceil selection");
+		var spatialGrid=TestHostAccess.editable(region).grid();
+		byte[] selectedBytes = granularCodec.encodeSection(selectedSection,spatialGrid);
+		require(granularCodec.decodeSection(selectedBytes, 1, 0,spatialGrid).equals(selectedSection), "Section codec lost the actual noncanonical ceil selection");
 		byte[] invalidSelection = selectedBytes.clone(); invalidSelection[invalidSelection.length - Integer.BYTES - 1] = (byte) 255;
-		expectIOException(() -> granularCodec.decodeSection(invalidSelection, 1, 0), "Invalid persisted ceil selection was accepted");
+		expectIOException(() -> granularCodec.decodeSection(invalidSelection, 1, 0,spatialGrid), "Invalid persisted ceil selection was accepted");
 		byte[] unsupportedManifestPayload = state.manifest().extensions().stream()
 				.filter(extension -> extension.type().equals(GranularRegionStateCodec.MANIFEST_EXTENSION))
 				.findFirst().orElseThrow().payload();
@@ -525,7 +552,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				.findFirst().orElseThrow().payload();
 		java.nio.ByteBuffer.wrap(unsupportedSectionPayload).putInt(Integer.BYTES, 1);
 		expectIOException(() -> granularCodec.decodeSection(unsupportedSectionPayload,
-				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION),
+				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,spatialGrid),
 				"non-current granular section payload was accepted");
 
 		Path root = Files.createTempDirectory(Path.of("."), "granular-region-");
@@ -539,30 +566,30 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		float[] reactivePositions = reactivePure.copyPositionVolume();
 		double[] reactiveLiquidMass = new double[reactivePure.particleCount()]; double reactiveTotalMass = 0.0;
 		for (int marker = 0; marker < reactiveLiquidMass.length; marker++) {
-			reactiveLiquidMass[marker] = reactivePositions[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			reactiveLiquidMass[marker] = reactivePositions[marker * 4 + 3] * mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity();
 			reactiveTotalMass += reactiveLiquidMass[marker];
 		}
 		TestHostAccess.editable(reactiveRegion).restoreMaterialParticleState(new FlipMaterialParticleState(reactivePure.sizeX(),
 				reactivePure.sizeY(), reactivePure.sizeZ(), reactivePure.cellSize(), reactivePure.particleCount(),
-				reactivePure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(reactivePure.cellSize()).massUnitsForNormalized(reactiveTotalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, reactivePositions,
+				reactivePure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(reactivePure.cellSize()).massUnitsForNormalized(reactiveTotalMass), java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material()), reactivePositions,
 				reactivePure.copyParticleVelocities(), reactivePure.copySolidMask(), java.util.Arrays.stream(reactiveLiquidMass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(reactivePure.cellSize()).massUnitsForNormalized(m)).toArray(),
 				new int[reactivePure.particleCount()]));
-		TestHostAccess.editable(reactiveRegion).bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		TestHostAccess.editable(reactiveRegion).bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
 		SolidCompositionRecord composition = SolidCompositionRecord.fromStableAmounts(
-				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 640L,
+				mmm.fluid.TestFluidDefinitions.load().chemistry(), java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 640L,
 						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0L);
 		GranularStateSnapshot reactiveFixture = new GranularStateSnapshot(reactiveRegion.sizeX(), reactiveRegion.sizeY(),
-				reactiveRegion.sizeZ(), granular.fingerprint(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+				reactiveRegion.sizeZ(), granular.fingerprint(), mmm.fluid.TestFluidDefinitions.load().chemistry().fingerprint(),
 				granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.StableComposition(List.of(
 						new GranularStateSnapshot.CompositionComponent(BuiltinChemicalDefinitions.CL_MINUS, 640L),
 						new GranularStateSnapshot.CompositionComponent(BuiltinChemicalDefinitions.NA_PLUS, 640L)), 0L)),
 				java.util.Map.of(BuiltinChemicalDefinitions.CL_MINUS, 640L, BuiltinChemicalDefinitions.NA_PLUS, 640L),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F, 0.0F, 0.0F, 0.0F,
-						10L, mmm.units.Mass.fromKilograms(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
+						10L, mmm.units.Mass.fromKilograms(composition.totalMass(mmm.fluid.TestFluidDefinitions.load().chemistry())),
 						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1, 0, (byte) 0, 0)), List.of(), 10L,
-				mmm.units.Mass.fromKilograms(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
-		TestHostAccess.editable(reactiveRegion).restoreGranularState(reactiveFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
+				mmm.units.Mass.fromKilograms(composition.totalMass(mmm.fluid.TestFluidDefinitions.load().chemistry())));
+		TestHostAccess.editable(reactiveRegion).restoreGranularState(reactiveFixture, granular, liquids, mmm.fluid.TestFluidDefinitions.load().material());
 		var removedReactive = TestHostAccess.editable(reactiveRegion).tryExtractExactGranular(1, 1, 1, 10L, 0, true);
 		require(removedReactive.transferred()
 				&& TestHostAccess.editable(reactiveRegion).tryInsertExactGranular(1, 1, 1, removedReactive.ledger(), 0, true).inserted(),
@@ -571,11 +598,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionState reactiveState = RegionCheckpointFixtures.captureGranular(reactiveRegion, 1L);
 		reactiveState.validate();
 		GranularStateSnapshot reactiveRoundTrip = restorer(reactiveState).reconstructGranular(granular);
-		reactiveRoundTrip.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
+		reactiveRoundTrip.validateSolidCompositionMasses(mmm.fluid.TestFluidDefinitions.load().chemistry());
 		assertGranularStateEquals(reactiveExpected, reactiveRoundTrip);
 		Path reactiveRoot = Files.createTempDirectory(Path.of("."), "reactive-granular-region-");
 		RegionGenerationStore reactiveFiles = new RegionGenerationStore(
-				reactiveRoot, BuiltinChemicalDefinitions.REGISTRY, granular);
+				reactiveRoot, mmm.fluid.TestFluidDefinitions.load().chemistry(), granular);
 		reactiveFiles.publish(reactiveState);
 		TestHostAccess.editable(reactiveRegion).removeAllGranularExact();
 		GranularStateSnapshot auditOnlyExpected = TestHostAccess.editable(reactiveRegion).exportGranularState();
@@ -584,7 +611,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionState auditOnlyState = RegionCheckpointFixtures.captureGranular(reactiveRegion, 2L);
 		auditOnlyState.validate();
 		GranularStateSnapshot auditOnlyRoundTrip = restorer(auditOnlyState).reconstructGranular(granular);
-		auditOnlyRoundTrip.validateAgainst(granular, BuiltinChemicalDefinitions.REGISTRY);
+		auditOnlyRoundTrip.validateAgainst(granular, mmm.fluid.TestFluidDefinitions.load().chemistry());
 		assertGranularStateEquals(auditOnlyExpected, auditOnlyRoundTrip);
 		reactiveFiles.publish(auditOnlyState);
 
@@ -602,7 +629,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 	}
 
 	static void validateChemicalCodec() throws Exception {
-		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		ChemicalRegistry chemistry = mmm.fluid.TestFluidDefinitions.load().chemistry();
 		FluidRegion region = populatedRegion(new UUID(19L, 20L));
 		FlipParticleState pure = TestHostAccess.editable(region).exportParticleState();
 		double[] mass = new double[pure.particleCount()];
@@ -610,11 +637,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		double totalMass = 0.0;
 		float[] positionVolume = pure.copyPositionVolume();
 		for (int marker = 0; marker < pure.particleCount(); marker++) {
-			mass[marker] = positionVolume[marker * 4 + 3] * BuiltinFluidMaterials.WATER.referenceDensity();
+			mass[marker] = positionVolume[marker * 4 + 3] * mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity();
 			totalMass += mass[marker];
 		}
 		TestHostAccess.editable(region).restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(),
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material()), positionVolume, pure.copyParticleVelocities(),
 				pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), material));
 		TestHostAccess.editable(region).bindChemistry(chemistry);
 		TestHostAccess.editable(region).setMarkerChemical(0, java.util.Map.of(
@@ -626,9 +653,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		FlipChemicalParticleState expected = TestHostAccess.editable(region).captureAuthoritativeState().chemicals();
 		RegionState state = RegionCheckpointFixtures.captureChemical(region, 1L);
 		state.validate();
-		expectIOException(restorer(state)::reconstruct, "chemical state was silently reconstructed as pure water");
-		expectIOException(restorer(state)::reconstructMaterial, "chemical state was silently reconstructed as material-only state");
-		assertChemicalStateEquals(expected, restorer(state).reconstructChemical(chemistry));
+		expectIOException(() -> restorer(state).reconstruct(mmm.fluid.TestFluidDefinitions.load()), "chemical state was silently reconstructed as pure water");
+		expectIOException(() -> restorer(state).reconstructMaterial(mmm.fluid.TestFluidDefinitions.load()), "chemical state was silently reconstructed as material-only state");
+		assertChemicalStateEquals(expected, restorer(state).reconstructChemical(mmm.fluid.TestFluidDefinitions.withRegistries(null, chemistry, null, null, null)));
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest manifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -645,13 +672,13 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		Path root = Files.createTempDirectory(Path.of("."), "chemical-region-");
 		RegionGenerationStore files = new RegionGenerationStore(root, chemistry);
 		files.publish(state);
-		assertChemicalStateEquals(expected, restorer(files.read(region.id())).reconstructChemical(chemistry));
+		assertChemicalStateEquals(expected, restorer(files.read(region.id())).reconstructChemical(mmm.fluid.TestFluidDefinitions.withRegistries(null, chemistry, null, null, null)));
 
 		FluidRegion emptyRegion = emptyRegion(new UUID(21L, 22L));
 		FlipParticleState emptyPure = TestHostAccess.editable(emptyRegion).exportParticleState();
 		TestHostAccess.editable(emptyRegion).restoreMaterialParticleState(new FlipMaterialParticleState(
 				emptyPure.sizeX(), emptyPure.sizeY(), emptyPure.sizeZ(), emptyPure.cellSize(), 0, 0.0, mmm.units.SolverUnitScale.forCellSize(emptyPure.cellSize()).massUnitsForNormalized(0.0),
-				BuiltinFluidMaterials.DEFAULT_PALETTE, new float[0], new float[0], emptyPure.copySolidMask(), java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(emptyPure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[0]));
+				java.util.List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material()), new float[0], new float[0], emptyPure.copySolidMask(), java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(emptyPure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[0]));
 		TestHostAccess.editable(emptyRegion).bindChemistry(chemistry);
 		FlipChemicalParticleState emptyExpected = TestHostAccess.editable(emptyRegion).exportChemicalParticleState();
 		require(emptyExpected.particleCount() == 0 && emptyExpected.mixtures().isEmpty(),
@@ -660,14 +687,14 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		emptyState.validate();
 		RegionManifest emptyManifest = codec.decodeManifest(codec.encodeManifest(emptyState.manifest()));
 		require(emptyManifest.chemicalMixtures().isEmpty(), "empty chemical manifest invented a mixture");
-		assertChemicalStateEquals(emptyExpected, restorer(emptyState).reconstructChemical(chemistry));
+		assertChemicalStateEquals(emptyExpected, restorer(emptyState).reconstructChemical(mmm.fluid.TestFluidDefinitions.withRegistries(null, chemistry, null, null, null)));
 		files.publish(emptyState);
-		assertChemicalStateEquals(emptyExpected, restorer(files.read(emptyRegion.id())).reconstructChemical(chemistry));
+		assertChemicalStateEquals(emptyExpected, restorer(files.read(emptyRegion.id())).reconstructChemical(mmm.fluid.TestFluidDefinitions.withRegistries(null, chemistry, null, null, null)));
 
 		CompoundTag foreignFingerprint = codec.encodeManifest(state.manifest());
 		foreignFingerprint.putString("RegistryFingerprint", "0".repeat(64));
 		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
-		expectIOException(() -> restorer(new RegionState(foreign, state.sections())).reconstructChemical(chemistry),
+		expectIOException(() -> restorer(new RegionState(foreign, state.sections())).reconstructChemical(mmm.fluid.TestFluidDefinitions.withRegistries(null, chemistry, null, null, null)),
 				"foreign chemical registry was accepted while decoding stored species handles");
 
 		Path regionDir = root.toAbsolutePath().normalize().resolve("mmm").resolve("region-state")
@@ -705,10 +732,10 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateMaterialCodec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
-		List<FluidMaterial> palette = List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL);
+		List<FluidMaterial> palette = List.of(mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.WATER).material(), mmm.fluid.TestFluidDefinitions.load().material().entry(BuiltinFluidMaterials.OIL).material());
 		var input = materialCodecParticles(TestHostAccess.editable(region).exportParticleState(), palette);
 		TestHostAccess.editable(region).restoreMaterialParticleState(input);
-		TestHostAccess.editable(region).bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+		TestHostAccess.editable(region).bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());
 		// Point samples are derived from the committed shared MAC field after initialization.
 		var authoritativeBefore=TestHostAccess.editable(region).captureAuthoritativeState();
 		FlipMaterialParticleState expected = authoritativeBefore.materials();
@@ -722,8 +749,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		require(canonical.manifest().equals(repeated.manifest()) && canonical.sections().stream().map(RegionSectionState::checksum).toList().equals(repeated.sections().stream().map(RegionSectionState::checksum).toList()),
 				"Repeated material capture changed canonical cell/MAC bytes");
 		state.validate();
-		expectIOException(restorer(state)::reconstruct, "material state was silently reconstructed as pure water");
-		assertMaterialStateEquals(expected, restorer(state).reconstructMaterial());
+		expectIOException(() -> restorer(state).reconstruct(mmm.fluid.TestFluidDefinitions.load()), "material state was silently reconstructed as pure water");
+		assertMaterialStateEquals(expected, restorer(state).reconstructMaterial(mmm.fluid.TestFluidDefinitions.load()));
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -767,7 +794,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var pureRegion = populatedRegion(new UUID(17L, 18L));
 		RegionState pureState = RegionCheckpointFixtures.capture(pureRegion, 1L);
 		pureState.validate();
-		assertParticleStateEquals(TestHostAccess.editable(pureRegion).exportParticleState(), restorer(pureState).reconstruct());
+		assertParticleStateEquals(TestHostAccess.editable(pureRegion).exportParticleState(), restorer(pureState).reconstruct(mmm.fluid.TestFluidDefinitions.load()));
 		RegionManifest pureManifest = pureState.manifest();
 		var canonicalPure = RegionCheckpointFixtures.capture(canonicalCodecRegion(new UUID(17L, 18L)), 1L);
 		canonicalPure.validate();
@@ -782,9 +809,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		files.publish(state);
 		var committed=files.read(region.id());
-		FlipMaterialParticleState restored = restorer(committed).reconstructMaterial();
+		FlipMaterialParticleState restored = restorer(committed).reconstructMaterial(mmm.fluid.TestFluidDefinitions.load());
 		assertMaterialStateEquals(expected, restored);
-		var authoritative=restorer(committed).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),BuiltinFluidMaterials.createRegistry());
+		var authoritative=restorer(committed).reconstructAuthoritativeState(mmm.fluid.TestFluidDefinitions.withRegistries(mmm.fluid.TestFluidDefinitions.load().material(), null, mmm.fluid.TestFluidDefinitions.load().gas(), null, null));
 		assertFixtureMaterialQuantities(input,authoritative);
 		require(region.recordPublishedCheckpoint(1L) && region.releaseSolverAfterCheckpoint(1L),
 				"material controller fixture did not release its published solver");

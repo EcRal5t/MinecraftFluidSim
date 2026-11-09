@@ -1,27 +1,33 @@
 package mmm.world;
 
+import mmm.spatial.SpatialGrid;
+
 /** Immutable unsigned 2x2x2 occupancy masks captured from one world generation. */
 public final class CollisionField {
-	private final int sizeX, sizeY, sizeZ;
+	private final SpatialGrid grid;
 	private final byte[] microMasks;
 
 	public CollisionField(int sizeX, int sizeY, int sizeZ, byte[] microMasks) {
-		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || microMasks == null
-				|| microMasks.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
+		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),microMasks);
+	}
+	public CollisionField(SpatialGrid grid, byte[] microMasks) {
+		if (grid == null || microMasks == null || microMasks.length != grid.cellCount()) {
 			throw new IllegalArgumentException("Collision field dimensions are invalid");
 		}
-		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+		this.grid = grid;
 		this.microMasks = microMasks.clone();
 	}
 
-	public int sizeX() { return sizeX; }
-	public int sizeY() { return sizeY; }
-	public int sizeZ() { return sizeZ; }
+	public SpatialGrid grid() { return grid; }
+	public int sizeX() { return grid.sizeX(); }
+	public int sizeY() { return grid.sizeY(); }
+	public int sizeZ() { return grid.sizeZ(); }
 	public int microMask(int x, int y, int z) {
-		if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) {
+		int cell = grid.cell(x,y,z);
+		if (cell < 0) {
 			throw new IndexOutOfBoundsException("Collision field cell is outside its capture");
 		}
-		return Byte.toUnsignedInt(microMasks[(z * sizeY + y) * sizeX + x]);
+		return Byte.toUnsignedInt(microMasks[cell]);
 	}
 	public byte[] copyMicroMasks() { return microMasks.clone(); }
 }

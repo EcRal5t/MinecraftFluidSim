@@ -2,6 +2,7 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 // HOST_LAYOUT
+// SPATIAL_GRID
 
 // Packed record attributes and fixed grid geometry; numeric values preserve the device layout.
 const int GEOMETRY_STRIDE = 4;
@@ -69,18 +70,9 @@ void writeInt64At(int wordOffset, int64_t value) {
 ivec3 gridSize() {
     return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
 }
-bool isInsideGrid(ivec3 coordinates) {
-    return all(greaterThanEqual(coordinates, ivec3(0))) && all(lessThan(coordinates, gridSize()));
-}
-int cellIndexAt(ivec3 coordinates) {
-    return isInsideGrid(coordinates)
-               ? (coordinates.z * headerWord(H_SIZE_Y) + coordinates.y) * headerWord(H_SIZE_X) + coordinates.x
-               : -1;
-}
-ivec3 cellCoordinates(int cellIndex) {
-    return ivec3(cellIndex % headerWord(H_SIZE_X), cellIndex / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y),
-                 cellIndex / (headerWord(H_SIZE_X) * headerWord(H_SIZE_Y)));
-}
+bool isInsideGrid(ivec3 coordinates) { return gridCell(coordinates) >= 0; }
+int cellIndexAt(ivec3 coordinates) { return gridCell(coordinates); }
+ivec3 cellCoordinates(int cellIndex) { return gridPosition(cellIndex); }
 int bodyCount() {
     return readIntField(F_CONTROL, CONTROL_BODY_COUNT);
 }
@@ -108,35 +100,9 @@ dvec3 bodyMaximum(int bodyIndex) {
                  readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex + BOUNDS_MAXIMUM_OFFSET + 2)) /
            params.cellSize;
 }
-int xFaceCount() {
-    return (headerWord(H_SIZE_X) + 1) * headerWord(H_SIZE_Y) * headerWord(H_SIZE_Z);
-}
-int yFaceCount() {
-    return headerWord(H_SIZE_X) * (headerWord(H_SIZE_Y) + 1) * headerWord(H_SIZE_Z);
-}
-int faceAxis(int faceIndex) {
-    return faceIndex < xFaceCount() ? 0 : faceIndex < xFaceCount() + yFaceCount() ? 1 : 2;
-}
-int faceIndexAt(int axis, ivec3 coordinates) {
-    ivec3 faceGridSize = gridSize();
-    faceGridSize[axis]++;
-    return (axis == 0   ? 0
-            : axis == 1 ? xFaceCount()
-                        : xFaceCount() + yFaceCount()) +
-           (coordinates.z * faceGridSize.y + coordinates.y) * faceGridSize.x + coordinates.x;
-}
-ivec2 adjacentCells(int faceIndex) {
-    int axis = faceAxis(faceIndex), axisFaceIndex = faceIndex - (axis == 0   ? 0
-                                                                 : axis == 1 ? xFaceCount()
-                                                                             : xFaceCount() + yFaceCount());
-    ivec3 faceGridSize = gridSize();
-    faceGridSize[axis]++;
-    ivec3 upperCell = ivec3(axisFaceIndex % faceGridSize.x, axisFaceIndex / faceGridSize.x % faceGridSize.y,
-                            axisFaceIndex / (faceGridSize.x * faceGridSize.y)),
-          lowerCell = upperCell;
-    lowerCell[axis]--;
-    return ivec2(cellIndexAt(lowerCell), cellIndexAt(upperCell));
-}
+int faceAxis(int faceIndex) { return gridFaceEndpoints(faceIndex).z; }
+int faceIndexAt(int axis, ivec3 coordinates) { return gridFaceAt(coordinates, axis); }
+ivec2 adjacentCells(int faceIndex) { return gridFaceEndpoints(faceIndex).xy; }
 double cellGeometry(int cellIndex, int component) {
     return cellIndex < 0 ? 0.0
                          : readDoubleAt(headerWord(H_GEOMETRY_CELLS) + 2 * (GEOMETRY_STRIDE * cellIndex + component));
@@ -201,6 +167,7 @@ void enumerateBodyEntry(int entry) {
     ivec3 coordinates =
         first + ivec3(ordinal % extent.x, ordinal / extent.x % extent.y, ordinal / (extent.x * extent.y));
     int cellIndex = cellIndexAt(coordinates);
+    if (cellIndex < 0) return;
     double volume = 0.0;
     dvec3 wetAreas = dvec3(0.0);
     for (int bit = 0; bit < MICROCELL_COUNT; bit++)

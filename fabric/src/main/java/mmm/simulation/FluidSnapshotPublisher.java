@@ -7,7 +7,6 @@ import mmm.network.FluidGranularSnapshotPayload;
 import mmm.network.FluidMaterialSnapshotPayload;
 import mmm.network.FluidProtocol;
 import mmm.network.FluidProtocolServer;
-import mmm.network.FluidSnapshotPayload;
 import mmm.network.FluidThermalSnapshotPayload;
 import mmm.thermal.ThermalDisplaySnapshot;
 import mmm.thermal.ThermalRegistry;
@@ -73,15 +72,12 @@ final class FluidSnapshotPublisher {
 		Objects.requireNonNull(server, "server");
 		Objects.requireNonNull(region, "region");
 		long sequence = region.nextSnapshotSequence();
-		FluidSnapshotPayload purePayload = FluidSnapshotPayload.removeRegion(
-				region.dimension().identifier(), region.id(), tombstoneNetworkGeneration, sequence);
 		FluidMaterialSnapshotPayload materialPayload = FluidMaterialSnapshotPayload.removeRegion(
 				region.dimension().identifier(), region.id(), tombstoneNetworkGeneration, sequence);
 		FluidChemicalSnapshotPayload chemicalPayload = FluidChemicalSnapshotPayload.removeRegion(materialPayload);
 		FluidGranularSnapshotPayload granularPayload = FluidGranularSnapshotPayload.removeRegion(materialPayload);
 		FluidThermalSnapshotPayload thermalPayload = FluidThermalSnapshotPayload.removeRegion(materialPayload);
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			FluidProtocolServer.send(player, purePayload);
 			FluidProtocolServer.send(player, materialPayload);
 			FluidProtocolServer.send(player, chemicalPayload);
 			FluidProtocolServer.send(player, granularPayload);
@@ -91,7 +87,6 @@ final class FluidSnapshotPublisher {
 
 	void clearAll(MinecraftServer server) {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			FluidProtocolServer.send(player, FluidSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidMaterialSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidChemicalSnapshotPayload.clearAll());
 			FluidProtocolServer.send(player, FluidGranularSnapshotPayload.clearAll());

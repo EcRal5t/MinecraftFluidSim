@@ -63,12 +63,13 @@ public final class GpuLiquidGeometryBenchmark {
         return fixture(size,cut,.25);
     }
     static Fixture fixture(int size,boolean cut,double cellSize){
-        int cells = size * size * size;
+        var grid = mmm.spatial.SpatialGrid.rectangular(size,size,size);
+        int cells = grid.cellCount();
         byte[] masks = new byte[cells];
         long[] occupied = new long[cells];
         int[] cellOffsets = new int[cells + 1];
         for (int c = 0; c < cells; c++) {
-            int x = c % size, y = c / size % size, z = c / (size * size);
+            int x = grid.x(c), y = grid.y(c), z = grid.z(c);
             boolean wet = cut || x < size / 2 && y < 3 * size / 4;
             cellOffsets[c + 1] = cellOffsets[c] + (wet ? 2 : 0);
             if (cut && (x + z) % 4 == 0) { masks[c] = 0x33; occupied[c] = 1 << 20; }
@@ -78,7 +79,7 @@ public final class GpuLiquidGeometryBenchmark {
                 exponents = new int[stocks], limbs = new int[stocks], volumeOffsets = new int[stocks + 1];
         long[] mass = new long[stocks], energy = new long[stocks];
         for (int c = 0; c < cells; c++) {
-            int x = c % size, y = c / size % size, z = c / (size * size);
+            int x = grid.x(c), y = grid.y(c), z = grid.z(c);
             int volume = cut ? 16 + (x + 2 * y + 3 * z) % 24 : y == 3 * size / 4 - 1 ? 80 : 128;
             for (int row = cellOffsets[c]; row < cellOffsets[c + 1]; row++) {
                 int material = row - cellOffsets[c], numerator = material == 0 ? volume / 3 : volume - volume / 3;

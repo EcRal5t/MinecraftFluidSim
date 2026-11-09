@@ -4,7 +4,6 @@ import mmm.chemistry.ChemicalDataPackLoader;
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ExactRational;
 import mmm.chemistry.ChemicalRegistry;
-import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.AirNetwork;
 import mmm.fluid.air.BuiltinGasDefinitions;
@@ -29,12 +28,12 @@ public final class RegistryBundleLoader {
 
 	public static WorldCapabilityBundleStore.Definitions loadDefinitions(MinecraftServer server) throws IOException {
 		Objects.requireNonNull(server, "Minecraft server");
-		MaterialRegistry material = BuiltinFluidMaterials.createRegistry();
 		ChemicalRegistry chemical = ChemicalDataPackLoader.load(server.getResourceManager());
+		MaterialRegistry material = WorldMaterialDataPackLoader.liquids(server.getResourceManager());
 		GranularRegistry granular = GranularDataPackLoader.load(server.getResourceManager(), chemical);
-		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
+		GasRegistry gas = WorldMaterialDataPackLoader.gases(server.getResourceManager(), chemical);
 		ThermalRegistry thermal = ThermalDataPackLoader.load(server.getResourceManager(), chemical.fingerprint(),
-				granular.fingerprint(), gas.fingerprint());
+				granular.fingerprint(), gas.fingerprint()).withChemistry(chemical);
 		return new WorldCapabilityBundleStore.Definitions(EnumSet.allOf(WorldCapability.class),
 				material, chemical, granular, gas, thermal);
 	}
@@ -59,20 +58,21 @@ public final class RegistryBundleLoader {
 	private static void validate(
 			MaterialRegistry material, ChemicalRegistry chemical, GranularRegistry granular, GasRegistry gas, ThermalRegistry thermal
 	) {
-		validateSupportedChemicalMaterials(chemical);
-		validateSupportedGranularCarriers(granular);
+		validateSupportedChemicalMaterials(material, chemical);
+		validateSupportedGranularCarriers(material, granular);
 		validateSupportedGasComponents(gas, chemical);
 		validateSupportedThermalCarriers(material, thermal, chemical, granular, gas);
 		WorldCapabilityBundleStore.Definitions.validateMassTransferReferences(chemical, gas, thermal);
 	}
 
 
-	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) registry.phaseHandleForMaterial(material.id());
+	private static void validateSupportedChemicalMaterials(MaterialRegistry definitions, ChemicalRegistry registry) {
+		for (var entry : definitions.entries()) registry.phaseHandleForMaterial(entry.material().id());
 	}
 
-	private static void validateSupportedGranularCarriers(GranularRegistry registry) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
+	private static void validateSupportedGranularCarriers(MaterialRegistry definitions, GranularRegistry registry) {
+		for (var entry : definitions.entries()) {
+			var material = entry.material();
 			if (!registry.hasCarrier(material.id())) throw new IllegalArgumentException(
 					"Granular registry has no carrier for " + material.id());
 		}
@@ -96,7 +96,8 @@ public final class RegistryBundleLoader {
 			MaterialRegistry definitions, ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, GasRegistry gasRegistry
 	) {
-		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
+		for (var entry : definitions.entries()) {
+			var material = entry.material();
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
 			if (definitions.entry(material.id()).thermalExpansion() == null) throw new IllegalArgumentException(
 					"World material " + material.id() + " has no Boussinesq definition");

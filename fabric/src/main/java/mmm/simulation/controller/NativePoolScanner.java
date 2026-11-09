@@ -57,12 +57,6 @@ public final class NativePoolScanner {
                     else return failed(Status.UNSUPPORTED_GEOMETRY,"Air above the pool must open to air or full solid blocks");
                 }
             }
-            long dense=(long)(maxX-minX+1)*(maxY-minY+2)*(maxZ-minZ+1);
-            if (dense>maximumInteriorBlocks) return failed(Status.BUDGET_EXCEEDED,"Pool and air layer exceed the dense solver budget");
-            for(int z=minZ>>4;z<=maxZ>>4;z++) for(int x=minX>>4;x<=maxX>>4;x++) {
-                if(!world.isChunkLoaded(x,z)) return failed(Status.INCOMPLETE_CHUNKS,"Pool requires a loaded chunk");
-                chunks.add(ChunkPos.pack(x,z));
-            }
             return new ScanResult(Status.SUCCESS,new FluidRegionFootprint(seed,new BlockPos(minX,minY,minZ),
                     new BlockPos(maxX,maxY+1,maxZ),interior,shell,chunks,RegionKind.POOL,atmosphere),null);
         } catch (Unavailable unavailable) { return failed(Status.INCOMPLETE_CHUNKS,unavailable.getMessage()); }

@@ -40,7 +40,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
         var footprint=new mmm.simulation.controller.FluidRegionFootprint(origin,origin,origin.east(),interior,
                 Set.of(origin.below().asLong()),Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)),
                 mmm.model.region.RegionGeometry.RegionKind.POOL,Set.of(origin.above().asLong()),Set.of(returned));
-        var domain=new mmm.fluid.HostFluidState(4,2,2,CONFIG);
+        var domain=new mmm.fluid.HostFluidState(4, 2, 2, CONFIG, mmm.fluid.TestFluidDefinitions.load());
         for(int z=0;z<2;z++) for(int y=0;y<2;y++) for(int x=0;x<2;x++) domain.setSolid(x,y,z,true);
         domain.setVolume(2,0,0,.5F);
         var region=new FluidRegion(new UUID(571,577),DIMENSION,origin,domain,footprint);
@@ -50,7 +50,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
         var restored=files.read(region.id());
         require(restored.manifest().footprint().equals(MinecraftRegionCheckpointSource.footprint(footprint)),
                 "Pool kind, atmosphere or returned ownership changed during persistence");
-        var restoredDomain=restorer(restored).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
+        var restoredDomain=restorer(restored).reconstructAuthoritativeState(mmm.fluid.TestFluidDefinitions.withRegistries(null, null, mmm.fluid.TestFluidDefinitions.load().gas(), null, null));
         require(!restoredDomain.sealedDomainBoundary(),"Pool atmosphere was sealed during restore");
         FluidDomainStateAssertions.assertSameDurableState(domain.captureAuthoritativeState(),restoredDomain,"Pool returned-cell restore");
         require(!MinecraftRegionCheckpointSource.minecraftFootprint(restored.manifest().footprint()).containsInterior(origin),
@@ -71,7 +71,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		for (var descriptor : first.manifest().sections()) payloads.add(files.readSection(first, descriptor.key()));
 		var complete = files.completeRead(first, payloads);
 		FluidDomainStateAssertions.assertSameDurableState(TestHostAccess.editable(region).captureAuthoritativeState(),
-				restorer(complete).reconstructAuthoritativeState(null, null, null, BuiltinGasDefinitions.createRegistry(), null),
+				restorer(complete).reconstructAuthoritativeState(mmm.fluid.TestFluidDefinitions.withRegistries(null, null, mmm.fluid.TestFluidDefinitions.load().gas(), null, null)),
 				"Incremental section read");
 		expectIOException(() -> files.completeRead(first, payloads.subList(0, payloads.size() - 1)),
 				"Incomplete section collection became a complete generation");
@@ -127,9 +127,9 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 				&& Float.floatToRawIntBits((float) manifest.totalVolume()) == Float.floatToRawIntBits(before.totalVolume()),
 				"manifest did not retain the exact marker ledger");
 		var committed=files.read(region.id());
-		FlipParticleState after = restorer(committed).reconstruct();
+		FlipParticleState after = restorer(committed).reconstruct(mmm.fluid.TestFluidDefinitions.load());
 		assertParticleStateEquals(before, after);
-		var authoritativeAfter=restorer(committed).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
+		var authoritativeAfter=restorer(committed).reconstructAuthoritativeState(mmm.fluid.TestFluidDefinitions.withRegistries(null, null, mmm.fluid.TestFluidDefinitions.load().gas(), null, null));
 		FluidRegion startupMetadata = FluidRegion.unloaded(manifest.regionId(), DIMENSION,
 				MinecraftRegionCheckpointSource.blockPosition(manifest.origin()), manifest.sizeX(),
 				manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(), MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
@@ -156,7 +156,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 			files.publish(repeated);
 			require(region.recordPublishedCheckpoint(generation), "repeated checkpoint was not recorded");
 			require(region.releaseSolverAfterCheckpoint(generation), "repeated unload was rejected");
-			var restored=restorer(files.read(region.id())).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
+			var restored=restorer(files.read(region.id())).reconstructAuthoritativeState(mmm.fluid.TestFluidDefinitions.withRegistries(null, null, mmm.fluid.TestFluidDefinitions.load().gas(), null, null));
 			region.restoreAuthoritativeSolver(restored, generation);
 			assertParticleStateEquals(before, TestHostAccess.editable(region).exportParticleState());
 			FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,TestHostAccess.editable(region).captureAuthoritativeState(),"Repeated region cold restore");
@@ -199,11 +199,11 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 			RegionGenerationStore files = new RegionGenerationStore(root);
 			RegionState first = RegionCheckpointFixtures.capture(region, 1L);
 			files.publish(first);
-			FlipParticleState firstParticles = restorer(first).reconstruct();
+			FlipParticleState firstParticles = restorer(first).reconstruct(mmm.fluid.TestFluidDefinitions.load());
 			FluidRegion nextRegion = populatedRegion(region.id());
 			TestHostAccess.edit(nextRegion, state -> state.setVolume(1, 1, 1, 0.5F));
 			RegionState second = RegionCheckpointFixtures.capture(nextRegion, 2L);
-			FlipParticleState secondParticles = restorer(second).reconstruct();
+			FlipParticleState secondParticles = restorer(second).reconstruct(mmm.fluid.TestFluidDefinitions.load());
 			try {
 				files.publish(second, (observed, path) -> { if (observed == point) throw new IOException("injected " + point); });
 				throw new AssertionError("Fault point did not interrupt publication: " + point);
@@ -213,7 +213,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 			require(reopened.manifest().checkpointGeneration() == expectedGeneration,
 					"fault exposed a mixed or unexpected generation at " + point);
 			require(reopened.manifest().layout() == RegionStateLayout.PURE, "fault changed the current pure-water layout");
-			assertParticleStateEquals(expectedGeneration == 1L ? firstParticles : secondParticles, restorer(reopened).reconstruct());
+			assertParticleStateEquals(expectedGeneration == 1L ? firstParticles : secondParticles, restorer(reopened).reconstruct(mmm.fluid.TestFluidDefinitions.load()));
 		}
 	}
 
@@ -285,7 +285,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 	static void validateRemovedHeadAndQuarantine() throws Exception {
 		Path root = Files.createTempDirectory( "removed-head-");
 		FluidRegion region = populatedRegion(UUID.randomUUID());
-		WorldCapabilityProfile profile = WorldCapabilityProfile.of(Set.of(), RegistryFingerprintSet.unbound());
+		WorldCapabilityProfile profile = mmm.simulation.TestProfiles.pure();
 		RegionState active = RegionCheckpointFixtures.capture(region, 1L);
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		files.publish(active);

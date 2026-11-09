@@ -15,6 +15,7 @@ repositories {
 
 dependencies {
 	api project(':solver')
+	testImplementation project(path: ':solver', configuration: 'testArtifacts')
 	implementation 'org.lwjgl:lwjgl:3.4.1:unsafe'
 	implementation('org.lwjgl:lwjgl-shaderc:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }
 	implementation('org.lwjgl:lwjgl-vma:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }
@@ -267,6 +268,11 @@ registerGpuProbe('runGpuWetWallValidation', 'Checks wet fixed-wall geometry and 
 registerGpuProbe('runGpuChannelFlowValidation', 'Runs pressure-driven resolved liquid channels through complete mechanical steps.',
     'mmm.gpu.GpuChannelFlowValidation', 'gpu-channel-flow-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), providers.gradleProperty('gpuChannelSteps').getOrElse('16')
+}
+
+registerGpuProbe('runGpuSpatialDomainValidation', 'Checks channel flow, heat and checkpoint continuation across sparse blocks.',
+    'mmm.gpu.GpuSpatialDomainValidation', 'gpu-spatial-domain-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 }
 
 

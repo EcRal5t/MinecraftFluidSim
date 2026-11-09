@@ -12,9 +12,9 @@ import mmm.api.transfer.TransferQuantity;
 public final class ContainerTransferManifests {
 	private ContainerTransferManifests() { }
 	private record Inventory(Map<String,TransferManifest.Component> components,String chemical,String granular) { }
-	public static TransferManifest from(ContainerTransferJournal journal) {
-		var first=inventory(journal.operation()==ContainerTransferJournal.Operation.INSERT?journal.beforeItem():journal.afterItem());
-		var second=inventory(journal.operation()==ContainerTransferJournal.Operation.INSERT?journal.afterItem():journal.beforeItem());
+	public static TransferManifest from(ContainerTransferJournal journal, double waterDensity) {
+		var first=inventory(journal.operation()==ContainerTransferJournal.Operation.INSERT?journal.beforeItem():journal.afterItem(),waterDensity);
+		var second=inventory(journal.operation()==ContainerTransferJournal.Operation.INSERT?journal.afterItem():journal.beforeItem(),waterDensity);
 		var components=new ArrayList<TransferManifest.Component>();
 		for(var source:first.components().values()) {
 			var remainder=second.components().get(source.materialId());
@@ -34,14 +34,14 @@ public final class ContainerTransferManifests {
 				new TransferQuantity.Granular(journal.solidVolumeSvq()):new TransferQuantity.Liquid(journal.volumeNanos(),energy);
 		return new TransferManifest(quantity,components,first.chemical(),first.granular(),energy);
 	}
-	private static Inventory inventory(ContainerTransferJournal.ItemFingerprint item) {
+	private static Inventory inventory(ContainerTransferJournal.ItemFingerprint item, double waterDensity) {
 		var result=new TreeMap<String,TransferManifest.Component>();
 		String chemical=null,granular=null;
 		switch(item.kind()) {
 			case WATER_BUCKET,PARTIAL -> {
 				long nanos=item.kind()==ContainerTransferJournal.ItemKind.WATER_BUCKET?ContainerFluidLedger.NANOS_PER_BLOCK:item.nanos();
 				result.put("mmm:water",new TransferManifest.Component("mmm:water",nanos,
-						mmm.units.Mass.fromKilograms(nanos*1e-9*1000),0,List.of()));
+						mmm.units.Mass.fromKilograms(nanos*1e-9*waterDensity),0,List.of()));
 			}
 			case MATERIAL_BUCKET -> {
 				for(var value:FluidMixture.decode(item.contents()).components()) result.put(value.materialId(),

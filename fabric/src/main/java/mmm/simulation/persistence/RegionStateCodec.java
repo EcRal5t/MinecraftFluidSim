@@ -155,7 +155,7 @@ final class RegionStateCodec {
 		}
 		root.put("LiquidStocks",stocks); ListTag faces = new ListTag();
 		for (var face : section.faceMomentum()) {
-			CompoundTag tag = new CompoundTag(); tag.putInt("Axis",face.axis()); tag.putInt("Face",face.face());
+			CompoundTag tag = new CompoundTag(); tag.putInt("Axis",face.axis()); tag.putInt("X",face.x());tag.putInt("Y",face.y());tag.putInt("Z",face.z());
 			tag.putLong("MomentumBits",Double.doubleToRawLongBits(face.kilogramMetersPerSecond())); faces.add(tag);
 		}
 		root.put("FaceMomentum",faces); root.putByteArray("Solids",section.solidMask()); root.put("Extensions",encodeExtensions(section.extensions())); root.putLong("Checksum",section.checksum());
@@ -185,8 +185,8 @@ final class RegionStateCodec {
 						Double.longBitsToDouble(tag.getLongOr("InternalEnergyBits",0))));
 			}
 			var faces = new ArrayList<RegionSectionState.FaceMomentum>(); var encodedFaces = root.getListOrEmpty("FaceMomentum");
-			for (int i = 0; i < encodedFaces.size(); i++) { var tag = compoundAt(encodedFaces,i,"MAC momentum"); require(tag,"Axis",Tag.TAG_INT); require(tag,"Face",Tag.TAG_INT); require(tag,"MomentumBits",Tag.TAG_LONG);
-				faces.add(new RegionSectionState.FaceMomentum(tag.getIntOr("Axis",-1),tag.getIntOr("Face",-1),Double.longBitsToDouble(tag.getLongOr("MomentumBits",0)))); }
+			for (int i = 0; i < encodedFaces.size(); i++) { var tag = compoundAt(encodedFaces,i,"MAC momentum"); require(tag,"Axis",Tag.TAG_INT);require(tag,"X",Tag.TAG_INT);require(tag,"Y",Tag.TAG_INT);require(tag,"Z",Tag.TAG_INT);require(tag,"MomentumBits",Tag.TAG_LONG);
+				faces.add(new RegionSectionState.FaceMomentum(tag.getIntOr("Axis",-1),tag.getIntOr("X",-1),tag.getIntOr("Y",-1),tag.getIntOr("Z",-1),Double.longBitsToDouble(tag.getLongOr("MomentumBits",0)))); }
 			return new RegionSectionState(identity.layout(),identity.id(),identity.dimension(),identity.generation(),root.getIntOr("SectionX",0),root.getIntOr("SectionY",0),root.getIntOr("SectionZ",0),
 					root.getIntOr("StartX",-1),root.getIntOr("StartY",-1),root.getIntOr("StartZ",-1),root.getIntOr("SizeX",0),root.getIntOr("SizeY",0),root.getIntOr("SizeZ",0),
 					stocks,faces,root.getByteArray("Solids").orElseThrow(),decodeExtensions(root.getListOrEmpty("Extensions")),root.getLongOr("Checksum",-1));
@@ -223,7 +223,7 @@ final class RegionStateCodec {
 		for (FluidMaterial material : materials) {
 			CompoundTag tag = new CompoundTag();
 			tag.putString("Id", material.id()); tag.putLong("ReferenceDensityKgPerM3Bits", Double.doubleToRawLongBits(material.referenceDensity()));
-			tag.putString("MiscibilityGroup", material.miscibilityGroup()); list.add(tag);
+			tag.putString("MiscibilityGroup", material.miscibilityGroup()); tag.putInt("DisplayArgb", material.displayArgb()); list.add(tag);
 		}
 		return list;
 	}
@@ -233,10 +233,10 @@ final class RegionStateCodec {
 		List<FluidMaterial> result = new ArrayList<>(list.size());
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compoundAt(list, i, "material palette");
-			require(tag, "Id", Tag.TAG_STRING); require(tag, "ReferenceDensityKgPerM3Bits", Tag.TAG_LONG); require(tag, "MiscibilityGroup", Tag.TAG_STRING);
+			require(tag, "Id", Tag.TAG_STRING); require(tag, "ReferenceDensityKgPerM3Bits", Tag.TAG_LONG); require(tag, "MiscibilityGroup", Tag.TAG_STRING); require(tag, "DisplayArgb", Tag.TAG_INT);
 			try {
 				result.add(new FluidMaterial(tag.getStringOr("Id", ""), Double.longBitsToDouble(tag.getLongOr("ReferenceDensityKgPerM3Bits", 0L)),
-						tag.getStringOr("MiscibilityGroup", ""), 0.0, Math.PI / 2.0));
+						tag.getStringOr("MiscibilityGroup", ""), 0.0, Math.PI / 2.0, tag.getIntOr("DisplayArgb", 0)));
 			} catch (IllegalArgumentException exception) {
 				throw new IOException("Invalid material palette entry", exception);
 			}
@@ -342,7 +342,7 @@ final class RegionStateCodec {
 
 	private static CompoundTag encodeConfig(FluidSolverConfig config) {
 		CompoundTag tag = new CompoundTag();
-		tag.putInt("CellSize", Float.floatToRawIntBits(config.cellSize())); tag.putInt("Density", Float.floatToRawIntBits(config.density()));
+		tag.putInt("CellSize", Float.floatToRawIntBits(config.cellSize()));
 		tag.putInt("Gravity", Float.floatToRawIntBits(config.gravity())); tag.putInt("TimeStep", Float.floatToRawIntBits(config.timeStep()));
 		tag.putInt("PressureIterations", config.maxPressureIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
 		tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
@@ -350,8 +350,8 @@ final class RegionStateCodec {
 	}
 
 	private static FluidSolverConfig decodeConfig(CompoundTag tag) throws IOException {
-		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "FluidEpsilon")) require(tag, field, Tag.TAG_INT);
-		return new FluidSolverConfig(bits(tag, "CellSize"), bits(tag, "Density"), bits(tag, "Gravity"), bits(tag, "TimeStep"),
+		for (String field : List.of("CellSize", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "FluidEpsilon")) require(tag, field, Tag.TAG_INT);
+		return new FluidSolverConfig(bits(tag, "CellSize"), bits(tag, "Gravity"), bits(tag, "TimeStep"),
 				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "FluidEpsilon"));
 	}
 

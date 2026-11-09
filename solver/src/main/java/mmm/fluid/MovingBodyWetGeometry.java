@@ -59,7 +59,7 @@ final class MovingBodyWetGeometry {
     for (int z = start[2]; z <= end[2]; z++)
       for (int y = start[1]; y <= end[1]; y++)
         for (int x = start[0]; x <= end[0]; x++) {
-          int cell = x + domain.sizeX * (y + domain.sizeY * z);
+          int cell = domain.grid.cell(x,y,z);if(cell<0)continue;
           if (domain.liquidGrid.cellStockVolume[cell] <= 0) continue;
           double density = domain.liquidGrid.cellDensity[cell];
           double wetVolume = 0, wetMoment = 0;
@@ -164,7 +164,7 @@ final class MovingBodyWetGeometry {
 
   private static boolean isWater(HostFluidState domain, int material) {
     return domain.materialRegistry == null ? material == 0
-        : domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER.id());
+        : domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER);
   }
 
   /**
@@ -179,7 +179,7 @@ final class MovingBodyWetGeometry {
     for (int z = start[2]; z <= end[2]; z++)
       for (int y = start[1]; y <= end[1]; y++)
         for (int x = start[0]; x <= end[0]; x++) {
-          int cell = x + domain.sizeX * (y + domain.sizeY * z);
+          int cell = domain.grid.cell(x,y,z);if(cell<0)continue;
           var body = bodyPlanes(bounds, h, x, y, z);
           if (gas.cells().get(cell).isEmpty()) continue;
           double pressure = DomainGasInventory.spatialPressure(domain, cell) - mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA;

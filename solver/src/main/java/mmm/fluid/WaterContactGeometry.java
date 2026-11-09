@@ -31,7 +31,7 @@ final class WaterContactGeometry {
 			for (int ca = firstA; ca <= lastA; ca++) for (int cb = firstB; cb <= lastB; cb++) {
 				int[] xyz = new int[3];
 				xyz[axis] = normalCell; xyz[a] = ca; xyz[b] = cb;
-				int cell = xyz[0] + domain.sizeX * (xyz[1] + domain.sizeY * xyz[2]);
+				int cell = domain.grid.cell(xyz[0],xyz[1],xyz[2]);if(cell<0)continue;
 				var row = domain.liquidCells.stocksInCell(cell);
 				if (row.isEmpty()) continue;
 				var layersBySupport = new java.util.HashMap<Integer, List<GasLiquidContactGeometry.Layer>>();
@@ -82,6 +82,6 @@ final class WaterContactGeometry {
 
 	private static boolean isWater(HostFluidState domain, int material) {
 		return domain.materialRegistry == null ? material == 0
-				: domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER.id());
+				: domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER);
 	}
 }

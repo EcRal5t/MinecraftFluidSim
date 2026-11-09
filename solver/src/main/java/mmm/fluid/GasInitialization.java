@@ -18,11 +18,10 @@ final class GasInitialization {
 	private int[] restoredGasNodes;
 	GasInitialization(HostFluidState domain) { this.domain = domain; }
 
-	GasStateSnapshot bootstrap(String fingerprint) { refresh(); var snapshot=export(fingerprint); domain.domainCapabilities.initializeSpatialGas(); return snapshot; }
 	GasStateSnapshot export(String fingerprint) {
 		if (domain.gasState.frame == null) throw new IllegalStateException("Gas topology has not been explicitly initialized");
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
-		return GasStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ,
+		return GasStateSnapshot.capture(domain.grid,
 				domain.gasState.frame.pieceNodes(), domain.gasState.network, fingerprint == null ? "" : fingerprint);
 	}
 	void restore(GasStateSnapshot state, GasRegistry registry) { restoreOwners(state, registry, List.of()); domain.domainCapabilities.initializeSpatialGas(); }
@@ -38,8 +37,7 @@ final class GasInitialization {
 		if(thermal==null)domain.domainCapabilities.initializeSpatialGas();
 	}
 	private void restoreOwners(GasStateSnapshot state, GasRegistry registry, List<mmm.thermal.CoherentPhaseStore.Group> groups) {
-		if (state == null || registry == null || state.sizeX() != domain.sizeX
-				|| state.sizeY() != domain.sizeY || state.sizeZ() != domain.sizeZ
+		if (state == null || registry == null || !state.grid().equals(domain.grid)
 				|| !state.registryFingerprint().equals(registry.fingerprint()))
 			throw new IllegalArgumentException("Gas restore identity/dimensions mismatch");
 		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0)
@@ -47,7 +45,7 @@ final class GasInitialization {
 		domain.domainFlowFields.ensureInventoryGrid(); long[] occupied = currentOccupied();
 		if (!groups.isEmpty()) {
 			domain.domainCapabilities.validateCoherentRestoreCapacity(groups);
-			var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+			var occupancy = new GranularCouplingFields(domain.grid,domain.config.cellSize());
 			long[] fixed = new long[domain.cellCount];
 			for (var group : groups) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
 			occupancy.setFixedCellSvq(fixed);

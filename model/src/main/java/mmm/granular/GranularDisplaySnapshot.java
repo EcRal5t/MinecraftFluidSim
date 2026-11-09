@@ -7,13 +7,18 @@ import java.util.Objects;
 
 /** Bounded, quantized, read-only client view. No exact SVQ, mass or solid composition leaves the server. */
 public record GranularDisplaySnapshot(
-		int sizeX, int sizeY, int sizeZ, float cellSize, String registryFingerprint,
+		mmm.spatial.SpatialGrid grid, float cellSize, String registryFingerprint,
 		List<MaterialEntry> materials, byte[] depositBulkFill, byte[] depositPorosity,
 		short[] depositTopMaterial, List<ParcelSample> activeParcels
 ) {
 	private static final int MAX_PARCEL_GLYPH_DIAMETER_Q = 10;
+    public GranularDisplaySnapshot(int x,int y,int z,float h,String fingerprint,List<MaterialEntry> materials,
+            byte[] fill,byte[] porosity,short[] top,List<ParcelSample> samples) {
+        this(mmm.spatial.SpatialGrid.rectangular(x,y,z),h,fingerprint,materials,fill,porosity,top,samples);
+    }
+    public int sizeX(){return grid.sizeX();} public int sizeY(){return grid.sizeY();} public int sizeZ(){return grid.sizeZ();}
 	public GranularDisplaySnapshot {
-		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Float.isFinite(cellSize) && cellSize > 0.0F)
+		if (grid == null || !(Float.isFinite(cellSize) && cellSize > 0.0F)
 				|| registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")) {
 			throw new IllegalArgumentException("Invalid granular display identity/geometry");
 		}
@@ -22,7 +27,7 @@ public record GranularDisplaySnapshot(
 		depositPorosity = Objects.requireNonNull(depositPorosity, "depositPorosity").clone();
 		depositTopMaterial = Objects.requireNonNull(depositTopMaterial, "depositTopMaterial").clone();
 		activeParcels = List.copyOf(Objects.requireNonNull(activeParcels, "activeParcels"));
-		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int cells = grid.cellCount();
 		if (materials.isEmpty() || materials.size() > GranularLimits.MAX_MATERIALS
 				|| depositBulkFill.length != cells || depositPorosity.length != cells
 				|| depositTopMaterial.length != cells
@@ -55,13 +60,14 @@ public record GranularDisplaySnapshot(
 	@Override public short[] depositTopMaterial() { return depositTopMaterial.clone(); }
 
 	public static GranularDisplaySnapshot build(
-			int sizeX, int sizeY, int sizeZ, float cellSize, GranularRegistry registry,
+			mmm.spatial.SpatialGrid grid, float cellSize, GranularRegistry registry,
 			GranularParcelStore parcels, GranularDepositStore deposits
 	) {
 		if (registry == null || parcels == null || deposits == null) {
 			throw new IllegalArgumentException("Granular display source is missing");
 		}
-		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
+        int cells = grid.cellCount();
 		if (deposits.cellCount() != cells) throw new IllegalArgumentException("Granular display dimensions changed");
 		List<MaterialEntry> palette = registry.materials().stream()
 				.map(material -> new MaterialEntry(material.id(), material.baseArgb())).toList();
@@ -91,7 +97,7 @@ public record GranularDisplaySnapshot(
 		int count = Math.min(candidates.size(), GranularLimits.MAX_DISPLAY_PARCELS_PER_REGION);
 		ArrayList<ParcelSample> samples = new ArrayList<>(count);
 		for (int index = 0; index < count; index++) samples.add(candidates.get(index).sample());
-		return new GranularDisplaySnapshot(sizeX, sizeY, sizeZ, cellSize, registry.fingerprint(),
+		return new GranularDisplaySnapshot(grid, cellSize, registry.fingerprint(),
 				palette, bulk, porosity, top, samples);
 	}
 

@@ -14,8 +14,8 @@ public final class GpuGranularTransitionsBenchmark {
         try(var context=new VulkanDeviceContext(device,true,true);var lifecycle=new VulkanGranularTransitions(context);var geometry=new VulkanGranularGeometry(context)){
             int n=8,cells=n*n*n;double h=.5,dt=.05;long a=Math.max(8,context.storageOffsetAlignment());
             var fixture=GpuLiquidGeometryBenchmark.fixture(n,false);var liquid=VulkanLiquidStateLayout.forState(fixture.inventory(),fixture.momentum(),a);
-            var registry=mmm.granular.BuiltinGranularDefinitions.createRegistry();var ids=registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList();
-            var state=new VulkanGranularStateLayout(n,n,n,16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),a);
+            var registry=mmm.fluid.TestFluidDefinitions.load().granular();var ids=registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList();
+            var state=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(n,n,n),16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),a);
             long cursor=state.endOffset();var coherent=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,8);cursor=coherent.offset()+coherent.bytes();
             var masks=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,4);cursor=masks.offset()+masks.bytes();
             var occupancy=new VulkanGranularGeometry.Layout(state,coherent,cursor,a);cursor=occupancy.endOffset();
@@ -35,7 +35,7 @@ public final class GpuGranularTransitionsBenchmark {
             state.importState(initial,new VulkanGranularStateLayout.State(state.definitions(),List.of(particle),List.of(bed),List.of(),List.of()));
             for(int c=0;c<cells;c++){int off=Math.toIntExact(cellData.offset()+32L*c);initial.putDouble(off,1).putDouble(off+8,125).putDouble(off+16,1);initial.putDouble(Math.toIntExact(mu.offset()+8L*c),.001);}
             var still=faceData(faceCount,0);var forced=faceData(faceCount,1);initial.duplicate().position(Math.toIntExact(faces.offset())).put(still.duplicate());
-            try(var storage=new VulkanRegionStorage(context,transitions.endOffset(),1024*1024)){
+            try(var storage=new VulkanRegionStorage(context,transitions.endOffset(),1024*1024,liquid.grid())){
                 storage.initialize(initial,0);int settled=0,woken=0,relaxed=0;
                 System.out.println("Device: "+context.deviceName());System.out.println("step,active,deposits,settled,woken,relaxed,wall_ms,error");
                 for(int step=0;step<7;step++){
@@ -58,7 +58,7 @@ public final class GpuGranularTransitionsBenchmark {
                     for(var d:result.deposits()){finalVolume=Math.addExact(finalVolume,d.inventory().solidVolumeSvq());finalMass=Math.addExact(finalMass,d.inventory().massUnits());}
                     if(finalVolume!=svq+bedVolume||finalMass!=particle.inventory().massUnits()+bed.inventory().massUnits()||settled==0||woken==0||relaxed==0||result.dynamics().logicalStep()!=7)
                         throw new IllegalStateException("Granular lifecycle did not complete or changed its exact inventory");
-                    result.toSnapshot(n,n,n,h);System.out.printf("Continuous lifecycle complete: settled=%d,woken=%d,relaxed=%d,SVQ=%d,massUnits=%d%n",settled,woken,relaxed,finalVolume,finalMass);
+                    result.toSnapshot(liquid.grid(),h);System.out.printf("Continuous lifecycle complete: settled=%d,woken=%d,relaxed=%d,SVQ=%d,massUnits=%d%n",settled,woken,relaxed,finalVolume,finalMass);
                 }
             }
             stackedBeds(context,geometry,lifecycle,false,false);
@@ -71,9 +71,9 @@ public final class GpuGranularTransitionsBenchmark {
         int n=8,cells=n*n*n;double h=.5;long alignment=Math.max(8,context.storageOffsetAlignment());
         var fixture=GpuLiquidGeometryBenchmark.fixture(n,false);
         var liquid=VulkanLiquidStateLayout.forState(fixture.inventory(),fixture.momentum(),alignment);
-        var registry=mmm.granular.BuiltinGranularDefinitions.createRegistry();
+        var registry=mmm.fluid.TestFluidDefinitions.load().granular();
         var ids=registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList();
-        var state=new VulkanGranularStateLayout(n,n,n,16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),alignment);
+        var state=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(n,n,n),16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),alignment);
         long cursor=state.endOffset();var coherent=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,8);cursor=coherent.offset()+coherent.bytes();
         var masks=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,4);cursor=masks.offset()+masks.bytes();
         var occupancy=new VulkanGranularGeometry.Layout(state,coherent,cursor,alignment);cursor=occupancy.endOffset();
@@ -101,7 +101,7 @@ public final class GpuGranularTransitionsBenchmark {
             initial.putDouble(Math.toIntExact(mu.offset()+8L*c),.001);
         }
         initial.duplicate().position(Math.toIntExact(faces.offset())).put(faceData(faceCount,wake?1:0));
-        try(var storage=new VulkanRegionStorage(context,transitions.endOffset(),1024*1024)){
+        try(var storage=new VulkanRegionStorage(context,transitions.endOffset(),1024*1024,liquid.grid())){
             storage.initialize(initial,0);
             try(var source=storage.capture();var candidate=storage.prepare(source)){
                 var feedback=candidate.beginBatch(0,(cmd,input,output,errors,staging,stack)->{

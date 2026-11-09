@@ -29,7 +29,7 @@ final class VulkanRegionObservation implements AutoCloseable {
     }
     synchronized Totals capture(VulkanLiquidRegion.Capture capture) {
         var in=capture.readoutInputs();var l=in.liquid();var solid=in.granular();var thermal=in.thermal()==null?null:in.thermal().conduction();
-        int faces=(l.sizeX()+1)*l.sizeY()*l.sizeZ()+l.sizeX()*(l.sizeY()+1)*l.sizeZ()+l.sizeX()*l.sizeY()*(l.sizeZ()+1);
+        int faces=l.grid().faceCount();
         var energy=in.mechanicalEnergy();
         int n=Math.max(thermal==null?0:thermal.owners,Math.max(l.cellCount(),Math.max(faces,solid==null?0:solid.particleCapacity())));
         n=Math.max(n,Math.max(in.gas()==null?0:in.gas().nodeCapacity(),energy==null?0:energy.potentialTerms().count()/2));int groups=(n+127)/128;

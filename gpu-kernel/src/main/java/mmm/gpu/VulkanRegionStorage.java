@@ -25,33 +25,57 @@ final class VulkanRegionStorage implements AutoCloseable {
 
     private final VulkanDeviceContext context;
     private final int stagingBytes;
+    private final mmm.spatial.SpatialGrid grid;
     private final FlipGpuResources resources;
     private final List<Slot> slots = new ArrayList<>();
     private GpuStepScheduler scheduler;
     private GpuBuffer errors;
+    private GpuBuffer topology;
     private Version committed;
     private boolean closed;
     private long submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos, recordingNanos, waitingNanos;
 
     VulkanRegionStorage(VulkanDeviceContext context, long bytes, int stagingBytes) {
+        this(context,bytes,stagingBytes,null);
+    }
+    VulkanRegionStorage(VulkanDeviceContext context,long bytes,int stagingBytes,mmm.spatial.SpatialGrid grid){
         if (bytes < 4 || (bytes & 3) != 0 || stagingBytes < 4 || (stagingBytes & 3) != 0)
             throw new IllegalArgumentException("Device storage and transfer sizes must be positive words");
         this.context = context;
+        this.grid=grid;
         this.stagingBytes = stagingBytes;
         resources = new FlipGpuResources(context);
         try {
-            slots.add(new Slot(context, bytes));
-            slots.add(new Slot(context, bytes));
+            if(grid!=null)topology=resources.addDeviceStorage(4L*VulkanSpatialGrid.wordCount(grid));
+            slots.add(new Slot(context, bytes,grid,topology));
+            slots.add(new Slot(context, bytes,grid,topology));
             errors = resources.addDeviceStorage(4);
             scheduler = new GpuStepScheduler(context, resources, stagingBytes);
+            if(grid!=null)initializeTopology();
         } catch (RuntimeException | LinkageError failure) {
             try { close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
             throw failure;
         }
     }
 
+    private void initializeTopology() {
+        int[] words=VulkanSpatialGrid.encode(grid);
+        var values=ByteBuffer.allocateDirect(Math.min(65536,words.length*4)).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        try(var stack=stackPush()){
+            var submission=scheduler.acquire();var command=scheduler.begin(submission,"spatial-topology");
+            for(int first=0;first<words.length;){
+                values.clear();int last=Math.min(words.length,first+values.capacity()/4);
+                for(int i=first;i<last;i++)values.putInt(words[i]);values.flip();
+                vkCmdUpdateBuffer(command,topology.handle(),4L*first,values);first=last;
+            }
+            barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT,stack);
+            scheduler.submitAndWait(stack,submission,"spatial-topology");submissions++;uploadBytes+=topology.size();
+        }
+    }
+
     synchronized Metrics metrics() {
-        long deviceBytes = 4;
+        long deviceBytes = 4+(topology==null?0:topology.size());
         for (Slot slot : slots) deviceBytes = Math.addExact(deviceBytes, slot.buffer.size());
         return new Metrics(submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos, recordingNanos, waitingNanos,
                 slots.size(), deviceBytes, (long) stagingBytes * GpuStepScheduler.RING_SIZE);
@@ -195,7 +219,7 @@ final class VulkanRegionStorage implements AutoCloseable {
             }
         }
         if (best != null) { best.references = 1; return best; }
-        Slot target = new Slot(context, bytes);
+        Slot target = new Slot(context, bytes,grid,topology);
         target.references = 1;
         if (expandable < 0) slots.add(target);
         else slots.set(expandable, target).resources.close();
@@ -455,9 +479,9 @@ final class VulkanRegionStorage implements AutoCloseable {
         final FlipGpuResources resources;
         final GpuBuffer buffer;
         int references;
-        Slot(VulkanDeviceContext context, long bytes) {
+        Slot(VulkanDeviceContext context, long bytes,mmm.spatial.SpatialGrid grid,GpuBuffer topology) {
             resources = new FlipGpuResources(context);
-            try { buffer = resources.addDeviceStorage(bytes); }
+            try { buffer = resources.addDeviceStorage(bytes);if(grid!=null)buffer.spatialGrid(grid,topology); }
             catch (RuntimeException | LinkageError failure) {
                 try { resources.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
                 throw failure;

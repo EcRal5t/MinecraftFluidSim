@@ -324,7 +324,7 @@ public final class WorldCapabilityBundleStore {
 				slot.resolve("granular-registry.nbt"), chemical);
 		GasRegistry gas = GasRegistryCodec.readSnapshot(slot.resolve("gas-registry.nbt"));
 		ThermalRegistry thermal = ThermalRegistryCodec.readSnapshot(slot.resolve("thermal-registry.nbt"),
-				chemical.fingerprint(), granular.fingerprint(), gas.fingerprint());
+				chemical.fingerprint(), granular.fingerprint(), gas.fingerprint()).withChemistry(chemical);
 		Definitions definitions;
 		try {
 			definitions = new Definitions(profile.capabilities(), material, chemical, granular, gas, thermal);
@@ -560,6 +560,9 @@ public final class WorldCapabilityBundleStore {
 				thermal.speciesOffset(thermal.materialHandle(vapor.id()),transition.speciesId());
 			}
 			for (ChemicalPhaseDefinition phase : chemical.phases()) {
+				if (phase.materialId().equals("mmm:water") && phase.allowedSpecies().contains(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)
+						&& chemical.species(chemical.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL)).liquidProperties() == null)
+					throw new IllegalArgumentException("Ethanol liquid properties are missing");
 				if (!material.hasMaterial(phase.materialId())) {
 					throw new IllegalArgumentException("Chemical phase references unknown material " + phase.materialId());
 				}

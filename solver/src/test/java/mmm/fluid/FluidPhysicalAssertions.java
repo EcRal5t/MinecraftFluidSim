@@ -17,7 +17,7 @@ public final class FluidPhysicalAssertions {
 	}
 	/** Pressure error corresponds to at most five percent of one cell's water head. */
 	public static void hydrostaticPressure(HostFluidState domain,double actual,double expected,String context){
-		double allowance=HEAD_CELL_FRACTION*domain.config.density()*Math.abs(domain.config.gravity())*domain.config.cellSize();
+		double allowance=HEAD_CELL_FRACTION*domain.definitions().material().entry(BuiltinFluidMaterials.WATER).material().referenceDensity()*Math.abs(domain.config.gravity())*domain.config.cellSize();
 		require(Double.isFinite(actual)&&Math.abs(actual-expected)<=allowance,
 				context+": pressure="+actual+", expected="+expected+", allowancePa="+allowance);
 	}

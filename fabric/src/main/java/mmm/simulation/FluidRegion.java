@@ -27,6 +27,7 @@ public final class FluidRegion {
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
+    private final mmm.spatial.SpatialGrid grid;
 	private final FluidSolverConfig solverConfig;
 	private FluidRegionFootprint footprint;
 	private final long networkGeneration;
@@ -134,6 +135,7 @@ public final class FluidRegion {
 		this.sizeX = sizeX;
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
+        this.grid = domain != null ? domain.grid() : footprint != null ? FluidRegionFactory.grid(footprint) : mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ);
 		this.solverConfig = Objects.requireNonNull(solverConfig, "solverConfig");
 		if (networkGeneration <= 0L) throw new IllegalArgumentException("Region network generation must be positive");
 		this.footprint = footprint;
@@ -189,6 +191,8 @@ public final class FluidRegion {
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
 	public FluidSolverConfig solverConfig() { return solverConfig; }
+    public mmm.spatial.SpatialGrid grid() { return grid; }
+
 	/** Creates an independent host view of the committed device generation when needed. */
 	public HostFluidState hostSnapshot() {
 		var snapshot = HostFluidState.restoreAuthoritativeState(captureHostState());
@@ -196,7 +200,7 @@ public final class FluidRegion {
 		// It includes device connections and body sweeps that the import template predates.
 		if (groupAvailability != null) snapshot.prepareGroupAvailability(groupAvailability);
 		else if (residentState != null) {
-			boolean[] available = new boolean[sizeX * sizeY * sizeZ];
+			boolean[] available = new boolean[grid().cellCount()];
 			java.util.Arrays.fill(available, true);
 			snapshot.prepareGroupAvailability(available);
 		}
@@ -265,7 +269,7 @@ public final class FluidRegion {
 		return residentState == null ? editableHost().authoritativeLayout() : residentState.layout();
 	}
 	int solidMicroMask(int x,int y,int z) {
-		var device=deviceState(); return device==null?editableHost().solidMicroMask(x,y,z):device.fixedGeometry().mask((z*sizeY+y)*sizeX+x);
+		var device=deviceState(); return device==null?editableHost().solidMicroMask(x,y,z):device.fixedGeometry().mask(grid().cell(x,y,z));
 	}
 	double fixedOpenVolume() { var device=deviceState(); return device==null?editableHost().fixedOpenVolumeExact():device.fixedGeometry().totalOpenCellVolume(); }
 	boolean worldCellAvailable(int cell) { return worldAvailability==null ? deviceResident() || editableHost().worldCellAvailable(cell) : worldAvailability[cell]; }
@@ -276,7 +280,7 @@ public final class FluidRegion {
 	}
 	boolean groupAvailable(int cell) { return groupAvailability == null ? deviceResident() || editableHost().groupAvailable(cell) : groupAvailability[cell]; }
 	boolean prepareGroupAvailability(boolean[] available) {
-		if (available == null || available.length != sizeX * sizeY * sizeZ)
+		if (available == null || available.length != grid().cellCount())
 			throw new IllegalArgumentException("World availability has the wrong cell layout");
 		boolean allAvailable = true;
 		for (boolean cell : available) allAvailable &= cell;
@@ -481,7 +485,7 @@ public final class FluidRegion {
 	public float checkpointVolume() { return checkpointVolume; }
 	public FluidRegionLifecycle lifecycle() { return lifecycle; }
 	public long reservedCellCapacity() {
-		return Math.multiplyExact(Math.multiplyExact((long) sizeX, sizeY), sizeZ);
+		return grid().cellCount();
 	}
 
 	boolean paused() { return lifecycle.operatorPaused(); }
@@ -814,7 +818,7 @@ public final class FluidRegion {
 	public void restoreAuthoritativeSolver(mmm.fluid.FluidDomainState state,long generation) {
 		if(solverLoaded()||lifecycle.state()!=FluidRegionLifecycle.State.UNLOADED)throw new IllegalStateException("Only an unloaded region can restore its solver");
 		if(generation!=checkpointGeneration)throw new IllegalArgumentException("Checkpoint generation changed while restoring");
-		if(state.sizeX()!=sizeX()||state.sizeY()!=sizeY()||state.sizeZ()!=sizeZ()||!state.config().equals(solverConfig()))throw new IllegalArgumentException("Checkpoint solver geometry changed");
+		if(!state.grid().equals(grid())||!state.config().equals(solverConfig()))throw new IllegalArgumentException("Checkpoint solver geometry changed");
 		domain=HostFluidState.restoreAuthoritativeState(state);boundaryTemperatures=domain.thermalBoundaryTemperatures();boundaryTemperaturesKnown=true;collisionRefreshRequired=true;lifecycle.restoreFromUnloaded(unloadedResumeState,stepIntervalTicks);
 		publishCommittedObservation();
 	}

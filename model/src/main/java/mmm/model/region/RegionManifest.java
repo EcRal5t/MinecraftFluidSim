@@ -121,10 +121,8 @@ public record RegionManifest(
 			return;
 		}
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(materialPalette);
-		double densityTolerance = Math.max(1.0E-9, Math.abs(geometry.solverConfig().density()) * 1.0E-12);
-		if (Math.abs(registry.material(0).referenceDensity() - geometry.solverConfig().density()) > densityTolerance) {
-			throw new IllegalArgumentException("Material palette entry 0 must match the solver density");
-		}
+		if (!registry.material(0).id().equals("mmm:water"))
+			throw new IllegalArgumentException("Material palette entry 0 must be water");
 		if (materialLedgers.size() != materialPalette.size()) {
 			throw new IllegalArgumentException("Material palette and ledger counts disagree");
 		}
