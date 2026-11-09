@@ -46,24 +46,35 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         };
     }
     private static IndustrialLayout screening(BlockPos min,boolean crystals) {
+        if(crystals)return crystallization(min);
         var blocks=shell(min,7,7,7);var screens=new ArrayList<Screen>();var ports=new ArrayList<Port>();
         for(int x=1;x<6;x++)for(int z=1;z<6;z++) {
             var position=min.offset(x,3,z);
-            if(crystals && (x!=1 || z!=1))blocks.put(position,Blocks.IRON_BLOCK.defaultBlockState());
-            else {
-                blocks.put(position,MmmBlocks.SCREEN.defaultBlockState().setValue(ScreenBlock.FACING,Direction.UP));
-                screens.add(new Screen(position,crystals?.000005:.00025,.6));
-            }
+            blocks.put(position,MmmBlocks.SCREEN.defaultBlockState().setValue(ScreenBlock.FACING,Direction.UP));
+            screens.add(new Screen(position,.00025,.6));
         }
-        if(crystals)blocks.put(min.offset(1,2,1),MmmBlocks.VALVE.defaultBlockState().setValue(ValveBlock.FACING,Direction.UP).setValue(ValveBlock.OPENING,0));
         addPort(blocks,ports,min.offset(0,4,1),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
         addPort(blocks,ports,min.offset(6,1,1),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
-        addPort(blocks,ports,crystals?min.offset(0,3,1):min.offset(1,4,0),crystals?Direction.WEST:Direction.NORTH,FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.SOLID);
+        addPort(blocks,ports,min.offset(1,4,0),Direction.NORTH,FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.SOLID);
         addPort(blocks,ports,min.offset(1,3,0),Direction.NORTH,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.SOLID);
-        var cold=min.offset(crystals?2:3,4,1);blocks.put(cold,Blocks.IRON_BLOCK.defaultBlockState());
+        var cold=min.offset(3,4,1);blocks.put(cold,Blocks.IRON_BLOCK.defaultBlockState());
         var controller=min.offset(2,4,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
-        var walls=crystals?List.of(new Wall(min.offset(1,3,1),280),new Wall(cold,280)):List.of(new Wall(cold,280));
-        return new IndustrialLayout(min,controller,blocks,ports,screens,List.of(),walls,List.of());
+        return new IndustrialLayout(min,controller,blocks,ports,screens,List.of(),List.of(new Wall(cold,280)),List.of());
+    }
+    private static IndustrialLayout crystallization(BlockPos min) {
+        var blocks=shell(min,7,7,3);var ports=new ArrayList<Port>();var walls=new ArrayList<Wall>();
+        for(int x=1;x<=5;x++) {
+            var floor=min.offset(x,1,1);blocks.put(floor,Blocks.IRON_BLOCK.defaultBlockState());
+            if(x<=2)walls.add(new Wall(floor,280));
+        }
+        var screen=min.offset(2,2,1);
+        blocks.put(screen,MmmBlocks.SCREEN.defaultBlockState().setValue(ScreenBlock.FACING,Direction.EAST));
+        blocks.put(min.offset(3,2,1),MmmBlocks.VALVE.defaultBlockState().setValue(ValveBlock.FACING,Direction.EAST).setValue(ValveBlock.OPENING,0));
+        addPort(blocks,ports,min.offset(1,2,2),Direction.SOUTH,FluidPortBlockEntity.Mode.INPUT);
+        addPort(blocks,ports,min.offset(6,2,1),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
+        addPort(blocks,ports,min.offset(1,2,0),Direction.NORTH,FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.SOLID);
+        var controller=min.offset(2,4,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        return new IndustrialLayout(min,controller,blocks,ports,List.of(new Screen(screen,.000005,.6)),List.of(),walls,List.of());
     }
     private static IndustrialLayout connectedTanks(BlockPos min) {
         int sx=14,sy=5,sz=5;var blocks=shell(min,sx,sy,sz);
@@ -112,14 +123,19 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         addPort(blocks,ports,min.offset(7,11,5),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
         var productPort=ports.removeLast();ports.add(new Port(productPort.position(),productPort.outward(),productPort.mode(),productPort.phase(),productPort.rate(),true));
         addPort(blocks,ports,min.offset(7,1,2),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
-        for(int x=2;x<=5;x++) {
-            var vent=min.offset(x,13,1);
+        for(int x=2;x<=3;x++)for(int z=2;z<=3;z++) {
+            var vent=min.offset(x,13,z);
             addPort(blocks,ports,vent,Direction.UP,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
             var port=ports.removeLast();ports.add(new Port(port.position(),port.outward(),port.mode(),port.phase(),1_000_000_000L,false));
         }
+        // The boiler and condenser retain only the passages needed by their real ports.
+        for(int y=1;y<=2;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++)
+            if(z<2 || z>(trays?5:3))blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
+        for(int y=11;y<=12;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++)
+            if(x<2 || z<2 || z>5)blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
         // The shaft keeps separate gas chimneys and liquid downcomers through each tray.
         for(int y=3;y<=9;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++)
-            if(x<2 || x>5 || z<2 || z>5)
+            if(x<2 || x>(trays?5:3) || z<2 || z>(trays?5:3))
                 blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
         if(trays) {
             int[] levels={3,6,8};
@@ -149,21 +165,8 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
                 blocks.put(min.offset(x,10,z),Blocks.IRON_BLOCK.defaultBlockState());
         if(trays)blocks.put(min.offset(4,10,5),MmmBlocks.VALVE.defaultBlockState()
                 .setValue(ValveBlock.FACING,Direction.UP).setValue(ValveBlock.OPENING,bypass?0:4));
-        // Preheat every exposed shaft and tray wall; the condenser remains independently cold.
-        for(int y=3;y<=10;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++) {
-            var position=min.offset(x,y,z);
-            if(blocks.getOrDefault(position,Blocks.AIR.defaultBlockState()).is(Blocks.IRON_BLOCK))
-                thermal.add(new Wall(position,380));
-        }
-        thermal.removeIf(wall->java.util.Arrays.stream(Direction.values()).noneMatch(direction->{
-            var adjacent=wall.position().relative(direction);
-            int x=adjacent.getX()-min.getX(),y=adjacent.getY()-min.getY(),z=adjacent.getZ()-min.getZ();
-            var state=blocks.getOrDefault(adjacent,Blocks.AIR.defaultBlockState());
-            return x>0 && x<7 && y>0 && y<13 && z>0 && z<7
-                    && (state.isAir() || state.is(MmmBlocks.VALVE) && state.getValue(ValveBlock.OPENING)==4);
-        }));
         for(int x=2;x<=4;x++)for(int z=1;z<=3;z++) {
-            var hot=min.offset(x,0,z);blocks.put(hot,MmmBlocks.THERMAL_RESERVOIR.defaultBlockState());thermal.add(new Wall(hot,380));
+            var hot=min.offset(x,0,z);blocks.put(hot,MmmBlocks.THERMAL_RESERVOIR.defaultBlockState());thermal.add(new Wall(hot,293.15));
         }
         var cold=min.offset(6,12,5);blocks.put(cold,Blocks.IRON_BLOCK.defaultBlockState());thermal.add(0,new Wall(cold,warm?400:285));
         var controller=min.offset(2,1,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
