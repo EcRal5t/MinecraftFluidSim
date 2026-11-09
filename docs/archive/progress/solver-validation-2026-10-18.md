@@ -1,6 +1,6 @@
 # 共同主干阶段验证记录（2026-10-17 至 2026-10-18）
 
-本页保存当时的验证范围与测量结果。[最新验证证据](../../maintenance/validation.md#当前验证证据)与[当前实施计划](../../roadmap/solver-consolidation-plan.md)分别维护运行证据和实施状态。
+本页保存当时的验证范围与测量结果。[验证指南](../../maintenance/validation.md)与[当前实施计划](../../roadmap/solver-consolidation-plan.md)分别维护验证方法和待办。
 
 以下为 2026-10-17 至 2026-10-18 留存的阶段验证记录，主类均在 `mmm.fluid`：
 

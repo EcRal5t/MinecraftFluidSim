@@ -6,7 +6,7 @@
 |---|---|
 | [当前设计书](architecture/system-overview.md) | 当前模型、完整职责链、跨模块契约和代码索引 |
 | [当前实施计划](roadmap/solver-consolidation-plan.md) | 当前进度、下一轮交付、依赖及完成条件 |
-| [验证指南](maintenance/validation.md) | 命令、场景、误差与预算判定、最新验证证据 |
+| [验证指南](maintenance/validation.md) | 命令、场景、误差与预算判定 |
 
 首次阅读规则见 [AGENTS.md](../AGENTS.md)。先完整理解设计书与实施计划，再按改动进入下列参考。
 专题开头的修改入口用于继续定位具体文件。
@@ -27,8 +27,6 @@
 | 世界归属、容器载荷、WAL 与恢复分类 | [事务参考](architecture/world-ownership-and-containers.md) |
 | 外部查询、提交事件、线程和单位 | [接口参考](architecture/external-api.md) |
 | 后续玩家能力、产品阶段与范围 | [长期产品路线](roadmap/product-roadmap.md) |
-| 下一轮 GPU 单一实现、编辑／恢复迁移及 CPU 路径删除 | [GPU 执行链主线化计划](roadmap/gpu-mainline-execution-plan.md) |
-| GPU 主线化之后的基础物理、热传质、化学与组合工艺交付 | [仿真能力补全计划](roadmap/simulation-capability-completion-plan.md) |
 | 自由构造工业玩法的阀门、筛、物料箱、测量控制及运动适配 | [后续工业玩法实施计划](roadmap/emergent-industrial-gameplay-plan.md) |
 | 基础方块搭建的蒸馏、过滤、活塞、吸附及催化测试 | [工业装置仿真测试规格](roadmap/industrial-simulation-test-plan.md) |
 | 范围扩张与完整 GPU 后端要求 | [后端扩展参考](roadmap/performance-and-backends.md) |
@@ -45,8 +43,8 @@
 
 - 模型或职责链改变：更新设计书；稳定公式、数据归属或提交契约改变时更新对应参考。
 - 代码移动或调用迁移：更新设计书的阶段索引及涉及的专题入口。
-- 进度改变：只在实施计划登记完成项、剩余项和下一步，链接对应验证证据。
-- 运行验证：在验证指南记录被测构建、原输入、完成步数、结果及计时口径；旧结果移入归档。
+- 进度改变：在实施计划维护剩余项和下一步；完成内容进入设计书，阶段记录留在 Git。
+- 运行验证：验证指南维护可复用命令、场景与判定口径；本轮输出按需保留，交付后清理临时记录。
 - 长期目标改变：更新产品路线；当前施工进度继续由实施计划维护。
 
 同一条规则在其负责的文档完整说明，其他页面链接过去。入口目录保持简短，历史探索留在 Git、会话和归档中。

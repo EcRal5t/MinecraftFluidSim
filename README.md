@@ -10,7 +10,7 @@ Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围
 |---|---|
 | [当前设计书](docs/architecture/system-overview.md) | 完整职责链、权威数据、跨模块契约，以及每阶段的代码和测试入口 |
 | [当前实施计划](docs/roadmap/solver-consolidation-plan.md) | 当前进度、下一轮交付范围和完成条件 |
-| [验证指南](docs/maintenance/validation.md) | 测试选择、命令、预算、误差判定和最新验证证据 |
+| [验证指南](docs/maintenance/validation.md) | 测试选择、命令、预算和误差判定 |
 
 固定开发要求见 [AGENTS.md](AGENTS.md)。[文档目录](docs/README.md)列出按需查阅的公式、存档、事务与接口参考，以及长期产品路线和归档。修改代码前先沿设计书找完整职责链，再进入具体文件。
 
@@ -60,4 +60,3 @@ Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围
 将主模组 JAR（排除 `sources`）与 Fabric API 放入 Minecraft 26.2 / Fabric 的 `mods` 目录即可运行，使用 Java 25 或更新版本。当前发布内嵌 Windows x64 的 GPU 运行库，默认使用 Vulkan 设备0，无需添加启动参数。需要切换显卡时添加 Java 参数 `-Dmmm.gpuDevice=1`。正常请求、观察显示、编辑与存档交接沿生产区域流程推进，启动说明见[运行时说明](docs/architecture/runtime-and-lifecycle.md#startup)，当前实现范围见[实施状态](docs/roadmap/solver-consolidation-plan.md)。
 
 构建缓存、实验输出与本地研究归档的保存位置和清理方式见 [构建输出管理](docs/maintenance/build-outputs.md)。
-
