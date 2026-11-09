@@ -327,18 +327,19 @@ void clearUnavailablePending(int c) {
         }
     }
 }
-void propose(int c) {
-    if (!activeCell(c)) return;
+int referenceInput(){return workField((p.maximum&1)==0?FIELD_LIQUID_REFERENCE:FIELD_LIQUID_REFERENCE_NEXT);}
+int referenceOutput(){return workField((p.maximum&1)==0?FIELD_LIQUID_REFERENCE_NEXT:FIELD_LIQUID_REFERENCE);}
+int propose(int c) {
+    if (!activeCell(c)) return -1;
     int node=contactNode(c,p.maximum);
-    if(node<0 || !activeCell(node))return;
-    if(p.maximum==6)clearUnavailablePending(c);
+    if(node<0 || !activeCell(node))return -1;
     int geometry=geometryHeaderWord(GEO_H_CELLS);
     double fill=readDouble(geometry+2*(4*c+3));
-    if(fill<=0.0LF || (p.maximum>0 && readDouble(geometry+2*(4*node+3))>=1.0LF))return;
+    if(fill<=0.0LF || (p.maximum>0 && readDouble(geometry+2*(4*node+3))>=1.0LF))return -1;
     double gasTemperature=state(node,0);
     double gasVolume=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*node+MIXTURE_GAS_VOLUME));
     double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h,totalNanos=0.0LF,pressure=0.0LF,capacity=0.0LF,reference=0.0LF;
-    double totalLiquid=-1.0LF;bool gasPrepared=false;int head=-1,tail=-1;
+    double totalLiquid=-1.0LF;bool gasPrepared=false;int head=-1;
     int rules=headerWord(H_RULE_COUNT),materials=headerWord(H_MATERIAL_COUNT);
     for(int m=0;m<materials;m++){
         int lr=row(c,m);int64_t mass=phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr);
@@ -373,7 +374,7 @@ void propose(int c) {
                         totalNanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*node));
                         pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*node+MIXTURE_PRESSURE));
                         capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*node+2))*h3;
-                        reference=readDouble(workField(FIELD_LIQUID_REFERENCE)+2*node)*h3;
+                        reference=readDouble(referenceInput()+2*node)*h3;
                         gasPrepared=true;
                     }
                     double targetNanos=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(node,int(words[r+1]))));
@@ -393,7 +394,7 @@ void propose(int c) {
                 double film = seriesConductance(1.0LF,readDouble(r + 12),1.0LF,readDouble(r + 14),henry * 8.31446261815324LF * liquidTemperature);
                 double partialPressure = double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * component(node, int(words[r + 1])))) * 1e-9LF *
                                                (101325.0LF / 293.15LF) * gasTemperature / gasVolume;
-                if(totalLiquid<0.0LF)totalLiquid=readDouble(workField(FIELD_LIQUID_REFERENCE)+2*c);
+                if(totalLiquid<0.0LF)totalLiquid=readDouble(referenceInput()+2*c);
                 double area = readDouble(p.header + H_CELL_SIZE) * readDouble(p.header + H_CELL_SIZE) *
                               interfaceArea * min(1.0LF,phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),lr)/max(totalLiquid,1e-300LF));
                 double conductance = film * area,
@@ -410,12 +411,10 @@ void propose(int c) {
             writeDouble(workField(FIELD_KG) + 2 * index, transfer);
             writeDouble(workField(FIELD_TEMP) + 2 * index, liquidTemperature);
             writeDouble(workField(FIELD_GAS_TEMP) + 2 * index, gasTemperature);
-            words[workField(FIELD_NEXT)+index]=uint(head);if(tail<0)tail=index;head=index;
+            words[workField(FIELD_NEXT)+index]=uint(head);head=index;
         }
     }
-    if(head>=0){
-        words[workField(FIELD_NEXT)+tail]=atomicExchange(words[workField(FIELD_HEAD)+node],uint(head));
-    }
+    return head;
 }
 int64_t coldLimit(int64_t wanted, double margin, double cost) {
     if (cost > 0.0)
@@ -509,7 +508,7 @@ void proposeDryWall(int index){
     }
     double equilibrium=fraction*101325.0LF*double(exp(float(readDouble(r+8)*(1.0LF/readDouble(r+6)-1.0LF/temperature))));
     if(partial<=equilibrium)return;
-    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h,reference=readDouble(workField(FIELD_LIQUID_REFERENCE)+2*c)*h3;
+    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h,reference=readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c)*h3;
     double capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*c+2))*h3;
     double addNanos=double(quantum)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF);
     double response=vaporResponse(capacity,reference,nanos,target,gasTemperature,pressure,addNanos,
@@ -625,9 +624,8 @@ void commitWall(int device){
     }
 }
 // Each gas cell grants proposals against live stocks; face batches keep liquid writers disjoint.
-uvec4 exchange(int node) {
+uvec4 exchange(int node, int first) {
     uvec4 counts=uvec4(0u);
-    int first=int(words[workField(FIELD_HEAD)+node]);
     if(first<0)return counts;
     if (node >= int(words[gasField(GAS_COUNTS)]))
         return counts;
@@ -694,7 +692,7 @@ uvec4 exchange(int node) {
             reportInvalid();
             return counts;
         }
-        q = coldLimit(q, phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER), lr) - liquidCold(lr, m),
+        q = coldLimit(q, phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER), lr) - liquidCold(lr,m),
                       dissolve ? lcold - carried : carried - lcold);
         if (dissolve)
             q = coldLimit(
@@ -772,7 +770,7 @@ uvec4 exchange(int node) {
             double reference=0.0LF;
             for(int material=0;material<headerWord(H_MATERIAL_COUNT);material++)
                 reference+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),row(c,material));
-            int total=workField(FIELD_LIQUID_REFERENCE)+2*c;
+            int total=(wall?workField(FIELD_LIQUID_REFERENCE_NEXT):referenceOutput())+2*c;
             writeDouble(total,reference);
         }
         double remainingLiquidEnergy=phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER),lr)+(dissolve?liquidMoved:-liquidMoved);
@@ -805,7 +803,7 @@ uvec4 exchange(int node) {
     }
     writeDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node, energy);
     words[workField(FIELD_ORPHAN_RECEIVER)+node]=uint(receiver);
-    words[workField(FIELD_HEAD)+node]=uint(-1);
+    if(p.maximum==7)words[workField(FIELD_HEAD)+node]=uint(-1);
     return counts;
 }
 int faceBase(int axis) { return gridFaceOffset(axis); }
@@ -1023,12 +1021,18 @@ void reduceActivity(uvec4 counts,int lane) {
 void main() {
     int i = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if(pipelineStage==STAGE_PROPOSE){
-        if(i<p.count && errors==0u)propose(i);
+        uvec4 counts=uvec4(0u);
+        if(i<p.count && errors==0u){
+            writeDouble(referenceOutput()+2*i,readDouble(referenceInput()+2*i));
+            int first=propose(i);
+            if(first>=0)counts=exchange(contactNode(i,p.maximum),first);
+        }
+        reduceActivity(counts,int(gl_LocalInvocationID.x));
         return;
     }
     if(pipelineStage==STAGE_EXCHANGE){
         uvec4 counts=uvec4(0u);
-        if(i<p.count && errors==0u)counts=exchange(i);
+        if(i<p.count && errors==0u)counts=exchange(i,int(words[workField(FIELD_HEAD)+i]));
         reduceActivity(counts,int(gl_LocalInvocationID.x));
         return;
     }
@@ -1040,7 +1044,10 @@ void main() {
     }
     if (errors != 0u)
         return;
-    if(p.stage==13)
+    if(p.stage==15){
+        int node=contactNode(i,6);
+        if(activeCell(i) && node>=0 && activeCell(node))clearUnavailablePending(i);
+    } else if(p.stage==13)
         proposeDryWall(i);
     else if(p.stage==14)
         commitWall(i);

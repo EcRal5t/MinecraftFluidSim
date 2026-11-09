@@ -12,6 +12,12 @@ const int STAGE_LARGE_VELOCITY_PRODUCT = 7;
 const int STAGE_SMALL_ROW_PRODUCT = 8;
 const int STAGE_ROW_BLOCK_PRODUCT = 9;
 const int STAGE_LARGE_ROW_PRODUCT = 10;
+const int STAGE_MARK_INDUCED_VELOCITY = 11;
+const int STAGE_MARK_PRODUCT_ROWS = 12;
+const int STAGE_MARK_PRODUCT_VELOCITIES = 13;
+const int STAGE_PRODUCT_DISPATCH = 14;
+const int STAGE_SPARSE_VELOCITY_PRODUCT = 15;
+const int STAGE_SPARSE_ROW_PRODUCT = 16;
 const uint ERROR_COUPLED_PRESSURE = 262144u;
 const int MODE_PRESSURE = 0;
 const int MODE_SEARCH_DIRECTION = 1;
@@ -75,7 +81,8 @@ bool termValid(int e) {
            readDoubleField(FIELD_TERM_COEFFICIENT, e) != 0.0;
 }
 bool velocityPhase() {
-    return p.stage >= STAGE_SMALL_VELOCITY_PRODUCT && p.stage <= STAGE_LARGE_VELOCITY_PRODUCT;
+    return p.stage >= STAGE_SMALL_VELOCITY_PRODUCT && p.stage <= STAGE_LARGE_VELOCITY_PRODUCT
+        || p.stage == STAGE_SPARSE_VELOCITY_PRODUCT;
 }
 bool selected(int owner) {
     return velocityPhase() ? owner >= headerValue(H_ROW_COUNT) : owner < headerValue(H_ROW_COUNT);
@@ -102,8 +109,11 @@ void dispatchCount(int first, int groups) {
 void initialize(int id) {
     writeIntField(FIELD_COUNTS, id, 0);
     writeIntField(FIELD_CURSORS, id, 0);
-    if (id == 0)
+    if (id == 0) {
         words[p.header + H_LARGE_COUNT] = 0u;
+        writeIntField(FIELD_PRODUCT_COUNTS, 0, 0);
+        writeIntField(FIELD_PRODUCT_COUNTS, 1, 0);
+    }
 }
 void countTerm(int term) {
     int row = readIntField(FIELD_TERM_ROW, term), velocity = readIntField(FIELD_TERM_VELOCITY, term);
@@ -232,11 +242,70 @@ void largeProduct(int index, int lane) {
     if (lane == 0)
         finishOwner(owner, parts[0]);
 }
+// A particle velocity or drag row couples every incident fluid row. The first pass
+// marks those velocities; the second marks their rows; the third closes the set of
+// velocities required to evaluate each marked row against the complete vector.
+void markInducedVelocity(int velocity){
+    int rows=headerValue(H_ROW_COUNT),liquid=headerValue(H_LIQUID_COUNT);
+    int faces=headerValue(H_VELOCITY_COUNT)-(rows-liquid),owner=rows+velocity;
+    bool induced=false;
+    for(int i=readIntField(FIELD_OFFSETS,owner);i<readIntField(FIELD_OFFSETS,owner+1);i++){
+        int term=readIntField(FIELD_ENTRIES,i),row=readIntField(FIELD_TERM_ROW,term);
+        if(velocity>=faces||row>=liquid){induced=true;break;}
+    }
+    writeIntField(FIELD_INDUCED_VELOCITY,velocity,induced?1:0);
+}
+void markProductRow(int row){
+    if(int(words[headerValue(H_ROWS)+row])<0)return;
+    bool affected=false;
+    for(int i=readIntField(FIELD_OFFSETS,row);i<readIntField(FIELD_OFFSETS,row+1);i++){
+        int term=readIntField(FIELD_ENTRIES,i),velocity=readIntField(FIELD_TERM_VELOCITY,term);
+        if(readIntField(FIELD_INDUCED_VELOCITY,velocity)!=0){affected=true;break;}
+    }
+    if(affected){
+        words[headerValue(H_ROWS)+row]=uint(-row-2);
+        uint slot=atomicAdd(words[fieldOffset(FIELD_PRODUCT_COUNTS)],1u);
+        writeIntField(FIELD_PRODUCT_ROWS,int(slot),row);
+    }
+}
+void markProductVelocity(int velocity){
+    int owner=headerValue(H_ROW_COUNT)+velocity;bool needed=false;
+    for(int i=readIntField(FIELD_OFFSETS,owner);i<readIntField(FIELD_OFFSETS,owner+1);i++){
+        int term=readIntField(FIELD_ENTRIES,i),row=readIntField(FIELD_TERM_ROW,term);
+        if(int(words[headerValue(H_ROWS)+row]) < -1){needed=true;break;}
+    }
+    if(needed){
+        uint slot=atomicAdd(words[fieldOffset(FIELD_PRODUCT_COUNTS)+1],1u);
+        writeIntField(FIELD_PRODUCT_VELOCITIES,int(slot),velocity);
+    }
+}
+void productDispatch(){
+    bool enabled=readDoubleWord(headerValue(H_CONTROL)+2*(p.argument==MODE_PRESSURE?CONTROL_REFRESH:CONTROL_RUN))!=0.0;
+    for(int kind=0;kind<2;kind++){
+        int count=enabled?readIntField(FIELD_PRODUCT_COUNTS,kind==0?1:0):0,at=fieldOffset(FIELD_PRODUCT_DISPATCH)+3*kind;
+        words[at]=uint(min(count,65535));words[at+1]=uint(max(1,(count+65534)/65535));words[at+2]=1u;
+    }
+}
+void sparseProduct(int index,int lane){
+    bool velocities=p.stage==STAGE_SPARSE_VELOCITY_PRODUCT;
+    int count=readIntField(FIELD_PRODUCT_COUNTS,velocities?1:0);
+    if(index>=count)return;
+    int owner=velocities?headerValue(H_ROW_COUNT)+readIntField(FIELD_PRODUCT_VELOCITIES,index)
+                        :readIntField(FIELD_PRODUCT_ROWS,index);
+    dvec2 sum=dvec2(0.0);
+    for(int i=readIntField(FIELD_OFFSETS,owner)+lane;i<readIntField(FIELD_OFFSETS,owner+1);i+=128)
+        sum+=termValue(readIntField(FIELD_ENTRIES,i),owner);
+    parts[lane]=sum;reduce(lane);
+    if(lane==0)finishOwner(owner,parts[0]);
+}
 void main() {
     int block = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x),
         id = 128 * block + lane;
-    if (p.stage >= STAGE_SMALL_VELOCITY_PRODUCT && p.argument < MODE_PREPARE && readDoubleWord(headerValue(H_CONTROL) + 2 * (p.argument == MODE_PRESSURE ? CONTROL_REFRESH : CONTROL_RUN)) == 0.0)
+    bool productStage=(p.stage>=STAGE_SMALL_VELOCITY_PRODUCT && p.stage<=STAGE_LARGE_ROW_PRODUCT)
+        ||p.stage==STAGE_SPARSE_VELOCITY_PRODUCT||p.stage==STAGE_SPARSE_ROW_PRODUCT;
+    if (productStage && p.argument < MODE_PREPARE && readDoubleWord(headerValue(H_CONTROL) + 2 * (p.argument == MODE_PRESSURE ? CONTROL_REFRESH : CONTROL_RUN)) == 0.0)
         return;
+    if(p.stage==STAGE_SPARSE_VELOCITY_PRODUCT||p.stage==STAGE_SPARSE_ROW_PRODUCT){sparseProduct(block,lane);return;}
     if (p.stage == STAGE_VELOCITY_BLOCK_PRODUCT || p.stage == STAGE_ROW_BLOCK_PRODUCT) {
         blockProduct(block, lane);
         return;
@@ -257,6 +326,14 @@ void main() {
         countBlocks(id);
     else if (p.stage == STAGE_MAP_BLOCKS)
         mapBlocks(id);
+    else if (p.stage == STAGE_MARK_INDUCED_VELOCITY)
+        markInducedVelocity(id);
+    else if (p.stage == STAGE_MARK_PRODUCT_ROWS)
+        markProductRow(id);
+    else if (p.stage == STAGE_MARK_PRODUCT_VELOCITIES)
+        markProductVelocity(id);
+    else if (p.stage == STAGE_PRODUCT_DISPATCH && id==0)
+        productDispatch();
     else if (p.stage == STAGE_SMALL_VELOCITY_PRODUCT || p.stage == STAGE_SMALL_ROW_PRODUCT)
         shortOwnerProduct(id);
 }

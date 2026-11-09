@@ -145,6 +145,11 @@ final class VulkanGranularTransitions implements AutoCloseable {
         for(int color=0;color<4;color++)stage(command,l,6,l.columnsCount,color,h,dt,gravity);
         recordGather(command,l,h,dt,gravity);
     }
+    /** Prepare the same inventory snapshot and accounting columns for an empty interval. */
+    void recordEmptyInterval(VkCommandBuffer command,Layout l,GpuBuffer arena,double h,double dt,double gravity){
+        recordCopySource(command,l,arena);
+        stage(command,l,16,Math.max(1,l.inputRows),0,h,dt,gravity);
+    }
     /** Shared phase-transfer entry: copy first, apply its complete row/species successor to l.source,
      * then call recordReassemble. Zero-volume source rows are removed during the gather. */
     void recordCopySource(VkCommandBuffer command,Layout l,GpuBuffer arena){

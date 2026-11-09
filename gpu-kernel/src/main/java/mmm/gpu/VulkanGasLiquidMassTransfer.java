@@ -90,7 +90,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_SLOT(4),
         ORPHAN_ENERGY(8),
         ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4),
-        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8);
+        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8);
         final int width;
         Field(int width) {
             this.width = width;
@@ -364,14 +364,12 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 (command, input, output, errors, staging, stack) -> recordPublish(command, l), l.feedbackOffset(), 28);
         completedPhaseBatches=result.error()==0?result.feedback().getInt(24):0;
         if(timings!=null){
-            double propose=0,exchange=0;
+            double contact=0;
             for(var sample:timings.read()){
-                if(sample.stage().equals("gas-transfer-propose"))propose+=sample.milliseconds();
-                else if(sample.stage().equals("gas-transfer-exchange"))exchange+=sample.milliseconds();
+                if(sample.stage().equals("gas-transfer-contact"))contact+=sample.milliseconds();
                 else System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
             }
-            System.out.printf("mechanical_kernel=gas-transfer-propose gpu_ms=%.3f%n",propose);
-            System.out.printf("mechanical_kernel=gas-transfer-exchange gpu_ms=%.3f%n",exchange);
+            System.out.printf("mechanical_kernel=gas-transfer-contact gpu_ms=%.3f%n",contact);
         }
         return result.error();
     }
@@ -383,8 +381,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         });
         for(int pass=0;pass<7;pass++){
             final int current=pass;
-            timed(c,"gas-transfer-propose",()->stage(c,l,1,l.cells,current));
-            timed(c,"gas-transfer-exchange",()->stage(c,l,4,l.groups,current));
+            if(pass==6)stage(c,l,15,l.cells,pass);
+            timed(c,"gas-transfer-contact",()->stage(c,l,1,l.cells,current));
         }
         if(l.dryProposals>0){
             timed(c,"gas-transfer-dry-wall",()->{

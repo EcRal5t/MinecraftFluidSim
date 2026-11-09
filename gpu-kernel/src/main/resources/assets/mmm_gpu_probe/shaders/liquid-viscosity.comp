@@ -14,7 +14,7 @@ layout(binding = 2, std430) buffer Errors {
 layout(push_constant) uniform Params {
     int header;
     int stage;
-    int colour;
+    int reserved;
     int count;
     double h;
     double dt;
@@ -70,9 +70,6 @@ double readDoubleField(int field, int index) {
 void writeDoubleField(int field, int index, double value) {
     writeCandidateDouble(fieldOffset(field) + 2 * index, value);
 }
-void add(int field, int index, double value) {
-    writeDoubleField(field, index, readDoubleField(field, index) + value);
-}
 int readIntField(int field, int index) {
     return int(words[fieldOffset(field) + index]);
 }
@@ -117,27 +114,9 @@ bool enabled(int f) {
 double harmonic(double a, double b) {
     return a == 0.0LF || b == 0.0LF ? 0.0LF : seriesConductance(2.0LF,a,1.0LF,b,1.0LF);
 }
-// Exact local exponential damping, evaluated in double precision without float exp.
-double blend(double x) {
-    if (x < 1e-4)
-        return x * (1.0 - x * (.5 - x * (1.0 / 6.0 - x * (1.0 / 24.0 - x / 120.0))));
-    if (x > 745.0)
-        return 1.0;
-    int e = int(round(-x / 0.6931471805599453094LF));
-    double r = -x - double(e) * 0.6931471805599453094LF, t = 1.0, sum = 1.0;
-    for (int k = 1; k <= 18; k++) {
-        t *= r / double(k);
-        sum += t;
-    }
-    return 1.0 - ldexp(sum, e);
-}
 // Evaluate each liquid carrier at its own temperature, then volume-average the
 // stresses represented by this cell's shared velocity. Carrier stocks remain distinct.
 void prepareCell(int c) {
-    if (c == 0) {
-        for (int colour = 0; colour < 18; colour++)
-            writeIntField(FIELD_STRAIN_COUNTS, colour, 0);
-    }
     writeDoubleField(FIELD_SOURCE_CELL_HEAT, c, 0.0);
     writeDoubleField(FIELD_SOURCE_CELL_WORK, c, 0.0);
     writeDoubleField(FIELD_MU, c, 0.0);
@@ -247,9 +226,6 @@ void prepareFace(int f) {
     writeDoubleField(FIELD_CONTACT_FACE_HEAT, f, 0.0);
     writeDoubleField(FIELD_CONTACT_FACE_WORK, f, 0.0);
 }
-int colourStart(int colour) {
-    return headerWord(COLOUR_OFFSETS + colour);
-}
 void compileStrain(int row, ivec4 ids, double conductance) {
     if (!(conductance > 0.0))
         return;
@@ -284,47 +260,6 @@ ivec4 strainFaces(int row) {
     eb[ab.y] = 1;
     return ivec4(faceAt(pos, ab.x), faceAt(pos - eb, ab.x), faceAt(pos, ab.y), faceAt(pos - ea, ab.y));
 }
-bool explicitStrain(int row) {
-    ivec4 ids = strainFaces(row);
-    for (int i = 0; i < 4; i++)
-        if (ids[i] >= 0 && readDoubleField(FIELD_FACE_INVERSE_MASS, ids[i]) > 0.0 && readIntField(FIELD_FACE_EXPLICIT, ids[i]) == 0)
-            return false;
-    return true;
-}
-void applyStrain(int id) {
-    if (id >= readIntField(FIELD_STRAIN_COUNTS, p.colour))
-        return;
-    int slot = colourStart(p.colour) + id, row = readIntField(FIELD_STRAIN_ROWS, slot),
-        owner = (row < 3 * cellCount() ? row : row - 3 * cellCount()) / 3;
-    ivec4 ids = strainFaces(row);
-    dvec4 response = dvec4(0.0);
-    dvec3 fixedCoefficients = dvec3(0.0);
-    double inverse = 0.0, rate = 0.0;
-    for (int i = 0; i < 4; i++) {
-        int f = ids[i];
-        double inv = f < 0 ? 0.0 : readDoubleField(FIELD_FACE_INVERSE_MASS, f);
-        if (inv == 0.0) {
-            ids[i] = -1;
-            continue;
-        }
-        double sign = (i % 2 == 0 ? 1.0 : -1.0);
-        response[i] = sign * inv;
-        inverse += inv;
-        rate += sign * faceValue(f, FACE_VELOCITY);
-        fixedCoefficients[axisOf(f)] += sign;
-    }
-    if (rate == 0.0)
-        return;
-    double impulse = blend(p.dt * readDoubleField(FIELD_STRAIN_CONDUCTANCE, row) * inverse) * rate / inverse;
-    add(FIELD_STRESS_HEAT, row, max(0.0, impulse * (rate - .5 * impulse * inverse)));
-    for (int i = 0; i < 4; i++) {
-        int f = ids[i];
-        if (f >= 0)
-            writeFaceVelocity(f, faceValue(f, FACE_VELOCITY) - impulse * response[i]);
-    }
-    for (int a = 0; a < 3; a++)
-        add(FIELD_CELL_FIXED_IMPULSE, 3 * owner + a, impulse * fixedCoefficients[a]);
-}
 void compileCellStrain(int id) {
     int c = id / 6, kind = id % 6, row = kind < 3 ? 3 * c + kind : 3 * cellCount() + 3 * c + kind - 3;
     writeDoubleField(FIELD_STRAIN_CONDUCTANCE, row, 0.0);
@@ -356,85 +291,8 @@ void compileCellStrain(int id) {
                          harmonic(readDoubleField(FIELD_MU, cells.z), readDoubleField(FIELD_MU, cells.w)));
     compileStrain(3 * cellCount() + 3 * c + pair, ids, mu * p.h * area);
 }
-void prepareImplicitStrain(int row) {
-    if (readDoubleField(FIELD_STRAIN_CONDUCTANCE, row) == 0.0)
-        return;
-    if (explicitStrain(row)) {
-        writeIntField(FIELD_STRAIN_CLASS, row, readIntField(FIELD_STRAIN_CLASS, row) | 8);
-        return;
-    }
-    bool normal = row < 3 * cellCount();
-    int local = normal ? row : row - 3 * cellCount(), kind = local % 3;
-    ivec3 pos = cellPosition(local / 3);
-    int colour;
-    if (normal)
-        colour = 2 * kind + (pos[kind] & 1);
-    else {
-        ivec2 ab = shearAxes(kind);
-        colour = 6 + 4 * kind + (pos[ab.x] & 1) + 2 * (pos[ab.y] & 1);
-    }
-    int slot = colourStart(colour) + int(atomicAdd(words[fieldOffset(FIELD_STRAIN_COUNTS) + colour], 1u));
-    writeIntField(FIELD_STRAIN_ROWS, slot, row);
-}
-void strainDispatch(int colour) {
-    int groups = (readIntField(FIELD_STRAIN_COUNTS, colour) + 127) / 128;
-    writeIntField(FIELD_STRAIN_DISPATCH, 3 * colour, min(groups, 65535));
-    writeIntField(FIELD_STRAIN_DISPATCH, 3 * colour + 1, (groups + 65534) / 65535);
-    writeIntField(FIELD_STRAIN_DISPATCH, 3 * colour + 2, 1);
-}
 double wallConductance(int c, int tangent) {
     return c < 0 ? 0.0 : readDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + tangent);
-}
-void wall(int f) {
-    if (!enabled(f) || readIntField(FIELD_FACE_EXPLICIT, f) != 0)
-        return;
-    ivec2 cells = faceCells(f);
-    int axis = axisOf(f);
-    double conductance = wallConductance(cells.x, axis) + wallConductance(cells.y, axis), v = faceValue(f, FACE_VELOCITY),
-           mass = faceValue(f, FACE_MASS);
-    if (conductance == 0.0 || v == 0.0)
-        return;
-    double impulse = mass * blend(p.dt * conductance / mass) * v;
-    writeFaceVelocity(f, v - impulse / mass);
-    add(FIELD_WALL_HEAT, f, max(0.0, impulse * (v - .5 * impulse / mass)));
-    add(FIELD_WALL_FACE_IMPULSE, f, impulse);
-}
-void prescribed(int f) {
-    if (headerWord(H_CONTACT_FACE_OFFSETS) >= 0 && readIntField(FIELD_FACE_EXPLICIT, f) == 0) {
-        int first = int(words[headerWord(H_CONTACT_FACE_OFFSETS) + f]), last = int(words[headerWord(H_CONTACT_FACE_OFFSETS) + f + 1]);
-        if (first < 0 || last < first || last > headerWord(H_CONTACT_CAPACITY)) {
-            atomicOr(errors, INVALID_VISCOSITY_ERROR);
-            return;
-        }
-        ivec2 cells = faceCells(f);
-        double mu = 0.0, samples = 0.0;
-        for (int i = 0; i < 2; i++)
-            if (wet(cells[i])) {
-                mu += readDoubleField(FIELD_MU, cells[i]);
-                samples++;
-            }
-        for (int contact = first; contact < last; contact++) {
-            if (!enabled(f) || samples == 0.0)
-                continue;
-            int body = int(words[headerWord(H_CONTACT_BODY_HANDLES) + contact]);
-            double distance = candidateDouble(headerWord(H_CONTACT_AREA_OVER_DISTANCE) + 2 * contact);
-            if (body < 0 || body >= headerWord(H_BODY_COUNT) || distance < 0.0) {
-                atomicOr(errors, INVALID_VISCOSITY_ERROR);
-                continue;
-            }
-            double target = candidateDouble(headerWord(H_CONTACT_VELOCITIES) + 2 * (3 * body + axisOf(f))), before = faceValue(f, FACE_VELOCITY),
-                   mass = faceValue(f, FACE_MASS), conductance = mu / samples * distance;
-            double after = before + blend(p.dt * conductance / mass) * (target - before), delta = after - before,
-                   impulse = mass * delta, work = target * impulse;
-            writeFaceVelocity(f, after);
-            writeDoubleField(FIELD_CONTACT_IMPULSE, contact, -impulse);
-            writeDoubleField(FIELD_CONTACT_WORK, contact, work);
-            add(FIELD_CONTACT_FACE_WORK, f, work);
-            add(FIELD_CONTACT_FACE_HEAT, f, max(0.0, impulse * (target - before - .5 * delta)));
-        }
-    }
-    double v = faceValue(f, FACE_VELOCITY);
-    writeDoubleField(FIELD_FINAL_FACE_K, f, .5 * faceValue(f, FACE_MASS) * v * v);
 }
 void gather(int c) {
     if (!wet(c))
@@ -529,9 +387,11 @@ double contactConductance(int contact, double mu) {
 double contactVelocity(int contact, int axis) {
     return candidateDouble(headerWord(H_CONTACT_VELOCITIES) + 2 * (3 * int(words[headerWord(H_CONTACT_BODY_HANDLES) + contact]) + axis));
 }
-bool explicitCondition(int f) {
-    if (!enabled(f))
-        return false;
+void prepareFaceScale(int f) {
+    if (!enabled(f)) {
+        writeDoubleField(FIELD_FACE_SCALE, f, 0.0);
+        return;
+    }
     int rows[6];
     double signs[6];
     faceStrains(f, rows, signs);
@@ -549,11 +409,25 @@ bool explicitCondition(int f) {
     double mu = contacts.x < contacts.y ? contactMu(cells) : 0.0;
     for (int contact = contacts.x; contact < contacts.y; contact++)
         assigned += p.dt * contactConductance(contact, mu);
-    return assigned <= faceValue(f, FACE_MASS);
+    double mass = faceValue(f, FACE_MASS);
+    writeDoubleField(FIELD_FACE_SCALE, f, mass / (mass + assigned));
 }
-void explicitFace(int f) {
+
+void scaleStrain(int row) {
+    double g = readDoubleField(FIELD_STRAIN_CONDUCTANCE, row);
+    if (g <= 0.0)
+        return;
+    ivec4 faces = strainFaces(row);
+    double scale = 1.0;
+    for (int i = 0; i < 4; i++)
+        if (faces[i] >= 0 && readDoubleField(FIELD_FACE_INVERSE_MASS, faces[i]) > 0.0)
+            scale = min(scale, readDoubleField(FIELD_FACE_SCALE, faces[i]));
+    writeDoubleField(FIELD_STRAIN_CONDUCTANCE, row, g * scale);
+}
+
+void applyFace(int f) {
     double before = readDoubleField(FIELD_SOURCE_FACE_VELOCITY, f), mass = faceValue(f, FACE_MASS);
-    if (readIntField(FIELD_FACE_EXPLICIT, f) == 0) {
+    if (!enabled(f)) {
         writeDoubleField(FIELD_FINAL_FACE_K, f, readDoubleField(FIELD_SOURCE_FACE_K, f));
         return;
     }
@@ -564,8 +438,6 @@ void explicitFace(int f) {
     double impulse = 0.0;
     for (int i = 0; i < 6; i++) {
         double g = rows[i] < 0 ? 0.0 : readDoubleField(FIELD_STRAIN_CONDUCTANCE, rows[i]);
-        if (g > 0.0 && (readIntField(FIELD_STRAIN_CLASS, rows[i]) & 8) == 0)
-            g = 0.0;
         sizes[i] = g > 0.0 ? strainSize(rows[i]) : 1;
         rates[i] = g > 0.0 ? readDoubleField(FIELD_STRESS_HEAT, rows[i]) : 0.0;
         weights[i] = p.dt * g * double(sizes[i]);
@@ -574,13 +446,14 @@ void explicitFace(int f) {
     }
     ivec2 cells = faceCells(f);
     int axis = axisOf(f);
-    double wallG = wallConductance(cells.x, axis) + wallConductance(cells.y, axis), wallWeight = p.dt * wallG;
+    double scale = readDoubleField(FIELD_FACE_SCALE, f);
+    double wallG = wallConductance(cells.x, axis) + wallConductance(cells.y, axis), wallWeight = p.dt * wallG * scale;
     assigned += wallWeight;
     impulse -= wallWeight * before;
     ivec2 contacts = prescribedRange(f);
     double mu = contacts.x < contacts.y ? contactMu(cells) : 0.0, work = 0.0, contactHeat = 0.0;
     for (int contact = contacts.x; contact < contacts.y; contact++) {
-        double g = contactConductance(contact, mu);
+        double g = contactConductance(contact, mu) * scale;
         if (g == 0.0)
             continue;
         double target = contactVelocity(contact, axis), rate = before - target, j = -p.dt * g * rate, w = target * j;
@@ -592,7 +465,7 @@ void explicitFace(int f) {
         writeDoubleField(FIELD_CONTACT_WORK, contact, w);
     }
     double after = before + impulse / mass, difference = before - after;
-    // The CFL test guarantees nonnegative weights, so this is an actual kinetic mixing loss.
+    // Finite shared stresses leave nonnegative mass for kinetic mixing.
     double mixing = .5 * (mass - assigned) * difference * difference;
     for (int i = 0; i < 6; i++)
         if (weights[i] > 0.0) {
@@ -601,7 +474,7 @@ void explicitFace(int f) {
         }
     mixing += .5 * wallWeight * after * after;
     for (int contact = contacts.x; contact < contacts.y; contact++) {
-        double g = contactConductance(contact, mu);
+        double g = contactConductance(contact, mu) * scale;
         if (g == 0.0)
             continue;
         double d = contactVelocity(contact, axis) - after;
@@ -614,14 +487,12 @@ void explicitFace(int f) {
     writeDoubleField(FIELD_CONTACT_FACE_WORK, f, work);
     writeDoubleField(FIELD_CONTACT_FACE_HEAT, f, contactHeat + mixing);
 }
-void explicitCellHeat(int c) {
+void applyStrainHeat(int c) {
     dvec3 fixedImpulse = dvec3(0.0);
     for (int kind = 0; kind < 6; kind++) {
         int row = kind < 3 ? 3 * c + kind : 3 * cellCount() + 3 * c + kind - 3;
         double g = readDoubleField(FIELD_STRAIN_CONDUCTANCE, row);
-        if (g > 0.0 && (readIntField(FIELD_STRAIN_CLASS, row) & 8) == 0)
-            g = 0.0;
-        double rate = readDoubleField(FIELD_STRESS_HEAT, row), impulse = p.dt * g * rate;
+        double rate = g > 0.0 ? readDoubleField(FIELD_STRESS_HEAT, row) : 0.0, impulse = p.dt * g * rate;
         writeDoubleField(FIELD_STRESS_HEAT, row, .5 * impulse * rate);
         if (g == 0.0)
             continue;
@@ -644,13 +515,6 @@ void main() {
         prepareCell(id);
     else if (p.stage == STAGE_PREPARE_FACES)
         prepareFace(id);
-    else if (p.stage == STAGE_APPLY_STRAIN_OR_WALL) {
-        if (p.colour < 18)
-            applyStrain(id);
-        else
-            wall(id);
-    } else if (p.stage == STAGE_APPLY_CONTACTS)
-        prescribed(id);
     else if (p.stage == STAGE_GATHER_HEAT)
         gather(id);
     else if (p.stage == STAGE_CLEAR_CONTACTS) {
@@ -658,14 +522,12 @@ void main() {
         writeDoubleField(FIELD_CONTACT_WORK, id, 0.0);
     } else if (p.stage == STAGE_COMPILE_CELL_STRAIN)
         compileCellStrain(id);
-    else if (p.stage == STAGE_PUBLISH_STRAIN_DISPATCH)
-        strainDispatch(id);
-    else if (p.stage == STAGE_PREPARE_IMPLICIT_STRAIN)
-        prepareImplicitStrain(id);
-    else if (p.stage == STAGE_MARK_EXPLICIT_FACES)
-        writeIntField(FIELD_FACE_EXPLICIT, id, explicitCondition(id) ? 1 : 0);
-    else if (p.stage == STAGE_APPLY_EXPLICIT_FACES)
-        explicitFace(id);
-    else if (p.stage == STAGE_APPLY_EXPLICIT_HEAT)
-        explicitCellHeat(id);
+    else if (p.stage == STAGE_PREPARE_FACE_SCALE)
+        prepareFaceScale(id);
+    else if (p.stage == STAGE_SCALE_STRAINS)
+        scaleStrain(id);
+    else if (p.stage == STAGE_APPLY_FACES)
+        applyFace(id);
+    else if (p.stage == STAGE_APPLY_STRAIN_HEAT)
+        applyStrainHeat(id);
 }

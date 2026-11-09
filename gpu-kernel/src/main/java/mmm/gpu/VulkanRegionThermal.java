@@ -78,16 +78,14 @@ final class VulkanRegionThermal implements AutoCloseable {
     private final VulkanLiquidThermodynamics caloric;
     private final VulkanThermalContacts contacts;
     private final VulkanThermalConduction conduction;
-    private final VulkanPressureKernel pressure;
     private final VulkanEnergyLedger deviceLedger;
     private final VulkanCommandTemplates templates;
     private record PreparationKey(VulkanThermalContacts.Inputs input,VulkanThermalConduction.Layout conduction,
-                                  long header,int cells,int owners,int samples,double duration,
-                                  FlipKernelBindings.BufferIdentity frozen) {}
+                                  long header,int cells,int owners,int samples,double duration) {}
     private VulkanStageTimings timings;
     VulkanRegionThermal(VulkanDeviceContext context){
         try{caloric=own(new VulkanLiquidThermodynamics(context));
-            contacts=own(new VulkanThermalContacts(context));conduction=own(new VulkanThermalConduction(context));pressure=own(new VulkanPressureKernel(context,4096));deviceLedger=own(new VulkanEnergyLedger(context));
+            contacts=own(new VulkanThermalContacts(context));conduction=own(new VulkanThermalConduction(context));deviceLedger=own(new VulkanEnergyLedger(context));
             templates=own(new VulkanCommandTemplates(context));
             if(Boolean.getBoolean("mmm.gpuMechanicalStages")&&context.hasTimestampQueries())timings=own(new VulkanStageTimings(context,384));
         }catch(RuntimeException|Error failure){try{close();}catch(RuntimeException closing){failure.addSuppressed(closing);}throw failure;}
@@ -98,7 +96,7 @@ final class VulkanRegionThermal implements AutoCloseable {
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation){
         return execute(candidate,l,duration,sourceDevices,settlement,continuation,null,null,-1);
     }
-    /** Hooks share the first preparation and final publication submissions; failed candidates remain private. */
+    /** Preparation, finite heat exchange and publication share one private candidate submission. */
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation,
                 VulkanRegionStorage.ComputeCommands prefix,VulkanRegionStorage.ComputeCommands suffix){
         return execute(candidate,l,duration,sourceDevices,settlement,continuation,prefix,suffix,-1);
@@ -106,41 +104,21 @@ final class VulkanRegionThermal implements AutoCloseable {
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation,
                 VulkanRegionStorage.ComputeCommands prefix,VulkanRegionStorage.ComputeCommands suffix,long finalUploadedBytes){
         if(finalUploadedBytes < -1)throw new IllegalArgumentException("Final thermal upload bytes must be nonnegative or -1 for continuation");
-        var status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
+        VulkanRegionStorage.ComputeCommands advance=(command,in,out,errors,staging,stack)->{
             if(prefix!=null)prefix.record(command,in,out,errors,staging,stack);
             var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);
             caloric.rebindRanges(arena,err);contacts.rebindRanges(arena,err);
             deviceLedger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);
-            conduction.rebindRanges(arena,err);pressure.rebindRanges(l.conduction().pressureRanges(arena,err));
+            conduction.rebindRanges(arena,err);
             if(timings!=null)timings.reset(command);
             if(timings!=null)recordPreparation(command,l,duration);
             else {
                 var c=l.contacts();
-                var key=new PreparationKey(l.input(),l.conduction(),c.header.offset(),c.cells,c.owners,c.samples,duration,contacts.frozenIdentity());
+                var key=new PreparationKey(l.input(),l.conduction(),c.header.offset(),c.cells,c.owners,c.samples,duration);
                 templates.record(command,new VulkanCommandTemplates.Key(0,out,errors,0,0,key),
                         secondary->recordPreparation(secondary,l,duration));
             }
-        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),44);
-        if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
-        if(status.error()!=0)return status.error();
-        int bathCount=status.feedback().getInt(24);
-        int fastOwners=status.feedback().getInt(28),fastSamples=status.feedback().getInt(32);
-        if(fastOwners>0){
-            var offsets=l.contacts().column(VulkanThermalContacts.Field.CACHE_OFFSETS);
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
-                timed(command,"thermal-imex-fast-contacts",()->contacts.recordImexContacts(command,l.contacts(),duration,fastSamples));
-                timed(command,"thermal-imex-isolated",()->conduction.recordImexIsolated(command,l.conduction(),duration,fastOwners));
-            },offsets.offset()+4L*fastSamples,4);
-            if(status.error()!=0)return status.error();int directedFastContacts=status.feedback().getInt(0);
-            if(directedFastContacts>0){
-                contacts.ensureFrozenCapacity(Math.multiplyExact(2,directedFastContacts));
-                status=candidate.continueBatch((command,in,out,errors,staging,stack)->timed(command,"thermal-imex-cache",()->contacts.recordImexCache(command,l.contacts(),duration,fastSamples)),0,0);
-                if(status.error()!=0)return status.error();
-                conduction.solveImex(candidate,l.conduction(),pressure,duration,fastOwners,contacts.imexOperator(l.contacts(),duration,fastSamples),timings);
-            }
-        }
-        VulkanRegionStorage.ComputeCommands publish=(command,in,out,errors,staging,stack)->{
-            timed(command,"thermal-finish",()->{if(fastOwners>0)contacts.recordImexCorrection(command,l.contacts(),duration);conduction.recordImexFinish(command,l.conduction(),duration);});
+            timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration));
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));
             if(l.input().device()!=null)l.input().device().recordSettle(command,sourceDevices,settlement,deviceLedger,out,continuation);
             caloric.record(command,l.input().liquidThermal());
@@ -149,14 +127,18 @@ final class VulkanRegionThermal implements AutoCloseable {
             if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
             if(suffix!=null)suffix.record(command,in,out,errors,staging,stack);
         };
-        int finalError=finalUploadedBytes<0?candidate.continueBatch(publish,0,0).error():candidate.finishBatch(finalUploadedBytes,publish);
+        long feedback=l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset();
+        var status=finalUploadedBytes<0?candidate.continueBatch(advance,feedback,20)
+                :candidate.finishBatch(finalUploadedBytes,advance,feedback,20);
+        if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
+        if(status.error()!=0)return status.error();
+        int bathCount=status.feedback().getInt(16);
         if(timings!=null){
             for(var sample:timings.read())System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
             System.out.printf("thermal_layout owner_capacity=%d term_capacity=%d contact_capacity=%d bath_count=%d bath_capacity=%d reservoir_MiB=%.3f%n",
                     l.conduction().owners,l.conduction().terms,l.conduction().contacts,bathCount,l.conduction().baths,l.conduction().column(VulkanThermalConduction.Field.RESERVOIR_CHANGE).bytes()/1048576.0);
-            System.out.printf("thermal_imex fast_owners=%d fast_samples=%d frozen_SS_MiB=%.3f%n",fastOwners,fastSamples,contacts.frozenBytes()/1048576.0);
         }
-        return finalError;
+        return status.error();
     }
     private void recordPreparation(org.lwjgl.vulkan.VkCommandBuffer command,Layout l,double duration){
         timed(command,"thermal-caloric",()->{
@@ -167,15 +149,11 @@ final class VulkanRegionThermal implements AutoCloseable {
         });
         timed(command,"thermal-samples",()->contacts.recordSpatial(command,l.contacts()));
         conduction.recordSpatialInitialize(command,l.conduction(),duration);
-        timed(command,"thermal-sample-operator",()->contacts.recordFullTrial(command,l.contacts(),duration));
-        conduction.recordImexPrepare(command,l.conduction(),duration,timings);
-        timed(command,"thermal-imex-classify",()->{
-            conduction.recordImexClassify(command,l.conduction(),duration);
-            contacts.recordImexSamples(command,l.contacts(),duration);
-        });
-        contacts.recordConductionState(command,l.contacts());
+        conduction.recordSpatialOwnerCapacities(command,l.conduction(),duration);
+        timed(command,"thermal-contact-conductances",()->contacts.recordContactConductances(command,l.contacts(),duration));
+        conduction.recordNormalizeRates(command,l.conduction(),duration);
+        timed(command,"thermal-limited-flux",()->contacts.recordLimitedFlux(command,l.contacts(),duration));
     }
-    long deviceBytes(){return contacts.frozenBytes();}
     /** Settles the wall energy written by dry-wall condensation after conduction. */
     void recordCondensationSettlement(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,
             VulkanThermalDeviceLayout device,VulkanThermalDeviceLayout.Settlement settlement,

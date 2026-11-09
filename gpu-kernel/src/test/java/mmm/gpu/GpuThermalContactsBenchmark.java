@@ -20,7 +20,7 @@ public final class GpuThermalContactsBenchmark {
         try(var context=new VulkanDeviceContext(device,true,true);var liquidGeometry=new VulkanLiquidGeometry(context);var totalsKernel=new VulkanLiquidCellVolumes(context);
             var gasGeometryKernel=new VulkanGasGeometry(context);var gasEOS=new VulkanGasThermodynamics(context);var caloric=new VulkanLiquidThermodynamics(context);
             var coherentGeometryKernel=new VulkanCoherentGeometry(context);var granularGeometryKernel=new VulkanGranularGeometry(context);
-            var ledger=new VulkanEnergyLedger(context);var contacts=new VulkanThermalContacts(context);var conduction=new VulkanThermalConduction(context);var pressure=new VulkanPressureKernel(context,4096)){
+            var ledger=new VulkanEnergyLedger(context);var contacts=new VulkanThermalContacts(context);var conduction=new VulkanThermalConduction(context)){
             long a=Math.max(8,context.storageOffsetAlignment());int cells=grid*grid*grid;double h=.5;
             int c1=grid+1,c2=c1+1,c3=2*grid+2,c4=3*grid+2;long q=1024;
             var fixture=GpuLiquidGeometryBenchmark.fixture(grid,true);var old=fixture.inventory();var mass=old.massUnits();var energy=old.energyBits();
@@ -89,7 +89,7 @@ public final class GpuThermalContactsBenchmark {
                 long[] elapsed=new long[samples];VulkanRegionStorage.Metrics before=null;boolean upload=false;int growth=0;int[] counts=new int[4];
                 for(int step=0;step<warm+samples;step++){
                     if(step==warm)before=storage.metrics();long start=System.nanoTime();try(var source=storage.capture()){
-                        while(true){int[] required=advance(storage,source,contacts,conduction,pressure,caloric,gasEOS,ledger,settlement,input,tail,sourceEnd,upload);
+                        while(true){int[] required=advance(storage,source,contacts,conduction,caloric,gasEOS,ledger,settlement,input,tail,sourceEnd,upload);
                             if(required[0]==0){counts=Arrays.copyOfRange(required,1,5);break;}
                             if(required[4]<=tail.conduction().contacts&&required[5]<=tail.conduction().baths)throw new IllegalStateException("Thermal capacity requirement did not grow");
                             int edges=required[4]>tail.conduction().contacts?Math.multiplyExact(required[4],2):tail.conduction().contacts;
@@ -131,7 +131,7 @@ public final class GpuThermalContactsBenchmark {
             var deviceConfig=new VulkanThermalDeviceLayout.Configuration(devices.definitions(),deviceInitial,deviceThermal.tables(),new double[]{385*293.15});
             double[] baths=new double[6*cells];for(int i=0;i<baths.length;i++)baths[i]=initial.getDouble(Math.toIntExact(bath.offset()+8L*i));
             var thermalConfig=new VulkanRegionThermal.Configuration(tables,mapping,h,baths,1);
-            try(var projection=new VulkanLiquidProjection(context);var multigrid=new VulkanPressureMultigrid(context);
+            try(var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);var multigrid=new VulkanPressureMultigrid(context);
                 var region=new VulkanLiquidRegion(context,liquidGeometry,projection,pressure,multigrid,inventory,fixture.momentum(),fixture.fixed(),fixture.occupied(),mechanical,gasConfig,granularConfig,thermalConfig,coherentConfig,deviceConfig)){
                 var audit=mmm.thermal.ThermalAuditLedger.initialized(mmm.units.SignedDyadic.sum(Arrays.stream(inventory.energyBits()).mapToDouble(Double::longBitsToDouble).toArray())
                         .add(mmm.units.SignedDyadic.sum(gasConfig.initial().internalEnergy())).add(mmm.units.SignedDyadic.sum(granularConfig.initial().particles().stream().mapToDouble(p->p.inventory().internalEnergy()).toArray()))
@@ -164,7 +164,7 @@ public final class GpuThermalContactsBenchmark {
         }
     }
     private static int[] advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,VulkanThermalContacts contacts,VulkanThermalConduction conduction,
-                                 VulkanPressureKernel pressure,VulkanLiquidThermodynamics caloric,VulkanGasThermodynamics gasEOS,VulkanEnergyLedger ledger,VulkanThermalDeviceLayout.Settlement settlement,VulkanThermalContacts.Inputs input,Tail t,long sourceEnd,boolean upload){
+                                 VulkanLiquidThermodynamics caloric,VulkanGasThermodynamics gasEOS,VulkanEnergyLedger ledger,VulkanThermalDeviceLayout.Settlement settlement,VulkanThermalContacts.Inputs input,Tail t,long sourceEnd,boolean upload){
         double dt=.05;try(var candidate=storage.prepareReallocated(source,t.bytes())){
             var writes=new java.util.ArrayList<VulkanGasThermodynamics.TableChunk>();if(upload){writes.add(new VulkanGasThermodynamics.TableChunk(t.conduction().header.offset(),t.conduction().headerBytes()));writes.addAll(t.conduction().tableChunks());writes.add(new VulkanGasThermodynamics.TableChunk(t.contacts().header.offset(),t.contacts().headerBytes()));writes.addAll(t.contacts().tableChunks());}
             long bytes=writes.stream().mapToLong(x->x.bytes().remaining()).sum();
@@ -172,13 +172,13 @@ public final class GpuThermalContactsBenchmark {
                 copy(command,in,0,out,0,sourceEnd,stack);if(upload)for(var w:writes)vkCmdUpdateBuffer(command,out.handle(),w.offset(),w.bytes());else copy(command,in,sourceEnd,out,sourceEnd,t.bytes()-sourceEnd,stack);
                 input.device().recordBeginRequest(command,in,input.device(),out,stack);
                 barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
-                var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);ledger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);caloric.rebindRanges(arena,err);gasEOS.rebindRanges(arena,err);contacts.rebindRanges(arena,err);conduction.rebindRanges(arena,err);pressure.rebindRanges(t.conduction().pressureRanges(arena,err));
+                var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);ledger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);caloric.rebindRanges(arena,err);gasEOS.rebindRanges(arena,err);contacts.rebindRanges(arena,err);conduction.rebindRanges(arena,err);
                 caloric.record(command,input.liquidThermal());caloric.record(command,input.granularThermal());caloric.record(command,input.coherentThermal());caloric.record(command,input.deviceThermal());gasEOS.record(command,input.gasThermal());contacts.recordPrepare(command,t.contacts());
             },t.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),20);
             int[] required=new int[6];required[0]=status.error();for(int i=0;i<5;i++)required[i+1]=status.feedback().getInt(4*i);if(status.error()==64)return required;if(status.error()!=0)throw new IllegalStateException("Thermal sampling error="+status.error());
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{conduction.recordGraphPrepare(command,t.conduction(),dt);},t.conduction().column(VulkanThermalConduction.Field.IMEX_COUNTS).offset(),16);
-            required[5]=status.feedback().getInt(4);if(status.error()==64){required[0]=64;return required;}
-            if(status.error()!=0)throw new IllegalStateException("Thermal IMEX preparation error="+status.error());conduction.solveGraphImex(candidate,t.conduction(),pressure,dt,status.feedback().getInt(0),status.feedback().getInt(12));
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{conduction.recordGraphPrepare(command,t.conduction(),dt);},t.conduction().column(VulkanThermalConduction.Field.MODE).offset()+4,4);
+            required[5]=status.feedback().getInt(0);if(status.error()==64){required[0]=64;return required;}
+            if(status.error()!=0)throw new IllegalStateException("Thermal preparation error="+status.error());
             int error=candidate.finishBatch((command,in,out,errors,staging,stack)->{conduction.recordGraphFinish(command,t.conduction(),dt);contacts.recordPublish(command,t.contacts());input.device().recordSettle(command,input.device(),settlement,ledger,out);});if(error!=0)throw new IllegalStateException("Thermal finish error="+error);candidate.commit();return required;
         }
     }

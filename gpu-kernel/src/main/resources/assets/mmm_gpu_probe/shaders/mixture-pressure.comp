@@ -15,6 +15,7 @@ const int STAGE_PARTICLE_INCIDENCE = 8;
 const int STAGE_PUBLISH_FACES = 9;
 const int STAGE_PUBLISH_PARTICLES = 10;
 const int STAGE_CLAMP_PRESSURE = 11;
+const int STAGE_INITIALIZE_WARM = 12;
 const uint ERROR_GRANULAR_PRESSURE = 1048576u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
@@ -29,6 +30,7 @@ layout(push_constant) uniform Params {
     double cellSize;
     double duration;
     double gravity;
+    int warmValid;
 }
 p;
 // SPATIAL_GRID
@@ -297,9 +299,15 @@ void prepareDrag(int parcel) {
 void initializeRow(int row) {
     int count = headerValue(H_LIQUID_COUNT);
     bool enabled = row < count && pressureCell(row);
-    double reference = enabled ? mixture(row, Q_PRESSURE) : 0.0;
+    double reference = row < count ? mixture(row, Q_PRESSURE) : 0.0;
     double storage = enabled ? mixture(row, Q_PRESSURE_COMPLIANCE)/(p.duration*p.duration) : 0.0;
     if (!finite(reference) || reference < 0.0 || !finite(storage) || storage < 0.0) reportInvalidState();
+    if(row<count){
+        int guess=jh(COUPLED_H_PROBLEM)+2*(jh(COUPLED_H_ROW_COUNT)+row);
+        double previousReference=readDouble(ja(COUPLED_REFERENCE)+2*row);
+        double increment=enabled&&p.warmValid!=0?readDouble(guess)+previousReference-reference:0.0LF;
+        writeNumber(guess,clamp(increment,-reference,MIXTURE_PRESSURE_LIMIT-reference));
+    }
     if (row >= count) {
         int entry = 7 * count + row - count;
         words[jh(COUPLED_H_STARTS) + row] = uint(entry);
@@ -313,6 +321,12 @@ void initializeRow(int row) {
     writeNumber(ja(COUPLED_STORAGE) + 2 * row, storage);
     writeNumber(ja(COUPLED_ROW_SOURCE) + 2 * row, 0.0);
     words[ja(COUPLED_ROW_ENABLED) + row] = enabled ? 1u : 0u;
+}
+void initializeWarmReference(int row){
+    double reference=mixture(row,Q_PRESSURE);
+    if(!finite(reference)||reference<0.0LF){reportInvalidState();return;}
+    writeNumber(ja(COUPLED_REFERENCE)+2*row,reference);
+    writeNumber(jh(COUPLED_H_PRESSURE)+2*row,0.0LF);
 }
 void fluidIncidence(int f) {
     if (!activeFace(f)) {
@@ -468,6 +482,7 @@ void main() {
         publishFace(id);
     else if (p.stage == STAGE_PUBLISH_PARTICLES && id < headerValue(H_PARTICLE_CAPACITY))
         publishParticle(id);
+    else if (p.stage == STAGE_INITIALIZE_WARM && id < headerValue(H_LIQUID_COUNT)) initializeWarmReference(id);
     else if (p.stage == STAGE_CLAMP_PRESSURE && id < headerValue(H_LIQUID_COUNT) && pressureCell(id)) {
         double reference = mixture(id, Q_PRESSURE), increment = readDouble(jh(COUPLED_H_PRESSURE) + 2 * id);
         writeNumber(jh(COUPLED_H_PRESSURE) + 2 * id, clamp(increment, -reference, MIXTURE_PRESSURE_LIMIT-reference));

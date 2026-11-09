@@ -13,7 +13,7 @@ layout(binding=7,std430) buffer Control { double control[]; };
 layout(binding=8,std430) buffer Partials { double partials[]; };
 layout(binding=9,std430) buffer Completion { uint errors; };
 layout(binding=10,std430) buffer StageDispatch { uvec4 stageDispatch[]; };
-layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; int liquidCount; int matrixFreeFromRow; } p;
+layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; int liquidCount; } p;
 shared dvec4 scratch[256];
 int lane,n,gid,stride,group,groupCount;
 #define R(row) work[row]
@@ -37,6 +37,8 @@ int lane,n,gid,stride,group,groupCount;
 #define RESIDUAL_REFRESHES control[CONTROL_RESIDUAL_REFRESHES]
 void syncAll(){memoryBarrierBuffer();barrier();}
 bool finite(double value){return !isnan(value)&&!isinf(value);}
+int rowIndex(int entry){return entry < -1 ? -entry-2 : entry;}
+bool matrixFree(int entry){return entry < -1;}
 double hypotStable(double a,double b){
     double high=max(abs(a),abs(b)),low=min(abs(a),abs(b));
     if(isinf(high))return high;if(high==0.0)return 0.0;
@@ -52,6 +54,21 @@ void saveStats(double a,double b,double c,double d){
     dvec4 result=reduceStats(dvec4(a,b,c,d));
     if(lane==0)for(int column=0;column<4;column++)partials[4*group+column]=result[column];
 }
+double reduceDot(double value){
+    scratch[lane].x=value;barrier();
+    for(int offset=128;offset>0;offset/=2){if(lane<offset)scratch[lane].x+=scratch[lane+offset].x;barrier();}
+    double result=scratch[0].x;barrier();return result;
+}
+void saveDot(double value){
+    double result=reduceDot(value);
+    if(lane==0)partials[4*group]=result;
+}
+double collectDot(){
+    if(groupCount==1)return partials[0];
+    precise double value=0.0;
+    for(int block=lane;block<groupCount;block+=256)value+=partials[4*block];
+    return reduceDot(value);
+}
 dvec4 collectStats(){
     if(groupCount==1)return dvec4(partials[0],partials[1],partials[2],partials[3]);
     precise dvec4 value=dvec4(0.0);
@@ -64,7 +81,7 @@ void initializeRows(){
         pressure[row]=problem[n+row];R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
         double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal+=values[edge];DIAG(row)=diagonal;
     }
-    double maximum=0.0;for(int row=gid;row<p.count;row+=stride)if(rows[row]>=0)maximum=max(maximum,abs(pressure[rows[row]]));
+    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rowIndex(rows[ordinal]);if(row>=0)maximum=max(maximum,abs(pressure[row]));}
     saveStats(0.0,0.0,0.0,maximum);
 }
 void initializeControl(){
@@ -76,8 +93,8 @@ void refreshResidual(){
     if(REFRESH==0.0)return;
     precise double sum=0.0;double equations=0.0,boundNorm=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
-        int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
-        if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
+        int entry=rows[ordinal],row=rowIndex(entry);if(row<0)continue;bool implicit=matrixFree(entry);precise double product=implicit?Q(row):0.0;
+        if(!implicit)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
         double value=RHS(row)-product;R(row)=value;equations+=1.0;sum+=value*value;
         boundNorm=hypotStable(boundNorm,abs(RHS(row))+2.0*DIAG(row)*PMAX);
     }
@@ -92,35 +109,35 @@ void finishRefresh(){
 }
 void precondition(){
     if(RUN==0.0)return;precise double sum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rowIndex(rows[ordinal]);if(row<0)continue;
         if(p.externalPreconditioner==0||row>=p.liquidCount)Z(row)=R(row)/DIAG(row);
         if(RESTART!=0.0)D(row)=Z(row);sum+=R(row)*Z(row);}
-    saveStats(sum,0.0,0.0,0.0);
+    saveDot(sum);
 }
 void finishPrecondition(){
-    if(RUN==0.0)return;dvec4 stats=collectStats();if(gid!=0)return;
-    double next=stats.x;BETA=RESTART!=0.0?0.0:next/RZ;RZ=next;
+    if(RUN==0.0)return;double next=collectDot();if(gid!=0)return;
+    BETA=RESTART!=0.0?0.0:next/RZ;RZ=next;
 }
 void updateDirection(){
     if(RUN==0.0||RESTART!=0.0)return;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row>=0)D(row)=Z(row)+BETA*D(row);}
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rowIndex(rows[ordinal]);if(row>=0)D(row)=Z(row)+BETA*D(row);}
 }
 void directionProduct(){
     if(RUN==0.0)return;precise double sum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
-        precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
-        if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int entry=rows[ordinal],row=rowIndex(entry);if(row<0)continue;
+        bool implicit=matrixFree(entry);precise double product=implicit?Q(row):0.0;
+        if(!implicit)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);
         Q(row)=product;sum+=D(row)*product;}
-    saveStats(sum,0.0,0.0,0.0);
+    saveDot(sum);
 }
 void finishProduct(){
-    if(RUN==0.0)return;dvec4 stats=collectStats();if(gid!=0)return;double denominator=stats.x;
+    if(RUN==0.0)return;double denominator=collectDot();if(gid!=0)return;
     if(!(denominator>0.0&&finite(denominator)&&RZ>0.0&&finite(RZ))){atomicOr(errors,4u);RUN=0.0;return;}
     ALPHA=RZ/denominator;
 }
 void updateSolution(){
     if(RUN==0.0)return;precise double sum=0.0;double equations=0.0,maximum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rowIndex(rows[ordinal]);if(row<0)continue;
         pressure[row]+=ALPHA*D(row);R(row)-=ALPHA*Q(row);maximum=max(maximum,abs(pressure[row]));
         equations+=1.0;sum+=R(row)*R(row);}
     saveStats(sum,equations,0.0,maximum);
@@ -138,8 +155,8 @@ void executeStage(int stage){
     else if(stage==STAGE_FINISH_PRODUCT)finishProduct();else if(stage==STAGE_UPDATE_SOLUTION)updateSolution();
     else if(stage==STAGE_FINISH_UPDATE)finishUpdate();else if(stage==STAGE_FINALIZE_CONTROL&&gid==0){REFRESH=1.0;SUCCESS=0.0;}
     else if(stage==STAGE_CHECK_SUCCESS&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
-    else if(stage==STAGE_CHECK_MECHANICAL){for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];
-        if(row>=0&&(!finite(pressure[row])||!finite(RHS(row))||(row<p.matrixFreeFromRow&&(!(DIAG(row)>0.0)||!finite(DIAG(row))))))atomicOr(errors,4u);}
+    else if(stage==STAGE_CHECK_MECHANICAL){for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int entry=rows[ordinal],row=rowIndex(entry);
+        if(row>=0&&(!finite(pressure[row])||!finite(RHS(row))||(!matrixFree(entry)&&(!(DIAG(row)>0.0)||!finite(DIAG(row))))))atomicOr(errors,4u);}
         if(gid==0&&!finite(RMS))atomicOr(errors,4u);}
 }
 void singleStage(int stage){executeStage(stage);syncAll();}

@@ -188,7 +188,7 @@ registerGpuProbe(
 
 registerGpuProbe(
     'runGpuThermalConductionBenchmark',
-    'Measures continuous segmented-caloric conduction with explicit and implicit finite-volume transport.',
+    'Measures continuous conservative finite heat exchange with segmented caloric states.',
     'mmm.gpu.GpuThermalConductionBenchmark',
     'gpu-thermal-conduction-work'
 ) { probeTask ->

@@ -60,12 +60,12 @@ float product(int base,int shape,int row,int vectorOffset) {
 
 void buildFine(int row) {
     for(int entry=0;entry<7;entry++)hierarchy[matrixEntryIndex(p.base,row,entry)]=0.0;
-    if(rows[row]<0)return;
+    if(rows[row]==-1)return;
     ivec3 at=coordinate(row,p.topology);
     for(int edge=starts[row];edge<starts[row+1];edge++) {
         int column=columns[edge];double value=values[edge];
         if(column==row)hierarchy[matrixEntryIndex(p.base,row,0)]+=value;
-        else if(column<p.fineCount&&rows[column]>=0) {
+        else if(column<p.fineCount&&rows[column]!=-1) {
             ivec3 difference=coordinate(column,p.topology)-at;
             int axis=difference.x!=0?0:difference.y!=0?1:2;
             int side=2*axis+(difference[axis]>0?1:0);

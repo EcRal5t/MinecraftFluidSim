@@ -76,6 +76,7 @@ public final class GpuProcessFlowsValidation {
             MinecraftProcessOperations drive=null;double positiveDriveWork=0,negativeDriveWork=0;boolean drivenContact=false;
             int motionSteps=scenario.equals("drive")?Math.max(40,steps):scenario.equals("evaporation")?Math.max(1200,steps):steps;
             long[] motionNanos=new long[motionSteps+(scenario.equals("absorption")?steps:0)];int timedMotions=0;
+            long collectionStartEthanol=0,collectionStartWater=0;
             if(scenario.equals("evaporation"))System.out.println("distillation_duration steps="+motionSteps+" seconds="+(motionSteps*region.solverConfig().timeStep()));
             if(scenario.equals("drive")){
                 var stock=region.hostSnapshot().exportLiquidCellState().physicalStocks().stream().findFirst().orElseThrow();
@@ -93,6 +94,17 @@ public final class GpuProcessFlowsValidation {
                     long carbonBeforeFeed=scenario.equals("absorption")?liquidInorganicCarbon(region.hostSnapshot().captureAuthoritativeState()):0;
                     fixture.transfer(source(scenario,world));available(region);
                     if(scenario.equals("absorption"))feedCarbon=Math.addExact(feedCarbon,liquidInorganicCarbon(region.hostSnapshot().captureAuthoritativeState())-carbonBeforeFeed);
+                }
+                // Drain startup entrainment through the output port before collecting the steady distillate.
+                if(scenario.equals("evaporation")&&step==300){
+                    motion.settlePendingPhaseWork(region);
+                    fixture.scoopMixtureAt(new int[]{11,4,1});
+                    var startupOutput=mmm.item.ContainerItemStacks.chemicalContents(fixture.actor.current,world.chemicalRegistry());
+                    System.out.println("distillation_startup_output nanos="+startupOutput.totalVolumeNanos());
+                    var gas=region.hostSnapshot().captureAuthoritativeState().spatialGas();
+                    collectionStartEthanol=gasPhaseSinkQuanta(gas,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL);
+                    collectionStartWater=gasPhaseSinkQuanta(gas,BuiltinGasDefinitions.WATER_VAPOR,BuiltinChemicalDefinitions.H2O);
+                    available(region);
                 }
                 var bodies=drive==null?List.<mmm.world.MovingBodyFluidCoupling.Request>of():drive.bodies(region,region.incrementTick());
                 long motionStart=System.nanoTime();var result=motion.step(region,bodies);
@@ -182,8 +194,8 @@ public final class GpuProcessFlowsValidation {
                     if(species.speciesId().equals(BuiltinChemicalDefinitions.H2O))water=Math.addExact(water,species.amountQuanta());
                 }
                 double collected=ethanol/(double)(ethanol+water),feed=8_576_086_956.0/(27_777_777_777.0+8_576_086_956.0);
-                long condensedEthanol=gasPhaseSinkQuanta(gasBeforeOutput,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL);
-                long condensedWater=gasPhaseSinkQuanta(gasBeforeOutput,BuiltinGasDefinitions.WATER_VAPOR,BuiltinChemicalDefinitions.H2O);
+                long condensedEthanol=gasPhaseSinkQuanta(gasBeforeOutput,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL)-collectionStartEthanol;
+                long condensedWater=gasPhaseSinkQuanta(gasBeforeOutput,BuiltinGasDefinitions.WATER_VAPOR,BuiltinChemicalDefinitions.H2O)-collectionStartWater;
                 System.out.println("cold_wall_collection nanos="+output.totalVolumeNanos()+" ethanol="+ethanol+" water="+water+" condensed_ethanol="+condensedEthanol+" condensed_water="+condensedWater+" feed_fraction="+feed+" collected_fraction="+collected);
                 if(output.totalVolumeNanos()<=0||ethanol<=0||ethanol>condensedEthanol||water>condensedWater||!(collected>feed))
                     throw new AssertionError("Cold-wall collection did not grow and enrich ethanol: feed="+feed+" collected="+collected+" ethanol="+ethanol+" water="+water+" condensed_ethanol="+condensedEthanol+" condensed_water="+condensedWater);

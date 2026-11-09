@@ -128,6 +128,10 @@ final class VulkanLiquidThermalStages {
         return candidate.finishBatch(stableHeader.bytes().remaining(), (command, input, output, errors, staging, stack) -> {
             if(react)recordReactionCompletion(command,output,errors,stack);
             recordLocalState(command,output,errors,duration,!react);
+            if(!sourceGeometryValid){
+                region.kernels.mixturePressureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                region.kernels.mixturePressureKernel.recordInitializeWarm(command,transport.pressure.assembly);
+            }
             region.kernels.ledger.record(command, thermal.reservoir());
             region.kernels.ledger.record(command, transport.thermalOnlyRoundoff);
             region.kernels.ledger.record(command, transport.thermalOnlyMechanical);

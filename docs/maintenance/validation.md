@@ -125,24 +125,26 @@
 
 2026-11-09，当前有界共同压力与有限驻留输运在 RTX 4060 Ti 上通过空间域验证。相同流动和温差平移到跨块通道，1152 个驻留格组成 L 形域，包围盒为 2304 格；运行 8 步后的最大体积差为 **0.000133425 格容**、最大温差为 **0.000126925 K**，两通道转移量为 2.04110 和 2.04128 格容，相对差为 0.00894%。质量、精确参考体积和物种守恒，checkpoint 后继续推进；卸载跨块通路一侧时，整个物理组的库存、内能与 MAC 动量保持不变。同入口的 Courant 数为 2 的封闭循环以一次完整步输运组成，库存与动能／内能账闭合。记录 `build/perf-delivery-final.log`。
 
-当前驻留状态验证通过设备候选拒绝、采用、机械与独立热推进、固定代次读出、实体插入和完整 checkpoint；热相变及固液反应的整数物种、质量、SVQ 和机械热账通过，记录 `build/perf-complete-validation.log` 中对应任务。扩散的末份溶质、水平及垂向携能交接通过，记录 `build/perf-delivery-final.log`。低压 U 管完成 120 步，气体总体温度约 296 K，两臂液位按压差方向变化，暂停单步、恢复、编辑和续算通过，记录 `build/perf-vacuum-pressure.log`。
+当前驻留状态验证通过设备候选拒绝、采用、机械与独立热推进、固定代次读出、实体插入和完整 checkpoint。32³／256 颗粒连续推进、床层沉降与唤醒、固液反应生成新床、跨块流动及暂停组精确保留通过；有限墙、热浴、分段热容及 11 个相变场景的物料与能量账闭合，扩散的末份溶质、水平及垂向携能交接通过。记录 `build/perf-production-regression.log` 与 `build/perf-final-physics.log`。低压 U 管连续 120 步、暂停单步、恢复、编辑与续算通过，最终气体总体温度约 296 K，记录 `build/perf-finite-vacuum.log`。湿壁、通道黏度／长度／宽度趋势及实体外功检查通过，记录 `build/perf-finite-stress64.log`。
 
-当前六条工艺均沿跨计算块的真实通道、容器、墙体及端口运行，完成物质与能量收支、停止、取样、checkpoint 和恢复续算。加热、吸收脱除、结晶、碳化和驱动记录于 `build/perf-delivery-final.log`；冷凝 1200 步记录于 `build/perf-condensation-final.log`。冷壁收集样品为 **4.470 mL**，乙醇摩尔分率从原料 **0.23591** 提高至 **0.34660**。本轮测量设备为 RTX 4060 Ti。
+当前六条工艺均沿跨计算块的真实通道、容器、墙体及端口运行，完成物质与能量收支、停止、取样、checkpoint 和恢复续算。加热、吸收脱除、结晶、碳化和驱动记录于 `build/perf-final-physics.log`；蒸发冷凝 1200 步记录于 `build/perf-distillation-collection.log`，设备均为 RTX 5070 Ti。
+
+蒸馏先在 300 步内完成 15 次、共 0.75 m³ 的热混合液投料，再通过真实容器从冷壁出口排出启动携液，随后推进 900 步并收集产品。启动排出 **4.503 mL**，产品为 **2.856 mL**；乙醇摩尔分率由原料 **0.23591** 提高到 **0.31409**。产品中的乙醇与水分别为 **29304／63995 μmol**，均低于收集区间新增的对应全域冷凝量 **56192／103335 μmol**。验收同时要求实际冷墙接触、有限冷墙吸热、整数物料与热账闭合；启动排液与产品提取分别走容器事务。
 
 每次 `motion.step` 的墙钟耗时包含冷导入首步，容器 WAL、采样、存档和绘制在计时外：
 
 | 工艺 | 步数 | 中位数 ms | P95 ms | 最大 ms |
 | --- | ---: | ---: | ---: | ---: |
-| 加热 | 20 | 43.060 | 96.130 | 582.824 |
-| 吸收与脱除 | 40 | 16.451 | 69.056 | 170.619 |
-| 结晶 | 20 | 26.889 | 84.839 | 184.060 |
-| 蒸发与冷凝 | 1200 | 12.164 | 28.998 | 479.675 |
-| 碳化 | 20 | 17.548 | 64.043 | 178.852 |
-| 规定运动驱动 | 40 | 16.923 | 93.433 | 229.912 |
+| 加热 | 20 | 8.879 | 33.209 | 265.329 |
+| 吸收与脱除 | 40 | 8.224 | 16.655 | 112.673 |
+| 结晶 | 20 | 22.469 | 42.878 | 113.465 |
+| 蒸发与冷凝 | 1200 | 6.696 | 9.114 | 241.133 |
+| 碳化 | 20 | 9.647 | 19.427 | 99.866 |
+| 规定运动驱动 | 40 | 7.968 | 19.969 | 94.356 |
 
-小场景仍有冷导入及相变长步尖峰，后续集中优化。完整步流程与原 64³ 后端预算分别评价。
+表中最大值包含冷导入，容器交接后的状态重建与长流程尖峰继续单独记录。完整操作流程与原 64³ 后端预算分别评价。
 
-当前完整水流完成 500 步、实体交互、暂停单步、checkpoint 恢复、库存编辑及续算。499 个非冷导入步墙钟中位 35.688 ms、P95 70.914 ms、最大 256.347 ms，未触发自动暂停。最终 `assemble verifyArchitecture` 通过，架构检查扫描 598 个生产源；上述水流、空间域、扩散和五条工艺记录于 `build/perf-delivery-final.log`。交付产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+RTX 5070 Ti 上完整水流完成 500 步、实体交互、暂停单步、checkpoint 恢复、库存编辑及续算。499 个非冷导入步墙钟中位 **10.028 ms**、P95 **12.783 ms**、最大 **23.597 ms**，未触发自动暂停。水流记录见 `build/perf-final-physics.log`。最终 `assemble verifyArchitecture` 通过，架构检查扫描 598 个生产源，记录 `build/perf-production-build.log`；交付产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 `:gpu-kernel:runGpuLiquidDiffusionValidation` 通过：修改世界定义中的水密度、液体及氮气热容，宿主实际库存和 GPU 物性表随定义更新；同一入口的有限扩散、末份溶质、垂向动量和携能交接通过。记录 `build/s8-data-diffusion.log`。
 
@@ -152,7 +154,13 @@
 
 最终 `assemble verifyArchitecture :fabric:runHostValidation -PhostValidation=shape` 通过，记录 `build/s8-delivery-final.log`。楼梯放置使用 310 K 的正式化学、气体及热定义，实际搬迁 6 格液体，体积、整数质量、全部物种和液体携能保持；气体缩容功进入机械功账，总内能与热审计精确闭合。库存验证中的零质量尾量及稀疏空间合同随后通过，记录 `build/s8-host-spatial.log`。交付产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
-2026-11-09，当前实现的完整生产 64³／0.5 m 输入执行 5 步预热及 50 步连续测量。日志确认实际设备为 RTX 4060 Ti：墙钟中位 **107.802 ms**、P95 **145.266 ms**、最大 **191.613 ms**、GPU 均值 **94.920 ms**，全部按一次完整流体步推进。单 bank 工作区 **3,298,740,960 B**，设备分配 **6325.4 MiB**。记录 `build/perf-delivery-final.log`。RTX 5070 Ti 的最终 50 ms 验收受驱动故障阻断：显式选择该设备时 Java 在设备初始化阶段退出，Windows 记录 `nvoglv64.dll`／`0xc0000409`，见 `build/perf-production5070-final.log` 和 `build/perf-device-failure.log`。恢复驱动后需在日志确认的 RTX 5070 Ti 上复测当前完整实现，50 ms 目标保持未完成。
+2026-11-10，RTX 5070 Ti 上原 64³／0.5 m、32 m 边长的完整生产切格输入执行 5 步预热及 50 步连续测量，全部墙钟样本低于 50 ms：中位 **46.358 ms**、P95 **48.393 ms**、最大 **49.918 ms**，GPU 均值 **41.918 ms**。每步一次完成 0.05 s 流体推进，常态 **6 次提交**；单 bank 工作区 **3,074,704,544 B**，设备分配 **5898.1 MiB**。输入保留水／油切格、局部气体及生产热学、扩散、反应和相变定义；颗粒布局已启用，实际颗粒与床层库存为空。计时包含设备候选准备、完整计算和提交，Minecraft 世界操作、展示与冷初始化分别评价。记录 `build/perf-production64-delivery.log`。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuLiquidMechanicalBenchmark '-PgpuProbeDeviceName=RTX 5070 Ti' -PgpuMechanicalGrids=64 -PgpuMechanicalScene=cut -PgpuMechanicalGas=true -PgpuMechanicalThermal=true -PgpuMechanicalProduction=true -PgpuMechanicalWarmup=5 -PgpuMechanicalSamples=50 --offline --console=plain --max-workers=1
+```
+
+设备按名称显式选择，日志中的 `Device` 行记录实际硬件；显卡枚举编号随驱动状态变化。
 
 S1 的针对性入口：
 

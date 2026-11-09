@@ -54,7 +54,8 @@ final class VulkanCoupledPressure implements AutoCloseable {
         TERM_ROW(4), TERM_VELOCITY(4), TERM_COEFFICIENT(8), INVERSE_MASS(8), PREDICTED_VELOCITY(8),
         FIXED_REFERENCE_FORCE(8), REFERENCE(8), STORAGE(8), ROW_SOURCE(8), ROW_ENABLED(4),
         COUNTS(4), OFFSETS(4), CURSORS(4), ENTRIES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_OWNER(4),
-        LARGE_IDS(4), PARTIALS(8), RESPONSE(8), PROJECTED_VELOCITY(8), SCAN(4), DISPATCH(4), ROW_DIVERGENCE(8);
+        LARGE_IDS(4), PARTIALS(8), RESPONSE(8), PROJECTED_VELOCITY(8), SCAN(4), DISPATCH(4), ROW_DIVERGENCE(8),
+        INDUCED_VELOCITY(4), PRODUCT_ROWS(4), PRODUCT_VELOCITIES(4), PRODUCT_COUNTS(4), PRODUCT_DISPATCH(4);
         final int width; Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -83,6 +84,10 @@ final class VulkanCoupledPressure implements AutoCloseable {
                     case BLOCK_OWNER->blocks;
                     case PARTIALS->Math.multiplyExact(2,blocks);
                     case DISPATCH->6;
+                    case INDUCED_VELOCITY,PRODUCT_VELOCITIES->velocities;
+                    case PRODUCT_ROWS->rows;
+                    case PRODUCT_COUNTS->2;
+                    case PRODUCT_DISPATCH->6;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
                     default->owners;
                 };
@@ -109,9 +114,8 @@ final class VulkanCoupledPressure implements AutoCloseable {
     }
     record Operator(VulkanCoupledPressure kernel,Layout layout) implements VulkanPressureKernel.PressureOperator {
         @Override public int liquidCount(){return layout.liquidCount();}
-        @Override public int matrixFreeFromRow(){return layout.pressureSize()==layout.liquidCount()?layout.pressureSize():0;}
         @Override public void recordProduct(VkCommandBuffer command,boolean direction){
-            if(layout.pressureSize()!=layout.liquidCount())kernel.recordProduct(command,layout,direction);
+            kernel.recordProduct(command,layout,direction);
         }
     }
     private final FlipKernelBindings bindings;
@@ -137,10 +141,14 @@ final class VulkanCoupledPressure implements AutoCloseable {
         stage(command,layout,4,layout.owners,0,duration);
         multiply(command,layout,5,2,duration);
         multiply(command,layout,8,2,duration);
+        stage(command,layout,11,layout.velocities,0,duration);
+        stage(command,layout,12,layout.rows,0,duration);
+        stage(command,layout,13,layout.velocities,0,duration);
     }
     void recordProduct(VkCommandBuffer command,Layout layout,boolean direction){
-        multiply(command,layout,5,direction?1:0,1);
-        multiply(command,layout,8,direction?1:0,1);
+        stage(command,layout,14,1,direction?1:0,1);
+        stage(command,layout,15,layout.velocities,direction?1:0,1);
+        stage(command,layout,16,layout.rows,direction?1:0,1);
     }
     /** Outputs u*=predicted + dt M^-1(J^T(reference+p)+fixed), including all strong-drag reactions. */
     void recordProject(VkCommandBuffer command,Layout layout,double duration){multiply(command,layout,5,3,duration);}
@@ -157,10 +165,11 @@ final class VulkanCoupledPressure implements AutoCloseable {
             bindings.bind(command,stack);
             var push=stack.malloc(24).putInt(layout.headerWordOffset()).putInt(stage).putInt(count).putInt(argument).putDouble(duration).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            if(stage==6||stage==7||stage==9||stage==10){
+            if(stage==6||stage==7||stage==9||stage==10||stage==15||stage==16){
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+(stage==7||stage==10?12:0));
+                var dispatch=stage>=15?layout.column(Field.PRODUCT_DISPATCH):layout.column(Field.DISPATCH);
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+dispatch.offset()+(stage==7||stage==10||stage==16?12:0));
             }else{int groups=(count+127)/128;vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);}
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

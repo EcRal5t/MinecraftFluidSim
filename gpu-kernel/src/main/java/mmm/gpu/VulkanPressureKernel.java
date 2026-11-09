@@ -41,7 +41,6 @@ final class VulkanPressureKernel implements AutoCloseable {
     /** One matrix product for the common PCG; the multigrid liquid block is shared by every model. */
     interface PressureOperator {
         int liquidCount();
-        int matrixFreeFromRow();
         void recordProduct(VkCommandBuffer command, boolean direction);
     }
     private final FlipKernelBindings bindings;
@@ -54,7 +53,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         dispatchResources = new FlipGpuResources(context);
         try {
             stageDispatch = dispatchResources.addDeviceStorage(16L * 10);
-            bindings = new FlipKernelBindings(context, 11, shader(), 32);
+            bindings = new FlipKernelBindings(context, 11, shader(), 28);
         } catch (RuntimeException | Error failure) { dispatchResources.close(); throw failure; }
     }
 
@@ -65,32 +64,17 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     void record(VkCommandBuffer command, int size, int count, int maximumIterations) {
-        record(command, size, count, maximumIterations, null, null);
-    }
-
-    void record(VkCommandBuffer command, int size, int count, int maximumIterations,
-                VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
-        record(command, size, count, maximumIterations, multigrid, hierarchy, null);
-    }
-
-    void record(VkCommandBuffer command, int size, int count, int maximumIterations,
-                VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
-        if (gas == null && multigrid == null && size <= singleWorkgroupRows) {
+        if (size <= singleWorkgroupRows) {
             bind(command);
             stage(command, size, count, maximumIterations, -1, 1, false, null);
             return;
         }
-        recordInitialize(command, size, count, maximumIterations, multigrid, hierarchy, gas);
-        recordIterations(command, size, count, maximumIterations, multigrid, hierarchy, maximumIterations, gas);
-        recordFinish(command, size, count, maximumIterations, multigrid, hierarchy, gas);
+        recordInitialize(command, size, count, maximumIterations, null, null, null);
+        recordIterations(command, size, count, maximumIterations, null, null, maximumIterations, null);
+        recordFinish(command, size, count, maximumIterations, null, null, null);
     }
 
     /** Initializes one solve; later batches retain its pressure, residual and conjugate direction. */
-    void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
-                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
-        recordInitialize(command, size, count, maximumIterations, multigrid, hierarchy, null);
-    }
-
     void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         if(multigrid!=null)multigrid.beginTimings(command);
@@ -103,12 +87,6 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     /** Records a bounded continuation; the shader retains the original solve-wide iteration limit. */
-    void recordIterations(VkCommandBuffer command, int size, int count, int maximumIterations,
-                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy,
-                          int iterations) {
-        recordIterations(command, size, count, maximumIterations, multigrid, hierarchy, iterations, null);
-    }
-
     void recordIterations(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy,
                           int iterations, PressureOperator gas) {
@@ -124,11 +102,6 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     /** Recomputes the final residual and publishes the existing pressure completion status. */
-    void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
-                      VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
-        recordFinish(command, size, count, maximumIterations, multigrid, hierarchy, null);
-    }
-
     void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         bind(command);
@@ -169,14 +142,14 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external, PressureOperator gas) {
-        if (gas != null && gas.matrixFreeFromRow()<size
+        if (gas != null
                 && (stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal())) {
             gas.recordProduct(command, stage == Stage.DIRECTION_PRODUCT.ordinal());
             bind(command);
         }
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(count, size, maximumIterations, stage, groups,external?1:0, gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
+                    stack.ints(count, size, maximumIterations, stage, groups,external?1:0, gas == null ? size : gas.liquidCount()));
             boolean parallel = stage == Stage.INITIALIZE_ROWS.ordinal() || stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.PRECONDITION.ordinal() || stage == Stage.UPDATE_DIRECTION.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal() || stage == Stage.UPDATE_SOLUTION.ordinal() || stage==Stage.CHECK_MECHANICAL.ordinal();
             if(parallel&&stage!=Stage.INITIALIZE_ROWS.ordinal()&&stage!=Stage.CHECK_MECHANICAL.ordinal()){
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);

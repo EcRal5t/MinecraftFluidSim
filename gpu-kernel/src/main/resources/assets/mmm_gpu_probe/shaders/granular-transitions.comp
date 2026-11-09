@@ -45,6 +45,7 @@ const int STAGE_SCATTER_DESTINATIONS = 12;
 const int STAGE_GATHER_INVENTORY = 13;
 const int STAGE_PUBLISH_SPECIES_COUNT = 14;
 const int STAGE_GATHER_SPECIES = 15;
+const int STAGE_EMPTY_INTERVAL = 16;
 const uint ERROR_GRANULAR_TRANSITIONS = 8388608u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
@@ -779,6 +780,18 @@ void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
     if (id >= p.count || errors != 0u)
         return;
+    if (p.stage == STAGE_EMPTY_INTERVAL) {
+        if (id == 0)
+            writeInt64(targetFieldOffset(GRANULAR_LOGICAL_STEP), readInt64(sourceFieldOffset(GRANULAR_LOGICAL_STEP)) + 1l);
+        if (id < headerValue(H_INPUT_ROWS)) {
+            writeDouble(sourceFieldOffset(GRANULAR_INTERNAL_ENERGY) + 2 * id, 0.0);
+            write(FIELD_FINAL_ENERGY, id, 0.0);
+            write(FIELD_HEAT, id, 0.0);
+            for (int k = 0; k < 17; k++)
+                write(FIELD_LIFT_TERMS, 17 * id + k, 0.0);
+        }
+        return;
+    }
     if (p.stage == STAGE_INITIALIZE) {
         if (id < 12)
             writeFieldInt(FIELD_CONTROL, id, 0);

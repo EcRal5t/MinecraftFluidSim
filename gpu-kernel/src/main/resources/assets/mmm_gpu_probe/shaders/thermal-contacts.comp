@@ -3,10 +3,11 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
 layout(local_size_x=128)in;
 layout(binding=0,std430)buffer Arena{uint words[];};
+layout(binding=0,std430)buffer LongArena{int64_t longs[];};
 layout(binding=1,std430)buffer Errors{uint errors;};
-layout(binding=2,std430)buffer FrozenConductance{double frozenG[];};
 layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
 // SPATIAL_GRID
 // HOST_LAYOUT
@@ -27,25 +28,13 @@ const int STAGE_PUBLISH = 10;
 const int STAGE_COUNT_PORTS = 11;
 const int STAGE_SCATTER_PORTS = 12;
 const int STAGE_SAVE_MODE_REQUIREMENT = 13;
-const int STAGE_SAVE_IMEX_REQUIREMENTS = 14;
-const int STAGE_SCATTER_OWNER_SAMPLE = 15;
 const int STAGE_COUNT_BATHS = 16;
 const int STAGE_WRITE_BATHS = 17;
 const int STAGE_PREPARE_SPATIAL_FLUX = 18;
-const int STAGE_BATH_SUMMARY = 19;
 const int STAGE_INITIALIZE_GRAPH = 21;
 const int STAGE_UPDATE_MODE_REQUIREMENT = 22;
 const int STAGE_SPATIAL_DISPATCH = 24;
 const int STAGE_PROJECT_CONTACT_GEOMETRY = 25;
-const int STAGE_COMPACT_IMEX = 40;
-const int STAGE_COUNT_IMEX_CACHE = 41;
-const int STAGE_WRITE_IMEX_CACHE = 42;
-const int STAGE_UPDATE_AFFECTED_FLUX = 43;
-const int STAGE_COMPACT_AFFECTED = 44;
-const int STAGE_AFFECTED_DISPATCH = 45;
-const int STAGE_CACHE_FLUX = 46;
-const int STAGE_CACHE_PRODUCT = 47;
-shared dvec4 mfBounds[128];
 int headerWord(int n){return int(words[p.header+n]);}int workField(int n){return headerWord(WORK_FIELDS+n);}
 int conductionHeaderWord(int i){return int(words[headerWord(H_CONDUCTION_HEADER)+i]);}int conductionField(int field){return conductionHeaderWord(CONDUCTION_FIELDS+field);}
 // Reserve the first lane's shared destination once for the participating subgroup.
@@ -85,10 +74,10 @@ int ownerFor(int candidate){return candidate>=0&&candidate<headerWord(H_OWNER_CA
 void clear(int id){
  if(id<headerWord(H_OWNER_CAPACITY))words[workField(FIELD_OWNER_FLAGS)+id]=0u;
  if(id<headerWord(H_DEVICE_CAPACITY)){writeDouble(headerWord(H_DEVICE_ENERGY_CHANGE)+4*id,0.0);writeDouble(headerWord(H_DEVICE_ENERGY_CHANGE)+4*id+2,0.0);}
- if(id<headerWord(H_CONDUCTION_OWNER_CAPACITY)){words[workField(FIELD_TERM_COUNTS)+id]=0u;words[conductionField(CONDUCTION_DEGREE_COUNTS)+id]=0u;words[conductionField(CONDUCTION_DEGREE_CURSORS)+id]=0u;}
+ if(id<headerWord(H_CONDUCTION_OWNER_CAPACITY)){words[workField(FIELD_TERM_COUNTS)+id]=0u;if(p.step!=2){words[conductionField(CONDUCTION_DEGREE_COUNTS)+id]=0u;words[conductionField(CONDUCTION_DEGREE_CURSORS)+id]=0u;}}
  if(id<headerWord(H_SAMPLE_CAPACITY)){words[workField(FIELD_CONTACT_COUNTS)+id]=0u;words[workField(FIELD_SAMPLE_FLAGS)+id]=0u;}
  if(id<headerWord(H_CELL_COUNT)){words[workField(FIELD_CELL_COUNTS)+id]=0u;words[workField(FIELD_CELL_CURSORS)+id]=0u;words[workField(FIELD_PORT_COUNTS)+id]=0u;words[workField(FIELD_PORT_CURSORS)+id]=0u;}
- if(id==0){words[headerWord(H_CONDUCTION_HEADER)+7]=uint(p.step==2?2:1);words[headerWord(H_CONDUCTION_HEADER)+76]=uint(p.header);words[conductionField(CONDUCTION_MODE)+1]=0u;for(int i=0;i<15;i++)words[conductionField(CONDUCTION_DISPATCH)+i]=0u;for(int i=0;i<7;i++)words[workField(FIELD_REQUIREMENTS)+i]=0u;for(int i=0;i<3;i++)words[headerWord(H_CONDUCTION_COUNTS)+i]=0u;
+ if(id==0){words[headerWord(H_CONDUCTION_HEADER)+7]=uint(p.step==2?2:1);words[headerWord(H_CONDUCTION_HEADER)+76]=uint(p.header);words[conductionField(CONDUCTION_MODE)+1]=0u;for(int i=0;i<15;i++)words[conductionField(CONDUCTION_DISPATCH)+i]=0u;for(int i=0;i<5;i++)words[workField(FIELD_REQUIREMENTS)+i]=0u;for(int i=0;i<3;i++)words[headerWord(H_CONDUCTION_COUNTS)+i]=0u;
   if(liveLiquid()<0||liveLiquid()>headerWord(H_LIQUID_CAPACITY)||liveGas()<0||liveGas()>headerWord(H_GAS_CAPACITY)||liveParticle()<0||liveParticle()>headerWord(H_PARTICLE_CAPACITY)||liveDeposit()<0||liveDeposit()>headerWord(H_DEPOSIT_CAPACITY)||liveCoherent()<0||liveCoherent()>headerWord(H_COHERENT_CAPACITY)||liveDevice()<0||liveDevice()>headerWord(H_DEVICE_CAPACITY)||livePorts()<0||livePorts()>headerWord(H_PORT_CAPACITY))reportInvalid();}
 }
 void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[workField(FIELD_OWNER_FLAGS)+id]=exists&&hasMass(kind,row)?1u:0u;}
@@ -258,7 +247,7 @@ double deviceConductance(int point,int port){
  precise double conductance=seriesConductance(cellSize()*cellSize()*area,readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port),readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port),k,film);return conductance;
 }
 // Port weights are geometry alone. The material conductivity and finite owner temperatures
-// remain in the one canonical pair evaluator used by both explicit and implicit conduction.
+// remain in the canonical finite heat exchange for each contact.
 void projectContactGeometry(int id){
  if(id<headerWord(H_CELL_COUNT))for(int axis=0;axis<3;axis++){
   int other=neighbor(id,axis,1),base=workField(FIELD_FACE_FACTORS)+2*(15*id+5*axis),lowBits=(1<<axis)-1;double sum=0.0;bool reciprocal=true;
@@ -337,14 +326,7 @@ void contacts(int point,bool writing){
 }
 void writeContacts(int id){if(id==0){uint count=words[workField(FIELD_CONTACT_OFFSETS)+headerWord(H_SAMPLE_CAPACITY)];words[workField(FIELD_REQUIREMENTS)+3]=count;words[headerWord(H_CONDUCTION_COUNTS)+2]=count;if(count>uint(headerWord(H_CONDUCTION_CONTACT_CAPACITY)))atomicOr(errors,64u);}
  if((errors&~64u)!=0u||words[workField(FIELD_CONTACT_OFFSETS)+headerWord(H_SAMPLE_CAPACITY)]>uint(headerWord(H_CONDUCTION_CONTACT_CAPACITY)))return;contacts(id,true);}
-bool imexFast(int owner){return 2.0*p.dt*readDouble(conductionField(CONDUCTION_DEGREE)+2*owner)>readDouble(conductionField(CONDUCTION_MIN_CP)+2*owner);}
-// Spatial explicit conduction keeps one U/T/Cp owner and only one incident per sample.
-void scatterOwnerSample(int id){
- int owner=-1;
- if(id<headerWord(H_SAMPLE_CAPACITY)){if(id>=liveSamples())return;owner=int(words[workField(FIELD_SAMPLE_OWNER)+id]);}
- else{int port=id-headerWord(H_SAMPLE_CAPACITY);if(port>=livePorts()||!activeCell(int(words[headerWord(H_PORT_CELL)+port])))return;owner=ownerFor(deviceBase()+int(words[headerWord(H_PORT_DEVICE)+port]));}
- if(owner<0)return;int slot=int(reserveIncident(conductionField(CONDUCTION_DEGREE_CURSORS)+owner));words[conductionField(CONDUCTION_INCIDENT)+words[conductionField(CONDUCTION_DEGREE_OFFSETS)+owner]+slot]=uint(id);
-}
+// Spatial heat exchange keeps one U/T/Cp owner and one incident per sample.
 void countBaths(int point){
  if(point>=liveSamples())return;int count=0,cell=int(words[workField(FIELD_SAMPLE_CELL)+point]);
  if(headerWord(H_BATH_TEMPERATURES)>=0&&readDouble(workField(FIELD_OWNER_K)+2*int(words[workField(FIELD_SAMPLE_OWNER)+point]))>0.0)for(int direction=0;direction<6;direction++){
@@ -364,73 +346,63 @@ void writeBaths(int point){
   writeDouble(workField(FIELD_BATH_G)+2*outAt,conductance);writeDouble(workField(FIELD_BATH_T)+2*outAt,temperature);outAt++;
  }
 }
-dvec2 mfAdd(dvec2 a,double b){precise double next=a.x+b,v=next-a.x,error=(a.x-(next-v))+(b-v);precise double lo=error+a.y,sum=next+lo,virtualLo=sum-next,remainder=(next-(sum-virtualLo))+(lo-virtualLo);return dvec2(sum,remainder);}
-int imexPoint,imexCursor;
-void pairFlux(int owner,int other,int otherPoint,double conductance,double dt,inout dvec2 degree,inout dvec2 delta){
- if(owner==other||conductance==0.0)return;if(!(isFinite(conductance)&&conductance>0.0)){reportInvalid();return;}
- if(p.stage==STAGE_COUNT_IMEX_CACHE||p.stage==STAGE_WRITE_IMEX_CACHE){
-  if(p.stage==STAGE_COUNT_IMEX_CACHE){atomicOr(words[workField(FIELD_IMEX_AFFECTED_FLAGS)+otherPoint],1u);if(imexFast(other)){atomicOr(words[conductionField(CONDUCTION_IMEX_COUPLED)+owner],1u);degree.x+=1.0;}}
-  else if(imexFast(other)){frozenG[2*imexCursor]=conductance;frozenG[2*imexCursor+1]=double(other);imexCursor++;}
-  return;
+void addOwnerValue(int field,int owner,double value){
+ int address=(conductionField(field)+2*owner)/2;
+ int64_t observed=atomicAdd(longs[address],int64_t(0));
+ for(;;){
+  uint64_t bits=uint64_t(observed);
+  double previous=packDouble2x32(uvec2(uint(bits),uint(bits>>32))),next=previous+value;
+  if(!isFinite(next)){reportInvalid();return;}
+  uvec2 pair=unpackDouble2x32(next);int64_t desired=int64_t(uint64_t(pair.x)|(uint64_t(pair.y)<<32));
+  int64_t actual=atomicCompSwap(longs[address],observed,desired);
+  if(actual==observed)return;observed=actual;
  }
- if(p.stage==STAGE_UPDATE_AFFECTED_FLUX){
-  int a=min(owner,other),b=max(owner,other);double oldA=readDouble(conductionField(CONDUCTION_OWNER_INITIAL_T)+2*a),oldB=readDouble(conductionField(CONDUCTION_OWNER_INITIAL_T)+2*b);
-  double newA=imexFast(a)?readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*a):oldA,newB=imexFast(b)?readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*b):oldB;
-  precise double oldQ=conductance*(oldB-oldA)*dt,newQ=conductance*(newB-newA)*dt;
-  delta=mfAdd(delta,owner==a?newQ-oldQ:oldQ-newQ);return;
- }
- int a=min(owner,other),b=max(owner,other);
- int temperature=16;
- precise double difference=readDouble(conductionField(temperature)+2*b)-readDouble(conductionField(temperature)+2*a);
- precise double heatTransfer=conductance*difference*dt;
- degree=mfAdd(degree,conductance);delta=mfAdd(delta,owner==a?heatTransfer:-heatTransfer);
 }
-void spatialFlux(int id,bool preparing){
- double dt=p.dt;dvec2 degree=dvec2(0.0),delta=dvec2(0.0);
- if(id<headerWord(H_SAMPLE_CAPACITY)){
-  if(id>=liveSamples())return;int owner=int(words[workField(FIELD_SAMPLE_OWNER)+id]),cell=int(words[workField(FIELD_SAMPLE_CELL)+id]);
-  if(readDouble(workField(FIELD_OWNER_K)+2*owner)>0.0){
-   for(int at=int(words[workField(FIELD_CELL_OFFSETS)+cell]);at<int(words[workField(FIELD_CELL_OFFSETS)+cell+1]);at++){
-    int heatTransfer=int(words[workField(FIELD_CELL_SAMPLES)+at]);if(heatTransfer==id||int(words[workField(FIELD_SAMPLE_OWNER)+heatTransfer])==owner)continue;
-    pairFlux(owner,int(words[workField(FIELD_SAMPLE_OWNER)+heatTransfer]),heatTransfer,sameConductance(min(id,heatTransfer),max(id,heatTransfer)),dt,degree,delta);
-   }
-   for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
-    int other=neighbor(cell,axis,side);if(other<0)continue;
-    for(int at=int(words[workField(FIELD_CELL_OFFSETS)+other]);at<int(words[workField(FIELD_CELL_OFFSETS)+other+1]);at++){
-     int heatTransfer=int(words[workField(FIELD_CELL_SAMPLES)+at]),b=int(words[workField(FIELD_SAMPLE_OWNER)+heatTransfer]);if(b==owner)continue;
-     double conductance=side==1?crossConductance(id,heatTransfer,axis):crossConductance(heatTransfer,id,axis);pairFlux(owner,b,heatTransfer,conductance,dt,degree,delta);
-    }
-   }
-   if(headerWord(H_DEVICE_COUNTS)>=0)for(int at=int(words[workField(FIELD_PORT_OFFSETS)+cell]);at<int(words[workField(FIELD_PORT_OFFSETS)+cell+1]);at++){
-    int port=int(words[workField(FIELD_PORT_ROWS)+at]),b=ownerFor(deviceBase()+int(words[headerWord(H_PORT_DEVICE)+port]));if(b<0){reportInvalid();continue;}
-    pairFlux(owner,b,headerWord(H_SAMPLE_CAPACITY)+port,deviceConductance(id,port),dt,degree,delta);
-   }
-  }
-  if(p.stage!=41&&p.stage!=42)for(int bath=int(words[workField(FIELD_BATH_OFFSETS)+id]);bath<int(words[workField(FIELD_BATH_OFFSETS)+id+1]);bath++){
-   double conductance=readDouble(workField(FIELD_BATH_G)+2*bath);precise double heatTransfer=conductance*(readDouble(workField(FIELD_BATH_T)+2*bath)-readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*owner))*dt;
-   if(p.stage==STAGE_UPDATE_AFFECTED_FLUX){double oldQ=readDouble(conductionField(CONDUCTION_RESERVOIR_CHANGE)+2*bath*conductionHeaderWord(5));delta=mfAdd(delta,heatTransfer-oldQ);writeDouble(conductionField(CONDUCTION_RESERVOIR_CHANGE)+2*bath*conductionHeaderWord(5),heatTransfer);}else{degree=mfAdd(degree,conductance);delta=mfAdd(delta,heatTransfer);}if(preparing)writeDouble(conductionField(CONDUCTION_RESERVOIR_CHANGE)+2*bath*conductionHeaderWord(5),heatTransfer);
-  }
- }else{
-  int port=id-headerWord(H_SAMPLE_CAPACITY);if(port>=livePorts()||!activeCell(int(words[headerWord(H_PORT_CELL)+port])))return;int owner=ownerFor(deviceBase()+int(words[headerWord(H_PORT_DEVICE)+port]));if(owner<0)return;
-  int cell=int(words[headerWord(H_PORT_CELL)+port]);
+void exchangePair(int first,int second,double conductance,double dt){
+ if(first==second||conductance==0.0LF)return;
+ if(!(isFinite(conductance)&&conductance>0.0LF)){reportInvalid();return;}
+ int a=min(first,second),b=max(first,second);
+ if(p.step==0){addOwnerValue(CONDUCTION_DEGREE,a,conductance);addOwnerValue(CONDUCTION_DEGREE,b,conductance);return;}
+ precise double difference=readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*b)-readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*a);
+ double denominator=1.0LF+dt*(readDouble(conductionField(CONDUCTION_DEGREE)+2*a)+readDouble(conductionField(CONDUCTION_DEGREE)+2*b));
+ precise double heatTransfer=conductance*difference*dt/denominator;
+ if(heatTransfer!=0.0LF){addOwnerValue(CONDUCTION_FLUX,a,heatTransfer);addOwnerValue(CONDUCTION_FLUX,b,-heatTransfer);}
+}
+// Each physical contact publishes one heat quantity to its two owners.
+void spatialFlux(int id){
+ if(id>=liveSamples())return;
+ int owner=int(words[workField(FIELD_SAMPLE_OWNER)+id]),cell=int(words[workField(FIELD_SAMPLE_CELL)+id]);
+ double dt=p.dt;
+ if(readDouble(workField(FIELD_OWNER_K)+2*owner)>0.0LF){
   for(int at=int(words[workField(FIELD_CELL_OFFSETS)+cell]);at<int(words[workField(FIELD_CELL_OFFSETS)+cell+1]);at++){
-   int point=int(words[workField(FIELD_CELL_SAMPLES)+at]);pairFlux(owner,int(words[workField(FIELD_SAMPLE_OWNER)+point]),point,deviceConductance(point,port),dt,degree,delta);
+   int other=int(words[workField(FIELD_CELL_SAMPLES)+at]);if(other<=id)continue;
+   exchangePair(owner,int(words[workField(FIELD_SAMPLE_OWNER)+other]),sameConductance(id,other),dt);
+  }
+  for(int axis=0;axis<3;axis++){
+   int cellB=neighbor(cell,axis,1);if(cellB<0)continue;
+   for(int at=int(words[workField(FIELD_CELL_OFFSETS)+cellB]);at<int(words[workField(FIELD_CELL_OFFSETS)+cellB+1]);at++){
+    int other=int(words[workField(FIELD_CELL_SAMPLES)+at]);
+    exchangePair(owner,int(words[workField(FIELD_SAMPLE_OWNER)+other]),crossConductance(id,other,axis),dt);
+   }
+  }
+  if(headerWord(H_DEVICE_COUNTS)>=0)for(int at=int(words[workField(FIELD_PORT_OFFSETS)+cell]);at<int(words[workField(FIELD_PORT_OFFSETS)+cell+1]);at++){
+   int port=int(words[workField(FIELD_PORT_ROWS)+at]),other=ownerFor(deviceBase()+int(words[headerWord(H_PORT_DEVICE)+port]));
+   if(other<0){reportInvalid();continue;}exchangePair(owner,other,deviceConductance(id,port),dt);
   }
  }
- if(p.stage==STAGE_COUNT_IMEX_CACHE){words[workField(FIELD_CACHE_COUNTS)+imexPoint]=uint(degree.x);return;}
- if(p.stage==STAGE_WRITE_IMEX_CACHE)return;
- if(p.stage==STAGE_UPDATE_AFFECTED_FLUX){delta=mfAdd(delta,readDouble(workField(FIELD_IMEX_BASE)+4*id));delta=mfAdd(delta,readDouble(workField(FIELD_IMEX_BASE)+4*id+2));}
- int target=workField(FIELD_MF_DATA)+8*id;if(preparing){writeDouble(target,degree.x);writeDouble(target+2,degree.y);}writeDouble(target+4,delta.x);writeDouble(target+6,delta.y);
-}
-void bathSummary(int block,int lane){
- int id=128*block+lane,count=int(words[conductionField(CONDUCTION_MODE)+1]);double huge=1.7976931348623157e308LF;
- double temperature=id<count?readDouble(workField(FIELD_BATH_T)+2*id):0.0;mfBounds[lane]=id<count?dvec4(temperature,temperature,0.0,0.0):dvec4(huge,-huge,0.0,0.0);barrier();
- for(int width=64;width>0;width/=2){if(lane<width){mfBounds[lane].x=min(mfBounds[lane].x,mfBounds[lane+width].x);mfBounds[lane].y=max(mfBounds[lane].y,mfBounds[lane+width].y);}barrier();}
- if(lane==0)for(int i=0;i<4;i++)writeDouble(conductionField(CONDUCTION_BATH_PARTIALS)+2*(4*block+i),mfBounds[0][i]);
+ for(int bath=int(words[workField(FIELD_BATH_OFFSETS)+id]);bath<int(words[workField(FIELD_BATH_OFFSETS)+id+1]);bath++){
+  double g=readDouble(workField(FIELD_BATH_G)+2*bath);
+  if(p.step==0){addOwnerValue(CONDUCTION_DEGREE,owner,g);continue;}
+  double temperature=readDouble(workField(FIELD_BATH_T)+2*bath);
+  double denominator=1.0LF+dt*readDouble(conductionField(CONDUCTION_DEGREE)+2*owner);
+  precise double q=g*(temperature-readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*owner))*dt/denominator;
+  if(q!=0.0LF)addOwnerValue(CONDUCTION_FLUX,owner,q);
+  writeDouble(conductionField(CONDUCTION_RESERVOIR_CHANGE)+2*bath*conductionHeaderWord(5),q);
+ }
 }
 void spatialDispatch(){
  bool run=errors==0u;
- int groups=run?(liveSamples()+livePorts()+127)/128:0;
+ int groups=run?(liveSamples()+127)/128:0;
  words[workField(FIELD_MF_DISPATCH)]=uint(min(groups,65535));words[workField(FIELD_MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[workField(FIELD_MF_DISPATCH)+2]=1u;
 }
 void graphInitialize(int row){if(row<headerWord(H_CONDUCTION_OWNER_CAPACITY)){words[conductionField(CONDUCTION_DEGREE_COUNTS)+row]=0u;words[conductionField(CONDUCTION_DEGREE_CURSORS)+row]=0u;}if(row==0){words[headerWord(H_CONDUCTION_HEADER)+7]=1u;words[conductionField(CONDUCTION_MODE)+1]=0u;words[headerWord(H_CONDUCTION_COUNTS)+2]=0u;}}
@@ -439,39 +411,12 @@ void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[workFie
  if(kind==4){double old=readDouble(address);writeDouble(headerWord(H_DEVICE_ENERGY_CHANGE)+4*row,value);writeDouble(headerWord(H_DEVICE_ENERGY_CHANGE)+4*row+2,-old);if(readQuantity(address)!=readQuantity(headerWord(H_CONDUCTION_ENERGY)+2*owner)){uint64_t generation=readQuantity(headerWord(H_DEVICE_REQUEST_GENERATION)+2*row)+uint64_t(1);words[headerWord(H_DEVICE_GENERATION)+2*row]=uint(generation);words[headerWord(H_DEVICE_GENERATION)+2*row+1]=uint(generation>>32);}}
  writeDouble(address,value);
 }
-void imexCompact(int id){
- if(id>=p.count)return;words[workField(FIELD_IMEX_AFFECTED_FLAGS)+id]=0u;
- bool live=id<headerWord(H_SAMPLE_CAPACITY)?id<liveSamples():id-headerWord(H_SAMPLE_CAPACITY)<livePorts();if(!live)return;
- int owner=id<headerWord(H_SAMPLE_CAPACITY)?int(words[workField(FIELD_SAMPLE_OWNER)+id]):ownerFor(deviceBase()+int(words[headerWord(H_PORT_DEVICE)+id-headerWord(H_SAMPLE_CAPACITY)]));if(owner<0)return;
- writeDouble(workField(FIELD_IMEX_BASE)+4*id,readDouble(workField(FIELD_MF_DATA)+8*id+4));writeDouble(workField(FIELD_IMEX_BASE)+4*id+2,readDouble(workField(FIELD_MF_DATA)+8*id+6));
- if(imexFast(owner)){uint slot=atomicAdd(words[conductionField(CONDUCTION_IMEX_COUNTS)+1],1u);words[workField(FIELD_IMEX_SAMPLES)+slot]=uint(id);}
-}
-void imexCacheValue(int ordinal,bool product){
- int id=int(words[workField(FIELD_IMEX_SAMPLES)+ordinal]);dvec2 sum=dvec2(0.0);int n=int(words[conductionField(CONDUCTION_IMEX_COUNTS)]);
- for(int edge=int(words[workField(FIELD_CACHE_OFFSETS)+ordinal]);edge<int(words[workField(FIELD_CACHE_OFFSETS)+ordinal+1]);edge++){
-  double conductance=frozenG[2*edge];int other=int(frozenG[2*edge+1]),index=int(words[conductionField(CONDUCTION_IMEX_INDEX)+other]);double value;
-  if(product)value=(p.step==1?readDouble(conductionField(CONDUCTION_WORK)+2*(n+index)):readDouble(conductionField(CONDUCTION_PRESSURE)+2*index))/readDouble(conductionField(CONDUCTION_ROOT_CP)+2*other);
-  else value=readDouble(conductionField(p.step==1?17:16)+2*other)-readDouble(conductionField(CONDUCTION_OWNER_INITIAL_T)+2*other);
-  sum=mfAdd(sum,p.dt*conductance*value);
- }
- writeDouble(workField(FIELD_MF_DATA)+8*id+4,sum.x);writeDouble(workField(FIELD_MF_DATA)+8*id+6,sum.y);
-}
 void main(){int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
- if(p.stage==STAGE_BATH_SUMMARY){if(errors==0u)bathSummary(block,lane);return;}if(id>=p.count)return;
- if(p.stage>=STAGE_COMPACT_IMEX){
-  if(errors!=0u)return;
-  if(p.stage==STAGE_COMPACT_IMEX){if(int(words[conductionField(CONDUCTION_MODE)])!=0)imexCompact(id);return;}
-  if(p.stage==STAGE_COUNT_IMEX_CACHE||p.stage==STAGE_WRITE_IMEX_CACHE){if(id>=p.count)return;imexPoint=id;int point=int(words[workField(FIELD_IMEX_SAMPLES)+id]);imexCursor=int(words[workField(FIELD_CACHE_OFFSETS)+id]);if(p.stage==STAGE_COUNT_IMEX_CACHE)atomicOr(words[workField(FIELD_IMEX_AFFECTED_FLAGS)+point],1u);spatialFlux(point,false);return;}
-  if(p.stage==STAGE_COMPACT_AFFECTED){if(id<p.count&&words[workField(FIELD_IMEX_AFFECTED_FLAGS)+id]!=0u){uint slot=atomicAdd(words[conductionField(CONDUCTION_IMEX_COUNTS)+2],1u);words[workField(FIELD_IMEX_AFFECTED)+slot]=uint(id);}return;}
-  if(p.stage==STAGE_AFFECTED_DISPATCH){if(id==0){int groups=(int(words[conductionField(CONDUCTION_IMEX_COUNTS)+2])+127)/128;words[workField(FIELD_MF_DISPATCH)]=uint(min(groups,65535));words[workField(FIELD_MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[workField(FIELD_MF_DISPATCH)+2]=1u;}return;}
-  if(p.stage==STAGE_UPDATE_AFFECTED_FLUX){if(id<int(words[conductionField(CONDUCTION_IMEX_COUNTS)+2]))spatialFlux(int(words[workField(FIELD_IMEX_AFFECTED)+id]),false);return;}
-  if((p.stage==STAGE_CACHE_FLUX||p.stage==STAGE_CACHE_PRODUCT)&&id<p.count)imexCacheValue(id,p.stage==STAGE_CACHE_PRODUCT);
-  return;
- }
+if(id>=p.count)return;
  if(p.stage==STAGE_SPATIAL_DISPATCH){if(id==0)spatialDispatch();return;}
- if(p.stage==STAGE_PREPARE_SPATIAL_FLUX){if(errors!=0u||id>=liveSamples()+livePorts())return;int point=id<liveSamples()?id:headerWord(H_SAMPLE_CAPACITY)+id-liveSamples();spatialFlux(point,p.stage==STAGE_PREPARE_SPATIAL_FLUX);return;}
+ if(p.stage==STAGE_PREPARE_SPATIAL_FLUX){if(errors!=0u||id>=liveSamples())return;spatialFlux(id);return;}
  if(p.stage==STAGE_WRITE_BATHS){writeBaths(id);return;}if(p.stage==STAGE_INITIALIZE_GRAPH){graphInitialize(id);return;}
  if(p.stage==STAGE_UPDATE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=max(words[workField(FIELD_REQUIREMENTS)+4],words[conductionField(CONDUCTION_MODE)+1]);return;}
- if(p.stage==STAGE_SAVE_IMEX_REQUIREMENTS){if(id==0){words[workField(FIELD_REQUIREMENTS)+5]=words[conductionField(CONDUCTION_MODE)];words[workField(FIELD_REQUIREMENTS)+6]=words[conductionField(CONDUCTION_MODE)+1];for(int i=0;i<4;i++)words[workField(FIELD_REQUIREMENTS)+7+i]=words[conductionField(CONDUCTION_IMEX_COUNTS)+i];}return;}if(p.stage==STAGE_SAVE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=words[conductionField(CONDUCTION_MODE)+1];return;}if(p.stage==STAGE_CLEAR){clear(id);return;}if(p.stage==STAGE_PREPARE_OWNER){prepareOwner(id);return;}if(p.stage==STAGE_PREPARE_TERMS){prepareTerms(id);return;}if(p.stage==STAGE_WRITE_CONTACTS){writeContacts(id);return;}if(errors!=0u)return;
- if(p.stage==STAGE_FLAG_OWNER)flagOwner(id);else if(p.stage==STAGE_FLAG_SAMPLE)flagSample(id);else if(p.stage==STAGE_PREPARE_SAMPLE)prepareSample(id);else if(p.stage==STAGE_SCATTER_SAMPLE)scatterSample(id);else if(p.stage==STAGE_COVERAGE)coverage(id);else if(p.stage==STAGE_COUNT_CONTACTS)contacts(id,false);else if(p.stage==STAGE_PUBLISH)publish(id);else if(p.stage==STAGE_COUNT_PORTS)portCount(id);else if(p.stage==STAGE_SCATTER_PORTS)portScatter(id);else if(p.stage==STAGE_SCATTER_OWNER_SAMPLE)scatterOwnerSample(id);else if(p.stage==STAGE_COUNT_BATHS)countBaths(id);else if(p.stage==STAGE_PROJECT_CONTACT_GEOMETRY)projectContactGeometry(id);
+ if(p.stage==STAGE_SAVE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=words[conductionField(CONDUCTION_MODE)+1];return;}if(p.stage==STAGE_CLEAR){clear(id);return;}if(p.stage==STAGE_PREPARE_OWNER){prepareOwner(id);return;}if(p.stage==STAGE_PREPARE_TERMS){prepareTerms(id);return;}if(p.stage==STAGE_WRITE_CONTACTS){writeContacts(id);return;}if(errors!=0u)return;
+ if(p.stage==STAGE_FLAG_OWNER)flagOwner(id);else if(p.stage==STAGE_FLAG_SAMPLE)flagSample(id);else if(p.stage==STAGE_PREPARE_SAMPLE)prepareSample(id);else if(p.stage==STAGE_SCATTER_SAMPLE)scatterSample(id);else if(p.stage==STAGE_COVERAGE)coverage(id);else if(p.stage==STAGE_COUNT_CONTACTS)contacts(id,false);else if(p.stage==STAGE_PUBLISH)publish(id);else if(p.stage==STAGE_COUNT_PORTS)portCount(id);else if(p.stage==STAGE_SCATTER_PORTS)portScatter(id);else if(p.stage==STAGE_COUNT_BATHS)countBaths(id);else if(p.stage==STAGE_PROJECT_CONTACT_GEOMETRY)projectContactGeometry(id);
 }

@@ -338,8 +338,10 @@ void main() {
             writeFieldInt(FIELD_INTERVAL_COMPONENT, id, id);
             write(FIELD_INTERVAL_PARTICLE_WORK, id, 0.0);
         }
-        if (id < headerValue(H_CONTACT_CAPACITY))
+        if (id < headerValue(H_CONTACT_CAPACITY)) {
             write(FIELD_INTERVAL_FIXED_WORK, id, 0.0);
+            write(FIELD_FIXED_WORK, id, 0.0);
+        }
     } else if (p.stage == STAGE_RESTORE_VELOCITY) {
         if (id < particleCount()) {
             dvec3 v = vector(FIELD_SOURCE_VELOCITY, id);

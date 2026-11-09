@@ -171,7 +171,7 @@ final class VulkanThermalContacts implements AutoCloseable {
     enum Field{OWNER_FLAGS(4),OWNER_PREFIX(4),OWNER_KIND(4),OWNER_INDEX(4),OWNER_K(8),TERM_COUNTS(4),
         SAMPLE_FLAGS(4),SAMPLE_PREFIX(4),SAMPLE_OWNER(4),SAMPLE_CELL(4),SAMPLE_MASK(4),SAMPLE_FRACTION(8),
         CELL_COUNTS(4),CELL_OFFSETS(4),CELL_CURSORS(4),CELL_SAMPLES(4),COVERAGE(8),CONTACT_COUNTS(4),CONTACT_OFFSETS(4),
-        LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4),DEVICE_MATERIAL(4),PORT_COUNTS(4),PORT_OFFSETS(4),PORT_CURSORS(4),PORT_ROWS(4),MF_DATA(8),MF_POW(4),BATH_COUNTS(4),BATH_OFFSETS(4),BATH_G(8),BATH_T(8),MF_DISPATCH(4),FACE_FACTORS(8),CACHE_COUNTS(4),CACHE_OFFSETS(4),IMEX_SAMPLES(4),IMEX_AFFECTED_FLAGS(4),IMEX_AFFECTED(4),IMEX_BASE(8);
+        LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4),DEVICE_MATERIAL(4),PORT_COUNTS(4),PORT_OFFSETS(4),PORT_CURSORS(4),PORT_ROWS(4),MF_POW(4),BATH_COUNTS(4),BATH_OFFSETS(4),BATH_G(8),BATH_T(8),MF_DISPATCH(4),FACE_FACTORS(8);
         final int width;Field(int width){this.width=width;}}
     static final class Layout{
         final Inputs input;final Materials materials;final VulkanThermalConduction.Layout conduction;
@@ -182,17 +182,14 @@ final class VulkanThermalContacts implements AutoCloseable {
             if(base<Math.max(input.endOffset(),conduction.endOffset())||a<8||(a&(a-1))!=0||materials.conductivity().length!=conduction.tables.materials())throw new IllegalArgumentException("Invalid thermal contacts layout");
             long[] cursor={base};header=allocate(cursor,160,4,a);
             for(Field f:Field.values()){
-                int n=switch(f){case CACHE_COUNTS->Math.addExact(samples,input.device()==null?0:input.device().portCapacity());
-                    case CACHE_OFFSETS->Math.addExact(Math.addExact(samples,input.device()==null?0:input.device().portCapacity()),1);
-                    case IMEX_SAMPLES,IMEX_AFFECTED_FLAGS,IMEX_AFFECTED->Math.addExact(samples,input.device()==null?0:input.device().portCapacity());case IMEX_BASE->Math.multiplyExact(2,Math.addExact(samples,input.device()==null?0:input.device().portCapacity()));
-                    case FACE_FACTORS->Math.multiplyExact(15,cells);case MF_DISPATCH->3;case MF_DATA->Math.multiplyExact(4,samples+(input.device()==null?0:input.device().portCapacity()));
+                int n=switch(f){                    case FACE_FACTORS->Math.multiplyExact(15,cells);case MF_DISPATCH->3;
                     case MF_POW,BATH_COUNTS->samples;case BATH_OFFSETS->samples+1;case BATH_G,BATH_T->conduction.baths;
                     case OWNER_FLAGS->owners;case OWNER_PREFIX->owners+1;
                     case OWNER_KIND,OWNER_INDEX,OWNER_K,TERM_COUNTS->conduction.owners;
                     case SAMPLE_FLAGS,SAMPLE_OWNER,SAMPLE_CELL,SAMPLE_MASK,SAMPLE_FRACTION,CELL_SAMPLES,CONTACT_COUNTS->samples;
                     case SAMPLE_PREFIX,CONTACT_OFFSETS->samples+1;case PORT_COUNTS,PORT_CURSORS,CELL_COUNTS,CELL_CURSORS->cells;case PORT_OFFSETS->cells+1;case PORT_ROWS->input.device()==null?0:input.device().portCapacity();case CELL_OFFSETS->cells+1;case COVERAGE->Math.addExact(8*cells,input.device()==null?0:24*input.device().portCapacity());
                     case LIQUID_MATERIAL->materials.liquid().length;case GAS_MATERIAL->materials.gas().length;case GRANULAR_MATERIAL->materials.granular().length;case COHERENT_MATERIAL->materials.coherent().length;case DEVICE_MATERIAL->materials.device().length;case CONDUCTIVITY->materials.conductivity().length;
-                    case REQUIREMENTS->11;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.addExact(Math.multiplyExact(4,cells),input.device()==null?0:input.device().portCapacity()),Math.max(Math.addExact(samples,input.device()==null?0:input.device().portCapacity()),Math.max(owners,Math.max(cells,conduction.owners)))))/4);};
+                    case REQUIREMENTS->5;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.addExact(Math.multiplyExact(4,cells),input.device()==null?0:input.device().portCapacity()),Math.max(Math.addExact(samples,input.device()==null?0:input.device().portCapacity()),Math.max(owners,Math.max(cells,conduction.owners)))))/4);};
                 columns.put(f,allocate(cursor,n,f.width,a));
             }endOffset=align(cursor[0],a);Math.toIntExact(endOffset/4);
         }
@@ -238,9 +235,9 @@ final class VulkanThermalContacts implements AutoCloseable {
         private void ints(List<VulkanGasThermodynamics.TableChunk> out,Field f,int[] values){if(values.length==0)return;var b=ByteBuffer.allocateDirect(4*values.length).order(ByteOrder.LITTLE_ENDIAN);for(int x:values)b.putInt(x);b.flip();out.add(new VulkanGasThermodynamics.TableChunk(column(f).offset(),b));}
     }
     static Layout layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long alignment){return new Layout(input,materials,conduction,base,alignment);}
-    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena,errorRange;private final FlipGpuResources cacheResources;private GpuBuffer cache;
-    VulkanThermalContacts(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),32);cacheResources=new FlipGpuResources(context);try{cache=cacheResources.addDeviceStorage(8);scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();cacheResources.close();throw failure;}}
-    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){this.arena=arena;this.errorRange=errors;bindings.rebindRanges(List.of(arena,errors,new FlipKernelBindings.BufferRange(cache)));scan.rebindRanges(arena,arena,arena,errors);}
+    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
+    VulkanThermalContacts(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),32);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
+    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
     void recordPrepare(VkCommandBuffer command,Layout l){recordSource(command,l,false);recordGraphEdges(command,l);stage(command,l,13,1);}
     private void recordSource(VkCommandBuffer command,Layout l,boolean matrixFree){
         stage(command,l,0,Math.max(l.owners,Math.max(l.samples,Math.max(l.cells,l.conduction.owners))),matrixFree?2:1,0);
@@ -254,36 +251,20 @@ final class VulkanThermalContacts implements AutoCloseable {
     }
     void recordSpatial(VkCommandBuffer command,Layout l){
         recordSource(command,l,true);
-        scan.record(command,l.conduction.owners,l.conduction.word(VulkanThermalConduction.Field.DEGREE_COUNTS),l.conduction.word(VulkanThermalConduction.Field.DEGREE_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,15,spatialCapacity(l));stage(command,l,16,l.samples);
+        stage(command,l,16,l.samples);
         scan.record(command,l.samples,l.word(Field.BATH_COUNTS),l.word(Field.BATH_OFFSETS),l.word(Field.SCAN),l.word(Field.SAMPLE_PREFIX)+l.samples);
         stage(command,l,17,Math.max(1,l.samples));
     }
-    void recordFullTrial(VkCommandBuffer command,Layout l,double duration){
-        stage(command,l,24,1,-1,duration);stage(command,l,18,spatialCapacity(l),0,duration);stage(command,l,19,Math.max(1,l.conduction.baths),0,duration);
+    void recordContactConductances(VkCommandBuffer command,Layout l,double duration){
+        stage(command,l,24,1,-1,duration);stage(command,l,18,l.samples,0,duration);
+    }
+    void recordLimitedFlux(VkCommandBuffer command,Layout l,double duration){
+        stage(command,l,18,l.samples,1,duration);
     }
     void recordGraphEdges(VkCommandBuffer command,Layout l){
         stage(command,l,21,l.conduction.owners);stage(command,l,8,l.samples);
         prefix(command,l,l.samples,Field.CONTACT_COUNTS,Field.CONTACT_OFFSETS);stage(command,l,9,Math.max(1,l.samples));stage(command,l,22,1);
     }
-    private static int spatialCapacity(Layout l){return Math.addExact(l.samples,l.input.device()==null?0:l.input.device().portCapacity());}
-    /** Candidate batches have completed before this dedicated coefficient buffer may grow. */
-    void ensureFrozenCapacity(int slots){
-        if(slots<0)throw new IllegalArgumentException("Negative frozen conductance count");long bytes=Math.max(8L,Math.multiplyExact(8L,slots));
-        if(bytes>cache.size()){long capacity=Math.max(bytes,Math.addExact(cache.size(),cache.size()/2));var next=cacheResources.addDeviceStorage(capacity);var previous=cache;cache=next;cacheResources.destroy(previous);}
-        bindings.rebindRanges(List.of(arena,errorRange,new FlipKernelBindings.BufferRange(cache)));
-    }
-    long frozenBytes(){return cache.size();}
-    FlipKernelBindings.BufferIdentity frozenIdentity(){return new FlipKernelBindings.BufferIdentity(cache);}
-    void recordImexSamples(VkCommandBuffer command,Layout l,double dt){stage(command,l,40,spatialCapacity(l),0,dt);}
-    void recordImexContacts(VkCommandBuffer command,Layout l,double dt,int samples){stage(command,l,41,samples,0,dt);prefix(command,l,samples,Field.CACHE_COUNTS,Field.CACHE_OFFSETS);stage(command,l,44,spatialCapacity(l),0,dt);}
-    void recordImexCache(VkCommandBuffer command,Layout l,double dt,int samples){stage(command,l,42,samples,0,dt);}
-    void recordImexCorrection(VkCommandBuffer command,Layout l,double dt){stage(command,l,45,1,0,dt);stage(command,l,43,spatialCapacity(l),0,dt);}
-    VulkanThermalConduction.ImexOperator imexOperator(Layout l,double dt,int samples){return new VulkanThermalConduction.ImexOperator(){
-        public void flux(VkCommandBuffer command,boolean trial){stage(command,l,46,samples,trial?1:0,dt);}
-        public void product(VkCommandBuffer command,boolean direction){stage(command,l,47,samples,direction?1:0,dt);}
-    };}
-    void recordConductionState(VkCommandBuffer command,Layout l){stage(command,l,14,1);}
     /** The solver has already combined every spatial sample at its unique owner. */
     void recordPublish(VkCommandBuffer command,Layout l){stage(command,l,10,l.conduction.owners);}
     private void prefix(VkCommandBuffer command,Layout l,int n,Field input,Field output){scan.record(command,n,l.word(input),l.word(output),l.word(Field.SCAN));}
@@ -304,5 +285,5 @@ final class VulkanThermalContacts implements AutoCloseable {
     private static long align(long n,long a){return Math.addExact(n,a-1)&-a;}
     private static VulkanLiquidStateLayout.Column allocate(long[] cursor,int n,int width,long a){var c=new VulkanLiquidStateLayout.Column(align(cursor[0],a),n,width);cursor[0]=Math.addExact(c.offset(),c.bindingBytes());return c;}
     private static String shader(){try(var in=VulkanThermalContacts.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/thermal-contacts.comp")){if(in==null)throw new IllegalStateException("Thermal contact shader missing");return new String(in.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout()).replace("// SERIES_CONDUCTANCE_LIBRARY", VulkanLiquidPhaseRows.resource("series-conductance.glsl")).replace("// PLIC_FACE_LIBRARY", VulkanLiquidPhaseRows.resource("plic-face.glsl"));}catch(IOException e){throw new IllegalStateException("Thermal contact shader unavailable",e);}}
-    @Override public void close(){try{scan.close();}finally{try{bindings.close();}finally{cacheResources.close();}}}
+    @Override public void close(){try{scan.close();}finally{bindings.close();}}
 }

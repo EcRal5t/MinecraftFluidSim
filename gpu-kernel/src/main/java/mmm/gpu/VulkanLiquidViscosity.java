@@ -18,16 +18,13 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private enum Stage {
         PREPARE_CELLS,
         PREPARE_FACES,
-        APPLY_STRAIN_OR_WALL,
-        APPLY_CONTACTS,
         GATHER_HEAT,
         CLEAR_CONTACTS,
         COMPILE_CELL_STRAIN,
-        PUBLISH_STRAIN_DISPATCH,
-        PREPARE_IMPLICIT_STRAIN,
-        MARK_EXPLICIT_FACES,
-        APPLY_EXPLICIT_FACES,
-        APPLY_EXPLICIT_HEAT
+        PREPARE_FACE_SCALE,
+        SCALE_STRAINS,
+        APPLY_FACES,
+        APPLY_STRAIN_HEAT
     }
 
     /** Header words shared with the viscosity shader. */
@@ -37,7 +34,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         CONTACT_VELOCITIES, CONTACT_CAPACITY, BODY_COUNT, ACTIVITY_CELLS,
         AQUEOUS_MATERIAL, WATER_SPECIES, SODIUM_SPECIES, CHLORIDE_SPECIES, SALT_SPECIES
     }
-    private static final int STOCK_FIELDS = 24, WORK_FIELDS = 48, COLOUR_OFFSETS = 80, HEADER_WORDS = 128;
+    private static final int STOCK_FIELDS = 24, WORK_FIELDS = 48, HEADER_WORDS = 128;
     private static String shaderLayout() {
         var definitions = new StringBuilder();
         for (var stage : Stage.values())
@@ -47,7 +44,6 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         definitions.append("#define STOCK_FIELDS ").append(STOCK_FIELDS).append('\n');
         definitions.append("#define WORK_FIELDS ").append(WORK_FIELDS).append('\n');
         definitions.append("#define H_ETHANOL_SPECIES 111\n#define H_ETHANOL_VISCOSITY 112\n#define H_ETHANOL_MOLAR_MASS 114\n#define H_WATER_MOLAR_MASS 116\n#define H_SALT_A 118\n#define H_SALT_B 120\n#define H_SALT_MAX_MOLALITY 122\n#define H_SALT_REFERENCE_TEMPERATURE 124\n#define H_SALT_TEMPERATURE_TOLERANCE 126\n");
-        definitions.append("#define COLOUR_OFFSETS ").append(COLOUR_OFFSETS).append('\n');
         for (var field : VulkanLiquidStateLayout.Field.values())
             definitions.append("#define STOCK_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
         for (var field : Field.values())
@@ -96,8 +92,8 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         MU(8), EXTRAPOLATED(4), WALL_CONDUCTANCE(8), STRESS_HEAT(8), WALL_HEAT(8), CONTACT_FACE_HEAT(8),
         CONTACT_FACE_WORK(8), SOURCE_CELL_HEAT(8), SOURCE_CELL_WORK(8), SOURCE_FACE_VELOCITY(8), SOURCE_FACE_K(8),
         FINAL_FACE_K(8), CELL_FIXED_IMPULSE(8), WALL_FACE_IMPULSE(8), CONTACT_IMPULSE(8), CONTACT_WORK(8),
-        MATERIAL_OFFSETS(4), VISCOSITY_SEGMENTS(8), STRAIN_COUNTS(4), STRAIN_DISPATCH(4),
-        STRAIN_ROWS(4), STRAIN_CONDUCTANCE(8), FACE_INVERSE_MASS(8), FACE_EXPLICIT(4), STRAIN_CLASS(4);
+        MATERIAL_OFFSETS(4), VISCOSITY_SEGMENTS(8), STRAIN_CONDUCTANCE(8), FACE_INVERSE_MASS(8),
+        FACE_SCALE(8), STRAIN_CLASS(4);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -107,7 +103,6 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         private final Tables tables;private final PrescribedContacts contacts;
         private final int cellsWord,facesWord,wallsWord,temperatureWord,activityWord,activityCellsWord,faces;
         private final boolean noSlip;private final long endOffset;
-        private final int[] colourOffsets=new int[19];
         Layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
                VulkanLiquidStateLayout.Column walls,int carrierTemperatureWord,int faceActivityWord,Tables tables,
                PrescribedContacts contacts,boolean noSlip,long scratchBase,long alignment) {
@@ -121,14 +116,13 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             this.faces=faces.count()/4;
             if(scratchBase<source.bytes()||alignment<8||(alignment&(alignment-1))!=0||cells.count()!=4*source.cellCount()||carrierTemperatureWord<0)
                 throw new IllegalArgumentException("Viscous fields differ from resident liquid");
-            for(int colour=0;colour<18;colour++)colourOffsets[colour+1]=Math.addExact(colourOffsets[colour],colourCells(source,colour));
             long[] cursor={scratchBase};header=VulkanLiquidViscosity.column(cursor,HEADER_WORDS,4,alignment);int n=source.cellCount();
             for(Field field:Field.values()) {
                 int count=switch(field){
                     case WALL_CONDUCTANCE,CELL_FIXED_IMPULSE->3*n;case STRESS_HEAT->6*n;
-                    case WALL_HEAT,CONTACT_FACE_HEAT,CONTACT_FACE_WORK,SOURCE_FACE_VELOCITY,SOURCE_FACE_K,FINAL_FACE_K,WALL_FACE_IMPULSE,FACE_INVERSE_MASS,FACE_EXPLICIT->this.faces;
+                    case WALL_HEAT,CONTACT_FACE_HEAT,CONTACT_FACE_WORK,SOURCE_FACE_VELOCITY,SOURCE_FACE_K,FINAL_FACE_K,WALL_FACE_IMPULSE,FACE_INVERSE_MASS,FACE_SCALE->this.faces;
                     case CONTACT_IMPULSE,CONTACT_WORK->contacts==null?0:contacts.capacity();
-                    case STRAIN_COUNTS->18;case STRAIN_DISPATCH->54;case STRAIN_ROWS,STRAIN_CONDUCTANCE,STRAIN_CLASS->6*n;
+                    case STRAIN_CONDUCTANCE,STRAIN_CLASS->6*n;
                     case MATERIAL_OFFSETS->tables.offsets().length;case VISCOSITY_SEGMENTS->tables.segments().length;default->n;
                 };
                 columns.put(field,VulkanLiquidViscosity.column(cursor,count,field.width,alignment));
@@ -157,7 +151,6 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             data[Header.CONTACT_CAPACITY.ordinal()]=contacts==null?0:contacts.capacity();data[Header.BODY_COUNT.ordinal()]=contacts==null?0:contacts.bodies();
             for(var field:VulkanLiquidStateLayout.Field.values())data[STOCK_FIELDS+field.ordinal()]=word(sourceLayout.column(field));
             for(var field:Field.values())data[WORK_FIELDS+field.ordinal()]=word(column(field));
-            for(int colour=0;colour<colourOffsets.length;colour++)data[COLOUR_OFFSETS+colour]=colourOffsets[colour];
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);
             out.putDouble(4*112,tables.ethanolViscosity()).putDouble(4*114,tables.ethanolMolarMass()).putDouble(4*116,tables.waterMolarMass());
             var correction=tables.correction();
@@ -170,57 +163,33 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         }
     }
     private final FlipKernelBindings bindings;
-    private FlipKernelBindings.BufferRange candidate;
     VulkanLiquidViscosity(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),32);}
-    void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){this.candidate=candidate;bindings.rebindRanges(List.of(source,candidate,errors));}
+    void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(source,candidate,errors));}
     private void bind(VkCommandBuffer command){try(var stack=stackPush()){bindings.bind(command,stack);}}
-    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize){bind(command);stage(command,layout,Stage.PREPARE_CELLS.ordinal(),0,layout.source.cellCount(),cellSize,0);}
-    /** Nonstiff strains advance together; only their stiff neighbours enter symmetric local sweeps. */
+    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize){bind(command);stage(command,layout,Stage.PREPARE_CELLS.ordinal(),layout.source.cellCount(),cellSize,0);}
+    /** Apply all viscous stresses with shared, finite face impulses. */
     void record(VkCommandBuffer command,Layout layout,double cellSize,double duration){
         prepareFields(command,layout,cellSize,duration);
-        stage(command,layout,Stage.MARK_EXPLICIT_FACES.ordinal(),0,layout.faces,cellSize,duration);
-        stage(command,layout,Stage.PREPARE_IMPLICIT_STRAIN.ordinal(),0,Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
-        stage(command,layout,Stage.APPLY_EXPLICIT_FACES.ordinal(),0,layout.faces,cellSize,duration);
-        stage(command,layout,Stage.APPLY_EXPLICIT_HEAT.ordinal(),0,layout.source.cellCount(),cellSize,duration);
-        stage(command,layout,Stage.PUBLISH_STRAIN_DISPATCH.ordinal(),0,18,cellSize,duration);
-        for(int colour=0;colour<18;colour++)stage(command,layout,Stage.APPLY_STRAIN_OR_WALL.ordinal(),colour,colourCells(layout,colour),cellSize,.5*duration);
-        stage(command,layout,Stage.APPLY_STRAIN_OR_WALL.ordinal(),18,layout.faces,cellSize,duration);
-        for(int colour=17;colour>=0;colour--)stage(command,layout,Stage.APPLY_STRAIN_OR_WALL.ordinal(),colour,colourCells(layout,colour),cellSize,.5*duration);
-        stage(command,layout,Stage.APPLY_CONTACTS.ordinal(),0,layout.faces,cellSize,duration);
-        stage(command,layout,Stage.GATHER_HEAT.ordinal(),0,layout.source.cellCount(),cellSize,duration);
+        stage(command,layout,Stage.PREPARE_FACE_SCALE.ordinal(),layout.faces,cellSize,duration);
+        stage(command,layout,Stage.SCALE_STRAINS.ordinal(),Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
+        stage(command,layout,Stage.APPLY_FACES.ordinal(),layout.faces,cellSize,duration);
+        stage(command,layout,Stage.APPLY_STRAIN_HEAT.ordinal(),layout.source.cellCount(),cellSize,duration);
+        stage(command,layout,Stage.GATHER_HEAT.ordinal(),layout.source.cellCount(),cellSize,duration);
     }
     private void prepareFields(VkCommandBuffer command,Layout layout,double cellSize,double duration){
         if(!(cellSize>0&&Double.isFinite(cellSize)&&duration>0&&Double.isFinite(duration)))throw new IllegalArgumentException("Invalid viscous step");
         bind(command);
-        stage(command,layout,Stage.PREPARE_CELLS.ordinal(),0,layout.source.cellCount(),cellSize,duration);
-        stage(command,layout,Stage.PREPARE_FACES.ordinal(),0,layout.faces,cellSize,duration);
-        if(layout.contacts!=null)stage(command,layout,Stage.CLEAR_CONTACTS.ordinal(),0,layout.contacts.capacity(),cellSize,duration);
-        stage(command,layout,Stage.COMPILE_CELL_STRAIN.ordinal(),0,Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
+        stage(command,layout,Stage.PREPARE_CELLS.ordinal(),layout.source.cellCount(),cellSize,duration);
+        stage(command,layout,Stage.PREPARE_FACES.ordinal(),layout.faces,cellSize,duration);
+        if(layout.contacts!=null)stage(command,layout,Stage.CLEAR_CONTACTS.ordinal(),layout.contacts.capacity(),cellSize,duration);
+        stage(command,layout,Stage.COMPILE_CELL_STRAIN.ordinal(),Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
     }
-    private static int colourCells(Layout layout,int colour) {return layout.colourOffsets[colour+1]-layout.colourOffsets[colour];}
-    private static int colourCells(VulkanLiquidStateLayout source,int colour) {
-        var grid=source.grid();int count=0;
-        for(int block=0;block<grid.blockCount();block++){
-            int[] dims={grid.blockSize(block,0),grid.blockSize(block,1),grid.blockSize(block,2)};
-            if(colour<6){int axis=colour/2;dims[axis]=(dims[axis]+1-(colour&1))/2;}
-            else {int pair=(colour-6)/4,bits=(colour-6)%4;
-                int a=pair==2?1:0,b=pair==0?1:2;
-                dims[a]=(dims[a]+1-(bits&1))/2;dims[b]=(dims[b]+1-(bits>>1))/2;
-            }
-            count=Math.addExact(count,dims[0]*dims[1]*dims[2]);
-        }
-        return count;
-    }
-    private void stage(VkCommandBuffer command,Layout layout,int stage,int colour,int count,double h,double dt){
+    private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double h,double dt){
         if(count==0)return;int groups=(count+127)/128;
         try(var stack=stackPush()){
-            var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(colour).putInt(count).putDouble(h).putDouble(dt).flip();
+            var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(0).putInt(count).putDouble(h).putDouble(dt).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            if(stage==Stage.APPLY_STRAIN_OR_WALL.ordinal()&&colour<18){
-                VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,candidate.buffer().handle(),candidate.offset()+layout.column(Field.STRAIN_DISPATCH).offset()+12L*colour);
-            }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
+            vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
     }

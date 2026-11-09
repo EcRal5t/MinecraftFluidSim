@@ -149,6 +149,7 @@ tasks.register('runGpuProcessFlowsValidation', JavaExec) {
     jvmArgs '-ea', '--enable-native-access=ALL-UNNAMED', '-Xmx1g'
     systemProperty 'mmm.solverBackend', 'vulkan'
     systemProperty 'mmm.gpuDevice', providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	systemProperty 'mmm.gpuDeviceName', providers.gradleProperty('gpuProbeDeviceName').getOrElse('')
     args providers.gradleProperty('gpuProcessScenario').getOrElse('heat'), providers.gradleProperty('gpuProcessSteps').getOrElse('20')
     def workDir = layout.buildDirectory.dir('gpu-process-flows-work').get().asFile
     workingDir workDir
@@ -164,6 +165,7 @@ tasks.register('runGpuProductionDemoValidation', JavaExec) {
 	jvmArgs '-ea', '--enable-native-access=ALL-UNNAMED', '-Xmx1g'
 	systemProperty 'mmm.solverBackend', 'vulkan'
 	systemProperty 'mmm.gpuDevice', providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	systemProperty 'mmm.gpuDeviceName', providers.gradleProperty('gpuProbeDeviceName').getOrElse('')
 	systemProperty 'mmm.demoLiquidDiagnostic', providers.gradleProperty('gpuDemoLiquidDiagnostic').getOrElse('false')
 	args providers.gradleProperty('gpuDemo').getOrElse('demo'), providers.gradleProperty('gpuDemoSteps').getOrElse('1'), providers.gradleProperty('gpuDemoStage').getOrElse('complete')
 	def workDir = layout.buildDirectory.dir('gpu-production-demo-work').get().asFile

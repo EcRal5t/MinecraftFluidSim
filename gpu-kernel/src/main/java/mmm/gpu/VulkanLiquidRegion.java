@@ -658,9 +658,9 @@ final class VulkanLiquidRegion implements AutoCloseable {
         }
     }
     VulkanRegionStorage.Metrics metrics(){
-        var m=storage.metrics();long heatBytes=kernels==null||kernels.thermalKernel==null?0:kernels.thermalKernel.deviceBytes();
+        var m=storage.metrics();
         return new VulkanRegionStorage.Metrics(m.submissions(),m.uploadBytes(),m.readbackBytes(),m.copiedBytes(),m.gpuNanos(),m.recordingNanos(),
-                m.waitingNanos(),m.allocatedGenerations(),m.deviceBytes()+heatBytes,m.stagingBytes());
+                m.waitingNanos(),m.allocatedGenerations(),m.deviceBytes(),m.stagingBytes());
     }
     synchronized VulkanPressureKernel.Progress pressureProgress(){return pressureProgress;}
     synchronized double[] pressureDiagnostics() {

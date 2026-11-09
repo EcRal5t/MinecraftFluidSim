@@ -91,7 +91,7 @@ final class VulkanMixturePressure implements AutoCloseable {
         private static int word(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}
     }
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;
-    VulkanMixturePressure(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),32);
+    VulkanMixturePressure(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),36);
         try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){
         bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
@@ -103,9 +103,13 @@ final class VulkanMixturePressure implements AutoCloseable {
         stage(command,l,4,l.particles,h,dt,gravity);
     }
     /** After gas prepare, fills the common incidence; coupled.recordPrepare follows. */
-    void recordIncidence(VkCommandBuffer command,Layout l,double h,double dt,double gravity){
-        stage(command,l,5,l.coupled.termCapacity(),h,dt,gravity);stage(command,l,6,l.coupled.pressureSize(),h,dt,gravity);
+    void recordIncidence(VkCommandBuffer command,Layout l,double h,double dt,double gravity,boolean warmValid){
+        stage(command,l,5,l.coupled.termCapacity(),h,dt,gravity);stage(command,l,6,l.coupled.pressureSize(),h,dt,gravity,warmValid);
         stage(command,l,7,l.faces,h,dt,gravity);stage(command,l,8,l.particles,h,dt,gravity);
+    }
+    /** A cold import starts with its current EOS pressure and zero mechanical increment. */
+    void recordInitializeWarm(VkCommandBuffer command,Layout l){
+        stage(command,l,12,l.coupled.liquidCount(),1,1,0);
     }
     /** Publishes trial projected velocities; position/occupancy and all energy posting await joint capacity acceptance. */
     void recordProjectedVelocities(VkCommandBuffer command,Layout l,double h,double dt,double gravity){
@@ -116,8 +120,11 @@ final class VulkanMixturePressure implements AutoCloseable {
         stage(command,l,11,l.coupled.liquidCount(),h,dt,gravity);
     }
     private void stage(VkCommandBuffer command,Layout l,int stage,int count,double h,double dt,double gravity){
+        stage(command,l,stage,count,h,dt,gravity,false);
+    }
+    private void stage(VkCommandBuffer command,Layout l,int stage,int count,double h,double dt,double gravity,boolean warmValid){
         if(count==0)return;try(var stack=stackPush()){
-            bindings.bind(command,stack);var push=stack.malloc(32).putInt(l.headerWordOffset()).putInt(stage).putDouble(h).putDouble(dt).putDouble(gravity).flip();
+            bindings.bind(command,stack);var push=stack.malloc(36).putInt(l.headerWordOffset()).putInt(stage).putDouble(h).putDouble(dt).putDouble(gravity).putInt(warmValid?1:0).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);int groups=(count+127)/128;
             vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,

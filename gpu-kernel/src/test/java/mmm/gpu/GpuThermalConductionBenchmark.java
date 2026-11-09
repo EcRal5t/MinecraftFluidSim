@@ -10,7 +10,7 @@ import static mmm.gpu.VulkanRegionStorage.*;
 import static mmm.gpu.VulkanThermalConduction.Field.*;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Single-step IMEX caloric transport on a supplied owner graph. */
+/** Finite-step caloric transport on a supplied owner graph. */
 public final class GpuThermalConductionBenchmark {
     private GpuThermalConductionBenchmark() { }
     public static void main(String[] args){
@@ -20,7 +20,7 @@ public final class GpuThermalConductionBenchmark {
         var material=new ThermalMaterialDefinition("mmm:conduction_cost_water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",
                 293.15,0,.6,List.of(new ThermalMaterialDefinition.CaloricSegment(100,350,4180),new ThermalMaterialDefinition.CaloricSegment(350,1700,4300)));
         try(var context=new VulkanDeviceContext(device,true,true);var conduction=new VulkanThermalConduction(context);
-            var pressure=new VulkanPressureKernel(context,4096);var ledger=new VulkanEnergyLedger(context)){
+            var ledger=new VulkanEnergyLedger(context)){
             int owners=grid*grid*grid,edges=3*(grid-1)*grid*grid+2*grid*grid;long alignment=Math.max(8,context.storageOffsetAlignment());
             var l=VulkanThermalConduction.layout(owners,owners,edges,VulkanThermalConduction.Tables.fromMaterials(List.of(material)),0,alignment,2*grid*grid);
             var accounting=VulkanEnergyLedger.layout(List.of(
@@ -30,10 +30,10 @@ public final class GpuThermalConductionBenchmark {
             l.initializeHeaderAndTables(initial);accounting.initializeHeader(initial);
             initialize(initial,l,grid,h,material);
             try(var storage=new VulkanRegionStorage(context,accounting.endOffset(),1024*1024)){
-                storage.initialize(initial,0);long[] times=new long[samples];Metrics before=null;int implicitSteps=0,totalNewton=0;
+                storage.initialize(initial,0);long[] times=new long[samples];Metrics before=null;
                 System.out.printf("Device: %s; grid=%d h=%g m dt=%g s, %d actual owners, %d finite-volume contacts, segmented caloric water%n",context.deviceName(),grid,h,dt,owners,edges);
                 for(int step=0;step<warm+samples;step++){
-                    if(step==warm)before=storage.metrics();long begin=System.nanoTime();int iterations;
+                    if(step==warm)before=storage.metrics();long begin=System.nanoTime();
                     try(var capture=storage.capture();var candidate=storage.prepare(capture)){
                         var status=candidate.beginBatch((command,input,output,errors,staging,stack)->{
                             if(capture.generation()>0){
@@ -42,26 +42,24 @@ public final class GpuThermalConductionBenchmark {
                                 barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
                             }
                             var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
-                            conduction.rebindRanges(dst,err);pressure.rebindRanges(l.pressureRanges(dst,err));ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);
+                            conduction.rebindRanges(dst,err);ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);
                             conduction.recordGraphPrepare(command,l,dt);
-                        },l.column(IMEX_COUNTS).offset(),16);
-                        if(status.error()!=0)throw new IllegalStateException("Conduction prepare error="+status.error());int fastOwners=status.feedback().getInt(0),fastContacts=status.feedback().getInt(12);
-                        iterations=conduction.solveGraphImex(candidate,l,pressure,dt,fastOwners,fastContacts);
-                        if(fastOwners>0)implicitSteps++;
+                        },0,0);
+                        if(status.error()!=0)throw new IllegalStateException("Conduction prepare error="+status.error());
                         int error=candidate.finishBatch((command,input,output,errors,staging,stack)->{
                             conduction.recordGraphFinish(command,l,dt);ledger.record(command,accounting);
                         });
                         if(error!=0)throw new IllegalStateException("Conduction publication error="+error);candidate.commit();
                     }
-                    totalNewton+=iterations;double wall=(System.nanoTime()-begin)*1e-6;
+                    double wall=(System.nanoTime()-begin)*1e-6;
                     if(step>=warm)times[step-warm]=Math.round(wall*1e6);
-                    System.out.printf("step=%d wall_ms=%.3f newton=%d%n",step,wall,iterations);
+                    System.out.printf("step=%d wall_ms=%.3f%n",step,wall);
                 }
                 var after=storage.metrics();Arrays.sort(times);
-                System.out.println("scene,grid,median_ms,max_ms,gpu_mean_ms,upload_B,readback_B,device_MiB,implicit_steps,newton_iterations");
-                System.out.printf("%s,%d,%.3f,%.3f,%.3f,%d,%d,%.1f,%d,%d%n",stiff?"stiff":"normal",grid,times[samples/2]*1e-6,times[samples-1]*1e-6,
+                System.out.println("scene,grid,median_ms,max_ms,gpu_mean_ms,upload_B,readback_B,device_MiB");
+                System.out.printf("%s,%d,%.3f,%.3f,%.3f,%d,%d,%.1f%n",stiff?"stiff":"normal",grid,times[samples/2]*1e-6,times[samples-1]*1e-6,
                         (after.gpuNanos()-before.gpuNanos())*1e-6/samples,(after.uploadBytes()-before.uploadBytes())/samples,
-                        (after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.,implicitSteps,totalNewton);
+                        (after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.);
             }
         }
     }
