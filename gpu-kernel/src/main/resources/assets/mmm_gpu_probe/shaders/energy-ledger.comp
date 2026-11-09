@@ -3,7 +3,7 @@
 const int STAGE_ACCUMULATE_DOUBLE = 0;
 const int STAGE_CANONICALIZE = 2;
 const int STAGE_ADD_CANONICAL = 3;
-const uint ERROR_ENERGY_LEDGER = 32u;
+const uint ERROR_ENERGY_LEDGER = 512u;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint words[]; };

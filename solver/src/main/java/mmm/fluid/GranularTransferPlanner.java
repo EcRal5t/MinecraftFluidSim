@@ -31,7 +31,7 @@ final class GranularTransferPlanner {
 
 	GranularTransferPlanner(HostFluidState domain) {
 		this.domain = domain;
-		insertionKernel = new GranularKernel(domain.grid,domain.config.cellSize());
+		insertionKernel = new GranularKernel(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask);
 	}
 
 	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
@@ -457,7 +457,7 @@ final class GranularTransferPlanner {
 			if (remainingParcels.size() != 1) throw new IllegalStateException("Granular extraction has multiple partial active carriers");
 			var entry = remainingParcels.entrySet().iterator().next(); int ordinal = entry.getKey();
 			var next = entry.getValue(); var source = granular.parcels.parcel(ordinal);
-			var kernel = new GranularKernel(domain.grid,domain.config.cellSize());
+			var kernel = new GranularKernel(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask);
 			kernel.capture(next.x(), next.y(), next.z(), next.solidVolumeSvq());
 			java.util.function.IntToLongFunction available = cell -> domain.domainInventoryGeometry.granularGeometricOpenSvq(cell)
 					- (domain.gasState.spatial==null?mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]):0) - futureSolid[cell];

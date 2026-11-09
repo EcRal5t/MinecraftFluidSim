@@ -20,7 +20,8 @@ final class VulkanGranularGeometry implements AutoCloseable {
         DEPOSIT_CAPACITY(4),
         CELL_COUNT(5),
         ENTRY_CAPACITY(6),
-        COHERENT_SVQ(7);
+        COHERENT_SVQ(7),
+        FIXED_MASKS(39);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -37,13 +38,13 @@ final class VulkanGranularGeometry implements AutoCloseable {
         final int width;Field(int width){this.width=width;}}
     static final class Layout {
         private final VulkanGranularStateLayout state;
-        private final VulkanLiquidStateLayout.Column coherentSvq,header;
+        private final VulkanLiquidStateLayout.Column coherentSvq,fixedMasks,header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         private final int entries;private final long endOffset;
-        Layout(VulkanGranularStateLayout state,VulkanLiquidStateLayout.Column coherentSvq,long scratchBase,long alignment){
-            if(coherentSvq.count()!=state.cells()||coherentSvq.elementBytes()!=8||scratchBase<state.endOffset()
+        Layout(VulkanGranularStateLayout state,VulkanLiquidStateLayout.Column coherentSvq,VulkanLiquidStateLayout.Column fixedMasks,long scratchBase,long alignment){
+            if(coherentSvq.count()!=state.cells()||coherentSvq.elementBytes()!=8||fixedMasks.count()!=state.cells()||fixedMasks.elementBytes()!=4||scratchBase<state.endOffset()
                     ||alignment<8||(alignment&(alignment-1))!=0)throw new IllegalArgumentException("Granular occupancy layout differs");
-            this.state=state;this.coherentSvq=coherentSvq;entries=Math.addExact(8*state.particleCapacity(),state.depositCapacity());
+            this.state=state;this.coherentSvq=coherentSvq;this.fixedMasks=fixedMasks;entries=Math.addExact(8*state.particleCapacity(),state.depositCapacity());
             header=new VulkanLiquidStateLayout.Column(align(scratchBase,alignment),48,4);long cursor=header.offset()+header.bytes();
             for(Field field:Field.values()){
                 int count=switch(field){case OFFSETS->state.cells()+1;case ENTRIES->entries;
@@ -58,7 +59,7 @@ final class VulkanGranularGeometry implements AutoCloseable {
         ByteBuffer headerBytes(){
             var result=ByteBuffer.allocateDirect(192).order(ByteOrder.LITTLE_ENDIAN);
             result.putInt(4 * Header.SIZE_X.word,state.sizeX()).putInt(4 * Header.SIZE_Y.word,state.sizeY()).putInt(4 * Header.SIZE_Z.word,state.sizeZ()).putInt(4 * Header.PARTICLE_CAPACITY.word,state.particleCapacity())
-                    .putInt(4 * Header.DEPOSIT_CAPACITY.word,state.depositCapacity()).putInt(4 * Header.CELL_COUNT.word,state.cells()).putInt(4 * Header.ENTRY_CAPACITY.word,entries).putInt(4 * Header.COHERENT_SVQ.word,Math.toIntExact(coherentSvq.offset()/4));
+                    .putInt(4 * Header.DEPOSIT_CAPACITY.word,state.depositCapacity()).putInt(4 * Header.CELL_COUNT.word,state.cells()).putInt(4 * Header.ENTRY_CAPACITY.word,entries).putInt(4 * Header.COHERENT_SVQ.word,Math.toIntExact(coherentSvq.offset()/4)).putInt(4 * Header.FIXED_MASKS.word,Math.toIntExact(fixedMasks.offset()/4));
             for(var field:VulkanGranularStateLayout.Field.values())result.putInt(4*(STATE_FIELDS+field.ordinal()),state.word(field));
             for(var field:Field.values())result.putInt(4*(WORK_FIELDS+field.ordinal()),word(field));return result;
         }

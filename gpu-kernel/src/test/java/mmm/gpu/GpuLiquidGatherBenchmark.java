@@ -28,6 +28,22 @@ public final class GpuLiquidGatherBenchmark {
         }
     }
 
+    private static VulkanMixtureFlux.Layout fixtureRoutes(VulkanLiquidStateLayout state,long fixed,long base,long alignment){
+        var dummy=state.column(VulkanLiquidStateLayout.Field.COUNTS);
+        var solid=new VulkanLiquidStateLayout.Column(base,state.cellCount(),8);
+        return new VulkanMixtureFlux.Layout(state.grid(),dummy,dummy,false,dummy,
+                new VulkanLiquidStateLayout.Column(fixed,state.cellCount(),4),solid,null,dummy,true,base+solid.bindingBytes(),alignment);
+    }
+
+    private static VulkanLiquidThermodynamics.Layout fixtureCaloric(VulkanLiquidStateLayout state,
+            long materialReference,long speciesReference,long base,long alignment) {
+        var tables=new VulkanLiquidThermodynamics.Tables(new int[]{0,1,2},
+                new double[]{Double.MAX_VALUE,Double.MAX_VALUE},new double[]{1,1},
+                new double[]{293.15,293.15},new double[]{-293.15,-293.15});
+        return VulkanLiquidThermodynamics.layout(state,tables,Math.toIntExact(materialReference/4),
+                Math.toIntExact(speciesReference/4),2,base,alignment);
+    }
+
     /** Two subquantum materials share one real accepted quantum; the second case drains both. */
     private static void checkTailBundle(VulkanDeviceContext context,VulkanLiquidMaterialRoutes materials,
                                        VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,
@@ -38,14 +54,16 @@ public final class GpuLiquidGatherBenchmark {
         long fixed=routes.endOffset(),mass=fixed+4L*cells,materialReference=mass+16,speciesReference=materialReference+16;
         long accepted=speciesReference+32,phases=accepted+140L*cells,limb=phases+8;
         var material=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(accepted/4),Math.toIntExact(phases/4),0,-3,256,limb+8,alignment);
-        var quantity=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),Math.toIntExact(speciesReference/4),2,material.endOffset(),alignment);
-        var output=VulkanLiquidGather.layout(state,state,routes,Math.toIntExact(fixed/4),Math.toIntExact(mass/4),quantity.endOffset(),alignment);
+        var thermal=fixtureCaloric(state,materialReference,speciesReference,material.endOffset(),alignment);
+        var quantity=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),Math.toIntExact(speciesReference/4),2,Math.toIntExact(thermal.header().offset()/4),thermal.endOffset(),alignment);
+        var geometry=fixtureRoutes(state,fixed,quantity.endOffset(),alignment);
+        var output=VulkanLiquidGather.layout(state,state,routes,geometry,Math.toIntExact(fixed/4),Math.toIntExact(mass/4),geometry.endOffset(),alignment);
         var roundoff=VulkanEnergyLedger.layout(java.util.List.of(stream(quantity.energyRemainders(),1),stream(output.energyRemainders(),-1)),output.endOffset(),alignment);
         var endpoint=VulkanEnergyLedger.layout(java.util.List.of(
                 new VulkanEnergyLedger.Stream(0,Math.toIntExact(state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS).offset()/4),stocks,2,-1),
                 stream(state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),1)),roundoff.endOffset(),alignment);
         var initial=ByteBuffer.allocate(Math.toIntExact(endpoint.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
-        material.initializeHeader(initial);quantity.initializeHeader(initial);output.initializeHeader(initial);roundoff.initializeHeader(initial);endpoint.initializeHeader(initial);
+        material.initializeHeader(initial);thermal.initializeHeaderAndTables(initial);quantity.initializeHeader(initial);output.initializeHeader(initial);VulkanMixtureFlux.initializeRoutes(initial,geometry);roundoff.initializeHeader(initial);endpoint.initializeHeader(initial);
         initial.putLong(Math.toIntExact(mass),1).putLong(Math.toIntExact(mass+8),1);
         initial.putInt(Math.toIntExact(phases),0).putInt(Math.toIntExact(phases+4),1).putInt(Math.toIntExact(limb),1);
         for(int cell=0;cell<cells;cell++)for(int slot=0;slot<7;slot++){
@@ -65,6 +83,7 @@ public final class GpuLiquidGatherBenchmark {
             put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_LIMBS,4*stock,present?numerator:0);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.MASS_UNITS),stock,amount);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),stock,Double.doubleToRawLongBits((double)amount));
+            if(present)initial.putDouble(Math.toIntExact(thermal.temperatures().offset()+8L*stock),293.15+1e10);
             put(initial,state,VulkanLiquidStateLayout.Field.MIXTURE_PRESENT,stock,present?1:0);
             put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stock,Math.min(stock,2));
             if(present){put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_HANDLES,stock,stock);putLong(initial,state.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS),stock,amount);}
@@ -127,15 +146,17 @@ public final class GpuLiquidGatherBenchmark {
         var materialLayout=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(acceptedBase/4),
                 Math.toIntExact(phaseBase/4),-1,-40,scratchLimbs,acceptedLimb+8,alignment);
         System.out.println("material_route_capacity grid="+grid+" scratch_limbs="+scratchLimbs);
+        var thermal=fixtureCaloric(state,materialReference,speciesReference,materialLayout.endOffset(),alignment);
         var quantityLayout=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),
-                Math.toIntExact(speciesReference/4),2,materialLayout.endOffset(),alignment);
-        var layout=VulkanLiquidGather.layout(state,state,routes,Math.toIntExact(fixed/4),
-                Math.toIntExact(mass/4),quantityLayout.endOffset(),alignment);
+                Math.toIntExact(speciesReference/4),2,Math.toIntExact(thermal.header().offset()/4),thermal.endOffset(),alignment);
+        var geometry=fixtureRoutes(state,fixed,quantityLayout.endOffset(),alignment);
+        var layout=VulkanLiquidGather.layout(state,state,routes,geometry,Math.toIntExact(fixed/4),
+                Math.toIntExact(mass/4),geometry.endOffset(),alignment);
         int faces=state.column(VulkanLiquidStateLayout.Field.MOMENTUM_X).count()
                 +state.column(VulkanLiquidStateLayout.Field.MOMENTUM_Y).count()+state.column(VulkanLiquidStateLayout.Field.MOMENTUM_Z).count();
         long faceBase=layout.endOffset();
         var momentumLayout=VulkanLiquidMomentum.layout(state,state,routes,Math.toIntExact(faceBase/4),
-                Math.toIntExact(faceBase/4),-1,faceBase+32L*faces,alignment);
+                Math.toIntExact(faceBase/4),-1,faceBase+32L*faces,alignment).withGeometryRoutes(geometry);
         var roundoffLayout=VulkanEnergyLedger.layout(java.util.List.of(
                 stream(quantityLayout.energyRemainders(),1),stream(layout.energyRemainders(),-1),
                 stream(momentumLayout.heatPostingRemainders(),1),stream(momentumLayout.heatAllocationRemainders(),1)),
@@ -148,6 +169,7 @@ public final class GpuLiquidGatherBenchmark {
         if(bytes>context.maxStorageBufferRange())throw new IllegalArgumentException("Gather arena exceeds device storage descriptor range");
         var initial=ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
         layout.initializeHeader(initial);
+        VulkanMixtureFlux.initializeRoutes(initial,geometry);
         materialLayout.initializeHeader(initial);
         initial.putInt(Math.toIntExact(phaseBase),0).putInt(Math.toIntExact(phaseBase+4),1);
         initial.putInt(Math.toIntExact(acceptedLimb),1);
@@ -160,7 +182,7 @@ public final class GpuLiquidGatherBenchmark {
                         .putInt(at+12,-3).putInt(at+16,active?1:0);
             }
         }
-        quantityLayout.initializeHeader(initial);
+        thermal.initializeHeaderAndTables(initial);quantityLayout.initializeHeader(initial);
         momentumLayout.initializeHeader(initial);
         roundoffLayout.initializeHeader(initial);heatLayout.initializeHeader(initial);endpointLayout.initializeHeader(initial);
         for(int axis=0;axis<3;axis++) {
@@ -189,6 +211,7 @@ public final class GpuLiquidGatherBenchmark {
             put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_LIMBS,4*stock,1);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.MASS_UNITS),stock,even?100:200);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),stock,Double.doubleToRawLongBits(even?8:24));
+            initial.putDouble(Math.toIntExact(thermal.temperatures().offset()+8L*stock),293.15+(even?8.0/100:24.0/200)*1e10);
             put(initial,state,VulkanLiquidStateLayout.Field.MIXTURE_PRESENT,stock,1);
             put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stock,stock);
             put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_HANDLES,stock,material);

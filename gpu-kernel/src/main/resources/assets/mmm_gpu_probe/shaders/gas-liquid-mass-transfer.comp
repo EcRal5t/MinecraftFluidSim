@@ -23,6 +23,7 @@ layout(constant_id = 0) const int pipelineStage = -1;
 bool activeCell(int cell);
 bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
+// DYADIC_LIBRARY
 // SPATIAL_GRID
 // HOST_LAYOUT
 // SERIES_CONDUCTANCE_LIBRARY
@@ -92,6 +93,59 @@ u64vec2 mul128(uint64_t a, uint64_t b) {
     uint64_t mask = 0xffffffffUL, low = (a & mask) * (b & mask), t = (a >> 32) * (b & mask) + (low >> 32),
              mid = (t & mask) + (a & mask) * (b >> 32);
     return u64vec2((mid << 32) | (low & mask), (a >> 32) * (b >> 32) + (t >> 32) + (mid >> 32));
+}
+
+uint dyadicWord(int bank, int at) { return words[at]; }
+void dyadicWrite(int at, uint value) { words[at] = value; }
+
+// Evaluate the exact liquid reference volume after removing whole phase-change batches.
+int remainingVolumeStatus(int lr, int64_t batches) {
+    int header = headerWord(H_PHASE_ROWS_HEADER);
+    DyadicTerm items[7];
+    for (int i = 0; i < 7; i++) items[i] = DyadicTerm(1, 0, 0, 0, 0);
+    if (lr < phaseRowHeader(header, LP_H_SLOT_COUNT) && lr < int(words[stockField(LP_STOCK_COUNTS)])) {
+        int count = int(words[stockField(LP_STOCK_VOLUME_COUNTS) + lr]);
+        items[0] = DyadicTerm(1, stockField(LP_STOCK_VOLUME_LIMBS) + int(words[stockField(LP_STOCK_VOLUME_OFFSETS) + lr]),
+                              count, int(words[stockField(LP_STOCK_VOLUME_EXPONENTS) + lr]), count > 0 ? 1 : 0);
+    }
+    int64_t delta = readQuantity(phaseRowField(header, LP_FIELD_DELTA_SVQ) + 2 * lr) - batches;
+    if (delta != 0l) {
+        u64vec2 value = mul128(delta < 0l ? 0UL - uint64_t(delta) : uint64_t(delta),
+                                uint64_t(readQuantity(header + LP_H_VOLUME_SIGNIFICAND)));
+        int at = phaseRowField(header, LP_FIELD_DELTA_LIMBS) + 4 * lr;
+        words[at] = uint(value.x); words[at + 1] = uint(value.x >> 32);
+        words[at + 2] = uint(value.y); words[at + 3] = uint(value.y >> 32);
+        int count = value.y != 0UL ? (value.y >> 32 != 0UL ? 4 : 3) : (value.x >> 32 != 0UL ? 2 : 1);
+        items[1] = DyadicTerm(1, at, count, phaseRowHeader(header, LP_H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
+    }
+    return dyadicMeasure(items, 7).status;
+}
+
+bool vaporBatchesFit(int lr, int species, int64_t batches, int64_t quantum, int64_t unit, int64_t oldMass) {
+    int status = remainingVolumeStatus(lr, batches);
+    if (status == DYADIC_POSITIVE) return true;
+    if (status == DYADIC_ZERO) {
+        int64_t q = batches * quantum;
+        if (q * unit != oldMass) return false;
+        int header = headerWord(H_PHASE_ROWS_HEADER);
+        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
+            if (phaseRowSpecies(header, lr, s) != (s == species ? q : 0l)) return false;
+        return true;
+    }
+    if (status != DYADIC_NEGATIVE) reportInvalid();
+    return false;
+}
+
+int64_t limitVaporByVolume(int lr, int species, int64_t q, int64_t quantum, int64_t unit, int64_t oldMass) {
+    int64_t upper = q / quantum;
+    if (upper == 0l || vaporBatchesFit(lr, species, upper, quantum, unit, oldMass)) return upper * quantum;
+    int64_t lower = 0l;
+    while (lower < upper) {
+        int64_t mid = lower + (upper - lower + 1l) / 2l;
+        if (vaporBatchesFit(lr, species, mid, quantum, unit, oldMass)) lower = mid;
+        else upper = mid - 1l;
+    }
+    return lower * quantum;
 }
 bool lessEqual(u64vec2 a, u64vec2 b) {
     return a.y < b.y || a.y == b.y && a.x <= b.x;
@@ -814,8 +868,7 @@ uvec4 exchange(int node, int first) {
                 carried - double(unit) * massUnit() * specificGas(gm, readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE)) - reference);
         uint reservedBatches=0u;
         if(vapor){
-            if(!dissolve){double h=readDouble(p.header+H_CELL_SIZE),volume=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),lr)*h*h*h;
-                int64_t availableBatches=int64_t(max(0.0LF,floor(volume*134217728.0LF)));q=min(q,availableBatches*quantum);}
+            if (!dissolve) q = limitVaporByVolume(lr, sp, q, quantum, unit, oldMass);
             q=(q/quantum)*quantum;
             uint requested=uint(min(q/quantum,2147483647l)),granted=0u;
             if(requested>0u){

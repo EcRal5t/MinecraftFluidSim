@@ -95,7 +95,7 @@ final class VulkanGranularStateLayout {
             return compare!=0?compare:Long.compareUnsigned(a.massResidualUnits(),b.massResidualUnits());
         }
         /** CPU handoff uses its float parcel geometry; the lossless resident checkpoint above retains binary64. */
-        mmm.granular.GranularStateSnapshot toSnapshot(mmm.spatial.SpatialGrid grid,double cellSize){
+        mmm.granular.GranularStateSnapshot toSnapshot(mmm.spatial.SpatialGrid grid,double cellSize,java.util.function.IntUnaryOperator fixedMask){
             if(cellSize!=.5)throw new IllegalArgumentException("CPU granular snapshots use 0.5 m cells");
             var order=(java.util.Comparator<mmm.granular.GranularStateSnapshot.StableComposition>)State::compareComposition;
             var unique=new java.util.TreeSet<mmm.granular.GranularStateSnapshot.StableComposition>(order);
@@ -105,7 +105,7 @@ final class VulkanGranularStateLayout {
             for(var d:deposits){var c=composition(d.inventory());bedComposition.add(c);if(c!=null)unique.add(c);}
             var compositions=List.copyOf(unique);var active=new ArrayList<mmm.granular.GranularStateSnapshot.ActiveParcel>();
             var beds=new ArrayList<mmm.granular.GranularStateSnapshot.DepositGroup>();var totals=new java.util.TreeMap<String,Long>();
-            long volume=0,mass=0;var kernel=new mmm.granular.GranularKernel(grid,cellSize);
+            long volume=0,mass=0;var kernel=new mmm.granular.GranularKernel(grid,cellSize,fixedMask);
             for(int i=0;i<particles.size();i++){
                 var p=particles.get(i);var row=p.inventory();float x=(float)p.x(),y=(float)p.y(),z=(float)p.z();
                 kernel.capture(x,y,z,row.solidVolumeSvq());int mask=0;
@@ -148,12 +148,13 @@ final class VulkanGranularStateLayout {
                     c==null?List.of():c.components().stream().map(v->new mmm.granular.GranularAuditLedger.SpeciesAmount(v.speciesId(),v.amountQuanta())).toList()));}
             return new mmm.granular.GranularAuditLedger(entries);
         }
-        static State fromSnapshot(mmm.granular.GranularStateSnapshot snapshot,List<String> speciesIds,double[] activeEnergy,double[] depositEnergy,double cellSize){
+        static State fromSnapshot(mmm.granular.GranularStateSnapshot snapshot,List<String> speciesIds,double[] activeEnergy,double[] depositEnergy,double cellSize,java.util.function.IntUnaryOperator fixedMask){
             if(activeEnergy.length!=snapshot.activeParcels().size()||depositEnergy.length!=snapshot.depositGroups().size())throw new IllegalArgumentException("Granular thermal rows differ from inventory");
             var definitions=new Definitions(snapshot.registryFingerprint(),snapshot.chemicalRegistryFingerprint(),snapshot.materialPalette(),speciesIds);
             var ps=new ArrayList<Particle>();var ds=new ArrayList<Deposit>();
-            var kernel=new mmm.granular.GranularKernel(snapshot.grid(),cellSize);
+            var kernel=new mmm.granular.GranularKernel(snapshot.grid(),cellSize,fixedMask);
             for(int i=0;i<activeEnergy.length;i++){var p=snapshot.activeParcels().get(i);kernel.capture(p.x(),p.y(),p.z(),p.solidVolumeSvq());
+                kernel.requireMask(p.ceilMask());
                 int[] cells=new int[8];long[] quotas=new long[8];java.util.Arrays.fill(cells,-1);
                 for(int k=0;k<kernel.size();k++){cells[k]=kernel.cell(k);quotas[k]=kernel.floor(k)+((p.ceilMask()>>>k)&1);}
                 var row=fromComposition(definitions,p.materialPaletteIndex(),p.solidVolumeSvq(),p.massUnits(),p.solidCompositionIndex()==0?null:snapshot.solidCompositions().get(p.solidCompositionIndex()-1),activeEnergy[i]);

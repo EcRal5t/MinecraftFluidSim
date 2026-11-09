@@ -75,7 +75,7 @@ final class VulkanLiquidWorkspaceSections {
         final long endOffset;
         GranularSection(long base){var config=region.granularConfiguration;long a=liquid.alignment();
             state=new VulkanGranularStateLayout(liquid.grid(),granularReserves.particles(),granularReserves.deposits(),granularReserves.species(),config.initial().definitions(),base,a);
-            geometry=new VulkanGranularGeometry.Layout(state,workspace.geometry.get(GeometryField.OCCUPIED_SOLID),state.endOffset(),a);
+            geometry=new VulkanGranularGeometry.Layout(state,workspace.geometry.get(GeometryField.OCCUPIED_SOLID),workspace.geometry.get(GeometryField.FIXED_MASKS),state.endOffset(),a);
             materialReference=new VulkanLiquidStateLayout.Column(align(geometry.endOffset()),config.materialReferences().length,8);
             speciesReference=new VulkanLiquidStateLayout.Column(align(materialReference.offset()+materialReference.bindingBytes()),config.speciesReferences().length,8);
             thermal=VulkanLiquidThermodynamics.layout(state,config.thermal(),word(materialReference),word(speciesReference),config.speciesStride(),speciesReference.offset()+speciesReference.bindingBytes(),a);endOffset=thermal.endOffset();
@@ -109,10 +109,10 @@ final class VulkanLiquidWorkspaceSections {
                     geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),mixture.states(),geometry.get(GeometryField.FIXED_MASKS),viscosity,sourceBody==null?null:sourceBody.column(VulkanEntityBodyCoupling.Field.FACE_AREA),coupled.endOffset(),a);
             assembly.bindActivity(word(workspace.activityCells),word(workspace.activityFaces));
             constraint=new VulkanMixtureFlux.Layout(liquid.grid(),geometry.get(GeometryField.FACES),geometry.get(GeometryField.FLUXES),gas!=null,mixture.states(),
-                    geometry.get(GeometryField.FIXED_MASKS),targetSolid,gas==null?null:gas.thermo.states(),gas==null||region.gasConfiguration.sealedExterior(),assembly.endOffset(),a);
+                    geometry.get(GeometryField.FIXED_MASKS),targetSolid,gas==null?null:gas.thermo.states(),workspace.activityCells,gas==null||region.gasConfiguration.sealedExterior(),assembly.endOffset(),a);
             endOffset=constraint.endOffset();
         }
-        List<VulkanLiquidStateLayout.Column> persistentColumns(){return List.of(new VulkanLiquidStateLayout.Column(4L*coupled.headerWordOffset(),64,4),new VulkanLiquidStateLayout.Column(4L*assembly.headerWordOffset(),96,4),assembly.column(VulkanMixturePressure.Field.DIAMETERS),constraint.header());}
+        List<VulkanLiquidStateLayout.Column> persistentColumns(){return List.of(new VulkanLiquidStateLayout.Column(4L*coupled.headerWordOffset(),64,4),new VulkanLiquidStateLayout.Column(4L*assembly.headerWordOffset(),96,4),assembly.column(VulkanMixturePressure.Field.DIAMETERS),constraint.header(),constraint.outTarget,constraint.inOffsets,constraint.inSource,constraint.inSide);}
         List<HeaderWrite> headers(){return List.of(new HeaderWrite(4L*coupled.headerWordOffset(),coupled.headerBytes()),new HeaderWrite(4L*assembly.headerWordOffset(),assembly.headerBytes()),new HeaderWrite(constraint.header().offset(),constraint.headerBytes()));}
     }
     final class GranularDynamics {
@@ -125,7 +125,7 @@ final class VulkanLiquidWorkspaceSections {
         GranularDynamics(GranularSection granular,PressureSection common,VulkanLiquidStateLayout.Column viscosity,long base){long a=liquid.alignment();var pressure=common.assembly;
             contacts=new VulkanGranularContacts.Layout(granular.state,pressure,contactCapacity,base,a);
             motion=new VulkanGranularMotion.Layout(granular.state,contacts,pressure,word(geometry.get(GeometryField.FIXED_MASKS)),contacts.endOffset(),a);motion.bindBedGeometry(granular.geometry);motion.bindActivity(word(workspace.activityCells));motion.bindScreens(word(geometry.get(GeometryField.SCREEN_FACES)), pressure.word(VulkanMixturePressure.Field.DIAMETERS));transitions=new VulkanGranularTransitions.Layout(granular.state,granular.geometry,geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),liquid,geometry.get(GeometryField.FIXED_MASKS),viscosity,motion.endOffset(),a);transitions.bindActivity(word(workspace.activityCells));transitions.bindScreenCaptured(motion.word(VulkanGranularMotion.Field.SCREEN_CAPTURED));transitions.bindScreens(word(geometry.get(GeometryField.SCREEN_FACES)));
-            snapshotGeometry=new VulkanGranularGeometry.Layout(transitions.source,geometry.get(GeometryField.OCCUPIED_SOLID),transitions.endOffset(),a);
+            snapshotGeometry=new VulkanGranularGeometry.Layout(transitions.source,geometry.get(GeometryField.OCCUPIED_SOLID),geometry.get(GeometryField.FIXED_MASKS),transitions.endOffset(),a);
             snapshotThermal=VulkanLiquidThermodynamics.layout(transitions.source,region.granularConfiguration.thermal(),word(granular.materialReference),word(granular.speciesReference),region.granularConfiguration.speciesStride(),snapshotGeometry.endOffset(),a);
             endOffset=snapshotThermal.endOffset();
         }

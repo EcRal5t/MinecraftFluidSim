@@ -34,10 +34,10 @@ final class VulkanLiquidGather implements AutoCloseable {
         FIXED_MASK(7),
         SPECIES_MASS(8),
         MATERIAL_COUNT(9),
-        MEMBERS(10),
         SPECIES_COUNTS(11),
         ENERGY_REMAINDERS(14),
-        SLOT_COUNT(15);
+        SLOT_COUNT(15),
+        ROUTE_OFFSETS(65), ROUTE_SOURCES(66), ROUTE_SIDES(67);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -56,9 +56,9 @@ final class VulkanLiquidGather implements AutoCloseable {
     private static final int HEADER_WORDS = 80;
 
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output,
-                  VulkanLiquidRouteLayout routes, int fixedMaskWordOffset, int speciesMassWordOffset,
+                  VulkanLiquidRouteLayout routes, VulkanMixtureFlux.Layout geometryRoutes, int fixedMaskWordOffset, int speciesMassWordOffset,
                   VulkanLiquidStateLayout.Column header,
-                  VulkanLiquidStateLayout.Column members, VulkanLiquidStateLayout.Column speciesCounts,
+                  VulkanLiquidStateLayout.Column speciesCounts,
                   VulkanLiquidStateLayout.Column energyRemainders,
                   VulkanLiquidStateLayout.Column scanWorkspace, long endOffset) {
         int headerWordOffset() { return word(header); }
@@ -76,9 +76,12 @@ final class VulkanLiquidGather implements AutoCloseable {
             values[Header.CELL_COUNT.word] = output.cellCount(); values[Header.STOCK_CAPACITY.word] = output.stockCapacity();
             values[Header.SPECIES_CAPACITY.word] = output.speciesCapacity(); values[Header.LIMB_CAPACITY.word] = output.limbCapacity();
             values[Header.FIXED_MASK.word] = fixedMaskWordOffset; values[Header.SPECIES_MASS.word] = speciesMassWordOffset;
-            values[Header.MATERIAL_COUNT.word] = output.materialCount(); values[Header.MEMBERS.word] = word(members); values[Header.SPECIES_COUNTS.word] = word(speciesCounts);
+            values[Header.MATERIAL_COUNT.word] = output.materialCount(); values[Header.SPECIES_COUNTS.word] = word(speciesCounts);
             values[Header.ENERGY_REMAINDERS.word] = word(energyRemainders);
             values[Header.SLOT_COUNT.word] = Math.multiplyExact(output.cellCount(),output.materialCount());
+            values[Header.ROUTE_OFFSETS.word]=word(geometryRoutes.inOffsets);
+            values[Header.ROUTE_SOURCES.word]=word(geometryRoutes.inSource);
+            values[Header.ROUTE_SIDES.word]=word(geometryRoutes.inSide);
             for (var field : VulkanLiquidStateLayout.Field.values()) {
                 values[SOURCE_FIELDS + field.ordinal()] = word(source.column(field));
                 values[TARGET_FIELDS + field.ordinal()] = word(output.column(field));
@@ -92,7 +95,7 @@ final class VulkanLiquidGather implements AutoCloseable {
 
     }
 
-    static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output, VulkanLiquidRouteLayout routes,
+    static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output, VulkanLiquidRouteLayout routes, VulkanMixtureFlux.Layout geometryRoutes,
                          int fixedMaskWordOffset, int speciesMassWordOffset, long scratchBase, long alignment) {
         if (!source.grid().equals(output.grid())
                 || output.materialCount()<1 || source.materialCount()!=output.materialCount()
@@ -102,13 +105,12 @@ final class VulkanLiquidGather implements AutoCloseable {
         int stocks = output.stockCapacity();
         long[] cursor = {scratchBase};
         var header = column(cursor, HEADER_WORDS, 4, alignment);
-        var members = column(cursor, Math.multiplyExact(stocks, 7), 4, alignment);
         var speciesCounts = column(cursor, stocks, 4, alignment);
         var remainders = column(cursor, Math.multiplyExact(stocks, 7), 8, alignment);
         long scanBytes = VulkanPrefixScan.workspaceBytes(stocks);
         var workspace = column(cursor, Math.toIntExact(scanBytes / 4), 4, alignment);
-        return new Layout(source, output, routes, fixedMaskWordOffset, speciesMassWordOffset, header,
-                members, speciesCounts, remainders, workspace, align(cursor[0], alignment));
+        return new Layout(source, output, routes, geometryRoutes, fixedMaskWordOffset, speciesMassWordOffset, header,
+                speciesCounts, remainders, workspace, align(cursor[0], alignment));
     }
 
     private final FlipKernelBindings bindings;

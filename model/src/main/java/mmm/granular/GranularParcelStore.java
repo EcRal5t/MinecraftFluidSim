@@ -106,6 +106,11 @@ public final class GranularParcelStore {
 	public GranularParcelStore(GranularRegistry registry,int capacity,mmm.spatial.SpatialGrid grid,double cellSize) {
 		this(registry,capacity,new GranularKernel(grid,cellSize));
 	}
+	public GranularParcelStore(GranularRegistry registry,int capacity,mmm.spatial.SpatialGrid grid,double cellSize,
+			java.util.function.IntUnaryOperator fixedMask) {
+		this(registry,capacity,new GranularKernel(grid,cellSize,fixedMask));
+	}
+	GranularKernel kernel() { return kernel; }
 	private GranularParcelStore(GranularRegistry registry, int capacity, GranularKernel kernel) {
 		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
 		if (capacity <= 0 || capacity > GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION) {
@@ -147,6 +152,20 @@ public final class GranularParcelStore {
 		if (kernel != null && !kernel.sameGeometry(geometry)) throw new IllegalArgumentException("Granular occupancy domain geometry differs");
 	}
 	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= capacity - count; }
+	/** Publishes selections prepared for a fixed-geometry change; excluded parcels retain their source selection. */
+	public void applySupportSelections(int[] masks) {
+		if (masks == null || masks.length != count) throw new IllegalArgumentException("Granular support selections differ from inventory");
+		boolean changed = false;
+		for (int i = 0; i < count; i++) {
+			int mask = masks[i];
+			if (mask < -1 || mask > 254) throw new IllegalArgumentException("Granular occupancy selection is invalid");
+			if (mask >= 0 && (ceilMask[i] & 255) != mask) {
+				ceilMask[i] = (byte) mask;
+				changed = true;
+			}
+		}
+		if (changed) mutationRevision++;
+	}
 	/** Monotonic counter over every structural mutation; plan consumers re-verify it before commit. */
 	public long mutationRevision() { return mutationRevision; }
 	long maximumActiveParcelSvq(int material) { return registry.material(material).maximumActiveParcelSvq(); }

@@ -247,6 +247,7 @@ public final class FluidDomainContracts {
 		final long totalVolumeBits;
 		final long totalMassUnits;
 		final GranularCollisionPlan granular;
+		final int[] supportSelections;
 		final LiquidCollisionEdit liquid;
 		final ThermalDomainState.Revision thermalRevision;
 		final long momentumRevision;
@@ -254,7 +255,7 @@ public final class FluidDomainContracts {
 
 		CollisionEditPlan(
 				HostFluidState owner, List<CollisionEdit> edits, int[] previousMasks,
-				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular, LiquidCollisionEdit liquid,
+				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular, int[] supportSelections, LiquidCollisionEdit liquid,
 				ThermalDomainState.Revision thermalRevision
 		) {
 			this.owner = owner;
@@ -264,7 +265,7 @@ public final class FluidDomainContracts {
 			this.planMarkerCount = planMarkerCount;
 			this.totalVolumeBits = totalVolumeBits;
 			this.totalMassUnits = totalMassUnits;
-			this.granular = granular; this.liquid = liquid; this.thermalRevision = thermalRevision;
+			this.granular = granular; this.supportSelections=supportSelections; this.liquid = liquid; this.thermalRevision = thermalRevision;
 		}
 	}
 	record CollisionDeposit(int cell, GranularDepositStore.Group group) { }

@@ -89,6 +89,48 @@ int64_t routeMass(int stock, int slot) {
     int routeEntry = int(words[headerWord(H_SOURCE_OFFSETS) + stock]) + bitCount(mask & ((1u << slot) - 1u));
     return getLong(headerWord(H_ROUTE_MASS) + 2 * routeEntry);
 }
+double projectedVelocity(int faceId);
+bool closingCell(int cell) {
+    if(cell<0)return false;
+    int64_t solid=getLong(headerWord(H_TARGET_SOLID)+2*cell);
+    return (int64_t(bitCount((~words[headerWord(H_TARGET_MASKS)+cell])&255u))<<21)==solid;
+}
+int64_t geometryMass(int cell,int side) {
+    if(!closingCell(cell)||int(words[headerWord(H_ROUTE_TARGETS)+6*cell+side])==-1)return 0l;
+    int64_t mass=0l;
+    for(int stock=int(sourceWords[sourceField(STOCK_CELL_OFFSETS)+cell]);stock<int(sourceWords[sourceField(STOCK_CELL_OFFSETS)+cell+1]);stock++)
+        mass=addPositive(mass,routeMass(stock,side+1));
+    if(headerWord(H_GAS_ROUTE_MASS)>=0)for(int component=0;component<headerWord(H_GAS_COMPONENTS);component++)
+        mass=addPositive(mass,getLong(headerWord(H_GAS_ROUTE_MASS)+2*((side*headerWord(H_GAS_COMPONENTS)+component)*headerWord(H_CELL_COUNT)+cell)));
+    return mass;
+}
+int64_t geometryOut(int cell){
+    if(cell<0)return 0l;int64_t mass=0l;for(int side=0;side<6;side++)mass=addPositive(mass,geometryMass(cell,side));return mass;
+}
+int64_t geometryIn(int cell){
+    if(cell<0)return 0l;int64_t mass=0l;
+    int begin=int(words[headerWord(H_ROUTE_OFFSETS)+cell]),end=int(words[headerWord(H_ROUTE_OFFSETS)+cell+1]);
+    for(int i=begin;i<end;i++)mass=addPositive(mass,geometryMass(int(words[headerWord(H_ROUTE_SOURCES)+i]),int(words[headerWord(H_ROUTE_SIDES)+i])));
+    return mass;
+}
+double geometryVelocity(int source,int component,int side){return projectedVelocity(gridFace(source,2*component+side));}
+double geometryMomentum(int cell,int component){
+    if(cell<0)return 0.0;double result=0.0;
+    int begin=int(words[headerWord(H_ROUTE_OFFSETS)+cell]),end=int(words[headerWord(H_ROUTE_OFFSETS)+cell+1]);
+    for(int i=begin;i<end;i++){
+        int source=int(words[headerWord(H_ROUTE_SOURCES)+i]),side=int(words[headerWord(H_ROUTE_SIDES)+i]);int64_t mass=geometryMass(source,side);
+        result+=double(mass)*0.5*(geometryVelocity(source,component,0)+geometryVelocity(source,component,1));
+    }return result;
+}
+double geometryHeat(int cell,int component,double velocity){
+    if(cell<0)return 0.0;double result=0.0;
+    int begin=int(words[headerWord(H_ROUTE_OFFSETS)+cell]),end=int(words[headerWord(H_ROUTE_OFFSETS)+cell+1]);
+    for(int i=begin;i<end;i++){
+        int source=int(words[headerWord(H_ROUTE_SOURCES)+i]),side=int(words[headerWord(H_ROUTE_SIDES)+i]);int64_t mass=geometryMass(source,side);
+        double a=geometryVelocity(source,component,0)-velocity,b=geometryVelocity(source,component,1)-velocity;
+        result+=2.5e-11*double(mass)*0.5*(a*a+b*b);
+    }return result;
+}
 void decodeFaceCoordinates(int faceId, out int axis, out ivec3 coordinates) {
     axis=gridFaceEndpoints(faceId).z;coordinates=gridFacePosition(faceId);
 }
@@ -144,10 +186,10 @@ void faceFlux(int faceId) {
     int lowerCell = endpoints.x, upperCell = endpoints.y;
     int64_t forwardMass = int64_t(0), reverseMass = int64_t(0);
     if (lowerCell >= 0 && upperCell >= 0) {
-        for (int stock = int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + lowerCell]);
+        for (int stock = int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + lowerCell]); !closingCell(lowerCell) &&
              stock < int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + lowerCell + 1]); stock++)
             forwardMass = addPositive(forwardMass, routeMass(stock, 2 + 2 * axis));
-        for (int stock = int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + upperCell]);
+        for (int stock = int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + upperCell]); !closingCell(upperCell) &&
              stock < int(sourceWords[sourceField(STOCK_CELL_OFFSETS) + upperCell + 1]); stock++)
             reverseMass = addPositive(reverseMass, routeMass(stock, 1 + 2 * axis));
     }
@@ -162,6 +204,9 @@ void transport(int faceId) {
     ivec2 endpoints = gridFaceEndpoints(faceId).xy;
     int lowerCell = endpoints.x, upperCell = endpoints.y;
     int64_t sourceMass = addPositive(cellMassUnits(lowerCell, false), cellMassUnits(upperCell, false)), targetMass = addPositive(cellMassUnits(lowerCell, true), cellMassUnits(upperCell, true));
+    int64_t movedOut=addPositive(geometryOut(lowerCell),geometryOut(upperCell)),movedIn=addPositive(geometryIn(lowerCell),geometryIn(upperCell));
+    if(movedOut>sourceMass||movedIn>targetMass){atomicOr(errors,ERROR_INVALID_MOMENTUM);return;}
+    sourceMass-=movedOut;
     bool hasAmbient = (lowerCell < 0 || upperCell < 0) && getDouble(headerWord(H_PROJECTED_FACES) + 8 * faceId + 4) > 0.0;
     if (hasAmbient) {
         int64_t ambient = getLong(p.header + H_AMBIENT_MASS);
@@ -212,14 +257,15 @@ void transport(int faceId) {
         return;
     }
     int64_t remaining = available - outgoingMass;
-    if (remaining != targetMass) {
+    if (remaining != targetMass-movedIn) {
         atomicOr(errors, ERROR_INVALID_MOMENTUM);
         return;
     }
     double retainedFraction = available > int64_t(0) ? double(remaining) / double(available) : 0.0;
     double retainedOld = double(sourceMass) * retainedFraction;
     double retainedAmbient = double(externalIncoming) * retainedFraction;
-    double oldVelocity = projectedVelocity(faceId), momentum = retainedOld * oldVelocity + incomingMomentum * retainedFraction;
+    double oldVelocity = projectedVelocity(faceId), momentum = retainedOld * oldVelocity + incomingMomentum * retainedFraction
+            + geometryMomentum(lowerCell,component)+geometryMomentum(upperCell,component);
     double velocity = targetMass > int64_t(0) ? momentum / double(targetMass) : 0, difference = oldVelocity - velocity;
     double heat = 2.5e-11 * (retainedOld * difference * difference + retainedAmbient * velocity * velocity);
     for (int neighborSlot = 0; neighborSlot < 6; neighborSlot++)
@@ -227,6 +273,7 @@ void transport(int faceId) {
             difference = projectedVelocity(neighborFaces[neighborSlot]) - velocity;
             heat += 2.5e-11 * double(incomingAmounts[neighborSlot]) * retainedFraction * difference * difference;
         }
+    heat+=geometryHeat(lowerCell,component,velocity)+geometryHeat(upperCell,component,velocity);
     putDouble(headerWord(H_TRANSPORTED_MOMENTUM) + 2 * faceId, momentum * 5e-11);
     putDouble(headerWord(H_FACE_HEAT) + 2 * faceId, heat);
 }

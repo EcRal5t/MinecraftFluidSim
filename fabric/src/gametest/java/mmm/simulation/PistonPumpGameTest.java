@@ -77,27 +77,18 @@ public final class PistonPumpGameTest {
         int[] stage={-3},ticks={0},cycles={0};long[] liquid={0},solids={Math.addExact(initial.granularMassUnits(),initial.coherentMassUnits())};double[] before={0,0};boolean[] moving={false};
         test.onEachTick(()->{
             ticks[0]++;
-            if(ticks[0]%100==0)System.out.println("pump_wait stage="+stage[0]+" ticks="+ticks[0]
-                    +" chamber="+(region.solverLoaded()?poolVolume(test,region,4,4)*.125:-1)
-                    +" fill="+fillingPort.status()+" item="+fillingBox.getItem(0).getItem()
-                    +" roof="+(region.solverLoaded()?region.solidMicroMask(4,2,4):-1)
-                    +" valves="+level.getBlockState(test.absolutePos(inlet))+","+level.getBlockState(test.absolutePos(outlet))
-                    +" failure="+region.availabilityFailure()+" source="+level.getBlockState(test.absolutePos(source))
-                    +" destination="+level.getBlockState(test.absolutePos(destination)));
-            if((stage[0]==-2||stage[0]==-1||stage[0]==2||stage[0]==3)
+            if((stage[0]==-2||stage[0]==-1||stage[0]==2||stage[0]==3||stage[0]==15||stage[0]==17)
                     &&(level.getBlockEntity(test.absolutePos(source)) instanceof PistonMovingBlockEntity
                     ||level.getBlockEntity(test.absolutePos(destination)) instanceof PistonMovingBlockEntity))moving[0]=true;
             if(stage[0]==-3&&ticks[0]>=40) {
                 assertInventory(test,region,0,gas[0],solids[0]);
                 assertValves(test,inlet,outlet,0,0);
                 chamber[0]=chamber(test,region);compression[0]=chamber[0].pressure();
-                reportGas(test,region,"before");
                 compression[1]=gasEnergy(region);
                 compression[2]=region.thermalAudit().mechanicalWork().toDouble();
                 setPower(test,drive,true);stage[0]=-2;ticks[0]=0;
             } else if(stage[0]==-2&&ticks[0]>=20&&moving[0]&&settled(test,runtime,region,destination)) {
                 assertValves(test,inlet,outlet,0,0);
-                reportGas(test,region,"after");
                 var after=chamber(test,region);double pressure=after.pressure();
                 test.assertTrue(pressure>compression[0],"Closed chamber pressure did not rise: "+compression[0]+" -> "+pressure
                         +"; gasEnergy="+compression[1]+" -> "+gasEnergy(region)
@@ -178,6 +169,18 @@ public final class PistonPumpGameTest {
                 setPower(test,drive,false);stage[0]=6;ticks[0]=0;
             } else if(stage[0]==6&&ticks[0]>=20&&region.availabilityFailure()==null&&settled(test,runtime,region,source)) {
                 assertInventory(test,region,liquid[0],gas[0],solids[0]);
+                setPower(test,outletPower,true);stage[0]=14;ticks[0]=0;
+            } else if(stage[0]==14&&valvesAt(test,inlet,outlet,0,4)) {
+                before[0]=poolVolume(test,region,4,6);
+                setPower(test,drive,true);stage[0]=15;ticks[0]=0;moving[0]=false;
+            } else if(stage[0]==15&&ticks[0]>=20&&moving[0]&&settled(test,runtime,region,destination)
+                    &&poolVolume(test,region,4,6)>before[0]) {
+                assertInventory(test,region,liquid[0],gas[0],solids[0]);
+                setPower(test,outletPower,false);setPower(test,inletPower,true);stage[0]=16;ticks[0]=0;
+            } else if(stage[0]==16&&valvesAt(test,inlet,outlet,4,0)) {
+                setPower(test,drive,false);stage[0]=17;ticks[0]=0;moving[0]=false;
+            } else if(stage[0]==17&&ticks[0]>=20&&moving[0]&&settled(test,runtime,region,source)) {
+                assertInventory(test,region,liquid[0],gas[0],solids[0]);
                 manager.remove(region.id());test.succeed();stage[0]=7;
             }
         });
@@ -230,19 +233,6 @@ public final class PistonPumpGameTest {
     }
     private static double gasEnergy(FluidRegion region) {
         return java.util.Arrays.stream(region.hostSnapshot().captureAuthoritativeState().spatialGas().internalEnergy()).sum();
-    }
-    private static void reportGas(GameTestHelper test,FluidRegion region,String stage) {
-        var host=region.hostSnapshot();var state=host.captureAuthoritativeState();var gas=state.spatialGas();var origin=region.origin();
-        for(int bx=2;bx<=5;bx++)for(int bz=2;bz<=6;bz++) {
-            var point=test.absolutePos(new BlockPos(bx,2,bz));int x=(point.getX()-origin.getX())*2,y=(point.getY()-origin.getY())*2,z=(point.getZ()-origin.getZ())*2;
-            long amount=0,mass=0;double volume=0,energy=0;int fixed=0;
-            for(int dx=0;dx<2;dx++)for(int dy=0;dy<4;dy++)for(int dz=0;dz<2;dz++) {
-                int cell=region.grid().cell(x+dx,y+dy,z+dz);if(cell<0)continue;
-                var stock=gas.cells().get(cell);amount=Math.addExact(amount,stock.standardVolumeNanos());mass=Math.addExact(mass,stock.totalMassUnits());
-                energy+=gas.energyAt(cell);volume+=host.cellGasVolume(x+dx,y+dy,z+dz);fixed+=Integer.bitCount(state.fixedGeometry().mask(cell));
-            }
-            System.out.println("pump_gas stage="+stage+" block="+bx+","+bz+" standard="+amount+" mass="+mass+" volume="+volume+" U="+energy+" fixedMicro="+fixed);
-        }
     }
     private static void assertInventory(GameTestHelper test,FluidRegion region,long liquid,long gas,long solids) {
         test.assertTrue(region.availabilityFailure()==null,"Pump region paused: "+region.availabilityFailure());

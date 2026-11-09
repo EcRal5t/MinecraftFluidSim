@@ -101,20 +101,40 @@ final class DomainCollision {
 			masks[cell] = (byte) edit.mask();
 		}
 		var nextFixed = FixedGeometrySnapshot.fromMasks(domain.grid, masks, previousFixed.screens());
+		var granularProjection=projectGranular(nextFixed,null);
+		long[] oldGranular=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularCoupling.copySolidSvq();
+		long[] nextGranular=granularProjection==null?oldGranular:granularProjection.occupied();
+		long[] nextOccupied;
 		try {
 			domain.geometry.cutCells.restoreSnapshot(nextFixed);
 			domain.restoreEntityBodyState(bodies);
-			var nextOccupied = domain.occupiedSolidSvq();
+			nextOccupied=domain.entityBodyCoupling.addTo(nextGranular.clone());
 			for (int cell = 0; cell < domain.cellCount; cell++) {
-				long before = ((long) Integer.bitCount(previousFixed.mask(cell)) << 21) + previousOccupied[cell];
-				long after = ((long) Integer.bitCount(nextFixed.mask(cell)) << 21) + nextOccupied[cell];
+				long before = ((long) Integer.bitCount(previousFixed.mask(cell)) << 21) + previousOccupied[cell]-oldGranular[cell];
+				long after = ((long) Integer.bitCount(nextFixed.mask(cell)) << 21) + nextOccupied[cell]-nextGranular[cell];
 				if (before != after) throw new CollisionEditBlockedException(
 						"Moving-body handoff changes occupied volume at cell " + cell, null);
 			}
-		} catch (RuntimeException failure) {
+		} finally {
 			domain.geometry.cutCells.restoreSnapshot(previousFixed);
 			domain.restoreEntityBodyState(previousBodies);
-			throw failure;
+		}
+		var expanded=new ArrayList<CollisionEdit>(edits);var changed=new HashSet<Integer>();
+		for(var edit:edits)changed.add(domain.grid.cell(edit.x(),edit.y(),edit.z()));
+		for(int cell=0;cell<domain.cellCount;cell++)if(nextOccupied[cell]>previousOccupied[cell]&&changed.add(cell))
+			expanded.add(new CollisionEdit(domain.grid.x(cell),domain.grid.y(cell),domain.grid.z(cell),nextFixed.mask(cell)));
+		var relocation=LiquidCollisionEdit.prepare(domain,expanded,null,nextOccupied);
+		if(relocation.localGas!=null)relocation.localGas.requireCurrent(domain);
+		domain.cellMacStage.publishMaterialChange(relocation.inventory,()->domain.cellMacStage.commitMomentum(relocation.momentum),()->{
+			domain.geometry.cutCells.restoreSnapshot(nextFixed);domain.restoreEntityBodyState(bodies);
+			if(granularProjection!=null){domain.granularState.parcels.applySupportSelections(granularProjection.selections());
+				domain.granularCoupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);}
+			if(relocation.localGas!=null)relocation.localGas.commit(domain);
+		});
+		if(domain.thermalState!=null){
+			var audit=domain.thermalState.auditLedger().withMechanicalWork(relocation.inventory.mechanicalHeat()).withRoundoff(relocation.energyRoundoff);
+			if(relocation.localGas!=null)audit=relocation.localGas.applyAudit(audit);
+			domain.thermalState.restoreAuditLedger(audit);
 		}
 		for (var edit : edits) {
 			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
@@ -158,10 +178,36 @@ final class DomainCollision {
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be planned", failure);
 		}
+		long[] futureOccupied=null;int[] supportSelections=null;
+		var liquidEdits=new ArrayList<CollisionEdit>(canonical);
+		if(domain.granularState!=null){
+			byte[] masks=domain.geometry.cutCells.copyMicroMasks();
+			for(var edit:canonical)masks[domain.grid.cell(edit.x(),edit.y(),edit.z())]=(byte)edit.mask();
+			var nextFixed=FixedGeometrySnapshot.fromMasks(domain.grid,masks);
+			var projection=projectGranular(nextFixed,granularPlan);
+			supportSelections=projection.selections();futureOccupied=projection.occupied();
+			futureOccupied=domain.entityBodyCoupling.addTo(futureOccupied);
+			long[] before=domain.occupiedSolidSvq();
+			for(int cell=0;cell<domain.cellCount;cell++)if(futureOccupied[cell]>before[cell]&&!uniqueCells.contains(cell))
+				liquidEdits.add(new CollisionEdit(domain.grid.x(cell),domain.grid.y(cell),domain.grid.z(cell),nextFixed.mask(cell)));
+		}
 		return new CollisionEditPlan((HostFluidState) domain, List.copyOf(canonical), previousMasks, domain.liquidCells.size(),
-				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan,
-				LiquidCollisionEdit.prepare(domain, canonical, granularPlan),
+				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan, supportSelections,
+				LiquidCollisionEdit.prepare(domain, liquidEdits, granularPlan, futureOccupied),
 				domain.thermalState == null ? null : domain.thermalState.thermalRevision());
+	}
+	private record GranularProjection(long[] occupied,int[] selections) { }
+	private GranularProjection projectGranular(FixedGeometrySnapshot fixed,GranularCollisionPlan plan){
+		if(domain.granularState==null)return null;
+		var projected=mmm.granular.GranularCouplingFields.projectParcels(domain.grid,domain.config.cellSize(),fixed::mask,
+				domain.granularState.parcels,plan==null?null:plan.selectedParcels());
+		long[] occupied=projected.occupiedSvq().clone();boolean[] removed=new boolean[domain.cellCount];
+		if(plan!=null)for(var group:plan.depositGroups())removed[group.cell()]=true;
+		for(int cell=0;cell<domain.cellCount;cell++){
+			occupied[cell]=Math.addExact(occupied[cell],domain.granularCoupling.fixedCellSvq(cell));
+			if(!removed[cell])occupied[cell]=Math.addExact(occupied[cell],domain.granularState.deposits.cellBulkVolumeSvq(cell));
+		}
+		return new GranularProjection(occupied,projected.ceilMasks());
 	}
 	public void beginCollisionEdits(CollisionEditPlan plan) {
 		if (plan == null || plan.owner != domain || plan.consumed || domain.activeCollisionPlan != null) {
@@ -193,12 +239,14 @@ final class DomainCollision {
 		}
 		domain.cellMacStage.publishMaterialChange(plan.liquid.inventory,
                 ()->domain.cellMacStage.commitMomentum(plan.liquid.momentum),()->{
+		if(plan.supportSelections!=null)domain.granularState.parcels.applySupportSelections(plan.supportSelections);
 		if (plan.granular != null) try {
 			commitGranularCollision(plan.granular);
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be committed", failure);
 		}
 		domain.geometry.cutCells.restoreSnapshot(plan.liquid.fixedGeometry);
+		if(domain.granularState!=null)domain.granularCoupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);
 		if(plan.liquid.localGas!=null)plan.liquid.localGas.commit(domain);
 		for (var edit : plan.edits) {
 			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
@@ -337,7 +385,6 @@ final class DomainCollision {
 			if (taken.solidCompositionHandle() != 0) domain.granularState.compositions.release(taken.solidCompositionHandle());
 		}
 		domain.granularState.escapedSink = plan.sinkAfter();
-		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 
 		for (int cell = 0; cell < plan.affectedCells().length; cell++) {
 			if (plan.affectedCells()[cell]) domain.domainPhaseInventory.markGranularExternalChange(cell);

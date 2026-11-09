@@ -20,7 +20,7 @@ import java.util.Map;
 final class FluidThermalBinding {
 	private FluidThermalBinding() { }
 
-	/** Reference energy follows the allocated integer species; only sensible U follows mass. */
+	/** Each transported share carries its actual composition at the source temperature. */
 	static LiquidCellInventory.EnergyPartitioner liquidEnergyPartitioner(HostFluidState domain) {
 		if (domain.thermalState == null) return null;
 		var thermal = domain.thermalState;
@@ -28,11 +28,17 @@ final class FluidThermalBinding {
 		var chemistry = domain.liquidCells.chemicalRegistry();
 		return (source, masses, species, largest, energies) -> {
 			int material = thermal.thermalMaterialHandleForFluid(source.key().material());
-			double sourceReference = function.baseEnergy(material, source.massKilograms(), source.mixture(), chemistry);
-			double sensibleEnergy = source.internalEnergy()-sourceReference;
+			var mixture = source.mixture();
+			var sourceSpecies = mixture == null ? Map.<String, Long>of() : mixture.stableAmounts(chemistry);
+			double temperature = function.stateForInternalEnergy(material, source.massKilograms(),
+					sourceSpecies, source.internalEnergy()).temperatureK();
 			for (int i = 0; i < masses.length; i++) if (i != largest && masses[i] > 0) {
-				double reference = function.baseEnergy(material, Mass.kilograms(masses[i]), source.mixture(), chemistry, species, i);
-				energies[i] = reference+sensibleEnergy*(masses[i]/(double)source.massUnits());
+				var part = new java.util.HashMap<String, Long>();
+				for (int entry = 0; entry < species.length; entry++) {
+					long amount = species[entry][i];
+					if (amount != 0) part.put(chemistry.species(mixture.speciesHandle(entry)).id(), amount);
+				}
+				energies[i] = function.internalEnergyAtTemperature(material, Mass.kilograms(masses[i]), part, temperature);
 			}
 		};
 	}

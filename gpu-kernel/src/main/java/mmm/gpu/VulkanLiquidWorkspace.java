@@ -323,13 +323,10 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         region.kernels.coupledKernel.recordProject(command,transport.pressure.coupled,parameters.duration());
                         region.kernels.mixturePressureKernel.recordProjectedVelocities(command,transport.pressure.assembly,parameters.cellSize(),parameters.duration(),parameters.gravity());
                         region.kernel.recordTransportPreferences(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),parameters.cellSize(),parameters.duration());
-                        region.kernels.mixtureFlux.recordAnalyze(command,transport.pressure.constraint,parameters.cellSize(),parameters.duration());
                     };
                     boolean movingSolid=transport.entity!=null||granularMotion;
                     if(movingSolid){
                         var accepted=candidate.continueBatch(project,0,0);
-                        if(accepted.error()==4096&&(transport.entity!=null||transport.dynamics!=null))
-                            throw new MotionTimeRefinement("Moved solid leaves liquid without an open route");
                         if(accepted.error()!=0)return accepted.error();
                     }
                     VulkanRegionStorage.ComputeCommands finishProjection=(command,input,output,errors,staging,stack)->{
@@ -403,9 +400,18 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         }
                         capacityStage="liquid donor routes";
                         if(error==0) {
+                            if(!sourceGeometryValid||granularMotion||!java.util.Objects.equals(sourceBodyState,targetBodyState))
+                                region.kernels.mixtureFlux.prepareRoutes(candidate,transport.pressure.constraint,movingSolid);
+                            if(movingSolid){
+                                var routed=candidate.continueBatch((command,input,output,errors,staging,stack)->
+                                        region.kernels.mixtureFlux.recordAnalyze(command,transport.pressure.constraint,parameters.cellSize(),parameters.duration()),0,0);
+                                if(routed.error()==4096)throw new MotionTimeRefinement("Moved solid leaves liquid without an open route");
+                                if(routed.error()!=0)return routed.error();
+                            }
                             capacityStage="accepted volumes/material routes/gather/future gas geometry";
                             VulkanRegionStorage.ComputeCommands finishTransport=(command,input,output,errors,staging,stack)-> {
-                                if(!movingSolid)project.record(command,input,output,errors,staging,stack);
+                                if(!movingSolid){project.record(command,input,output,errors,staging,stack);
+                                    region.kernels.mixtureFlux.recordAnalyze(command,transport.pressure.constraint,parameters.cellSize(),parameters.duration());}
                                 if(!granularMotion)finishProjection.record(command,input,output,errors,staging,stack);
                                 if(transport.dynamics!=null&&!granularMotion)transport.recordEmptyGranular(command,output,errors,stack,parameters);
                                 transport.recordInitialize(command,input,output,errors);
@@ -566,6 +572,11 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             copyColumn(command,input,source.pressureColumns.get(PressureField.PRESSURE),output,pressureColumns.get(PressureField.PRESSURE),stack);
             var from=source.transport;var to=transport;
             copyColumn(command,input,from.pressure.coupled.column(VulkanCoupledPressure.Field.REFERENCE),output,to.pressure.coupled.column(VulkanCoupledPressure.Field.REFERENCE),stack);
+            var oldRouting=from.pressure.constraint;var newRouting=to.pressure.constraint;
+            copyColumn(command,input,oldRouting.outTarget,output,newRouting.outTarget,stack);
+            copyColumn(command,input,oldRouting.inOffsets,output,newRouting.inOffsets,stack);
+            copyColumn(command,input,oldRouting.inSource,output,newRouting.inSource,stack);
+            copyColumn(command,input,oldRouting.inSide,output,newRouting.inSide,stack);
             var oldTables=new VulkanLiquidStateLayout.Column[]{from.phaseTable,from.massTable,from.materialReference,from.speciesReference};
             var newTables=new VulkanLiquidStateLayout.Column[]{to.phaseTable,to.massTable,to.materialReference,to.speciesReference};
             for(int i=0;i<oldTables.length;i++)copyColumn(command,input,oldTables[i],output,newTables[i],stack);
@@ -673,25 +684,27 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             long sourceMixtureEnd=align(sourceMixture.offset()+sourceMixture.bindingBytes());
             pressure=sections.new PressureSection(granular,gas,mixture,viscosity.column(VulkanLiquidViscosity.Field.MU),sourceEntity,entity,
                     entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ),sourceMixtureEnd);
+            if(gas!=null)gas.transport.bindRoutes(word(pressure.constraint.outTarget),word(pressure.constraint.inOffsets),
+                    word(pressure.constraint.inSource),word(pressure.constraint.inSide));
             dynamics=granular==null?null:sections.new GranularDynamics(granular,pressure,viscosity.column(VulkanLiquidViscosity.Field.MU),pressure.endOffset);
             if(entity!=null){entity.bindPressure(mixture,pressure.coupled);entity.bindSourceOccupation(sourceEntity);}
             capacityInputs=VulkanLiquidCapacityInputs.layout(volumes,word(geometry.get(GeometryField.FIXED_MASKS)),
                     word(entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ)),word(geometry.get(GeometryField.FACES)),word(geometry.get(GeometryField.FLUXES)),
                     mixture.statesWord()+2*VulkanMixtureState.Quantity.LIQUID_SCALE.ordinal(),VulkanMixtureState.Quantity.values().length,
-                    word(activityCells),word(activityFaces),dynamics!=null?dynamics.endOffset:pressure.endOffset,liquid.alignment());
+                    word(activityCells),word(activityFaces),word(pressure.constraint.outTarget),dynamics!=null?dynamics.endOffset:pressure.endOffset,liquid.alignment());
             accepted=VulkanLiquidAcceptedVolumes.layout(volumes,word(capacityInputs.accepted()),
                     capacityInputs.endOffset(),liquid.alignment(),Math.addExact(volumes.limbCapacity(),Math.multiplyExact(cells,14)));
             materials=VulkanLiquidMaterialRoutes.layout(liquid,routes,word(accepted.descriptors()),word(phaseTable),-1,accepted.sourceCellVolumes().quantumExponent(),
                     Math.multiplyExact(7*stocks+3*cells,definitions.scratchLimbsPerWindow()),accepted.endOffset(),liquid.alignment());
-            quantities=VulkanLiquidRouteQuantities.layout(liquid,routes,word(materialReference),word(speciesReference),definitions.speciesStride(),materials.endOffset(),liquid.alignment());
-            gather=VulkanLiquidGather.layout(liquid,liquid,routes,word(geometry.get(GeometryField.FIXED_MASKS)),word(massTable),quantities.endOffset(),liquid.alignment());
-            heatTransport=VulkanMechanicalHeatTransport.layout(liquid,liquid,routes,word(viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT)),gather.endOffset(),liquid.alignment());
+            quantities=VulkanLiquidRouteQuantities.layout(liquid,routes,word(materialReference),word(speciesReference),definitions.speciesStride(),word(sourceThermal.header()),materials.endOffset(),liquid.alignment());
+            gather=VulkanLiquidGather.layout(liquid,liquid,routes,pressure.constraint,word(geometry.get(GeometryField.FIXED_MASKS)),word(massTable),quantities.endOffset(),liquid.alignment());
+            heatTransport=VulkanMechanicalHeatTransport.layout(liquid,liquid,routes,pressure.constraint,word(viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT)),gather.endOffset(),liquid.alignment());
             var mechanicalMomentum=VulkanLiquidMomentum.layout(liquid,liquid,routes,word(geometry.get(GeometryField.FACES)),word(futureFaces),-1,word(activityCells),word(activityFaces),heatTransport.endOffset(),liquid.alignment());
-            momentum=(gas==null?mechanicalMomentum:mechanicalMomentum.withGasTransport(gas.transport)).withAmbientMass(ambientMassUnits);
+            momentum=(gas==null?mechanicalMomentum:mechanicalMomentum.withGasTransport(gas.transport)).withGeometryRoutes(pressure.constraint).withAmbientMass(ambientMassUnits);
             liquidThermal=VulkanLiquidThermodynamics.layout(liquid,definitions.thermal(),word(materialReference),word(speciesReference),definitions.speciesStride(),momentum.endOffset(),liquid.alignment());
-            bodies=VulkanMechanicalBodies.layout(liquid,routes,word(geometry.get(GeometryField.FACES)),gas==null?-1:word(gas.geometry.cellNodes()),
+            bodies=VulkanMechanicalBodies.layout(liquid,routes,pressure.constraint,word(geometry.get(GeometryField.FACES)),gas==null?-1:word(gas.geometry.cellNodes()),
                     gas==null?0:gas.state.nodeCapacity(),gas==null?-1:Math.toIntExact(gas.state.column(VulkanGasStateLayout.Field.COUNTS).offset()/4),
-                    dynamics==null?null:new VulkanMechanicalBodies.GranularLinks(dynamics.transitions.source,pressure.assembly,dynamics.contacts.word(VulkanGranularContacts.Field.INTERVAL_COMPONENT)),
+                    dynamics==null?null:new VulkanMechanicalBodies.GranularLinks(dynamics.transitions.source,pressure.assembly,dynamics.contacts.word(VulkanGranularContacts.Field.INTERVAL_COMPONENT)),gas==null?null:gas.transport,
                     liquidThermal.endOffset(),liquid.alignment());
             var mechanicalEnergy=VulkanMechanicalEnergy.layout(bodies,momentum,liquidThermal,-1,
                     word(viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT)),entity==null?word(viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_WORK)):entity.word(VulkanEntityBodyCoupling.Field.SOURCE_WORK),
@@ -759,6 +772,9 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         VulkanCoherentStateLayout.Configuration coherentConfiguration, VulkanThermalDeviceLayout.Configuration deviceConfiguration,
                         VulkanRegionReactions.Configuration reactionConfiguration) {
             for(var header:headers(liquid))writer.put(header.offset(),header.bytes());
+            var routing=VulkanMixtureFlux.normalRoutes(pressure.constraint);
+            writer.put(pressure.constraint.outTarget,routing.targets());writer.put(pressure.constraint.inOffsets,routing.offsets());
+            writer.put(pressure.constraint.inSource,routing.sources());writer.put(pressure.constraint.inSide,routing.sides());
             writer.put(phaseTable,definitions.materialPhases());writer.put(massTable,definitions.speciesMasses());
             writer.put(materialReference,definitions.materialReferences());writer.put(speciesReference,definitions.speciesReferences());
             thermalTables(writer,sourceThermal);thermalTables(writer,liquidThermal);

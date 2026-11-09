@@ -48,8 +48,6 @@ u64vec2 product(uint64_t a, uint64_t b) {
 void terms(int row, out DyadicTerm items[7]) {
     for (int i = 0; i < 7; i++)
         items[i] = DyadicTerm(1, 0, 0, 0, 0);
-    if (phaseRowMass(p.header, row) == 0l)
-        return;
     if (row < headerWord(LP_H_SLOT_COUNT) && row < int(words[stockField(LP_STOCK_COUNTS)])) {
         int begin = int(words[stockField(LP_STOCK_VOLUME_OFFSETS) + row]),
             count = int(words[stockField(LP_STOCK_VOLUME_COUNTS) + row]);

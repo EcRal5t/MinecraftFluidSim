@@ -175,7 +175,7 @@ final class VulkanFluidStateCodec {
                 if(template.granular()!=null){
                     var grains=template.granular();
                     for(var deposit:grains.depositGroups())occupiedGas[deposit.cell()]=Math.addExact(occupiedGas[deposit.cell()],deposit.solidVolumeSvq());
-                    var kernel=new mmm.granular.GranularKernel(template.grid(),template.config().cellSize());
+                    var kernel=new mmm.granular.GranularKernel(template.grid(),template.config().cellSize(),template.fixedGeometry()::mask);
                     for(var parcel:grains.activeParcels()){
                         kernel.capture(parcel.x(),parcel.y(),parcel.z(),parcel.solidVolumeSvq());int mask=parcel.ceilMask();kernel.requireMask(mask);
                         for(int part=0;part<kernel.size();part++){int cell=kernel.cell(part);occupiedGas[cell]=Math.addExact(occupiedGas[cell],(mask&(1<<part))!=0?kernel.ceil(part):kernel.floor(part));}
@@ -209,7 +209,7 @@ final class VulkanFluidStateCodec {
                     .fromSnapshot(snapshot, species,
                         owner == null ? new double[snapshot.activeParcels().size()] : owner.copyActiveParcelEnergy(),
                         owner == null ? new double[snapshot.depositGroups().size()] : owner.copyDepositEnergy(),
-                        template.config().cellSize())
+                        template.config().cellSize(),template.fixedGeometry()::mask)
                     .withDynamics(template.granularDynamics());
             if (thermal == null) {
                 for (String id : state.definitions().materialIds()) {
@@ -314,7 +314,7 @@ final class VulkanFluidStateCodec {
         }
         var physicalGranular = granular == null
             ? null
-            : granular.toSnapshot(template.grid(), template.config().cellSize());
+            : granular.toSnapshot(template.grid(), template.config().cellSize(),template.fixedGeometry()::mask);
         return new FluidDomainState(template.grid(), template.config(), template.definitions(),
             template.sealedDomainBoundary(), liquid.inventory().decode(),
             capture.generation() == 0 ? template.phaseOccupancy() : capture.occupancy(), liquid.momentum(),

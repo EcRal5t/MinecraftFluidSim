@@ -180,19 +180,18 @@ final class CellMacStage {
         double[] retained=new double[domain.cellCount],future=new double[domain.cellCount],removed=new double[domain.cellCount];
         double[][] incomingP=new double[3][domain.cellCount],incomingK=new double[3][domain.cellCount];
         long[] movedGas=new long[domain.cellCount],escapedGas=new long[domain.cellCount];
+        long[] movedLiquid=new long[domain.cellCount],incomingLiquid=new long[domain.cellCount];
+        for(var transfer:edit.transfers()){
+            int cell=transfer.source().cell(),target=transfer.target().cell();long amount=transfer.massUnits();
+            movedLiquid[cell]=Math.addExact(movedLiquid[cell],amount);
+            incomingLiquid[target]=Math.addExact(incomingLiquid[target],amount);
+            addIncomingMomentum(incomingP,incomingK,cell,target,amount);
+        }
         if(gasEdit!=null)for(var transfer:gasEdit.transfers()){
             int cell=transfer.source(),target=transfer.target();long amount=transfer.massUnits();
             movedGas[cell]=Math.addExact(movedGas[cell],amount);
             if(target<0){escapedGas[cell]=Math.addExact(escapedGas[cell],amount);continue;}
-            double kg=Mass.kilograms(amount);
-            for(int axis=0;axis<3;axis++){
-                int low=domain.grid.face(cell,2*axis)-domain.grid.faceOffset(axis);
-                int high=domain.grid.face(cell,2*axis+1)-domain.grid.faceOffset(axis);
-                double[] mass=axis==0?massX:axis==1?massY:massZ,p=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
-                double a=mass[low]>0?p[low]/mass[low]:0,b=mass[high]>0?p[high]/mass[high]:0;
-                incomingP[axis][target]+=.5*kg*(a+b);
-                incomingK[axis][target]+=.25*kg*(a*a+b*b);
-            }
+            addIncomingMomentum(incomingP,incomingK,cell,target,amount);
         }
         for(int cell=0;cell<domain.cellCount;cell++){
             long oldLiquid=0,newLiquid=0;
@@ -201,9 +200,11 @@ final class CellMacStage {
             long oldGasMass=oldGas==null?0:oldGas.cells().get(cell).totalMassUnits();
             long newGasMass=nextGas==null?0:nextGas.cells().get(cell).totalMassUnits();
             long retainedGas=Math.subtractExact(oldGasMass,movedGas[cell]);
-            retained[cell]=Mass.kilograms(Math.addExact(Math.min(oldLiquid,newLiquid),retainedGas));
+            long retainedLiquid=Math.min(Math.subtractExact(oldLiquid,movedLiquid[cell]),Math.subtractExact(newLiquid,incomingLiquid[cell]));
+            if(retainedLiquid<0)throw new IllegalStateException("Liquid transfer exceeds its source or target inventory");
+            retained[cell]=Mass.kilograms(Math.addExact(retainedLiquid,retainedGas));
             future[cell]=Mass.kilograms(Math.addExact(newLiquid,newGasMass));
-            removed[cell]=Mass.kilograms(Math.addExact(Math.max(0,oldLiquid-newLiquid),escapedGas[cell]));
+            removed[cell]=Mass.kilograms(Math.addExact(Math.subtractExact(Math.subtractExact(oldLiquid,retainedLiquid),movedLiquid[cell]),escapedGas[cell]));
         }
         var heat=new java.util.TreeMap<Integer,SignedDyadic>();var removedEnergy=new java.util.TreeMap<Integer,SignedDyadic>();
         double[][] result=new double[3][];double[] impulse=new double[3];
@@ -233,6 +234,15 @@ final class CellMacStage {
         }
         return new ExternalMomentum(new MacMomentumState(domain.grid,result[0],result[1],result[2]),
                 java.util.Map.copyOf(heat),java.util.Map.copyOf(removedEnergy),new WallImpulse(impulse[0],impulse[1],impulse[2]));
+    }
+    private void addIncomingMomentum(double[][] incomingP,double[][] incomingK,int cell,int target,long amount){
+        double kg=Mass.kilograms(amount);
+        for(int axis=0;axis<3;axis++){
+            int low=domain.grid.face(cell,2*axis)-domain.grid.faceOffset(axis),high=domain.grid.face(cell,2*axis+1)-domain.grid.faceOffset(axis);
+            double[] mass=axis==0?massX:axis==1?massY:massZ,p=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
+            double a=mass[low]>0?p[low]/mass[low]:0,b=mass[high]>0?p[high]/mass[high]:0;
+            incomingP[axis][target]+=.5*kg*(a+b);incomingK[axis][target]+=.25*kg*(a*a+b*b);
+        }
     }
     private static double at(double[] values,int cell){return cell<0?0:values[cell];}
     private double ambientCellMass(){

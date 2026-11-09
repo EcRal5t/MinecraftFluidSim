@@ -327,6 +327,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         var shader = VulkanLiquidPhaseRows.resource("gas-liquid-mass-transfer.comp")
                 .replace("// HOST_LAYOUT", shaderLayout()).replace("// SERIES_CONDUCTANCE_LIBRARY", VulkanLiquidPhaseRows.resource("series-conductance.glsl"))
                 .replace("// PHASE_ROWS_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-phase-rows.glsl"))
+                .replace("// DYADIC_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-dyadic.glsl"))
                 .replace("// PLIC_FACE_LIBRARY", VulkanLiquidPhaseRows.resource("plic-face.glsl"));
         bindings = new FlipKernelBindings(c, 3, shader, 16, -1);
         try {

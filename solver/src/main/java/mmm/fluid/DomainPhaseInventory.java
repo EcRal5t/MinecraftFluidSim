@@ -316,7 +316,7 @@ final class DomainPhaseInventory {
 		return liquidRegistry;
 	}
 	private PreparedGranularBinding prepareGranularBinding(GranularRegistry registry) {
-		var state = new GranularDomainState(registry, domain.grid, domain.config.cellSize());
+		var state = new GranularDomainState(registry, domain.grid, domain.config.cellSize(),domain.geometry.cutCells::mask);
 		GranularPhaseTransferEngine phaseTransfer = null;
 		if (domain.chemistry != null && registry.hasReactiveRules()) {
 			int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
@@ -328,8 +328,8 @@ final class DomainPhaseInventory {
 		return new PreparedGranularBinding(state,
 				new GranularDepositDynamics(registry, state.parcels, state.deposits, state.inventory,
 						domain.grid, domain.config.cellSize()),
-				new GranularCouplingFields(domain.grid,domain.config.cellSize()),
-				new GranularCouplingFields(domain.grid,domain.config.cellSize()),
+				new GranularCouplingFields(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask),
+				new GranularCouplingFields(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask),
 				new FlipGranularCollision(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, state.deposits,
 						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
 				phaseTransfer, new int[GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION]);

@@ -34,7 +34,7 @@ public final class GpuGranularMotionBenchmark {
         var coherent=new VulkanLiquidStateLayout.Column(align(masks.offset()+masks.bytes(),alignment),state.cells(),8);
         var contact=new VulkanGranularContacts.Layout(state,finalK,32*count,align(coherent.offset()+coherent.bytes(),alignment),alignment);
         var movement=new VulkanGranularMotion.Layout(state,contact,finalY,Math.toIntExact(masks.offset()/4),contact.endOffset(),alignment);
-        var occupancy=new VulkanGranularGeometry.Layout(state,coherent,movement.endOffset(),alignment);
+        var occupancy=new VulkanGranularGeometry.Layout(state,coherent,masks,movement.endOffset(),alignment);
         var initial=ByteBuffer.allocate(Math.toIntExact(occupancy.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
         contact.initializeHeader(initial);initial.duplicate().position(Math.toIntExact(movement.header.offset())).put(movement.headerBytes());occupancy.initializeHeader(initial);
         int material=movement.word(VulkanGranularMotion.Field.MATERIAL)*4;

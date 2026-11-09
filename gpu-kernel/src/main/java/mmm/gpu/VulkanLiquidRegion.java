@@ -297,10 +297,20 @@ final class VulkanLiquidRegion implements AutoCloseable {
             double amount=0;
             for(int face:faces) {
                 int axis=grid.faceAxis(face),left=grid.faceLeft(face),right=grid.faceRight(face);
-                if(left>=0)amount+=read(volume.offset()+8L*((2*axis+1)*grid.cellCount()+left),8).getDouble(0);
-                if(right>=0)amount-=read(volume.offset()+8L*(2*axis*grid.cellCount()+right),8).getDouble(0);
+                if(left>=0 && gasFaceRoute(left,2*axis+1,right))amount+=read(volume.offset()+8L*((2*axis+1)*grid.cellCount()+left),8).getDouble(0);
+                if(right>=0 && gasFaceRoute(right,2*axis,left))amount-=read(volume.offset()+8L*(2*axis*grid.cellCount()+right),8).getDouble(0);
             }
             return amount/flowDuration;
+        }
+        private boolean gasFaceRoute(int cell,int side,int neighbor) {
+            var gas=layout.transport.gas.transport;
+            if(gas.routeTargets>=0 && read(4L*(gas.routeTargets+6*cell+side),4).getInt(0)!=neighbor)return false;
+            if(gas.targetMasks>=0 && gas.targetSolid>=0) {
+                int mask=read(4L*(gas.targetMasks+cell),4).getInt(0);
+                long capacity=(long)Integer.bitCount((~mask)&255)<<21;
+                if(read(4L*(gas.targetSolid+2*cell),8).getLong(0)>=capacity)return false;
+            }
+            return true;
         }
         private double routeVolume(VulkanLiquidAcceptedVolumes.Layout accepted,int route){
             var descriptor=read(accepted.descriptors().offset()+20L*route,20);

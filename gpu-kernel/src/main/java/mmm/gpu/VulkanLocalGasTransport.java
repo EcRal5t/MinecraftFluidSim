@@ -17,6 +17,7 @@ final class VulkanLocalGasTransport implements AutoCloseable {
         final VulkanMixtureState.Layout mixture; final int cells,faces,faceFlux,projectedVelocity,velocityStride,pressureWord,activityCells,activityFaces;
         final boolean sealedExterior; final VulkanGasAmbient.AmbientTables ambient; final long[] speciesMasses;
         int targetMasks=-1,targetSolid=-1;
+        int routeTargets=-1,inOffsets=-1,inSources=-1,inSides=-1;
         final EnumMap<Field,VulkanLiquidStateLayout.Column> fields=new EnumMap<>(Field.class); final long endOffset;
         ProductionLayout(VulkanGasStateLayout source,VulkanGasThermodynamics.Layout eos,VulkanMixtureState.Layout mixture,
                          int faceFlux,int projectedVelocity,int velocityStride,int pressureWord,int activityCells,int activityFaces,
@@ -30,20 +31,21 @@ final class VulkanLocalGasTransport implements AutoCloseable {
             if(source.nodeCapacity()<cells||eos.gas()!=source||mixture.inputs().cells()!=cells||faceFlux<0||projectedVelocity<0||velocityStride<1||pressureWord<0||base<mixture.endOffset())throw new IllegalArgumentException("Invalid production gas transport layout");
             long cursor=base;int components=source.definitions().componentIds().size(),species=source.definitions().speciesStride();
             for(Field f:Field.values()) {
-                int n=switch(f){case HEADER->96;case NANOS,MASS,RESIDUAL->6*cells*components;case SPECIES->6*cells*species;case ENERGY,VOLUME,INFLOW_NANOS,ENERGY_ROUNDOFF->6*cells;case GATHER_ROUNDOFF->21*cells;case WORK,EXTERNAL_PRESSURE_WORK,OLD_VOLUME,OLD_MASS,NEW_MASS,EXTERNAL_SOURCE_ENERGY,EXTERNAL_SINK_ENERGY->cells;case AMBIENT_DATA->5*ambient.handles().length+4*ambient.speciesHandles().length+1;case SPECIES_MASS->speciesMasses.length;default->faces;};
+                int n=switch(f){case HEADER->96;case NANOS,MASS,RESIDUAL->6*cells*components;case SPECIES->6*cells*species;case ENERGY,VOLUME,INFLOW_NANOS,ENERGY_ROUNDOFF->6*cells;case GATHER_ROUNDOFF->27*cells;case WORK,EXTERNAL_PRESSURE_WORK,OLD_VOLUME,OLD_MASS,NEW_MASS,EXTERNAL_SOURCE_ENERGY,EXTERNAL_SINK_ENERGY->cells;case AMBIENT_DATA->5*ambient.handles().length+4*ambient.speciesHandles().length+1;case SPECIES_MASS->speciesMasses.length;default->faces;};
                 long offset=(cursor+alignment-1)&-alignment;var c=new VulkanLiquidStateLayout.Column(offset,n,f.width);fields.put(f,c);cursor=offset+c.bindingBytes();
             }
             endOffset=(cursor+alignment-1)&-alignment;
         }
         VulkanLiquidStateLayout.Column column(Field f){return fields.get(f);}
         void bindTargetOccupation(int masks,int solid){targetMasks=masks;targetSolid=solid;}
+        void bindRoutes(int targets,int offsets,int sources,int sides){routeTargets=targets;inOffsets=offsets;inSources=sources;inSides=sides;}
         int word(Field f){return Math.toIntExact(column(f).offset()/4);}
         ByteBuffer headerBytes(){
             int[] h=new int[96];h[0]=cells;h[1]=source.definitions().componentIds().size();h[2]=source.definitions().speciesStride();h[3]=eos.headerWordOffset();
             for(Field f:Field.values())h[64+f.ordinal()]=word(f);
             for(var f:VulkanGasStateLayout.Field.values())h[16+f.ordinal()]=Math.toIntExact(source.column(f).offset()/4);
             h[48]=mixture.statesWord();h[51]=projectedVelocity;h[52]=projectedVelocity-2;h[53]=pressureWord;h[54]=activityCells;h[55]=activityFaces;h[56]=faceFlux;h[59]=velocityStride;
-            h[57]=targetMasks;h[58]=targetSolid;
+            h[4]=routeTargets;h[14]=inOffsets;h[15]=inSources;h[49]=inSides;h[57]=targetMasks;h[58]=targetSolid;
             h[60]=source.sizeX();h[61]=source.sizeY();h[62]=source.sizeZ();h[63]=1;
             h[5]=sealedExterior?1:0;h[6]=ambient.handles().length;h[7]=ambient.speciesHandles().length;
             var target=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<h.length;i++)target.putInt(4*i,h[i]);

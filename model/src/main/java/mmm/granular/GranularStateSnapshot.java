@@ -258,7 +258,7 @@ public final class GranularStateSnapshot {
 		List<StableComposition> table = List.copyOf(unique); Map<StableComposition, Integer> indices = new HashMap<>();
 		for (int index = 0; index < table.size(); index++) indices.put(table.get(index), index + 1);
 		List<ActiveParcel> active = new ArrayList<>(parcels.count());
-		var kernel = new GranularKernel(grid,.5);
+		var kernel = parcels.kernel() == null ? new GranularKernel(grid,.5) : parcels.kernel();
 		parcels.requireGeometry(kernel);
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index); StableComposition composition = activeStable[index];
@@ -370,7 +370,6 @@ public final class GranularStateSnapshot {
 	}
 
 	private void validateActive() {
-		var kernel = new GranularKernel(grid,.5);
 		for (ActiveParcel parcel : activeParcels) {
 			if (!(Float.isFinite(parcel.x()) && Float.isFinite(parcel.y()) && Float.isFinite(parcel.z())
 					&& parcel.x() >= 0.0F && parcel.x() < sizeX * 0.5F && parcel.y() >= 0.0F && parcel.y() < sizeY * 0.5F
@@ -382,7 +381,8 @@ public final class GranularStateSnapshot {
 					&& (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED) == 0)) {
 				throw new IllegalArgumentException("Invalid active granular snapshot parcel");
 			}
-			kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); kernel.requireMask(parcel.ceilMask());
+			if (parcel.ceilMask() < 0 || parcel.ceilMask() > 254)
+				throw new IllegalArgumentException("Invalid granular occupancy selection");
 		}
 	}
 

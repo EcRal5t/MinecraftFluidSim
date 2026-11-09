@@ -94,174 +94,104 @@ void clearStock(int stock) {
         candidateWords[targetField(STOCK_SUPPORT_MASKS) + stock] = 0u;
     }
     candidateWords[headerWord(H_SPECIES_COUNTS) + stock] = 0u;
-    for (int i = 0; i < 7; i++)
-        candidateWords[headerWord(H_MEMBERS) + 7 * stock + i] = uint(-1);
     for (int i = 0; i < 7; i++) {
         putDouble(headerWord(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, 0.0);
     }
 }
 
-void sourceNeighbors(int targetSlot, out int sourceSlots[7], out int routeDirections[7]) {
-    int material = targetSlot % headerWord(H_MATERIAL_COUNT), cellId = targetSlot / headerWord(H_MATERIAL_COUNT);
-    for (int i = 0; i < 7; i++) {
-        sourceSlots[i] = -1;
-        routeDirections[i] = 0;
-        int neighbor = cellId;
-        if (i > 0) {
-            int side = i - 1;
-            neighbor = gridNeighbor(cellId, side);
-            routeDirections[i] = (side ^ 1) + 1;
-        }
-        if (neighbor < 0)
-            continue;
-        sourceSlots[i] = neighbor * headerWord(H_MATERIAL_COUNT) + material;
-    }
+int memberCount(int stock) {
+    int cell=stock/headerWord(H_MATERIAL_COUNT);
+    return 1+int(candidateWords[headerWord(H_ROUTE_OFFSETS)+cell+1])-int(candidateWords[headerWord(H_ROUTE_OFFSETS)+cell]);
 }
-int seekSpecies(int speciesEntry, int speciesEnd, int routeDirection) {
-    while (speciesEntry < speciesEnd) {
-        int64_t amount = longAt(routeField(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * speciesEntry + routeDirection));
-        if (amount > int64_t(0))
-            break;
-        if (amount < int64_t(0))
-            atomicOr(errors, ERROR_INVALID_INVENTORY);
-        speciesEntry++;
-    }
-    return speciesEntry;
+void member(int stock,int ordinal,out int sourceSlot,out int direction,out int entry) {
+    int cell=stock/headerWord(H_MATERIAL_COUNT),material=stock%headerWord(H_MATERIAL_COUNT);
+    if(ordinal==0){sourceSlot=stock;direction=0;}
+    else {int index=int(candidateWords[headerWord(H_ROUTE_OFFSETS)+cell])+ordinal-1;
+        sourceSlot=int(candidateWords[headerWord(H_ROUTE_SOURCES)+index])*headerWord(H_MATERIAL_COUNT)+material;
+        direction=int(candidateWords[headerWord(H_ROUTE_SIDES)+index])+1;}
+    entry=routeIndex(sourceSlot,direction);
+    if(entry>=0 && int(candidateWords[routeField(ROUTE_VOLUME_DESCRIPTORS)+DYADIC_DESCRIPTOR_WORDS*entry+DYADIC_SIGN])<=0)entry=-1;
 }
-
-// Each accepted route has sorted, unique species handles. Seven-way merge preserves that order.
-int mergeSpecies(int stock, int members[7], int outputStart, bool writing, out int64_t representedMass) {
-    int speciesCursors[7], speciesEnds[7], sourceSlots[7], routeDirections[7];
-    representedMass = int64_t(0);
-    if (sourceWords[sourceField(STOCK_COUNTS) + 1] == 0u)
-        return 0;
-    sourceNeighbors(stock, sourceSlots, routeDirections);
-    for (int i = 0; i < 7; i++) {
-        speciesCursors[i] = members[i] < 0 ? 0 : int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS) + sourceSlots[i]]);
-        speciesEnds[i] = members[i] < 0 ? 0 : int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS) + sourceSlots[i] + 1]);
-        speciesCursors[i] = seekSpecies(speciesCursors[i], speciesEnds[i], routeDirections[i]);
-    }
-    int count = 0;
-    while (true) {
-        int speciesHandle = 2147483647;
-        bool found = false;
-        for (int i = 0; i < 7; i++)
-            if (speciesCursors[i] < speciesEnds[i]) {
-                speciesHandle = min(speciesHandle, int(sourceWords[sourceField(STOCK_SPECIES_HANDLES) + speciesCursors[i]]));
-                found = true;
+DyadicTerm memberVolume(int stock,int ordinal){
+    int slot,direction,entry;member(stock,ordinal,slot,direction,entry);
+    if(entry<0)return DyadicTerm(1,0,0,0,0);
+    int a=routeField(ROUTE_VOLUME_DESCRIPTORS)+DYADIC_DESCRIPTOR_WORDS*entry;
+    return DyadicTerm(int(candidateWords[a]),int(candidateWords[a+1]),int(candidateWords[a+2]),int(candidateWords[a+3]),int(candidateWords[a+4]));
+}
+int mergeSpecies(int stock,int outputStart,bool writing,out int64_t representedMass){
+    representedMass=int64_t(0);int count=0,last=-1,n=memberCount(stock);
+    while(true){
+        int next=2147483647;bool found=false;
+        for(int i=0;i<n;i++){
+            int slot,direction,entry;member(stock,i,slot,direction,entry);if(entry<0)continue;
+            int begin=int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS)+slot]),end=int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS)+slot+1]);
+            for(int s=begin;s<end;s++){
+                int handle=int(sourceWords[sourceField(STOCK_SPECIES_HANDLES)+s]);
+                if(handle>last && longAt(routeField(ROUTE_SPECIES_AMOUNTS)+2*(7*s+direction))>0l){next=min(next,handle);found=true;break;}
             }
-        if (!found)
-            break;
-        int64_t amount = int64_t(0);
-        for (int i = 0; i < 7; i++)
-            if (speciesCursors[i] < speciesEnds[i] && int(sourceWords[sourceField(STOCK_SPECIES_HANDLES) + speciesCursors[i]]) == speciesHandle) {
-                amount =
-                    addQuantity(amount, longAt(routeField(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * speciesCursors[i] + routeDirections[i])));
-                speciesCursors[i] = seekSpecies(speciesCursors[i] + 1, speciesEnds[i], routeDirections[i]);
-            }
-        if (writing) {
-            candidateWords[targetField(STOCK_SPECIES_HANDLES) + outputStart + count] = uint(speciesHandle);
-            putLong(targetField(STOCK_SPECIES_AMOUNTS) + 2 * (outputStart + count), amount);
-            int64_t massPerQuantum = longAt(headerWord(H_SPECIES_MASS) + 2 * speciesHandle);
-            if (massPerQuantum < int64_t(0) || (massPerQuantum > int64_t(0) && amount > MAX_LONG / massPerQuantum))
-                atomicOr(errors, ERROR_INVALID_INVENTORY);
-            else
-                representedMass = addQuantity(representedMass, amount * massPerQuantum);
         }
-        count++;
+        if(!found)break;int64_t amount=0l;
+        for(int i=0;i<n;i++){
+            int slot,direction,entry;member(stock,i,slot,direction,entry);if(entry<0)continue;
+            int begin=int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS)+slot]),end=int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS)+slot+1]);
+            for(int s=begin;s<end;s++)if(int(sourceWords[sourceField(STOCK_SPECIES_HANDLES)+s])==next){
+                amount=addQuantity(amount,longAt(routeField(ROUTE_SPECIES_AMOUNTS)+2*(7*s+direction)));break;
+            }
+        }
+        if(writing){candidateWords[targetField(STOCK_SPECIES_HANDLES)+outputStart+count]=uint(next);
+            putLong(targetField(STOCK_SPECIES_AMOUNTS)+2*(outputStart+count),amount);
+            int64_t unit=longAt(headerWord(H_SPECIES_MASS)+2*next);
+            if(unit<0l || (unit>0l && amount>MAX_LONG/unit))atomicOr(errors,ERROR_INVALID_INVENTORY);
+            else representedMass=addQuantity(representedMass,amount*unit);
+        }
+        last=next;count++;
     }
     return count;
 }
-
-// Publish exact volumes in the same invocation that reads the accepted routes.
-// Overflow demand is accumulated even when this candidate has insufficient limb capacity.
-void gatherVolume(int stock, DyadicTerm items[7]) {
-    int count, exponent;
-    uvec4 limbs;
-    if (dyadicPositiveSum(items, 7, count, exponent, limbs)) {
-        candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] = uint(count);
-        candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock] = uint(exponent);
-        for (int word = 0; word < count; word++)
-            candidateWords[targetField(STOCK_VOLUME_LIMBS) + 4 * stock + word] = limbs[word];
-        return;
+void gatherVolume(int stock){
+    int n=memberCount(stock),minimum=2147483647;int64_t highest=int64_t(-9223372036854775807L);
+    for(int i=0;i<n;i++){DyadicTerm t=memberVolume(stock,i);if(!dyadicPresent(t))continue;
+        minimum=min(minimum,t.exponent);uint top=dyadicWord(t.bank,t.offset+t.count-1);
+        highest=max(highest,int64_t(t.exponent)+32l*int64_t(t.count-1)+int64_t(findMSB(top)));}
+    if(minimum==2147483647)return;
+    if(highest-int64_t(minimum)>int64_t(DYADIC_MAX_SIGNIFICAND_BITS+31)){atomicOr(errors,ERROR_INVALID_INVENTORY);return;}
+    int limit=int((highest-int64_t(minimum))/32l)+2,first=-1,last=-1,shift=0;uint top=0u;uint64_t carry=0ul;
+    for(int pos=0;pos<limit;pos++){
+        uint64_t sum=carry;for(int i=0;i<n;i++)sum+=uint64_t(dyadicAlignedWord(memberVolume(stock,i),pos,minimum));
+        uint value=uint(sum);carry=sum>>32;
+        if(value!=0u){if(first<0){first=pos;shift=findLSB(value);}last=pos;top=value;}
     }
-    DyadicMeasure result = dyadicMeasure(items, 7);
-    if (result.status == DYADIC_ZERO)
-        return;
-    if (result.status != DYADIC_POSITIVE) {
-        atomicOr(errors, ERROR_INVALID_INVENTORY);
-        return;
+    if(first<0)return;
+    int64_t bits=32l*int64_t(last-first)+int64_t(findMSB(top)-shift+1),exp=int64_t(minimum)+32l*int64_t(first)+int64_t(shift);
+    if(bits>int64_t(DYADIC_MAX_SIGNIFICAND_BITS)||exp>2147483647l||exp<(-2147483647l-1l)){atomicOr(errors,ERROR_INVALID_INVENTORY);return;}
+    uint count=uint((bits+31l)>>5),offset=count<=4u?4u*uint(stock):atomicAdd(candidateWords[targetField(STOCK_VOLUME_OFFSETS)+headerWord(H_STOCK_CAPACITY)],count);
+    candidateWords[targetField(STOCK_VOLUME_OFFSETS)+stock]=offset;candidateWords[targetField(STOCK_VOLUME_COUNTS)+stock]=count;
+    candidateWords[targetField(STOCK_VOLUME_EXPONENTS)+stock]=uint(int(exp));
+    if(offset>uint(headerWord(H_LIMB_CAPACITY))||count>uint(headerWord(H_LIMB_CAPACITY))-offset)return;
+    carry=0ul;uint previous=0u;
+    for(int pos=0;pos<=last+1;pos++){
+        uint64_t sum=carry;for(int i=0;i<n;i++)sum+=uint64_t(dyadicAlignedWord(memberVolume(stock,i),pos,minimum));
+        uint value=uint(sum);carry=sum>>32;
+        if(pos>first){int outputIndex=pos-first-1;if(uint(outputIndex)<count)
+            candidateWords[targetField(STOCK_VOLUME_LIMBS)+int(offset)+outputIndex]=shift==0?previous:(previous>>shift)|(value<<(32-shift));}
+        previous=value;
     }
-    uint countWords = uint(result.words),
-         offset = countWords <= 4u
-                      ? 4u * uint(stock)
-                      : atomicAdd(candidateWords[targetField(STOCK_VOLUME_OFFSETS) + headerWord(H_STOCK_CAPACITY)], countWords);
-    candidateWords[targetField(STOCK_VOLUME_OFFSETS) + stock] = offset;
-    candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] = countWords;
-    candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock] = uint(result.exponent);
-    // Finish publishes the complete allocator demand and rejects the private candidate.
-    // No global error is raised here, so all rows still contribute their true overflow sizes.
-    if (offset > uint(headerWord(H_LIMB_CAPACITY)) || countWords > uint(headerWord(H_LIMB_CAPACITY)) - offset)
-        return;
-    dyadicWriteSum(items, 7, result, targetField(STOCK_VOLUME_LIMBS) + int(offset));
+}
+void gatherSlot(int stock){
+    int cell=stock/headerWord(H_MATERIAL_COUNT),n=memberCount(stock);int64_t mass=0l;uint mixture=0u;precise double energy=0.0;
+    candidateWords[targetField(STOCK_SUPPORT_MASKS)+stock]=(~candidateWords[headerWord(H_FIXED_MASK)+cell])&255u;
+    for(int i=0;i<n;i++){
+        int slot,direction,entry;member(stock,i,slot,direction,entry);if(entry<0)continue;
+        mass=addQuantity(mass,longAt(routeField(ROUTE_MASS_UNITS)+2*entry));mixture|=candidateWords[routeField(ROUTE_MIXTURE_PRESENT)+entry];
+        precise double part=doubleAt(routeField(ROUTE_ENERGY_BITS)+2*entry),next=energy+part,virtualPart=next-energy;
+        putDouble(headerWord(H_ENERGY_REMAINDERS)+2*(7*slot+direction),(energy-(next-virtualPart))+(part-virtualPart));
+        if(isnan(part)||isinf(part)||isnan(next)||isinf(next))atomicOr(errors,ERROR_INVALID_INVENTORY);energy=next;
+    }
+    gatherVolume(stock);putLong(targetField(STOCK_MASS_UNITS)+2*stock,mass);putDouble(targetField(STOCK_ENERGY_BITS)+2*stock,energy);
+    candidateWords[targetField(STOCK_MIXTURE_PRESENT)+stock]=mixture;int64_t unused;
+    candidateWords[headerWord(H_SPECIES_COUNTS)+stock]=uint(mergeSpecies(stock,0,false,unused));
 }
 
-void gatherStock(int stock, int cellId, int members[7]) {
-    candidateWords[targetField(STOCK_SUPPORT_MASKS) + stock] = (~candidateWords[headerWord(H_FIXED_MASK) + cellId]) & 255u;
-    int64_t massUnits = int64_t(0);
-    uint mixturePresent = 0u;
-    precise double energy = 0.0;
-    DyadicTerm volumeTerms[7];
-    for (int i = 0; i < 7; i++) {
-        volumeTerms[i] = DyadicTerm(1, 0, 0, 0, 0);
-        int routeEntry = members[i];
-        candidateWords[headerWord(H_MEMBERS) + 7 * stock + i] = uint(routeEntry);
-        if (routeEntry < 0)
-            continue;
-        massUnits = addQuantity(massUnits, longAt(routeField(ROUTE_MASS_UNITS) + 2 * routeEntry));
-        mixturePresent |= candidateWords[routeField(ROUTE_MIXTURE_PRESENT) + routeEntry];
-        precise double routeEnergy = doubleAt(routeField(ROUTE_ENERGY_BITS) + 2 * routeEntry);
-        precise double nextEnergy = energy + routeEnergy;
-        precise double virtualValue = nextEnergy - energy;
-        precise double remainder = (energy - (nextEnergy - virtualValue)) + (routeEnergy - virtualValue);
-        putDouble(headerWord(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, remainder);
-        energy = nextEnergy;
-        if (isnan(routeEnergy) || isinf(routeEnergy) || isnan(nextEnergy) || isinf(nextEnergy))
-            atomicOr(errors, ERROR_INVALID_INVENTORY);
-        int descriptorAddress = routeField(ROUTE_VOLUME_DESCRIPTORS) + DYADIC_DESCRIPTOR_WORDS * routeEntry;
-        volumeTerms[i] = DyadicTerm(int(candidateWords[descriptorAddress]), int(candidateWords[descriptorAddress + DYADIC_OFFSET]),
-                              int(candidateWords[descriptorAddress + DYADIC_COUNT]), int(candidateWords[descriptorAddress + DYADIC_EXPONENT]),
-                              int(candidateWords[descriptorAddress + DYADIC_SIGN]));
-    }
-    gatherVolume(stock, volumeTerms);
-    putLong(targetField(STOCK_MASS_UNITS) + 2 * stock, massUnits);
-    putDouble(targetField(STOCK_ENERGY_BITS) + 2 * stock, energy);
-    candidateWords[targetField(STOCK_MIXTURE_PRESENT) + stock] = mixturePresent;
-    int64_t unused;
-    candidateWords[headerWord(H_SPECIES_COUNTS) + stock] = uint(mergeSpecies(stock, members, 0, false, unused));
-}
-
-// Fixed slots gather the same material from the retained route and six actual neighbors.
-void gatherSlot(int targetSlot) {
-    int routeEntries[7], sourceSlots[7], routeDirections[7];
-    sourceNeighbors(targetSlot, sourceSlots, routeDirections);
-    for (int i = 0; i < 7; i++) {
-        routeEntries[i] = -1;
-        if (sourceSlots[i] < 0)
-            continue;
-        int routeEntry = routeIndex(sourceSlots[i], routeDirections[i]);
-        if (routeEntry < 0)
-            continue;
-        int volumeSign = int(candidateWords[routeField(ROUTE_VOLUME_DESCRIPTORS) + DYADIC_DESCRIPTOR_WORDS * routeEntry + DYADIC_SIGN]);
-        if (volumeSign < 0) {
-            atomicOr(errors, ERROR_INVALID_INVENTORY);
-            return;
-        }
-        if (volumeSign > 0)
-            routeEntries[i] = routeEntry;
-    }
-    gatherStock(targetSlot, targetSlot / headerWord(H_MATERIAL_COUNT), routeEntries);
-}
 uint volumeWord(int begin, int count, int index) {
     return index >= 0 && index < count ? candidateWords[targetField(STOCK_VOLUME_LIMBS) + begin + index] : 0u;
 }
@@ -338,11 +268,8 @@ void finishStock(int stock) {
     int begin = int(candidateWords[targetField(STOCK_VOLUME_OFFSETS) + stock]),
         end = begin + int(candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock]);
     putDouble(targetField(STOCK_NUMERIC_VOLUMES) + 2 * stock, numericVolume(begin, end - begin, exponent));
-    int members[7];
-    for (int i = 0; i < 7; i++)
-        members[i] = int(candidateWords[headerWord(H_MEMBERS) + 7 * stock + i]);
     int64_t represented;
-    mergeSpecies(stock, members, int(candidateWords[targetField(STOCK_SPECIES_OFFSETS) + stock]), true, represented);
+    mergeSpecies(stock, int(candidateWords[targetField(STOCK_SPECIES_OFFSETS) + stock]), true, represented);
     int64_t mass = longAt(targetField(STOCK_MASS_UNITS) + 2 * stock);
     putLong(targetField(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock,
             candidateWords[targetField(STOCK_MIXTURE_PRESENT) + stock] != 0u ? mass - represented : int64_t(0));

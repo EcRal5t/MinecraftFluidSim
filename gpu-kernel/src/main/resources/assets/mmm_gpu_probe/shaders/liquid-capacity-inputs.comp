@@ -53,7 +53,7 @@ void main() {
         double area = numberAt(h(H_FACES) + FACE_RECORD_WORDS * face + FACE_AREA_WORD);
         double flux = numberAt(h(H_FLUXES) + FLUX_RECORD_WORDS * face + FLUX_LIQUID_WORD);
         if (!finiteNumber(area) || !finiteNumber(flux)) { atomicOr(errors, ERROR_INVALID_ROUTE); return; }
-        int peer = gridNeighbor(cell, side);
+        int peer = int(words[h(H_ROUTE_TARGETS) + 6 * cell + side]);
         bool connected = cellEnabled && peer >= 0 && area > 0.0 &&
             (h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u);
         if (connected) {

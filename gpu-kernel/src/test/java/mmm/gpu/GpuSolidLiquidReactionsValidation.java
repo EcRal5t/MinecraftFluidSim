@@ -52,7 +52,7 @@ public final class GpuSolidLiquidReactionsValidation {
             var flowCells=new VulkanLiquidStateLayout.Column(align(cursor,a),4*cells,8);cursor=flowCells.offset()+flowCells.bytes();
             int faces=nx+ny+nz;var flowFaces=new VulkanLiquidStateLayout.Column(align(cursor,a),4*faces,8);cursor=flowFaces.offset()+flowFaces.bytes();
             var viscosity=new VulkanLiquidStateLayout.Column(align(cursor,a),liquid.slotCount(),8);cursor=viscosity.offset()+viscosity.bytes();
-            var solidGeometry=new VulkanGranularGeometry.Layout(solid,fixed,cursor,a);
+            var solidGeometry=new VulkanGranularGeometry.Layout(solid,fixed,masks,cursor,a);
             var phaseTransitions=new VulkanGranularTransitions.Layout(solid,solidGeometry,flowCells,flowFaces,liquid,masks,viscosity,solidGeometry.endOffset(),a);
             var configuration=new VulkanRegionReactions.Configuration(VulkanReactionDefinitions.fromRegistries(chemical,granular,thermal,gas),fluid,chemical,VulkanReactionProgressLayout.State.empty(),gravity,true,thermal,gas);
             var regionLayout=VulkanRegionReactions.layout(configuration,liquid,liquidCaloric,new VulkanRegionReactions.SolidInputs(phaseTransitions,solidCaloric,granular,h,-1),phaseTransitions.endOffset(),a);

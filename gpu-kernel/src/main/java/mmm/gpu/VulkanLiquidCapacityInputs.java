@@ -15,14 +15,14 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
         SIZE_X, SIZE_Y, SIZE_Z, CELL_COUNT, QUANTUM_EXPONENT, QUANTIZED,
         TOTAL_SIGNS, TOTAL_EXPONENTS, MASKS, OCCUPIED, FACES, FLUXES,
         PHYSICAL_PER_REFERENCE, PHYSICAL_SCALE_STRIDE, ACCEPTED, TOTAL_OFFSETS, TOTAL_LIMBS,
-        ACTIVITY_CELLS, ACTIVITY_FACES
+        ACTIVITY_CELLS, ACTIVITY_FACES, ROUTE_TARGETS
     }
     private static String headerDefines() {
         return VulkanShaderLayout.fields("H_", Header.values());
     }
     record Layout(VulkanLiquidCellVolumes.Layout volumes, VulkanLiquidStateLayout.Column accepted,
                   int masksWordOffset, int occupiedWordOffset, int facesWordOffset, int fluxesWordOffset,
-                  int physicalPerReferenceWordOffset, int physicalScaleStride, int activityCellsWordOffset, int activityFacesWordOffset,
+                  int physicalPerReferenceWordOffset, int physicalScaleStride, int activityCellsWordOffset, int activityFacesWordOffset, int routeTargetsWordOffset,
                   VulkanLiquidStateLayout.Column header, long endOffset) {
         int headerWordOffset() { return word(header); }
         void initializeHeader(ByteBuffer destination) {
@@ -50,6 +50,7 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
             data[Header.PHYSICAL_SCALE_STRIDE.ordinal()] = physicalScaleStride;
             data[Header.ACTIVITY_CELLS.ordinal()] = activityCellsWordOffset;
             data[Header.ACTIVITY_FACES.ordinal()] = activityFacesWordOffset;
+            data[Header.ROUTE_TARGETS.ordinal()] = routeTargetsWordOffset;
             data[Header.ACCEPTED.ordinal()] = word(accepted);
             for (int i = 0; i < data.length; i++) bytes.putInt(4 * i, data[i]);
             return bytes;
@@ -57,7 +58,7 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
     }
     static Layout layout(VulkanLiquidCellVolumes.Layout volumes,
                          int masksWordOffset, int occupiedWordOffset, int facesWordOffset, int fluxesWordOffset,
-                         int physicalPerReferenceWordOffset, int physicalScaleStride, int activityCellsWordOffset, int activityFacesWordOffset,
+                         int physicalPerReferenceWordOffset, int physicalScaleStride, int activityCellsWordOffset, int activityFacesWordOffset, int routeTargetsWordOffset,
                          long scratchBase, long alignment) {
         if (physicalPerReferenceWordOffset < 0 || physicalScaleStride < 1 ||
                 scratchBase < 0 || alignment < 8 || (alignment & (alignment - 1)) != 0)
@@ -70,7 +71,7 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
         var header = new VulkanLiquidStateLayout.Column(headerBase, Header.values().length, 4);
         long end = Math.addExact(Math.addExact(headerBase, header.bindingBytes()), alignment - 1) & -alignment;
         return new Layout(volumes, accepted, masksWordOffset, occupiedWordOffset, facesWordOffset, fluxesWordOffset,
-                physicalPerReferenceWordOffset, physicalScaleStride, activityCellsWordOffset, activityFacesWordOffset, header, end);
+                physicalPerReferenceWordOffset, physicalScaleStride, activityCellsWordOffset, activityFacesWordOffset, routeTargetsWordOffset, header, end);
     }
     private final FlipKernelBindings bindings;
     VulkanLiquidCapacityInputs(VulkanDeviceContext context) { bindings = new FlipKernelBindings(context, 2, shader(), 4); }

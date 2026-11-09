@@ -119,10 +119,7 @@ public final class PistonWorldGameTest {
         }
         for(var stock:state.liquid().physicalStocks()) {
             int cell=stock.key().cell(),x=grid.x(cell),y=grid.y(cell),z=grid.z(cell);liquidU+=stock.internalEnergy();
-            System.out.println("piston_liquid stage="+stage+" cell="+x+","+y+","+z+" mass="+stock.massUnits()
-                    +" U="+stock.internalEnergy()+" T="+host.thermalTemperatureInCell(x,y,z)
-                    +" pressure="+(host.pressure(x,y,z)+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA)
-                    +" gasMass="+gas.cells().get(cell).totalMassUnits()+" gasU="+gas.energyAt(cell));
+
         }
         var function=new mmm.thermal.ThermalStateFunction(state.thermalRegistry());
         var phases=new java.util.ArrayList<String>();

@@ -75,6 +75,8 @@ final class VulkanRegionThermal implements AutoCloseable {
         var causes=new ArrayList<String>();
         if((status&128)!=0)causes.add("gas caloric");
         if((status&256)!=0)causes.add("thermal conduction");
+        if((status&512)!=0)causes.add("energy ledger");
+        if((status&1024)!=0)causes.add("mechanical body connectivity");
         if((status&16384)!=0)causes.add("liquid or device caloric");
         return causes.isEmpty()?"":" ("+String.join(", ",causes)+")";
     }

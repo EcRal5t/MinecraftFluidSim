@@ -35,6 +35,16 @@ void exactAdd(double a,double b,out double sum,out double remainder){
 int routePart(int cell,int side){return localGasRouteIndex(cell,0,side,headerWord(0),1);}
 int componentPart(int cell,int component,int side){return localGasRouteIndex(cell,component,side,headerWord(0),headerWord(1));}
 int speciesPart(int cell,int species,int side){return localGasRouteIndex(cell,species,side,headerWord(0),headerWord(2));}
+int routeTarget(int cell,int side,ivec3 size){return int(words[headerWord(4)+6*cell+side]);}
+bool sourceClosing(int cell){return readDouble(sourceEosWord(GAS_H_STATES)+18*cell+4)>0.0LF&&headerWord(57)>=0&&headerWord(58)>=0&&
+    (int64_t(bitCount((~words[headerWord(57)+cell])&255u))<<21)==signedQuantity(headerWord(58)+2*cell);}
+bool externalRoute(int cell,int side,ivec3 size){
+    int target=routeTarget(cell,side,size);
+    return target==-2 || (target==-1 && localGasNeighbor(cell,side,size)<0 && headerWord(5)==0 && !sourceClosing(cell));
+}
+int inboundCount(int cell){return int(words[headerWord(14)+cell+1]-words[headerWord(14)+cell]);}
+int inboundSource(int cell,int index,ivec3 size){return int(words[headerWord(15)+int(words[headerWord(14)+cell])+index]);}
+int inboundSide(int cell,int index){return int(words[headerWord(49)+int(words[headerWord(14)+cell])+index]);}
 uint64_t ambientData(int i){return quantity(field(F_AMBIENT_DATA)+2*i);}
 uint64_t ambientComponent(uint64_t n,int component){
     int count=headerWord(6);
@@ -62,29 +72,30 @@ void split(int cell){
     double dt=packDouble2x32(uvec2(p.valueLow,p.valueHigh)),volume=readDouble(headerWord(48)+2*(7*cell+2)),temperature=readDouble(sourceEosWord(GAS_H_STATES)+18*cell);
     putDouble(field(F_OLD_VOLUME)+2*cell,volume);
     ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));
+    bool closing=sourceClosing(cell);
     double outflow[6],energy[6],totalOut=0.0;uint64_t weights[6],moved[6];
     for(int side=0;side<6;side++){
         int face=localGasFace(cell,side,size),other=localGasNeighbor(cell,side,size);
         double velocity=readDouble(headerWord(51)+2*face*headerWord(59));
         double h=readDouble(p.header+12),open=readDouble(headerWord(52)+2*(headerWord(59)*face+2));
         double area=open*h*h;
-        bool routeEnabled=(other>=0 || headerWord(5)==0) && ((headerWord(54)<0 || (words[headerWord(54)+cell]!=0u && (other<0 || words[headerWord(54)+other]!=0u))) &&
+        int target=routeTarget(cell,side,size);
+        bool routeEnabled=(other>=0?target>=0:headerWord(5)==0) && ((headerWord(54)<0 || (words[headerWord(54)+cell]!=0u && (other<0 || words[headerWord(54)+other]!=0u))) &&
              (headerWord(55)<0 || words[headerWord(55)+face]!=0u));
         double outward=((side&1)==0?-velocity:velocity);
         double total=readDouble(headerWord(56)+4*face),liquid=readDouble(headerWord(56)+4*face+2);
         double gasSweep=other>=0?max(0.0LF,abs(total)-abs(liquid))*h*h*h:max(0.0LF,outward)*area*dt;
-        outflow[side]=routeEnabled && outward>0.0LF?gasSweep:0.0LF;
-        double inStandard=routeEnabled && other<0?min(max(0.0LF,-outward)*dt,h)*area*1e9LF*293.15LF/readDouble(p.header+10):0.0LF;
+        outflow[side]=!closing && routeEnabled && outward>0.0LF?gasSweep:0.0LF;
+        double inStandard=!closing && routeEnabled && other<0?min(max(0.0LF,-outward)*dt,h)*area*1e9LF*293.15LF/readDouble(p.header+10):0.0LF;
         if(!isFinite(inStandard)||inStandard>double(LIMIT)){reportInvalid();return;}
         putQuantity(field(F_INFLOW_NANOS)+2*routePart(cell,side),uint64_t(floor(inStandard)));
+        putDouble(field(F_GATHER_ROUNDOFF)+42*headerWord(0)+2*routePart(cell,side),0.0LF);
         if(!isFinite(outflow[side])||area<0.0){reportInvalid();return;}
         totalOut+=outflow[side];energy[side]=0.0;moved[side]=uint64_t(0);
     }
     if(!isFinite(volume)||volume<0.0){reportInvalid();return;}
     if(totalOut>volume&&totalOut>0.0)for(int side=0;side<6;side++)outflow[side]*=volume/totalOut;
-    bool closing=readDouble(sourceEosWord(GAS_H_STATES)+18*cell+4)>0.0LF&&headerWord(57)>=0&&headerWord(58)>=0&&
-        (int64_t(bitCount((~words[headerWord(57)+cell])&255u))<<21)==signedQuantity(headerWord(58)+2*cell);
-    int finalRoute=-1;if(closing&&volume>0.0LF)for(int side=0;side<6;side++)if(outflow[side]>0.0LF)finalRoute=side;
+    int finalRoute=-1;if(closing&&volume>0.0LF)for(int side=0;side<6;side++)if(routeTarget(cell,side,size)!=-1){finalRoute=side;break;}
     if(closing&&volume>0.0LF&&finalRoute<0){reportInvalid();return;}
     uint64_t remainingWeight=SCALE;
     for(int side=0;side<6;side++){
@@ -165,10 +176,7 @@ void gather(int cell){
             uint64_t outN=incoming(F_NANOS,cell,component,side),outM=incoming(F_MASS,cell,component,side);
             if(outN>n||outM>m){reportInvalid();return;}n-=outN;m-=outM;outMass=plus(outMass,outM);
             residual=signedPlus(residual,-signedQuantity(field(F_RESIDUAL)+2*componentPart(cell,component,side)));
-            int other=localGasNeighbor(cell,side,size);if(other>=0){
-                n=plus(n,incoming(F_NANOS,other,component,side^1));m=plus(m,incoming(F_MASS,other,component,side^1));
-                residual=signedPlus(residual,signedQuantity(field(F_RESIDUAL)+2*componentPart(other,component,side^1)));
-            }else if(headerWord(5)==0){
+            if(externalRoute(cell,side,size)){
                 uint64_t added=ambientComponent(quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),component),mass=ambientMass(added,component);
                 if(mass==uint64_t(0))added=uint64_t(0);
                 int64_t extra=ambientResidual(added,component,mass);
@@ -186,6 +194,11 @@ void gather(int cell){
                 if(mass>uint64_t(0)){double specific,capacity;material(component,ambientTemperature,specific,capacity);externalIn+=double(mass)*1e-10LF*specific;}
             }
         }
+        for(int index=0;index<inboundCount(cell);index++){
+            int source=inboundSource(cell,index,size);if(source<0)continue;int side=inboundSide(cell,index);
+            n=plus(n,incoming(F_NANOS,source,component,side));m=plus(m,incoming(F_MASS,source,component,side));
+            residual=signedPlus(residual,signedQuantity(field(F_RESIDUAL)+2*componentPart(source,component,side)));
+        }
         if((n==uint64_t(0))!=(m==uint64_t(0))){reportInvalid();return;}
         targetMass=plus(targetMass,m);putQuantity(gasField(G_STANDARD_VOLUME_NANOS)+2*i,n);putQuantity(gasField(G_MASS_UNITS)+2*i,m);putQuantity(gasField(G_MASS_RESIDUAL_UNITS)+2*i,uint64_t(residual));
     }
@@ -194,8 +207,7 @@ void gather(int cell){
         int i=cell*stride+local;uint64_t q=quantity(gasField(G_SPECIES_AMOUNTS)+2*i);
         for(int side=0;side<6;side++){
             uint64_t sent=quantity(field(F_SPECIES)+2*speciesPart(cell,local,side));if(sent>q){reportInvalid();return;}q-=sent;
-            int other=localGasNeighbor(cell,side,size);if(other>=0)q=plus(q,quantity(field(F_SPECIES)+2*speciesPart(other,local,side^1)));
-            else if(headerWord(5)==0) {
+            if(externalRoute(cell,side,size)) {
                 int component=0;while(component+1<components && local>=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+cell*components+component+1])-cell*stride)component++;
                 int entry=cell*stride+local,handle=int(words[gasField(G_SPECIES_HANDLES)+entry]);
                 uint64_t addedN=ambientComponent(quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),component);
@@ -206,6 +218,10 @@ void gather(int cell){
                 externalIn+=double(added)*readDouble(sourceEosWord(GAS_H_SPECIES_REFERENCE)+2*(component*sourceEosWord(GAS_H_SPECIES_STRIDE)+handle));
             }
         }
+        for(int index=0;index<inboundCount(cell);index++){
+            int source=inboundSource(cell,index,size);if(source<0)continue;
+            q=plus(q,quantity(field(F_SPECIES)+2*speciesPart(source,local,inboundSide(cell,index))));
+        }
         putQuantity(gasField(G_SPECIES_AMOUNTS)+2*i,q);
     }
     double outEnergy=0.0,inEnergy=0.0;uint64_t oldMass=quantity(field(F_OLD_MASS)+2*cell);
@@ -215,14 +231,17 @@ void gather(int cell){
         double next,remainder,part=readDouble(field(F_ENERGY)+2*routePart(cell,side));
         exactAdd(outEnergy,part,next,remainder);outEnergy=next;
         putDouble(errorBase+2*side,emptied?0.0LF:remainder);
-        int other=localGasNeighbor(cell,side,size);
-        if(other>=0){
-            exactAdd(inEnergy,readDouble(field(F_ENERGY)+2*routePart(other,side^1)),next,remainder);inEnergy=next;
-            putDouble(errorBase+2*(6+side),-remainder);putDouble(errorBase+2*(12+side),0.0LF);
-        }else{
+        putDouble(errorBase+2*(6+side),0.0LF);
+        if(externalRoute(cell,side,size)){
             exactAdd(externalOut,part,next,remainder);externalOut=next;
-            putDouble(errorBase+2*(6+side),0.0LF);putDouble(errorBase+2*(12+side),-remainder);
-        }
+            putDouble(errorBase+2*(12+side),-remainder);
+        }else putDouble(errorBase+2*(12+side),0.0LF);
+    }
+    for(int index=0;index<inboundCount(cell);index++){
+        int source=inboundSource(cell,index,size);if(source<0)continue;int side=inboundSide(cell,index);
+        double next,remainder;
+        exactAdd(inEnergy,readDouble(field(F_ENERGY)+2*routePart(source,side)),next,remainder);inEnergy=next;
+        putDouble(field(F_GATHER_ROUNDOFF)+42*headerWord(0)+2*routePart(source,side),-remainder);
     }
     putDouble(field(F_EXTERNAL_SOURCE_ENERGY)+2*cell,externalIn);putDouble(field(F_EXTERNAL_SINK_ENERGY)+2*cell,externalOut);
     double next,remainder;exactAdd(inEnergy,externalIn,next,remainder);inEnergy=next;putDouble(errorBase+36,-remainder);
@@ -237,14 +256,16 @@ void primalMass(int face){
     ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62)),ends=localGasFaceEndpoints(face,size);
     int64_t amount=int64_t(0);
     if(ends.x>=0&&ends.y>=0)for(int component=0;component<headerWord(1);component++){
-        amount=signedPlus(amount,signedQuantity(field(F_MASS)+2*componentPart(ends.x,component,2*ends.z+1)));
-        amount=signedPlus(amount,-signedQuantity(field(F_MASS)+2*componentPart(ends.y,component,2*ends.z)));
+        if(!sourceClosing(ends.x)&&routeTarget(ends.x,2*ends.z+1,size)==ends.y)
+            amount=signedPlus(amount,signedQuantity(field(F_MASS)+2*componentPart(ends.x,component,2*ends.z+1)));
+        if(!sourceClosing(ends.y)&&routeTarget(ends.y,2*ends.z,size)==ends.x)
+            amount=signedPlus(amount,-signedQuantity(field(F_MASS)+2*componentPart(ends.y,component,2*ends.z)));
     }
     if(ends.x<0 || ends.y<0){
         int cell=max(ends.x,ends.y),side=2*ends.z+(ends.y<0?1:0);int64_t outward=int64_t(0),inward=int64_t(0);
         uint64_t n=quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side));
         for(int component=0;component<headerWord(1);component++){
-            outward=signedPlus(outward,signedQuantity(field(F_MASS)+2*componentPart(cell,component,side)));
+            if(!sourceClosing(cell))outward=signedPlus(outward,signedQuantity(field(F_MASS)+2*componentPart(cell,component,side)));
             inward=signedPlus(inward,int64_t(ambientMass(ambientComponent(n,component),component)));
         }
         int direction=ends.y<0?1:-1;amount=int64_t(direction)*(outward-inward);
@@ -290,9 +311,8 @@ void applyPressureWork(int cell){
     }
     ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));double outgoing=0.0,incoming=0.0,externalVolume=0.0;
     for(int side=0;side<6;side++){
-        outgoing+=readDouble(field(F_VOLUME)+2*routePart(cell,side));int other=localGasNeighbor(cell,side,size);
-        if(other>=0)incoming+=readDouble(field(F_VOLUME)+2*routePart(other,side^1));
-        else {
+        outgoing+=readDouble(field(F_VOLUME)+2*routePart(cell,side));
+        if(externalRoute(cell,side,size)) {
             uint64_t offered=quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),accepted=uint64_t(0);
             for(int component=0;component<headerWord(1);component++){
                 uint64_t part=ambientComponent(offered,component);
@@ -302,6 +322,10 @@ void applyPressureWork(int cell){
             incoming+=received;
             externalVolume+=received-readDouble(field(F_VOLUME)+2*routePart(cell,side));
         }
+    }
+    for(int index=0;index<inboundCount(cell);index++){
+        int source=inboundSource(cell,index,size);if(source<0)continue;
+        incoming+=readDouble(field(F_VOLUME)+2*routePart(source,inboundSide(cell,index)));
     }
     putDouble(field(F_EXTERNAL_PRESSURE_WORK)+2*cell,(MIXTURE_PRESSURE_LIMIT-MIXTURE_BULK)*externalVolume);
     int nextMixture=int(p.valueLow);double oldVolume=readDouble(field(F_OLD_VOLUME)+2*cell),nextVolume=readDouble(nextMixture+2*(7*cell+2));

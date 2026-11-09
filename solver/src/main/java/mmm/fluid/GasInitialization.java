@@ -45,7 +45,7 @@ final class GasInitialization {
 		domain.domainFlowFields.ensureInventoryGrid(); long[] occupied = currentOccupied();
 		if (!groups.isEmpty()) {
 			domain.domainCapabilities.validateCoherentRestoreCapacity(groups);
-			var occupancy = new GranularCouplingFields(domain.grid,domain.config.cellSize());
+			var occupancy = new GranularCouplingFields(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask);
 			long[] fixed = new long[domain.cellCount];
 			for (var group : groups) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
 			occupancy.setFixedCellSvq(fixed);

@@ -17,7 +17,6 @@ void store(int a,double v){if(isnan(v)||isinf(v))atomicOr(errors,ERROR_MECHANICA
 int64_t oldQuantity(int a){return int64_t(uint64_t(source[a])|(uint64_t(source[a+1])<<32));}
 int64_t quantity(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
 int64_t addMass(int64_t a,int64_t b){if(b<int64_t(0)||a>int64_t(0x7fffffffffffffffUL)-b){atomicOr(errors,ERROR_MECHANICAL_ENERGY);return a;}return a+b;}
-int incomingSource(int c,int slot){return slot==0?c:gridNeighbor(c,(slot-1)^1);}
 void splitSourceHeat(int cell){
  int first=int(source[src(L_CELL_OFFSETS)+cell]),last=int(source[src(L_CELL_OFFSETS)+cell+1]);int64_t total=int64_t(0),accepted=int64_t(0);int finalRoute=-1;
  for(int stock=first;stock<last;stock++){total=addMass(total,oldQuantity(src(L_MASS_UNITS)+2*stock));for(int route=int(words[headerValue(H_ROUTE_OFFSETS)+stock]);route<int(words[headerValue(H_ROUTE_OFFSETS)+stock+1]);route++){
@@ -29,7 +28,8 @@ void splitSourceHeat(int cell){
 }
 void gatherAndPostHeat(int cell){
  double heat=0.0;
- for(int slot=0;slot<7;slot++){int from=incomingSource(cell,slot);if(from<0)continue;
+ int begin=int(words[headerValue(H_IN_OFFSETS)+cell]),end=int(words[headerValue(H_IN_OFFSETS)+cell+1]);
+ for(int i=begin-1;i<end;i++){int from=i<begin?cell:int(words[headerValue(H_IN_SOURCES)+i]);int slot=i<begin?0:int(words[headerValue(H_IN_SIDES)+i])+1;
   for(int stock=int(source[src(L_CELL_OFFSETS)+from]);stock<int(source[src(L_CELL_OFFSETS)+from+1]);stock++)for(int route=int(words[headerValue(H_ROUTE_OFFSETS)+stock]);route<int(words[headerValue(H_ROUTE_OFFSETS)+stock+1]);route++)if(int(words[headerValue(H_ROUTE_SLOTS)+route])==slot)heat+=value(headerValue(H_ROUTE_HEAT)+2*route);}
  store(headerValue(H_CELL_HEAT)+2*cell,heat);
  int first=int(words[dst(L_CELL_OFFSETS)+cell]),last=int(words[dst(L_CELL_OFFSETS)+cell+1]),lastStock=-1;int64_t total=int64_t(0);

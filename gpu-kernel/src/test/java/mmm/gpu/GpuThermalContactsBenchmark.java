@@ -54,7 +54,7 @@ public final class GpuThermalContactsBenchmark {
             cursor[0]=coherent.endOffset();var cr=column(cursor,1,8,a);var cs=column(cursor,1,8,a);
             var coherentThermal=VulkanLiquidThermodynamics.layout(coherent,VulkanLiquidThermodynamics.tables(materials.subList(5,6)),word(cr),word(cs),1,cursor[0],a);
             var coherentGeometry=VulkanCoherentGeometry.layout(coherent,coherentThermal.endOffset(),a);
-            var granularGeometry=new VulkanGranularGeometry.Layout(solid,coherentGeometry.occupiedSvq(),coherentGeometry.endOffset(),a);
+            var granularGeometry=new VulkanGranularGeometry.Layout(solid,coherentGeometry.occupiedSvq(),geometry.masks(),coherentGeometry.endOffset(),a);
             String deviceFingerprint="0".repeat(64);double deviceInitialU=2*385*400;
             var body=new mmm.thermal.FiniteThermalBodyState(0,deviceFingerprint,"mmm:contacts_device_copper",mmm.units.Mass.fromKilograms(2),deviceInitialU);
             var deviceState=new mmm.thermal.FiniteThermalDeviceState("mmm:contacts","copper","mmm:contacts_device",body);

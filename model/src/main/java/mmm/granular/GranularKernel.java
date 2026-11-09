@@ -11,6 +11,7 @@ public final class GranularKernel {
 	private static final SignedDyadic HALF = SignedDyadic.of(.5), ONE = SignedDyadic.of(1, 0);
 	private final int[] size, base = new int[3], cells = new int[8];
 	private final SpatialGrid spatial;
+	private final java.util.function.IntUnaryOperator fixedMask;
 	private final SignedDyadic h;
 	private final boolean binary;
 	private final ExactRational rationalH;
@@ -30,6 +31,10 @@ public final class GranularKernel {
 		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize);
 	}
 	public GranularKernel(SpatialGrid spatial,double cellSize) {
+		this(spatial, cellSize, cell -> 0);
+	}
+	public GranularKernel(SpatialGrid spatial,double cellSize,java.util.function.IntUnaryOperator fixedMask) {
+		this.fixedMask = Objects.requireNonNull(fixedMask);
 		int sizeX=spatial.sizeX(),sizeY=spatial.sizeY(),sizeZ=spatial.sizeZ();
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0))
 			throw new IllegalArgumentException("Granular kernel dimensions are invalid");
@@ -80,13 +85,15 @@ public final class GranularKernel {
 			int cx = base[0] + ox, cy = base[1] + oy, cz = base[2] + oz;
 			if (cx < 0 || cy < 0 || cz < 0 || cx >= size[0] || cy >= size[1] || cz >= size[2]) continue;
 			int cell=spatial.cell(cx,cy,cz);if(cell<0)continue;
+			int open=8-Integer.bitCount(fixedMask.applyAsInt(cell)&255);
+			if(open==0)continue;
 			cells[count] = cell;
 			binaryRemainder[count] = null; rationalRemainder[count] = null;
 			if (binary) {
-				binaryQuota[count] = binaryWeight[0][ox].multiply(binaryWeight[1][oy]).multiply(binaryWeight[2][oz]).multiply(quantity);
+				binaryQuota[count] = binaryWeight[0][ox].multiply(binaryWeight[1][oy]).multiply(binaryWeight[2][oz]).multiply(SignedDyadic.of(open,-3)).multiply(quantity);
 				binarySum = binarySum.add(binaryQuota[count]);
 			} else {
-				rationalQuota[count] = rationalWeight[0][ox].multiply(rationalWeight[1][oy]).multiply(rationalWeight[2][oz]).multiply(signedSvq);
+				rationalQuota[count] = rationalWeight[0][ox].multiply(rationalWeight[1][oy]).multiply(rationalWeight[2][oz]).multiply(open).divide(8).multiply(signedSvq);
 				rationalSum = rationalSum.add(rationalQuota[count]);
 			}
 			count++;
@@ -124,11 +131,13 @@ public final class GranularKernel {
 			int cx = start[0] + ox, cy = start[1] + oy, cz = start[2] + oz;
 			if (cx < 0 || cy < 0 || cz < 0 || cx >= size[0] || cy >= size[1] || cz >= size[2]) continue;
 			int cell=spatial.cell(cx,cy,cz);if(cell<0)continue;
+			double openness=(8-Integer.bitCount(fixedMask.applyAsInt(cell)&255))/8.0;
+			if(openness==0)continue;
 			targetCells[count] = cell;
-			raw[count]=weight[0][ox]*weight[1][oy]*weight[2][oz];sum+=raw[count];
-			gx[count] = volume * derivative[0][ox] * weight[1][oy] * weight[2][oz];
-			gy[count] = volume * weight[0][ox] * derivative[1][oy] * weight[2][oz];
-			gz[count] = volume * weight[0][ox] * weight[1][oy] * derivative[2][oz];
+			raw[count]=openness*weight[0][ox]*weight[1][oy]*weight[2][oz];sum+=raw[count];
+			gx[count] = openness * volume * derivative[0][ox] * weight[1][oy] * weight[2][oz];
+			gy[count] = openness * volume * weight[0][ox] * derivative[1][oy] * weight[2][oz];
+			gz[count] = openness * volume * weight[0][ox] * weight[1][oy] * derivative[2][oz];
 			dxsum+=gx[count];dysum+=gy[count];dzsum+=gz[count];count++;
 		}
 		if(!(sum>0))throw new IllegalStateException("Granular gradient has no spatial support");

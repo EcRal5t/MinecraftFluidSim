@@ -104,6 +104,19 @@ void applyFace(int a){
   accepted=min(accepted,phaseRowMass(h(H_ROWS),donor)/massPer);
   double waterExact=double(dir)*double(accepted)*ratio+waterCarry;
   int64_t signedWater=int64_t(trunc(waterExact));
+  // A remaining species needs a real liquid mass carrier after the paired transfer.
+  if(accepted>0l && signedWater==0l && accepted*massPer==phaseRowMass(h(H_ROWS),donor)){
+   bool remains=false;
+   for(int s=0;s<h(H_SPECIES);s++){
+    int64_t taken=(s==s1?accepted*int64_t(n1):0l)+(s==s2?accepted*int64_t(n2):0l);
+    if(phaseRowSpecies(h(H_ROWS),donor,s)>taken){remains=true;break;}
+   }
+   if(remains){
+    accepted--;
+    waterExact=double(dir)*double(accepted)*ratio+waterCarry;
+    signedWater=int64_t(trunc(waterExact));
+   }
+  }
   if(abs(signedWater)>waterAvailable){atomicOr(errors,ERROR_DIFFUSION);continue;}
   double nextWater=waterExact-double(signedWater),nextResidual=accepted==target?(exact-double(dir)*double(target))*1e-6LF:0.0LF;
   if(slot<0&&(nextResidual!=0.0LF||nextWater!=0.0LF))slot=reservePending(a,r,material,int(words[rule+6]));

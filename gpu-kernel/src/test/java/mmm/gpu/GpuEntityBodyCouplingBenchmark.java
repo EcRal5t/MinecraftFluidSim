@@ -132,12 +132,14 @@ public final class GpuEntityBodyCouplingBenchmark {
         int faces=6;long alignment=Math.max(8,context.storageOffsetAlignment());long[] cursor={0};
         var geometry=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);
         var mixture=column(cursor,7,8,alignment);var masks=column(cursor,1,4,alignment);
-        var occupied=column(cursor,1,8,alignment);var gas=column(cursor,9,8,alignment);
+        var occupied=column(cursor,1,8,alignment);var gas=column(cursor,9,8,alignment);var activity=column(cursor,1,4,alignment);
         try(var kernel=new VulkanMixtureFlux(context)){
             for(boolean sealed:new boolean[]{false,true}){
-                var layout=new VulkanMixtureFlux.Layout(mmm.spatial.SpatialGrid.rectangular(1,1,1),geometry,flux,true,mixture,masks,occupied,gas,sealed,cursor[0],alignment);
+                var layout=new VulkanMixtureFlux.Layout(mmm.spatial.SpatialGrid.rectangular(1,1,1),geometry,flux,true,mixture,masks,occupied,gas,activity,sealed,cursor[0],alignment);
                 var initial=ByteBuffer.allocate(Math.toIntExact(layout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
                 initial.duplicate().position(Math.toIntExact(layout.header().offset())).put(layout.headerBytes());
+                VulkanMixtureFlux.initializeRoutes(initial,layout);initial.putInt(Math.toIntExact(activity.offset()),1);
+                if(!sealed)initial.putInt(Math.toIntExact(layout.outTarget.offset()+4),-2);
                 initial.putDouble(Math.toIntExact(mixture.offset()+16),.125);
                 initial.putDouble(Math.toIntExact(gas.offset()+16),1.0);
                 initial.putLong(Math.toIntExact(occupied.offset()),16777216L);
@@ -164,12 +166,13 @@ public final class GpuEntityBodyCouplingBenchmark {
         int side=3,cells=27,faces=3*4*3*3,center=13,face=mmm.spatial.SpatialGrid.rectangular(side,side,side).faceAt(2,1,1,0);long alignment=Math.max(8,context.storageOffsetAlignment());long[] cursor={0};
         var geometry=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);
         var mixture=column(cursor,7*cells,8,alignment);var masks=column(cursor,cells,4,alignment);
-        var occupied=column(cursor,cells,8,alignment);var gas=column(cursor,9*cells,8,alignment);
-        var layout=new VulkanMixtureFlux.Layout(mmm.spatial.SpatialGrid.rectangular(side,side,side),geometry,flux,true,mixture,masks,occupied,gas,true,cursor[0],alignment);
+        var occupied=column(cursor,cells,8,alignment);var gas=column(cursor,9*cells,8,alignment);var activity=column(cursor,cells,4,alignment);
+        var layout=new VulkanMixtureFlux.Layout(mmm.spatial.SpatialGrid.rectangular(side,side,side),geometry,flux,true,mixture,masks,occupied,gas,activity,true,cursor[0],alignment);
         try(var kernel=new VulkanMixtureFlux(context);var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024,mmm.spatial.SpatialGrid.rectangular(side,side,side))){
             for(boolean closed:new boolean[]{true,false}){
                 var initial=ByteBuffer.allocate(Math.toIntExact(layout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
                 initial.duplicate().position(Math.toIntExact(layout.header().offset())).put(layout.headerBytes());
+                VulkanMixtureFlux.initializeRoutes(initial,layout);for(int c=0;c<cells;c++)initial.putInt(Math.toIntExact(activity.offset()+4L*c),1);
                 for(int c=0;c<cells;c++)initial.putDouble(Math.toIntExact(mixture.offset()+8L*(7*c+2)),.125);
                 for(int f=0;f<faces;f++)initial.putDouble(Math.toIntExact(geometry.offset()+8L*(4*f)),1).putDouble(Math.toIntExact(geometry.offset()+8L*(4*f+2)),1);
                 initial.putDouble(Math.toIntExact(geometry.offset()+8L*(4*face+1)),1);

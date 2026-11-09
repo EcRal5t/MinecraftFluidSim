@@ -18,7 +18,7 @@ public final class GpuGranularTransitionsBenchmark {
             var state=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(n,n,n),16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),a);
             long cursor=state.endOffset();var coherent=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,8);cursor=coherent.offset()+coherent.bytes();
             var masks=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,4);cursor=masks.offset()+masks.bytes();
-            var occupancy=new VulkanGranularGeometry.Layout(state,coherent,cursor,a);cursor=occupancy.endOffset();
+            var occupancy=new VulkanGranularGeometry.Layout(state,coherent,masks,cursor,a);cursor=occupancy.endOffset();
             var cellData=new VulkanLiquidStateLayout.Column(align(cursor,a),4*cells,8);cursor=cellData.offset()+cellData.bytes();
             int faceCount=3*(n+1)*n*n;var faces=new VulkanLiquidStateLayout.Column(align(cursor,a),4*faceCount,8);cursor=faces.offset()+faces.bytes();
             var mu=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,8);cursor=mu.offset()+mu.bytes();
@@ -58,7 +58,7 @@ public final class GpuGranularTransitionsBenchmark {
                     for(var d:result.deposits()){finalVolume=Math.addExact(finalVolume,d.inventory().solidVolumeSvq());finalMass=Math.addExact(finalMass,d.inventory().massUnits());}
                     if(finalVolume!=svq+bedVolume||finalMass!=particle.inventory().massUnits()+bed.inventory().massUnits()||settled==0||woken==0||relaxed==0||result.dynamics().logicalStep()!=7)
                         throw new IllegalStateException("Granular lifecycle did not complete or changed its exact inventory");
-                    result.toSnapshot(liquid.grid(),h);System.out.printf("Continuous lifecycle complete: settled=%d,woken=%d,relaxed=%d,SVQ=%d,massUnits=%d%n",settled,woken,relaxed,finalVolume,finalMass);
+                    result.toSnapshot(liquid.grid(),h,cell -> 0);System.out.printf("Continuous lifecycle complete: settled=%d,woken=%d,relaxed=%d,SVQ=%d,massUnits=%d%n",settled,woken,relaxed,finalVolume,finalMass);
                 }
             }
             stackedBeds(context,geometry,lifecycle,false,false);
@@ -76,7 +76,7 @@ public final class GpuGranularTransitionsBenchmark {
         var state=new VulkanGranularStateLayout(mmm.spatial.SpatialGrid.rectangular(n,n,n),16,32,16,new VulkanGranularStateLayout.Definitions(registry.fingerprint(),"",ids,List.of()),liquid.bytes(),alignment);
         long cursor=state.endOffset();var coherent=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,8);cursor=coherent.offset()+coherent.bytes();
         var masks=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,4);cursor=masks.offset()+masks.bytes();
-        var occupancy=new VulkanGranularGeometry.Layout(state,coherent,cursor,alignment);cursor=occupancy.endOffset();
+        var occupancy=new VulkanGranularGeometry.Layout(state,coherent,masks,cursor,alignment);cursor=occupancy.endOffset();
         var cellData=new VulkanLiquidStateLayout.Column(align(cursor,alignment),4*cells,8);cursor=cellData.offset()+cellData.bytes();
         int faceCount=3*(n+1)*n*n;var faces=new VulkanLiquidStateLayout.Column(align(cursor,alignment),4*faceCount,8);cursor=faces.offset()+faces.bytes();
         var mu=new VulkanLiquidStateLayout.Column(align(cursor,alignment),cells,8);cursor=mu.offset()+mu.bytes();

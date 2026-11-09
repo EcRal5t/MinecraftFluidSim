@@ -42,7 +42,7 @@ final class FlipGranularCollision {
 		this.cellSize = cellSize; this.geometry = new GranularCollisionGeometry(sizeX, sizeY, sizeZ, cellSize, cutCells, deposits);
 		this.sphereCollision = new GranularSphereCollision(sizeX, sizeY, sizeZ, cellSize, cutCells,
 				deposits);
-		this.capacityLimit=capacity;this.kernel = new GranularKernel(sizeX, sizeY, sizeZ, cellSize);
+		this.capacityLimit=capacity;this.kernel = new GranularKernel(cutCells.snapshot().grid(), cellSize, cutCells::mask);
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt) {

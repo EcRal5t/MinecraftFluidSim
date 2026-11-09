@@ -202,8 +202,8 @@ final class DomainCapabilities {
 	}
 	private void finishThermalBinding() {
 		if (domain.granularCoupling == null) {
-			domain.granularCoupling = new GranularCouplingFields(domain.grid,domain.config.cellSize());
-			domain.granularNextCoupling = new GranularCouplingFields(domain.grid,domain.config.cellSize());
+			domain.granularCoupling = new GranularCouplingFields(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask);
+			domain.granularNextCoupling = new GranularCouplingFields(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask);
 		}
 		refreshCoherentOccupancy();
 		domain.gridDirty = domain.velocityGridDirty = true;domain.pressureSystem.invalidateGeometry();
@@ -306,8 +306,7 @@ final class DomainCapabilities {
 			}
 			fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
 		}
-		GranularCouplingFields restoredOccupancy = new GranularCouplingFields(
-				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+		GranularCouplingFields restoredOccupancy = new GranularCouplingFields(domain.grid, domain.config.cellSize(),domain.geometry.cutCells::mask);
 		restoredOccupancy.setFixedCellSvq(fixed);
 		if (domain.granularState == null) restoredOccupancy.rebuildFixed();
 		else restoredOccupancy.rebuild(domain.granularState.parcels, domain.granularState.deposits);

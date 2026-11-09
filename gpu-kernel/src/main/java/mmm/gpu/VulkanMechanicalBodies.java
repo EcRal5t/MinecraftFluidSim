@@ -16,14 +16,15 @@ final class VulkanMechanicalBodies implements AutoCloseable {
         SOURCE_CELL_OFFSETS, ROUTE_MASS, PROJECTED_FACES, GAS_CELL_NODES, GAS_CAPACITY, PARENTS,
         CHANGED, COUNTS, OFFSETS, CURSORS, MEMBERS, GAS_COUNTS,
         PARTICLE_CAPACITY, GRAIN_COUNTS, GRAIN_FACE_IDS, GRAIN_FACE_SHARES, GRAIN_DRAG_WEIGHTS, GRAIN_SUPPORT_CELLS,
-        GRAIN_SUPPORT_QUOTAS, CONTACT_COMPONENTS, GRAIN_DRAG_RESISTANCE, ROUTE_OFFSETS, ROUTE_MASKS
+        GRAIN_SUPPORT_QUOTAS, CONTACT_COMPONENTS, GRAIN_DRAG_RESISTANCE, ROUTE_OFFSETS, ROUTE_MASKS, ROUTE_TARGETS,
+        GAS_ROUTE_MASS, GAS_COMPONENTS
     }
 
     /** Contact components use active particle ordinals; -1 omits particle-particle contact links. */
     record GranularLinks(VulkanGranularStateLayout state,VulkanMixturePressure.Layout pressure,int contactComponentsWordOffset) { }
-    record Layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
+    record Layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,VulkanMixtureFlux.Layout geometryRoutes,
                   int projectedFacesWordOffset, int gasCellNodesWordOffset, int gasNodeCapacity, int gasCountsWordOffset,
-                  GranularLinks granular,
+                  GranularLinks granular,VulkanLocalGasTransport.ProductionLayout gasTransport,
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column parents,
                   VulkanLiquidStateLayout.Column changed, VulkanLiquidStateLayout.Column counts,
                   VulkanLiquidStateLayout.Column offsets, VulkanLiquidStateLayout.Column cursors,
@@ -46,6 +47,9 @@ final class VulkanMechanicalBodies implements AutoCloseable {
             for(int i=0;i<values.length;i++)target.putInt(4*i,values[i]);
             target.putInt(4*Header.ROUTE_OFFSETS.ordinal(),word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS)));
             target.putInt(4*Header.ROUTE_MASKS.ordinal(),word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS)));
+            target.putInt(4*Header.ROUTE_TARGETS.ordinal(),word(geometryRoutes.outTarget));
+            target.putInt(4*Header.GAS_ROUTE_MASS.ordinal(),gasTransport==null?-1:gasTransport.word(VulkanLocalGasTransport.Field.MASS));
+            target.putInt(4*Header.GAS_COMPONENTS.ordinal(),gasTransport==null?0:gasTransport.source.definitions().componentIds().size());
             target.putInt(4*Header.PARTICLE_CAPACITY.ordinal(),granular==null?0:granular.state().particleCapacity());
             if(granular!=null){var state=granular.state();var pressure=granular.pressure();
                 target.putInt(4*Header.GRAIN_COUNTS.ordinal(),state.word(VulkanGranularStateLayout.Field.COUNTS));
@@ -63,14 +67,9 @@ final class VulkanMechanicalBodies implements AutoCloseable {
             destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
         }
     }
-    static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
-                         int projectedFacesWordOffset, int gasCellNodesWordOffset, int gasNodeCapacity, int gasCountsWordOffset,
-                         long scratchBase, long alignment) {
-        return layout(source,routes,projectedFacesWordOffset,gasCellNodesWordOffset,gasNodeCapacity,gasCountsWordOffset,null,scratchBase,alignment);
-    }
-    static Layout layout(VulkanLiquidStateLayout source,VulkanLiquidRouteLayout routes,
+    static Layout layout(VulkanLiquidStateLayout source,VulkanLiquidRouteLayout routes,VulkanMixtureFlux.Layout geometryRoutes,
                          int projectedFacesWordOffset,int gasCellNodesWordOffset,int gasNodeCapacity,int gasCountsWordOffset,
-                         GranularLinks granular,long scratchBase,long alignment){
+                         GranularLinks granular,VulkanLocalGasTransport.ProductionLayout gasTransport,long scratchBase,long alignment){
         if(gasNodeCapacity<0||(gasNodeCapacity>0&&(gasCellNodesWordOffset<0||gasCountsWordOffset<0))||projectedFacesWordOffset<0
                 ||scratchBase<routes.endOffset()||alignment<8||(alignment&(alignment-1))!=0)
             throw new IllegalArgumentException("Invalid mechanical body layout");
@@ -82,7 +81,7 @@ final class VulkanMechanicalBodies implements AutoCloseable {
         var offsets=column(cursor,Math.addExact(vertices,1),alignment);var cursors=column(cursor,vertices,alignment);
         var members=column(cursor,vertices,alignment);
         var scan=column(cursor,Math.toIntExact(VulkanPrefixScan.workspaceBytes(vertices)/4),alignment);
-        return new Layout(source,routes,projectedFacesWordOffset,gasCellNodesWordOffset,gasNodeCapacity,gasCountsWordOffset,granular,header,
+        return new Layout(source,routes,geometryRoutes,projectedFacesWordOffset,gasCellNodesWordOffset,gasNodeCapacity,gasCountsWordOffset,granular,gasTransport,header,
                 parents,changed,counts,offsets,cursors,members,scan,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;

@@ -26,10 +26,10 @@ final class LiquidCollisionEdit {
 	}
 
 	static LiquidCollisionEdit prepare(HostFluidState domain, List<FluidDomainContracts.CollisionEdit> edits,
-	                                  FluidDomainContracts.GranularCollisionPlan granular) {
+	                                  FluidDomainContracts.GranularCollisionPlan granular,long[] futureOccupied) {
 		byte[] masks = domain.geometry.cutCells.copyMicroMasks();
-		long[] occupied = domain.occupiedSolidSvq();
-		if (granular != null) {
+		long[] occupied = futureOccupied==null?domain.occupiedSolidSvq():futureOccupied.clone();
+		if (granular != null && futureOccupied==null) {
 			for (int i = 0; i < granular.selectedParcels().length; i++) if (granular.selectedParcels()[i]) {
 				var parcel = domain.granularState.parcels.parcel(i);
 				domain.granularCoupling.removePlannedParcel(occupied, domain.parcelPosition(parcel), parcel.solidVolumeSvq());
@@ -101,10 +101,10 @@ final class LiquidCollisionEdit {
 			eraseAll.addAll(erase); retainedAll.addAll(retained); removed.add(List.copyOf(escaped));
 		}
 		candidate.planEdits(eraseAll).commit(); candidate.planAdditions(retainedAll).commit();
-		routeDisplaced(domain, candidate, masks, occupied, removed, changedKeys);
+		var transfers=routeDisplaced(domain, candidate, masks, occupied, removed, changedKeys);
 		var inventoryEdits = new ArrayList<LiquidCellInventory.Edit>();
 		for (var key : changedKeys) inventoryEdits.add(new LiquidCellInventory.Edit(key, candidate.stock(key)));
-		var plan = domain.liquidCells.planEdits(inventoryEdits);
+		var plan = domain.liquidCells.planEdits(inventoryEdits).withTransfers(transfers);
 		var changed=new java.util.TreeSet<Integer>(plan.changedCells());
 		for(var edit:edits)changed.add(domain.domainFlowFields.cellIndex(edit.x(),edit.y(),edit.z()));
 		long[] beforeOccupied=domain.occupiedSolidSvq();for(int cell=0;cell<domain.cellCount;cell++)if(beforeOccupied[cell]!=occupied[cell])changed.add(cell);
@@ -114,11 +114,11 @@ final class LiquidCollisionEdit {
 		return new LiquidCollisionEdit(plan, momentum, localGas, fixed, removed);
 	}
 
-	private static void routeDisplaced(HostFluidState domain, LiquidCellInventory candidate, byte[] masks,
+	private static List<LiquidCellInventory.Transfer> routeDisplaced(HostFluidState domain, LiquidCellInventory candidate, byte[] masks,
 	                                   long[] occupied, List<List<LiquidCellInventory.Stock>> displaced,
 	                                   java.util.Set<LiquidCellInventory.Key> changedKeys) {
 		var sources = displaced.stream().flatMap(List::stream).toList();
-		if (sources.isEmpty()) return;
+		if (sources.isEmpty()) return List.of();
 		var transit = new LiquidCellInventory(domain.cellCount, domain.liquidCells.chemicalRegistry());
 		transit.planAdditions(sources).commit();
 		var routes = LiquidTransportRoutes.builder(sources.size(), sources.size());
@@ -167,8 +167,9 @@ final class LiquidCollisionEdit {
 			if (remaining.signum() != 0)
 				throw new FluidDomainContracts.CollisionEditBlockedException("Collision displacement has no reachable capacity", null);
 		}
-		var routed = transit.planRoutes(routes.build(), FluidThermalBinding.liquidEnergyPartitioner(domain)).future();
-		candidate.planAdditions(routed.stocks()).commit();
+		var routed = transit.planRoutes(routes.build(), FluidThermalBinding.liquidEnergyPartitioner(domain));
+		candidate.planAdditions(routed.future().stocks()).commit();
+		return routed.transfers();
 	}
 
 	float report(int index) {

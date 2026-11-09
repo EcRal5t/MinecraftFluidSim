@@ -79,7 +79,7 @@ final class DomainInventory {
     HostMixtureEdit prepareCondensedClear(CondensedClearPlan plan,boolean clearGranular){
         long[] occupied=new long[domain.cellCount];
         if(!clearGranular&&domain.granularState!=null){
-            var coupling=new mmm.granular.GranularCouplingFields(domain.grid,domain.config.cellSize());
+            var coupling=new mmm.granular.GranularCouplingFields(domain.grid,domain.config.cellSize(),domain.geometry.cutCells::mask);
             coupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);occupied=coupling.copySolidSvq();
         }
         occupied=domain.entityBodyCoupling.addTo(occupied);

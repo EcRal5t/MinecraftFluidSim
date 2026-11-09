@@ -19,15 +19,43 @@ public final class GranularCouplingFields {
 		this(mmm.spatial.SpatialGrid.rectangular(sizeX,sizeY,sizeZ),cellSize);
 	}
 	public GranularCouplingFields(mmm.spatial.SpatialGrid grid,double cellSize) {
+		this(grid,cellSize,cell -> 0);
+	}
+	public GranularCouplingFields(mmm.spatial.SpatialGrid grid,double cellSize,java.util.function.IntUnaryOperator fixedMask) {
 		int sizeX=grid.sizeX(),sizeY=grid.sizeY(),sizeZ=grid.sizeZ();
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0.0)) {
 			throw new IllegalArgumentException("Granular coupling dimensions are invalid");
 		}
-		this.kernel = new GranularKernel(grid,cellSize);
+		this.kernel = new GranularKernel(grid,cellSize,fixedMask);
 		this.cellCount = grid.cellCount();
 		this.solidSvq = new long[cellCount];
 		this.fixedCellSvq = new long[cellCount];
 	}
+
+	/** Derives active-particle occupancy and integer selections for a candidate fixed geometry. */
+	public static SupportProjection projectParcels(mmm.spatial.SpatialGrid grid, double cellSize,
+			java.util.function.IntUnaryOperator fixedMask, GranularParcelStore parcels, boolean[] excluded) {
+		if (parcels == null || excluded != null && excluded.length != parcels.count())
+			throw new IllegalArgumentException("Granular support projection differs from inventory");
+		var kernel = new GranularKernel(grid, cellSize, fixedMask);
+		var occupancy = new long[grid.cellCount()];
+		var selections = new int[parcels.count()];
+		Arrays.fill(selections, -1);
+		for (int i = 0; i < parcels.count(); i++) {
+			if (excluded != null && excluded[i]) continue;
+			var parcel = parcels.parcel(i);
+			kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
+			int mask = kernel.canonicalMask();
+			selections[i] = mask;
+			for (int part = 0; part < kernel.size(); part++) {
+				int cell = kernel.cell(part);
+				long share = kernel.floor(part) + ((mask >>> part) & 1);
+				occupancy[cell] = Math.addExact(occupancy[cell], share);
+			}
+		}
+		return new SupportProjection(occupancy, selections);
+	}
+	public record SupportProjection(long[] occupiedSvq, int[] ceilMasks) {}
 
 	/** Replaces fixed cell-local occupancy (for example coherent solid) without touching granular truth. */
 	public void setFixedCellSvq(long[] fixed) {

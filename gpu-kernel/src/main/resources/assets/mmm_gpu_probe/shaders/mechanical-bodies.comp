@@ -8,7 +8,7 @@ const int STAGE_JOIN_CELLS = 3;
 const int STAGE_COMPRESS_PARENTS = 4;
 const int STAGE_COUNT_MEMBERS = 5;
 const int STAGE_JOIN_PARTICLES = 7;
-const uint ERROR_MECHANICAL_BODY = 32u;
+const uint ERROR_MECHANICAL_BODY = 1024u;
 // HOST_LAYOUT
 // SPATIAL_GRID
 layout(local_size_x=128) in;
@@ -52,8 +52,11 @@ void joinCell(int index){
     for(int side=0;side<6;side++){
         bool moving=false;
         for(int stock=first;stock<last;stock++)if(routeMass(stock,side+1)>int64_t(0)){moving=true;break;}
+        if(!moving&&headerValue(H_GAS_ROUTE_MASS)>=0)for(int component=0;component<headerValue(H_GAS_COMPONENTS);component++)
+            if(mass(headerValue(H_GAS_ROUTE_MASS)+2*((side*headerValue(H_GAS_COMPONENTS)+component)*headerValue(H_CELLS)+index))>int64_t(0)){moving=true;break;}
         if(!moving)continue;
-        int target=gridNeighbor(index,side);
+        int target=int(words[headerValue(H_ROUTE_TARGETS)+6*index+side]);
+        if(target==-2||(target==-1&&gridNeighbor(index,side)<0))continue;
         if(target<0){atomicOr(errors,ERROR_MECHANICAL_BODY);return;}
         joinComponents(index,target);
     }

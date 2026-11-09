@@ -30,3 +30,19 @@ double caloricStateTemperature(int header, int material, double mass, double eth
     }
     return temperature;
 }
+
+// Integral of the material heat capacity between its reference and actual temperature.
+double caloricMaterialSensible(int header, int material, double temperature) {
+    int first = int(words[int(words[header + CAL_SEGMENT_OFFSETS]) + material]);
+    int last = int(words[int(words[header + CAL_SEGMENT_OFFSETS]) + material + 1]) - 1;
+    double reference = caloricStateRead(int(words[header + CAL_REFERENCE_TEMPERATURE]) + 2 * material);
+    double lower = min(reference, temperature), upper = max(reference, temperature), result = 0.0LF;
+    for (int segment = first; segment <= last && lower < upper; segment++) {
+        double end = segment == last ? upper : min(upper, caloricStateRead(int(words[header + CAL_SEGMENT_UPPER]) + 2 * segment));
+        if (end > lower) {
+            result += (end - lower) * caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment);
+            lower = end;
+        }
+    }
+    return temperature < reference ? -result : result;
+}

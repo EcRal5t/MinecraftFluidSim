@@ -560,7 +560,9 @@ void cell(int c) {
                 if(int(words[granularField(GRANULAR_MATERIAL)+grain])==sm)
                     solidVolume+=double(max(0l,readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ)+2*grain)))*(1.0LF/16777216.0LF)*size*size*size;
             double area=diameter>0.0LF?6.0LF*solidVolume/diameter:0.0LF;
-            area*=clamp(volume,0.0LF,1.0LF);
+            // The diffusion film has thickness d/2; liquid wets only the area it can fill.
+            double liquidVolume=volume*size*size*size;
+            if(area>0.0LF)area*=min(1.0LF,liquidVolume/(area*diameter*0.5LF));
             if(precip && area==0.0LF)area=size*size*clamp(volume,0.0LF,1.0LF);
             if(!(area>0.0LF && diameter>0.0LF && p.duration>0.0LF))continue;
             int slot=pendingSlot(c,directory,int(words[liquidField(LIQUID_MATERIALS)+first]),int(words[liquidField(LIQUID_SUPPORT_MASKS)+first]));
