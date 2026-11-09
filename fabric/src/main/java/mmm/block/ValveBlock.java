@@ -31,10 +31,10 @@ public final class ValveBlock extends Block {
     @Override public BlockState getStateForPlacement(BlockPlaceContext context){return defaultBlockState().setValue(FACING,context.getNearestLookingDirection().getOpposite());}
     public static VoxelShape shutter(BlockState state){
         int opening=state.getValue(OPENING);if(opening==4)return Shapes.empty();double edge=16-4*opening;
-        return switch(state.getValue(FACING).getAxis()){
-            case X->Block.box(4,0,0,12,edge,16);
-            case Y->Block.box(0,4,0,edge,12,16);
-            case Z->Block.box(0,0,4,16,edge,12);
+        return switch(state.getValue(FACING)){
+            case UP->Block.box(0,0,16-edge,16,16,16);
+            case DOWN->Block.box(0,0,0,16,16,edge);
+            default->Block.box(0,0,0,16,edge,16);
         };
     }
     @Override protected VoxelShape getCollisionShape(BlockState state,BlockGetter world,BlockPos pos,CollisionContext context){return shutter(state);}
