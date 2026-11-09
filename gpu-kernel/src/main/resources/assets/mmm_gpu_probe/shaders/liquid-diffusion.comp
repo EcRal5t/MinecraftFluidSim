@@ -36,16 +36,12 @@ double carried(int row,int m,int s1,int s2,int n1,int n2,int64_t q,int64_t units
  if(q==0l)return 0.0LF;
  int cal=h(H_CALORIC),first=int(words[int(words[cal+CAL_SEGMENT_OFFSETS])+m]),last=int(words[int(words[cal+CAL_SEGMENT_OFFSETS])+m+1])-1;
  double mass=double(phaseRowMass(h(H_ROWS),row))*1e-10LF,remaining=sensible(row,m);
- int ethanolSpecies=int(words[cal+CAL_ETHANOL_SPECIES]);double ethanol=0.0;
- if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)ethanol=caloricEthanolMass(mass,double(phaseRowSpecies(h(H_ROWS),row,ethanolSpecies)),rd(h(H_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
- double capacity=0.0LF,t=caloricStateTemperature(cal,m,mass,ethanol,0.0LF,remaining,capacity);
+ double capacity=0.0LF,t=caloricStateTemperature(cal,m,mass,0.0LF,remaining,capacity);
  double refT=rd(int(words[cal+CAL_REFERENCE_TEMPERATURE])+2*m),lo=min(refT,t),hi=max(refT,t),waterSensible=0.0;
  for(int i=first;i<=last&&lo<hi;i++){double upper=i==last?hi:min(hi,rd(int(words[cal+CAL_SEGMENT_UPPER])+2*i));if(upper>lo){waterSensible+=(upper-lo)*rd(int(words[cal+CAL_SEGMENT_CAPACITY])+2*i);lo=upper;}}
  if(t<refT)waterSensible=-waterSensible;
- double moved=double(units)*1e-10LF,movedEthanol=0.0;
- if(m==int(words[cal+CAL_AQUEOUS_MATERIAL])&&ethanolSpecies>=0)
-  movedEthanol=caloricEthanolMass(moved,double(q)*double((s1==ethanolSpecies?n1:0)+(s2==ethanolSpecies?n2:0)),rd(h(H_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
- return moved*materialReference(m)+(moved-movedEthanol)*waterSensible+movedEthanol*rd(h(H_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)*(t-refT)
+ double moved=double(units)*1e-10LF;
+ return moved*(materialReference(m)+waterSensible)
    +double(q)*double(n1)*speciesReference(m,s1)+(s2>=0?double(q)*double(n2)*speciesReference(m,s2):0.0LF);
 }
 int pendingIndex(int anchor,int r){return f(FIELD_PENDING_INDEX)+anchor*h(H_RULES)+r;}

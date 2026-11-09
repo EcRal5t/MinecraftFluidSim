@@ -2,7 +2,7 @@
 double caloricStateRead(int at) {
     return packDouble2x32(uvec2(words[at], words[at + 1]));
 }
-double caloricStateTemperature(int header, int material, double mass, double ethanol, double extraCapacity,
+double caloricStateTemperature(int header, int material, double mass, double extraCapacity,
                                double remaining, out double capacity) {
     int first = int(words[int(words[header + CAL_SEGMENT_OFFSETS]) + material]);
     int last = int(words[int(words[header + CAL_SEGMENT_OFFSETS]) + material + 1]) - 1;
@@ -12,7 +12,7 @@ double caloricStateTemperature(int header, int material, double mass, double eth
         segment++;
     if (remaining >= 0.0LF) {
         for (;; segment++) {
-            capacity = caloricCapacity(mass, ethanol, caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment),caloricStateRead(header+CAL_ETHANOL_HEAT_CAPACITY))+extraCapacity;
+            capacity = mass * caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment)+extraCapacity;
             double upper = caloricStateRead(int(words[header + CAL_SEGMENT_UPPER]) + 2 * segment);
             double span = (upper - temperature) * capacity;
             if (segment == last || remaining < span) { temperature += remaining / capacity; break; }
@@ -21,7 +21,7 @@ double caloricStateTemperature(int header, int material, double mass, double eth
     } else {
         remaining = -remaining;
         for (;; segment--) {
-            capacity = caloricCapacity(mass, ethanol, caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment),caloricStateRead(header+CAL_ETHANOL_HEAT_CAPACITY))+extraCapacity;
+            capacity = mass * caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment)+extraCapacity;
             double lower = segment == first ? 0.0LF : caloricStateRead(int(words[header + CAL_SEGMENT_UPPER]) + 2 * (segment - 1));
             double span = (temperature - lower) * capacity;
             if (segment == first || remaining <= span) { temperature -= remaining / capacity; break; }
@@ -29,20 +29,4 @@ double caloricStateTemperature(int header, int material, double mass, double eth
         }
     }
     return temperature;
-}
-
-// Integral of the material heat capacity between its reference and actual temperature.
-double caloricMaterialSensible(int header, int material, double temperature) {
-    int first = int(words[int(words[header + CAL_SEGMENT_OFFSETS]) + material]);
-    int last = int(words[int(words[header + CAL_SEGMENT_OFFSETS]) + material + 1]) - 1;
-    double reference = caloricStateRead(int(words[header + CAL_REFERENCE_TEMPERATURE]) + 2 * material);
-    double lower = min(reference, temperature), upper = max(reference, temperature), result = 0.0LF;
-    for (int segment = first; segment <= last && lower < upper; segment++) {
-        double end = segment == last ? upper : min(upper, caloricStateRead(int(words[header + CAL_SEGMENT_UPPER]) + 2 * segment));
-        if (end > lower) {
-            result += (end - lower) * caloricStateRead(int(words[header + CAL_SEGMENT_CAPACITY]) + 2 * segment);
-            lower = end;
-        }
-    }
-    return temperature < reference ? -result : result;
 }

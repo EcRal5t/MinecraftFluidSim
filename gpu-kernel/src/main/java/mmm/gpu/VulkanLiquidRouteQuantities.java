@@ -21,8 +21,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
         SPECIES_REFERENCE(4),
         SPECIES_STRIDE(5),
         SPECIES_REQUIRED(6),
-        ENERGY_REMAINDERS(7),
-        SOURCE_CALORIC(8);
+        ENERGY_REMAINDERS(7);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -38,7 +37,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
     }
 
     record Layout(VulkanLiquidStateLayout source,VulkanLiquidRouteLayout routes,
-                  int materialReferenceWordOffset,int speciesReferenceWordOffset,int speciesStride,int sourceCaloricWordOffset,
+                  int materialReferenceWordOffset,int speciesReferenceWordOffset,int speciesStride,
                   VulkanLiquidStateLayout.Column header,VulkanLiquidStateLayout.Column energyRemainders,long endOffset) {
         int headerWordOffset(){return word(header);}
         long bytes(){return endOffset-header.offset();}
@@ -49,20 +48,19 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
             values[Header.STOCK_CAPACITY.word]=source.stockCapacity();values[Header.ROUTE_CAPACITY.word]=routes.routeCapacity();values[Header.SPECIES_CAPACITY.word]=routes.speciesCapacity();
             values[Header.MATERIAL_REFERENCE.word]=materialReferenceWordOffset;values[Header.SPECIES_REFERENCE.word]=speciesReferenceWordOffset;values[Header.SPECIES_STRIDE.word]=speciesStride;
             values[Header.SPECIES_REQUIRED.word]=word(routes.column(VulkanLiquidRouteLayout.Field.SPECIES_REQUIRED));values[Header.ENERGY_REMAINDERS.word]=word(energyRemainders);
-            values[Header.SOURCE_CALORIC.word]=sourceCaloricWordOffset;
             for(var field:VulkanLiquidStateLayout.Field.values())values[SOURCE_FIELDS + field.ordinal()]=word(source.column(field));
             for(var field:VulkanLiquidRouteLayout.Field.values())values[ROUTE_FIELDS + field.ordinal()]=word(routes.column(field));
             for(int i=0;i<values.length;i++)target.putInt(4*i,values[i]);return target;
         }
     }
     static Layout layout(VulkanLiquidStateLayout source,VulkanLiquidRouteLayout routes,
-                         int materialReferenceWordOffset,int speciesReferenceWordOffset,int speciesStride,int sourceCaloricWordOffset,long scratchBase,long alignment){
+                         int materialReferenceWordOffset,int speciesReferenceWordOffset,int speciesStride,long scratchBase,long alignment){
         if(routes.sourceStockCapacity()<source.stockCapacity()||routes.speciesCapacity()<Math.multiplyExact(7,source.speciesCapacity())
-                ||scratchBase<routes.endOffset()||alignment<8||(alignment&(alignment-1))!=0||speciesStride<0||sourceCaloricWordOffset<0)
+                ||scratchBase<routes.endOffset()||alignment<8||(alignment&(alignment-1))!=0||speciesStride<0)
             throw new IllegalArgumentException("Invalid liquid quantity route layout");
         var header=new VulkanLiquidStateLayout.Column(align(scratchBase,alignment),64,4);
         var remainders=new VulkanLiquidStateLayout.Column(align(header.offset()+header.bytes(),alignment),Math.multiplyExact(source.stockCapacity(),8),8);
-        return new Layout(source,routes,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,sourceCaloricWordOffset,header,remainders,align(remainders.offset()+remainders.bindingBytes(),alignment));
+        return new Layout(source,routes,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,header,remainders,align(remainders.offset()+remainders.bindingBytes(),alignment));
     }
     private final FlipKernelBindings bindings;
     VulkanLiquidRouteQuantities(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),12);}
@@ -78,8 +76,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
     private static int word(VulkanLiquidStateLayout.Column column){return Math.toIntExact(column.offset()/4);}
     private static long align(long value,long alignment){return Math.addExact(value,alignment-1)&-alignment;}
     private static String shader(){try(var input=VulkanLiquidRouteQuantities.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/liquid-route-quantities.comp")){
-        if(input==null)throw new IllegalStateException("Liquid route quantities shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout() + VulkanLiquidThermodynamics.shaderLayout()
-                + "\n#define words candidateWords\n" + VulkanLiquidThermodynamics.shaderStateFunction());
+        if(input==null)throw new IllegalStateException("Liquid route quantities shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout());
     }catch(IOException failure){throw new IllegalStateException("Liquid route quantities shader unavailable",failure);}}
     @Override public void close(){bindings.close();}
 }

@@ -203,13 +203,7 @@ double liquidCold(int lr, int material) {
     double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
     double kg=double(phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr))*massUnit();
     double coldEnergy=kg*specificLiquid(material,minimum);
-    int ethanol=liquidCaloricWord(CAL_ETHANOL_SPECIES);
-    if(material==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && ethanol>=0){
-        double ethanolMass=caloricEthanolMass(kg,double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,ethanol)),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
-        double refT=readDouble(liquidCaloricWord(CAL_REFERENCE_TEMPERATURE)+2*material);
-        double waterCold=readDouble(liquidCaloricWord(CAL_COLD_SENSIBLE)+2*material);
-        coldEnergy+=ethanolMass*((minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)-waterCold);
-    }
+
     for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) {
         int64_t speciesAmount = phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp);
         if (speciesAmount > 0l)
@@ -614,10 +608,7 @@ double wallTemperatureAfter(int device,double temperature,double energy){
 }
 double liquidSpeciesEnergy(int material,int species,int64_t unit,double temperature){
     double specific=specificLiquid(material,temperature);
-    if(material==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && species==liquidCaloricWord(CAL_ETHANOL_SPECIES)){
-        double refT=readDouble(liquidCaloricWord(CAL_REFERENCE_TEMPERATURE)+2*material);
-        specific=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*material)+(temperature-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY);
-    }
+
     return double(unit)*massUnit()*specific+
         readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(material*liquidCaloricWord(CAL_SPECIES_STRIDE)+species));
 }
@@ -850,10 +841,7 @@ uvec4 exchange(int node, int first) {
                carried = double(unit) * massUnit() * specificGas(gm, transferTemperature) + reference;
         double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
         double liquidSpecificCold=specificLiquid(m,minimum);
-        if(m==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && sp==liquidCaloricWord(CAL_ETHANOL_SPECIES)){
-            double refT=readDouble(liquidCaloricWord(CAL_REFERENCE_TEMPERATURE)+2*m);
-            liquidSpecificCold=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*m)+(minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY);
-        }
+
         double lcold=double(unit)*massUnit()*liquidSpecificCold+
                      readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(m*liquidCaloricWord(CAL_SPECIES_STRIDE)+sp));
         if (!isFinite(carried) || !isFinite(lcold)) {
@@ -1032,10 +1020,7 @@ double liquidHeatCapacity(int c,int lr,int material) {
     double temperature=readDouble(liquidCaloricWord(CAL_CELL_TEMPERATURES)+2*c);
     int at=int(words[liquidCaloricWord(CAL_SEGMENT_OFFSETS)+material]),last=int(words[liquidCaloricWord(CAL_SEGMENT_OFFSETS)+material+1])-1;
     while(at<last && temperature>=readDouble(liquidCaloricWord(CAL_SEGMENT_UPPER)+2*at))at++;
-    double ethanol=0.0LF;int sp=liquidCaloricWord(CAL_ETHANOL_SPECIES);
-    if(material==liquidCaloricWord(CAL_AQUEOUS_MATERIAL) && sp>=0)
-        ethanol=caloricEthanolMass(kg,double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
-    return caloricCapacity(kg,ethanol,readDouble(liquidCaloricWord(CAL_SEGMENT_CAPACITY)+2*at),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY));
+    return kg * readDouble(liquidCaloricWord(CAL_SEGMENT_CAPACITY)+2*at);
 }
 double gasHeatCapacity(int c) {
     double temperature=state(c,0),capacity=0.0LF;

@@ -35,9 +35,9 @@ public final class ChemicalDefinitionCodec {
 	}
 
 	private static ChemicalSpecies.LiquidProperties liquidProperties(JsonObject root) {
-		requireOnly(root, "reference_density_kg_per_m3", "heat_capacity_j_per_kg_k", "conductivity_w_per_m_k", "viscosity_pa_s");
+		requireOnly(root, "reference_density_kg_per_m3", "conductivity_w_per_m_k", "viscosity_pa_s");
 		return new ChemicalSpecies.LiquidProperties(exact(root, "reference_density_kg_per_m3").toDouble(),
-				exact(root, "heat_capacity_j_per_kg_k").toDouble(), exact(root, "conductivity_w_per_m_k").toDouble(),
+				exact(root, "conductivity_w_per_m_k").toDouble(),
 				exact(root, "viscosity_pa_s").toDouble());
 	}
 

@@ -98,18 +98,10 @@ double massKilograms(int header, int row) {
 int materialHandle(int header, int row) {
     return int(words[caloricField(header, CAL_MATERIALS) + row]);
 }
-double rowEthanolMass(int header,int row,double mass) {
-    if (materialHandle(header,row)!=caloricField(header,CAL_AQUEOUS_MATERIAL) || caloricField(header,CAL_ETHANOL_SPECIES)<0) return 0.0;
-    for(int i=int(words[caloricField(header,CAL_SPECIES_OFFSETS)+row]);i<int(words[caloricField(header,CAL_SPECIES_OFFSETS)+row+1]);i++)
-        if(int(words[caloricField(header,CAL_SPECIES_HANDLES)+i])==caloricField(header,CAL_ETHANOL_SPECIES))
-            return caloricEthanolMass(mass,double(readInteger(caloricField(header,CAL_SPECIES_AMOUNTS)+2*i)),readDouble(header+CAL_ETHANOL_MOLAR_MASS));
-    return 0.0;
-}
+
 double minimumTemperatureEnergy(int header, int row) {
     int m = materialHandle(header, row);
     double energy = massKilograms(header, row) * (readDouble(caloricField(header, CAL_MATERIAL_REFERENCE) + 2 * m) + readDouble(caloricField(header, CAL_COLD_SENSIBLE) + 2 * m));
-    double ethanol=rowEthanolMass(header,row,massKilograms(header,row));
-    energy+=ethanol*((readDouble(header+CAL_MINIMUM_TEMPERATURE)-readDouble(caloricField(header,CAL_REFERENCE_TEMPERATURE)+2*m))*readDouble(header+CAL_ETHANOL_HEAT_CAPACITY)-readDouble(caloricField(header,CAL_COLD_SENSIBLE)+2*m));
     for (int item = int(words[caloricField(header, CAL_SPECIES_OFFSETS) + row]); item < int(words[caloricField(header, CAL_SPECIES_OFFSETS) + row + 1]); item++) {
         int species = int(words[caloricField(header, CAL_SPECIES_HANDLES) + item]);
         int64_t amount = readInteger(caloricField(header, CAL_SPECIES_AMOUNTS) + 2 * item);
@@ -145,7 +137,7 @@ double cellTemperature() {
                         last = int(words[caloricField(header, CAL_SEGMENT_OFFSETS) + thermalMaterial + 1]) - 1, segment = first;
                     while (segment < last && temperatureK >= readDouble(caloricField(header, CAL_SEGMENT_UPPER) + 2 * segment))
                         segment++;
-                    heatCapacity += caloricCapacity(m,rowEthanolMass(header,row,m),readDouble(caloricField(header, CAL_SEGMENT_CAPACITY) + 2 * segment),readDouble(header+CAL_ETHANOL_HEAT_CAPACITY));
+                    heatCapacity += m * readDouble(caloricField(header, CAL_SEGMENT_CAPACITY) + 2 * segment);
                     if (segment < last)
                         nextSegmentTemperature = min(nextSegmentTemperature, readDouble(caloricField(header, CAL_SEGMENT_UPPER) + 2 * segment));
                 }

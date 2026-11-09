@@ -34,13 +34,7 @@ void writeDouble(int at, double x) {
     words[at] = bits.x;
     words[at + 1] = bits.y;
 }
-double ethanolMass(int material,int stock,double mass) {
-    if (material != headerWord(CAL_AQUEOUS_MATERIAL) || headerWord(CAL_ETHANOL_SPECIES) < 0) return 0.0;
-    for (int item=int(words[headerWord(CAL_SPECIES_OFFSETS)+stock]);item<int(words[headerWord(CAL_SPECIES_OFFSETS)+stock+1]);item++)
-        if (int(words[headerWord(CAL_SPECIES_HANDLES)+item])==headerWord(CAL_ETHANOL_SPECIES))
-            return caloricEthanolMass(mass,double(readQuantity(headerWord(CAL_SPECIES_AMOUNTS)+2*item)),readDouble(p.header+CAL_ETHANOL_MOLAR_MASS));
-    return 0.0;
-}
+
 void stockState(int stock) {
     writeDouble(headerWord(CAL_TEMPERATURES) + 2 * stock, 0.0);
     writeDouble(headerWord(CAL_HEAT_CAPACITIES) + 2 * stock, 0.0);
@@ -81,8 +75,8 @@ void stockState(int stock) {
     double surfaceCapacity=headerWord(CAL_SURFACE_CAPACITY)<0?0.0LF:readDouble(headerWord(CAL_SURFACE_CAPACITY)+2*stock);
     double referenceTemperature=readDouble(headerWord(CAL_REFERENCE_TEMPERATURE)+2*material);
     base+=surfaceIntercept+surfaceCapacity*referenceTemperature;
-    double capacity = 0.0, ethanol = ethanolMass(material,stock,mass);
-    double temperature = caloricStateTemperature(p.header,material,mass,ethanol,surfaceCapacity,energy-base,capacity);
+    double capacity = 0.0;
+    double temperature = caloricStateTemperature(p.header,material,mass,surfaceCapacity,energy-base,capacity);
     double minimum = readDouble(p.header + CAL_MINIMUM_TEMPERATURE);
     if (temperature < minimum - 1e-7 || capacity <= 0.0) {
         atomicOr(errors, 16384u);
@@ -91,8 +85,7 @@ void stockState(int stock) {
     writeDouble(headerWord(CAL_TEMPERATURES) + 2 * stock, max(minimum, temperature));
     writeDouble(headerWord(CAL_HEAT_CAPACITIES) + 2 * stock, capacity);
     double waterCold=readDouble(headerWord(CAL_COLD_SENSIBLE)+2*material);
-    double ethanolCold=(minimum-readDouble(headerWord(CAL_REFERENCE_TEMPERATURE)+2*material))*readDouble(p.header+CAL_ETHANOL_HEAT_CAPACITY);
-    writeDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock, min(energy, base+(mass-ethanol)*waterCold+ethanol*ethanolCold+surfaceCapacity*(minimum-referenceTemperature)));
+    writeDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock, min(energy, base+mass*waterCold+surfaceCapacity*(minimum-referenceTemperature)));
 }
 void cellState(int cell) {
     int begin = int(words[headerWord(CAL_CELL_OFFSETS) + cell]), end = int(words[headerWord(CAL_CELL_OFFSETS) + cell + 1]);
@@ -117,7 +110,7 @@ void cellState(int cell) {
                 last = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
             while (segment < last && temperature >= readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment))
                 segment++;
-            capacity += caloricCapacity(mass,ethanolMass(material,stock,mass),readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment),readDouble(p.header+CAL_ETHANOL_HEAT_CAPACITY));
+            capacity += mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
             if (segment < last)
                 next = min(next, readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment));
         }

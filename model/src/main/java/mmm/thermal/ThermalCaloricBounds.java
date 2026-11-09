@@ -89,7 +89,6 @@ public final class ThermalCaloricBounds {
 			for (var portion : portions) {
 				double cv = thermal.material(portion.materialHandle()).caloricSegments().stream()
 						.mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatJPerKgK).min().orElseThrow();
-                if (ethanolRange(portion) != null) cv = Math.min(cv, ethanolDefinition().liquidProperties().heatCapacityJPerKgK());
 				capacity = capacity.add(SignedDyadic.of(portion.massLow()).multiply(SignedDyadic.of(cv)));
 			}
 			if (capacity.signum() == 0) return unboundedTemperature(upper);
@@ -137,8 +136,7 @@ public final class ThermalCaloricBounds {
 				double last = thermal.referenceEnergyCache().energy(offset, entry.getValue().high());
 				base = outward(base + (upper ? Math.max(first, last) : Math.min(first, last)), upper);
 			}
-			double correction=compositionCorrection(portion,material,temperature,upper);
-            result = outward(result + outward(forwardBound(portion, material, temperature, base, upper)+correction,upper), upper);
+			result = outward(result + forwardBound(portion, material, temperature, base, upper), upper);
 		}
 		return Double.isFinite(result) ? result : unboundedEnergy(upper);
 	}
@@ -162,8 +160,7 @@ public final class ThermalCaloricBounds {
 					material.referenceTemperatureK(), temperature);
 			double mass = (specific.signum() >= 0) == upper ? portion.massHigh() : portion.massLow();
 			if (!Double.isFinite(mass)) return null;
-			result = result.add(SignedDyadic.of(base)).add(specific.multiply(SignedDyadic.of(mass)))
-                    .add(SignedDyadic.of(compositionCorrection(portion,material,temperature,upper)));
+			result = result.add(SignedDyadic.of(base)).add(specific.multiply(SignedDyadic.of(mass)));
 		}
 		return result;
 	}
@@ -275,40 +272,10 @@ public final class ThermalCaloricBounds {
 		for (PortionRange portion : portions) {
 			var material = thermal.material(portion.materialHandle());
 			double mass = (probe >= material.referenceTemperatureK()) == upper ? portion.massHigh() : portion.massLow();
-			double pure=material.specificHeatAt(probe),correction=ethanolRange(portion)==null?0.0:compositionMassBound(portion,
-                    ethanolDefinition().liquidProperties().heatCapacityJPerKgK()-pure,upper);
-            var part=SignedDyadic.of(mass).multiply(SignedDyadic.of(pure)).add(SignedDyadic.of(correction));
-            if(part.signum()>0)total=total.add(part);
+			total = total.add(SignedDyadic.of(mass).multiply(SignedDyadic.of(material.specificHeatAt(probe))));
 		}
 		return total;
 	}
-    private mmm.chemistry.ChemicalSpecies ethanolDefinition() {
-        var chemistry=thermal.chemistry();
-        if(chemistry==null)throw new IllegalArgumentException("Chemical registry is required for liquid mixture properties");
-        var species=chemistry.species(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL));
-        if(species.liquidProperties()==null)throw new IllegalArgumentException("Liquid properties are missing for "+species.id());
-        return species;
-    }
-    private QuantaRange ethanolRange(PortionRange portion) {
-        var material=thermal.material(portion.materialHandle());
-        var range=material.carrierKind()==ThermalMaterialDefinition.CarrierKind.LIQUID && material.carrierId().equals("mmm:water")
-                ? portion.species().get(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL) : null;
-        if(range==null)return null;
-        ethanolDefinition();
-        return range;
-    }
-    private double compositionMassBound(PortionRange portion,double coefficient,boolean upper) {
-        QuantaRange range=ethanolRange(portion);if(range==null)return 0.0;
-        boolean maximum=(coefficient>=0)==upper;
-        double mass=Math.min(maximum?portion.massHigh():portion.massLow(),(maximum?range.high():range.low())*1e-6*ethanolDefinition().molarMassKgPerMol().toDouble());
-        return outward(mass*coefficient,upper);
-    }
-    private double compositionCorrection(PortionRange portion,ThermalMaterialDefinition material,double temperature,boolean upper) {
-        if(ethanolRange(portion)==null)return 0.0;
-        double difference=(temperature-material.referenceTemperatureK())*ethanolDefinition().liquidProperties().heatCapacityJPerKgK()
-                -material.sensibleSpecificEnergyAt(temperature);
-        return compositionMassBound(portion,difference,upper);
-    }
 
 	private static double nearerKnot(double cursor, double next, double knot, int direction) {
 		return direction > 0 ? knot > cursor && knot < next ? knot : next : knot < cursor && knot > next ? knot : next;

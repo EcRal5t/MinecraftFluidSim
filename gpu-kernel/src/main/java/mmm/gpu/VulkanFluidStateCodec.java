@@ -149,7 +149,6 @@ final class VulkanFluidStateCodec {
                 fluids.materials().stream().map(m -> m.id()).toList().indexOf("mmm:water"),
                 ethanolLiquid == null ? -1 : species.indexOf(mmm.chemistry.BuiltinChemicalDefinitions.ETHANOL),
                 ethanolLiquid == null ? 0.0 : ethanol.molarMassKgPerMol().toDouble(),
-                ethanolLiquid == null ? 0.0 : ethanolLiquid.heatCapacityJPerKgK(),
                 ethanolLiquid == null ? 0.0 : ethanolLiquid.conductivityWPerMK()), viscosity, forces,
             VulkanSurfaceTension.tables(fluids), true);
         VulkanLiquidRegion.GasConfiguration gas = null;

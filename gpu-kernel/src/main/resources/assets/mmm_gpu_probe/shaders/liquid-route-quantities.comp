@@ -220,15 +220,11 @@ void writeQuantities(int stock) {
     int64_t totalMass = readLong(0, src(STOCK_MASS_UNITS) + 2 * stock);
     int material = int(sourceWords[src(STOCK_MATERIALS) + stock]);
     double materialReference = readDouble(1, h(H_MATERIAL_REFERENCE) + 2 * material);
+    precise double sourceReference = double(totalMass) * MASS_UNIT_KG * materialReference;
     precise double references[ROUTE_COUNT];
-    int64_t ethanolQuanta[ROUTE_COUNT];
     for (int i = 0; i < ROUTE_COUNT; i++) {
         references[i] = double(masses[i]) * MASS_UNIT_KG * materialReference;
-        ethanolQuanta[i] = 0l;
     }
-    int caloric = h(H_SOURCE_CALORIC);
-    int aqueousMaterial = int(candidateWords[caloric + CAL_AQUEOUS_MATERIAL]);
-    int ethanolSpecies = int(candidateWords[caloric + CAL_ETHANOL_SPECIES]);
     int begin = int(sourceWords[src(STOCK_SPECIES_OFFSETS) + stock]),
         end = int(sourceWords[src(STOCK_SPECIES_OFFSETS) + stock + 1]);
     for (int entry = begin; entry < end; entry++) {
@@ -241,6 +237,7 @@ void writeQuantities(int stock) {
         int64_t amounts[ROUTE_COUNT];
         distribute(total, fractions, owner, amounts);
         double reference = readDouble(1, h(H_SPECIES_REFERENCE) + 2 * (material * h(H_SPECIES_STRIDE) + handle));
+        sourceReference += double(total) * reference;
         uint mask = candidateWords[route(ROUTE_SOURCE_MASKS) + stock];
         for (int dir = 0; dir < ROUTE_COUNT; dir++)
             if ((mask & (1u << dir)) == 0u)
@@ -254,18 +251,11 @@ void writeQuantities(int stock) {
             putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (ROUTE_COUNT * entry + dir), amounts[i]);
             if (amounts[i] > int64_t(0)) {
                 references[i] += double(amounts[i]) * reference;
-                if (material == aqueousMaterial && handle == ethanolSpecies) ethanolQuanta[i] = amounts[i];
             }
         }
     }
     double sourceEnergy = readDouble(0, src(STOCK_ENERGY_BITS) + 2 * stock);
-    double referenceTemperature = readDouble(1, int(candidateWords[caloric + CAL_REFERENCE_TEMPERATURE]) + 2 * material);
-    double temperature = totalMass > 0l
-        ? readDouble(1, int(candidateWords[caloric + CAL_TEMPERATURES]) + 2 * stock)
-        : referenceTemperature;
-    double materialSensible = caloricMaterialSensible(caloric, material, temperature);
-    double ethanolSensible = readDouble(1, caloric + CAL_ETHANOL_HEAT_CAPACITY) * (temperature - referenceTemperature);
-    double ethanolMolarMass = readDouble(1, caloric + CAL_ETHANOL_MOLAR_MASS);
+    double sensible = sourceEnergy - sourceReference;
     precise double energies[ROUTE_COUNT];
     for (int i = 0; i < ROUTE_COUNT; i++)
         energies[i] = 0.0;
@@ -274,9 +264,7 @@ void writeQuantities(int stock) {
         for (int i = 0; i < ROUTE_COUNT; i++)
             if (i != owner) {
                 if (masses[i] > int64_t(0)) {
-                    double kg = double(masses[i]) * MASS_UNIT_KG;
-                    double ethanol = material == aqueousMaterial ? caloricEthanolMass(kg, double(ethanolQuanta[i]), ethanolMolarMass) : 0.0LF;
-                    energies[i] = references[i] + (kg - ethanol) * materialSensible + ethanol * ethanolSensible;
+                    energies[i] = references[i] + sensible * fractions[i];
                 }
                 precise double corrected = energies[i] - error, next = sum + corrected;
                 error = (next - sum) - corrected;
@@ -284,7 +272,7 @@ void writeQuantities(int stock) {
             }
         energies[owner] = sourceEnergy - sum;
     }
-    bool valid = finite(sourceEnergy) && finite(temperature) && temperature > 0.0LF;
+    bool valid = finite(sourceEnergy) && finite(sourceReference);
     for (int i = 0; i < ROUTE_COUNT; i++) {
         valid = valid && finite(energies[i]);
         if (routeIndex(stock, i) >= 0)

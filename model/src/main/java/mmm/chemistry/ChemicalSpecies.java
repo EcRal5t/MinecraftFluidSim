@@ -14,11 +14,10 @@ public record ChemicalSpecies(
 		Double effectiveVolumeM3PerMol,
 		LiquidProperties liquidProperties
 ) {
-	public record LiquidProperties(double referenceDensityKgPerM3, double heatCapacityJPerKgK,
+	public record LiquidProperties(double referenceDensityKgPerM3,
 	                               double conductivityWPerMK, double viscosityPaS) {
 		public LiquidProperties {
 			if (!(Double.isFinite(referenceDensityKgPerM3) && referenceDensityKgPerM3 > 0
-					&& Double.isFinite(heatCapacityJPerKgK) && heatCapacityJPerKgK > 0
 					&& Double.isFinite(conductivityWPerMK) && conductivityWPerMK >= 0
 					&& Double.isFinite(viscosityPaS) && viscosityPaS > 0))
 				throw new IllegalArgumentException("Liquid species properties are invalid");

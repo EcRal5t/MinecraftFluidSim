@@ -78,7 +78,7 @@ final class VulkanThermalConduction implements AutoCloseable {
         KNOTS(8),MATERIAL_CP(8),MATERIAL_MIN_CP(8),MIN_CP(8),BEFORE_ENERGY(8),TEMPERATURE(8),
         DEGREE_COUNTS(4),DEGREE_OFFSETS(4),DEGREE_CURSORS(4),INCIDENT(4),DEGREE(8),FLUX(8),
         ENERGY_CHANGE(8),RESERVOIR_CHANGE(8),MODE(4),DISPATCH(4),SCAN(4),
-        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4),BATH_EDGES(4),TERM_ETHANOL_MASS(8);
+        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4),BATH_EDGES(4);
         final int width;Field(int width){this.width=width;}
     }
     /** Common knots retain every registered caloric break. Cp includes endpoint extension intervals. */
@@ -120,7 +120,7 @@ final class VulkanThermalConduction implements AutoCloseable {
                     case TERM_OFFSETS->Math.addExact(owners,1);
                     case DEGREE_OFFSETS,TILE_OFFSETS->spatial?0:Math.addExact(owners,1);
                     case DEGREE_COUNTS,DEGREE_CURSORS,TILE_COUNTS->spatial?0:owners;
-                    case TERM_MATERIAL,TERM_MASS,TERM_ETHANOL_MASS->terms;
+                    case TERM_MATERIAL,TERM_MASS->terms;
                     case CONTACT_A,CONTACT_B,CONTACT_G,CONTACT_BATH_T,BATH_INDEX->contacts;
                     case FLUX->Math.max(contacts,owners);
                     case KNOTS->tables.knots().length;case MATERIAL_CP->tables.heatCapacity().length;

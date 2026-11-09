@@ -200,7 +200,6 @@ public final class ChemicalRegistry {
 					.append(definition.effectiveVolumeM3PerMol() == null ? "" : Double.toHexString(definition.effectiveVolumeM3PerMol())).append('|');
 			var liquid = definition.liquidProperties();
 			if (liquid != null) out.append("liquid|").append(Double.toHexString(liquid.referenceDensityKgPerM3())).append('|')
-					.append(Double.toHexString(liquid.heatCapacityJPerKgK())).append('|')
 					.append(Double.toHexString(liquid.conductivityWPerMK())).append('|')
 					.append(Double.toHexString(liquid.viscosityPaS())).append('|');
 			appendMap(out, definition.composition());

@@ -87,7 +87,6 @@ public final class ChemicalRegistryCodec {
 				var properties = definition.liquidProperties();
 				CompoundTag value = new CompoundTag();
 				value.putLong("Density", Double.doubleToRawLongBits(properties.referenceDensityKgPerM3()));
-				value.putLong("HeatCapacity", Double.doubleToRawLongBits(properties.heatCapacityJPerKgK()));
 				value.putLong("Conductivity", Double.doubleToRawLongBits(properties.conductivityWPerMK()));
 				value.putLong("Viscosity", Double.doubleToRawLongBits(properties.viscosityPaS()));
 				liquidProperties.add(value);
@@ -187,11 +186,10 @@ public final class ChemicalRegistryCodec {
 			ChemicalSpecies.LiquidProperties properties = null;
 			if (!encodedProperties.isEmpty()) {
 				CompoundTag value = compound(encodedProperties, 0, "liquid properties");
-				requireAll(value, Map.of("Density", Tag.TAG_LONG, "HeatCapacity", Tag.TAG_LONG,
+				requireAll(value, Map.of("Density", Tag.TAG_LONG,
 						"Conductivity", Tag.TAG_LONG, "Viscosity", Tag.TAG_LONG));
 				properties = new ChemicalSpecies.LiquidProperties(
 						Double.longBitsToDouble(value.getLongOr("Density", 0)),
-						Double.longBitsToDouble(value.getLongOr("HeatCapacity", 0)),
 						Double.longBitsToDouble(value.getLongOr("Conductivity", 0)),
 						Double.longBitsToDouble(value.getLongOr("Viscosity", 0)));
 			}

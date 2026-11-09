@@ -87,7 +87,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var caloric=VulkanLiquidThermodynamics.tables(fluid,thermal).withAqueous(
                     fluid.materials().stream().map(m->m.id()).toList().indexOf("mmm:water"),
                     liquid==null?-1:chemistry.speciesHandle(ethanol.id()),liquid==null?0:ethanol.molarMassKgPerMol().toDouble(),
-                    liquid==null?0:liquid.heatCapacityJPerKgK(),liquid==null?0:liquid.conductivityWPerMK());
+                    liquid==null?0:liquid.conductivityWPerMK());
             return new MechanicalDefinitions(stockCapacity,speciesCapacity,limbCapacity,scratchLimbsPerWindow,quantumExponent,phases,masses,reference,offsets,stride,caloric,VulkanLiquidViscosity.tables(fluid,constitutive,chemistry),VulkanLiquidForces.tables(fluid,constitutive),VulkanSurfaceTension.tables(fluid),noSlip);
         }
 

@@ -79,9 +79,9 @@ public final class GpuLiquidDiffusionValidation {
         int[] handles={Math.min(water,ethanol),Math.max(water,ethanol),water,water};
         long[] amounts=water<ethanol?new long[]{55,10,55,55}:new long[]{10,55,55,55};
         long[] mass={17500,12900,12900},residual={3000,3000,3000};
-        double ethanolMass=10*460e-10,initialU=0;long[] energy=new long[3];
+        double initialU=0;long[] energy=new long[3];
         for(int i=0;i<3;i++){
-            double kg=mass[i]*1e-10,cp=(kg-(i==0?ethanolMass:0))*4200+(i==0?ethanolMass:0)*2430;
+            double kg=mass[i]*1e-10,cp=kg*4200;
             double value=cp*(310-293.15);energy[i]=Double.doubleToRawLongBits(value);initialU+=value;
         }
         var inventory=new DeviceLiquidInventory(cellOffsets,new int[]{0,0,0},new int[]{255,255,255},
@@ -104,7 +104,7 @@ public final class GpuLiquidDiffusionValidation {
             var definitions=tables.layout(liquid.bytes(),alignment);long ref=align(definitions.endOffset(),alignment),speciesRef=align(ref+8,alignment);
             var ethanolDefinition=chemistry.species(ethanol);
             var caloric=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(fluids,thermal).withAqueous(0,ethanol,
-                    ethanolDefinition.molarMassKgPerMol().toDouble(),ethanolDefinition.liquidProperties().heatCapacityJPerKgK(),ethanolDefinition.liquidProperties().conductivityWPerMK()),Math.toIntExact(ref/4),
+                    ethanolDefinition.molarMassKgPerMol().toDouble(),ethanolDefinition.liquidProperties().conductivityWPerMK()),Math.toIntExact(ref/4),
                     Math.toIntExact(speciesRef/4),chemistry.species().size(),speciesRef+8L*chemistry.species().size(),alignment);
             var progress=new VulkanReactionProgressLayout(cells,cells*32,0,definitions,caloric.endOffset(),alignment);
             long geometryOffset=align(progress.endOffset(),alignment);
@@ -150,10 +150,10 @@ public final class GpuLiquidDiffusionValidation {
                     throw new AssertionError("Incorrect solvent/solute exchange "+Arrays.toString(first)+Arrays.toString(second)+Arrays.toString(third));
                 for(int i=0;i<3;i++){
                     long[] q=species(after,i,water,ethanol);long expected=q[0]*180+q[1]*460+after.massResidualUnits()[i];
-                    double kg=after.massUnits()[i]*1e-10,ethyl=q[1]*460e-10;
-                    double expectedCp=(kg-ethyl)*4200+ethyl*2430;
+                    double kg=after.massUnits()[i]*1e-10;
+                    double expectedCp=kg*4200;
                     int slot=i==0?a:i==1?b:blocked;
-                    if(Math.abs(cp.getDouble(8*slot)-expectedCp)>1e-12*expectedCp)throw new AssertionError("Composition heat capacity differs row="+i+" actual="+cp.getDouble(8*slot)+" expected="+expectedCp+" species="+Arrays.toString(q)+" mass="+kg);
+                    if(Math.abs(cp.getDouble(8*slot)-expectedCp)>1e-12*expectedCp)throw new AssertionError("Carrier heat capacity differs row="+i+" actual="+cp.getDouble(8*slot)+" expected="+expectedCp+" mass="+kg);
                     if(i==2&&Math.abs(temperatures.getDouble(8*slot)-310)>1e-8)throw new AssertionError("Closed-cell temperature changed");
                     if(expected!=after.massUnits()[i]||after.massResidualUnits()[i]!=residual[i])throw new AssertionError("Species mass and residual disagree");
                 }
@@ -219,7 +219,11 @@ public final class GpuLiquidDiffusionValidation {
             }
             var actual=ByteBuffer.allocate(Math.toIntExact(liquid.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             try(var capture=storage.capture()){storage.read(capture,0,actual);}actual.flip();var finalState=liquid.exportState(actual);var result=finalState.inventory();
-            if(result.cellOffsets()[a]!=result.cellOffsets()[a+1])throw new AssertionError("Final solute quantum was not transferred");
+            int donor=result.cellOffsets()[a],donorEnd=result.cellOffsets()[a+1],recipient=result.cellOffsets()[b];
+            if(donorEnd-donor!=1 || result.massUnits()[donor]!=0 || Double.longBitsToDouble(result.energyBits()[donor])!=0.0
+                    || result.speciesOffsets()[donor]!=result.speciesOffsets()[donor+1] || recipient>=result.cellOffsets()[b+1]
+                    || species(result,recipient,water,salt)[1]!=1)
+                throw new AssertionError("Final solute quantum was not transferred");
             if(Arrays.stream(result.massUnits()).sum()!=saltMass+waterMass)throw new AssertionError("Quantum diffusion lost mass");
             double totalEnergy=Arrays.stream(result.energyBits()).mapToDouble(Double::longBitsToDouble).sum();
             double[] finalMass=new double[cells];finalMass[b]=(saltMass+waterMass)*1e-10;

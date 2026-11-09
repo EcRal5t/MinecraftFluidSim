@@ -143,20 +143,12 @@ double specificCold(int kind, int row) {
 double reference(int kind, int row, int s) {
     return readDouble(caloricHeaderWord(kind, CAL_SPECIES_REFERENCE) + 2 * (material(kind, row) * caloricHeaderWord(kind, CAL_SPECIES_STRIDE) + s));
 }
-double ethanolMass(int kind,int row) {
-    int sp=caloricHeaderWord(0,CAL_ETHANOL_SPECIES);
-    if(kind!=0 || material(kind,row)!=caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL) || sp<0)return 0.0LF;
-    return caloricEthanolMass(double(mass(kind,row))*MASS_UNIT_KG,double(species(kind,row,sp)),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS));
-}
+
 double cold(int kind, int row) {
     if (mass(kind, row) == 0l)
         return 0.0LF;
-    double result=double(mass(kind,row))*MASS_UNIT_KG*specificCold(kind,row),ethanol=ethanolMass(kind,row);
-    if(ethanol>0.0LF){
-        int m=material(kind,row);double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
-        double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
-        result+=ethanol*((minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
-    }
+    double result=double(mass(kind,row))*MASS_UNIT_KG*specificCold(kind,row);
+
     for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
         int64_t speciesAmount = species(kind, row, s);
         if (speciesAmount != 0l)
@@ -169,7 +161,7 @@ double capacity(int kind, int row, double t) {
         last = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
     while (at < last && t >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
-    return caloricCapacity(double(mass(kind,row))*MASS_UNIT_KG,ethanolMass(kind,row),readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at),readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY));
+    return double(mass(kind,row))*MASS_UNIT_KG*readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at);
 }
 double sensible(int kind, int row, double t) {
     int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
@@ -182,9 +174,7 @@ double sensible(int kind, int row, double t) {
             lower = upper;
         }
     }
-    double kg=double(mass(kind,row))*MASS_UNIT_KG,ethanol=ethanolMass(kind,row);
-    double minimum=readDouble(headerWord(kind==0?H_LIQUID_CALORIC:H_SOLID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
-    return (kg-ethanol)*result+ethanol*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)*(t-minimum);
+    return double(mass(kind,row))*MASS_UNIT_KG*result;
 }
 // DYADIC_LIBRARY
 uint dyadicWord(int bank, int at) {
@@ -347,11 +337,7 @@ double transferCold(int first, int end, int solid, int rule, int64_t batches, bo
                         part = portion(q, next, weight) - portion(q, prefix, weight);
                 if (part > 0l) {
                     result -= double(part)*reference(0,row,s);
-                    if(s==caloricHeaderWord(0,CAL_ETHANOL_SPECIES) && material(0,row)==caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL)){
-                        int m=material(0,row);double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
-                        double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
-                        result-=double(part)*1e-6LF*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_MOLAR_MASS)*((minimum-refT)*readDouble(headerWord(H_LIQUID_CALORIC)+CAL_ETHANOL_HEAT_CAPACITY)-readDouble(caloricHeaderWord(0,CAL_COLD_SENSIBLE)+2*m));
-                    }
+
                 }
                 prefix = next;
             }

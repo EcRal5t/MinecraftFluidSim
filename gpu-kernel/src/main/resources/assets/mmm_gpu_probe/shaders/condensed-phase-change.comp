@@ -187,11 +187,7 @@ double capacity(int kind, int row, double temperature, out double knot) {
     while (at + 1 < end && temperature >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
     knot = at + 1 < end ? readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at) : 1.7976931348623157e308LF;
-    double total=double(mass(kind,row))*1e-10LF, ethanol=0.0;
-    int ethanolSpecies=caloricHeaderWord(kind,CAL_ETHANOL_SPECIES);
-    if(m==caloricHeaderWord(kind,CAL_AQUEOUS_MATERIAL)&&ethanolSpecies>=0)
-        ethanol=caloricEthanolMass(total,double(readQuantity(kind,row,ethanolSpecies)),readDouble(headerWord(101)+CAL_ETHANOL_MOLAR_MASS));
-    return caloricCapacity(total,ethanol,readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at),readDouble(headerWord(101)+CAL_ETHANOL_HEAT_CAPACITY));
+    return double(mass(kind,row))*1e-10LF*readDouble(caloricHeaderWord(kind,CAL_SEGMENT_CAPACITY)+2*at);
 }
 int64_t freezable(int liquid) {
     int64_t result = phaseRowMass(phaseRowsHeader(), liquid);
@@ -226,13 +222,7 @@ dvec2 pairEnergy(int liquid, int solid, double temperature, bool freezing, int64
                 qa = readQuantity(0, liquid, s) + (freezing ? -q : q), qb = readQuantity(1, solid, s) + (freezing ? q : -q);
         if (qa != 0l) {
             result.x += double(qa) * reference(0, liquid, s);
-            int m=material(0,liquid);
-            if(m==caloricHeaderWord(0,CAL_AQUEOUS_MATERIAL)&&s==caloricHeaderWord(0,CAL_ETHANOL_SPECIES)) {
-                double ethanol=caloricEthanolMass(double(a)*1e-10LF,double(qa),readDouble(headerWord(101)+CAL_ETHANOL_MOLAR_MASS));
-                double refT=readDouble(caloricHeaderWord(0,CAL_REFERENCE_TEMPERATURE)+2*m);
-                double pureSensible=specific(0,liquid,temperature)-readDouble(caloricHeaderWord(0,CAL_MATERIAL_REFERENCE)+2*m);
-                result.x+=ethanol*((temperature-refT)*readDouble(headerWord(101)+CAL_ETHANOL_HEAT_CAPACITY)-pureSensible);
-            }
+
         }
         if (qb != 0l)
             result.y += double(qb) * reference(1, solid, s);

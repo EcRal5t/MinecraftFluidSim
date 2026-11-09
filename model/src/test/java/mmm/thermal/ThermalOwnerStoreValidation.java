@@ -34,10 +34,10 @@ public final class ThermalOwnerStoreValidation {
 
 		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
-        ethanolMixtureUsesConservedMassFractions();
+        aqueousMixtureUsesCarrierCaloricSegments();
 	}
 
-    private static void ethanolMixtureUsesConservedMassFractions() {
+    private static void aqueousMixtureUsesCarrierCaloricSegments() {
         var chemistry=TestChemicalDefinitions.load();
         var ethanol=chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.ETHANOL));
         var props=ethanol.liquidProperties();
@@ -45,11 +45,19 @@ public final class ThermalOwnerStoreValidation {
         var water=new ThermalMaterialDefinition("mmm:test_water",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",
                 293.15,0,.6,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,4200)));
         var pure=AqueousMixtureProperties.thermalMaterial(water,mass,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L),chemistry);
-        require(Math.abs(pure.specificHeatAt(300)-props.heatCapacityJPerKgK())<1e-9
-                && Math.abs(pure.conductivityWPerMeterK()-props.conductivityWPerMK())<1e-12,"Pure ethanol thermal properties differ");
+        require(Math.abs(pure.specificHeatAt(300)-water.specificHeatAt(300))<1e-9
+                && Math.abs(pure.conductivityWPerMeterK()-props.conductivityWPerMK())<1e-12,"Ethanol-rich carrier properties differ");
         var mixture=AqueousMixtureProperties.thermalMaterial(water,2*mass,Map.of(BuiltinChemicalDefinitions.ETHANOL,1_000_000L),chemistry);
-        require(Math.abs(mixture.specificHeatAt(300)-(4200+props.heatCapacityJPerKgK())/2)<1e-9
+        require(Math.abs(mixture.specificHeatAt(300)-water.specificHeatAt(300))<1e-9
                 && Math.abs(mixture.conductivityWPerMeterK()-(.6+props.conductivityWPerMK())/2)<1e-12,"Mixture thermal properties differ");
+        double traceMass=mass*1e-8,incomingMass=traceMass*100,temperature=50;
+        var traceSpecies=Map.of(BuiltinChemicalDefinitions.ETHANOL,1L);
+        var trace=AqueousMixtureProperties.thermalMaterial(water,traceMass,traceSpecies,chemistry);
+        var merged=AqueousMixtureProperties.thermalMaterial(water,traceMass+incomingMass,traceSpecies,chemistry);
+        double energy=ThermalCaloricInversion.energyAt(trace,traceMass,0,temperature)
+                +ThermalCaloricInversion.energyAt(water,incomingMass,0,temperature);
+        require(Math.abs(ThermalCaloricInversion.owner(merged,traceMass+incomingMass,energy,0).temperatureK()-temperature)<1e-9,
+                "Combining a quantized solute trace changed the caloric temperature");
     }
 
 	private static void thermalAuditAcceptsFloatingPointResidual() {

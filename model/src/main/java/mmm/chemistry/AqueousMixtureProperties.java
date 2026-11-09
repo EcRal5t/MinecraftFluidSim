@@ -6,7 +6,7 @@ import java.util.Map;
 public final class AqueousMixtureProperties {
     private AqueousMixtureProperties() { }
 
-    /** Caloric and transport properties share the same conserved ethanol mass fraction. */
+    /** Conductivity follows composition; caloric segments belong to the liquid carrier. */
     public static mmm.thermal.ThermalMaterialDefinition thermalMaterial(
             mmm.thermal.ThermalMaterialDefinition material, double massKg, Map<String, Long> speciesQuanta, ChemicalRegistry chemistry) {
         if (material.carrierKind() != mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID
@@ -18,12 +18,9 @@ public final class AqueousMixtureProperties {
         var properties=definition.liquidProperties();
         if (properties == null) throw new IllegalArgumentException("Liquid properties are missing for " + definition.id());
         double fraction = Math.min(1.0, ethanol * 1e-6 * definition.molarMassKgPerMol().toDouble() / massKg);
-        var segments = material.caloricSegments().stream().map(segment ->
-                new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(segment.minimumTemperatureK(), segment.maximumTemperatureK(),
-                        segment.specificHeatJPerKgK() * (1 - fraction) + properties.heatCapacityJPerKgK() * fraction)).toList();
         return new mmm.thermal.ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
                 material.referenceTemperatureK(), material.referenceSpecificEnergyJPerKg(),
-                material.conductivityWPerMeterK() * (1 - fraction) + properties.conductivityWPerMK() * fraction, segments);
+                material.conductivityWPerMeterK() * (1 - fraction) + properties.conductivityWPerMK() * fraction, material.caloricSegments());
     }
 
 }

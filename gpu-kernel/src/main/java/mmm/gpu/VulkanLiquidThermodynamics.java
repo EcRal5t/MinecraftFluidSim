@@ -45,7 +45,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         SECONDARY_BEGIN(40),
         SECONDARY_COUNTS(41), SURFACE_INTERCEPT(42), SURFACE_CAPACITY(43),
         MINIMUM_TEMPERATURE(44),
-        AQUEOUS_MATERIAL(46), ETHANOL_SPECIES(47), ETHANOL_HEAT_CAPACITY(48), ETHANOL_MOLAR_MASS(50), ETHANOL_CONDUCTIVITY(52);
+        AQUEOUS_MATERIAL(46), ETHANOL_SPECIES(47), ETHANOL_MOLAR_MASS(50), ETHANOL_CONDUCTIVITY(52);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -53,8 +53,6 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         var result = new StringBuilder();
         for (var field : Header.values())
             result.append("#define CAL_").append(field.name()).append(' ').append(field.word).append('\n');
-        result.append("double caloricEthanolMass(double mass,double quanta,double molarMass){return min(mass,quanta*1e-6LF*molarMass); }\n");
-        result.append("double caloricCapacity(double mass,double ethanolMass,double pureCp,double constituentCp){return (mass-ethanolMass)*pureCp+ethanolMass*constituentCp; }\n");
         return result.toString();
     }
 
@@ -90,12 +88,12 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                 layout.word(VulkanThermalDeviceLayout.Field.SURFACE_ENERGY_INTERCEPT),layout.word(VulkanThermalDeviceLayout.Field.SURFACE_HEAT_CAPACITY));}
     }
     record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible,
-                  int aqueousMaterial,int ethanolSpecies,double ethanolMolarMass,double ethanolHeatCapacity,double ethanolConductivity) {
+                  int aqueousMaterial,int ethanolSpecies,double ethanolMolarMass,double ethanolConductivity) {
         Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible) {
-            this(offsets,upper,capacity,referenceTemperature,coldSensible,-1,-1,0.0,0.0,0.0);
+            this(offsets,upper,capacity,referenceTemperature,coldSensible,-1,-1,0.0,0.0);
         }
-        Tables withAqueous(int material,int species,double molarMass,double heatCapacity,double conductivity) {
-            return new Tables(offsets,upper,capacity,referenceTemperature,coldSensible,material,species,molarMass,heatCapacity,conductivity);
+        Tables withAqueous(int material,int species,double molarMass,double conductivity) {
+            return new Tables(offsets,upper,capacity,referenceTemperature,coldSensible,material,species,molarMass,conductivity);
         }
     }
     static Tables tables(FluidMaterialRegistry fluid,ThermalRegistry thermal) {
@@ -141,7 +139,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
             data[Header.SECONDARY_BEGIN.word]=inventory.secondaryBegin();data[Header.SECONDARY_COUNTS.word]=inventory.secondaryCountsWord();
             data[Header.SURFACE_INTERCEPT.word]=inventory.surfaceInterceptWord();data[Header.SURFACE_CAPACITY.word]=inventory.surfaceCapacityWord();
             data[Header.AQUEOUS_MATERIAL.word]=tables.aqueousMaterial();data[Header.ETHANOL_SPECIES.word]=tables.ethanolSpecies();
-            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4 * Header.MINIMUM_TEMPERATURE.word,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);out.putDouble(4 * Header.ETHANOL_HEAT_CAPACITY.word,tables.ethanolHeatCapacity());out.putDouble(4 * Header.ETHANOL_MOLAR_MASS.word,tables.ethanolMolarMass());out.putDouble(4 * Header.ETHANOL_CONDUCTIVITY.word,tables.ethanolConductivity());return out;
+            for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4 * Header.MINIMUM_TEMPERATURE.word,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);out.putDouble(4 * Header.ETHANOL_MOLAR_MASS.word,tables.ethanolMolarMass());out.putDouble(4 * Header.ETHANOL_CONDUCTIVITY.word,tables.ethanolConductivity());return out;
         }
         void initializeHeaderAndTables(ByteBuffer destination) {
             destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
