@@ -150,7 +150,7 @@ final class VulkanLiquidWorkspaceSections {
             thermo=VulkanGasThermodynamics.layout(state,config.tables(),word(volumes),volumes.offset()+volumes.bindingBytes(),a);
             int cellWord=word(workspace.geometry.get(GeometryField.CELLS));
             mixture=VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,cellWord,4,cellWord+2,4,cellWord+4,4,
-                    thermo,config.cellSize(),1,cellWord),thermo.endOffset(),a);
+                    thermo,config.cellSize(),cellWord),thermo.endOffset(),a);
             geometry=VulkanGasGeometry.layout(totals,word(workspace.geometry.get(GeometryField.FIXED_MASKS)),occupiedWord,
                     cellWord,word(workspace.geometry.get(GeometryField.PLANES)),word(workspace.geometry.get(GeometryField.LIQUID_MICRO)),
                     config.sealedExterior(),config.cellSize(),mixture.endOffset(),a).withMixture(mixture);
@@ -180,7 +180,7 @@ final class VulkanLiquidWorkspaceSections {
             region.kernels.gasThermo.rebindRanges(arena,err);
             region.kernels.timed(command,phase+"-gas-caloric",()->{if(energyOnly)region.kernels.gasThermo.recordEnergy(command,thermo);else region.kernels.gasThermo.recordCaloric(command,thermo);});
             region.mixtureKernel.rebindRanges(arena,err);
-            region.kernels.timed(command,phase+"-mixture",()->region.mixtureKernel.record(command,mixture,region.requestCellSize,dt));
+            region.kernels.timed(command,phase+"-mixture",()->region.mixtureKernel.record(command,mixture,region.requestCellSize));
         }
         void recordTransport(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,
                              org.lwjgl.system.MemoryStack stack,double dt){

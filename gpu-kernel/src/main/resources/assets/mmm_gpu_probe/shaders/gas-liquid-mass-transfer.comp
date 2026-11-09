@@ -247,11 +247,23 @@ void initialize(int i) {
         writeDouble(workField(FIELD_ORPHAN_ENERGY) + 2 * i, 0.0);
         words[workField(FIELD_ORPHAN_RECEIVER) + i] = uint(-1);
         writeDouble(workField(FIELD_PE_WORK) + 2 * i, 0.0);
-        int64_t mass = 0l;
-        for (int m = 0; m < headerWord(H_MATERIAL_COUNT); m++)
-            mass = addq(mass, phaseRowMass(headerWord(H_PHASE_ROWS_HEADER), row(i, m)));
-        for (int m = 0; m < gasHeaderWord(GAS_H_COMPONENT_COUNT); m++)
-            mass = addq(mass, readQuantity(gasField(GAS_MASS_UNITS)+2*component(i,m)));
+        int64_t mass = 0l, nanos = 0l;
+        double reference = 0.0LF;
+        for (int m = 0; m < headerWord(H_MATERIAL_COUNT); m++) {
+            int lr=row(i,m);
+            int64_t liquidMass=phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr),quanta=0l;
+            mass=addq(mass,liquidMass);
+            reference+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),lr);
+            if(liquidMass>0l)for(int sp=0;sp<headerWord(H_SPECIES_COUNT);sp++)
+                quanta=addq(quanta,phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp));
+            writeQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr,quanta);
+        }
+        for (int m = 0; m < gasHeaderWord(GAS_H_COMPONENT_COUNT); m++) {
+            mass=addq(mass,readQuantity(gasField(GAS_MASS_UNITS)+2*component(i,m)));
+            nanos=addq(nanos,readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(i,m)));
+        }
+        writeDouble(workField(FIELD_LIQUID_REFERENCE)+2*i,reference);
+        writeQuantity(workField(FIELD_GAS_NANOS)+2*i,nanos);
         writeQuantity(workField(FIELD_OLD_MASS) + 2 * i, mass);
         writeQuantity(workField(FIELD_NEW_MASS) + 2 * i, mass);
     }
@@ -358,16 +370,15 @@ void propose(int c) {
                 double transfer;
                 if(vapor){
                     if(!gasPrepared){
-                        for(int componentId=0;componentId<gasHeaderWord(GAS_H_COMPONENT_COUNT);componentId++)
-                            totalNanos+=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(node,componentId)));
+                        totalNanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*node));
                         pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*node+MIXTURE_PRESSURE));
                         capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*node+2))*h3;
-                        for(int material=0;material<materials;material++)reference+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),row(node,material))*h3;
+                        reference=readDouble(workField(FIELD_LIQUID_REFERENCE)+2*node)*h3;
                         gasPrepared=true;
                     }
                     double targetNanos=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(node,int(words[r+1]))));
                     double partial=totalNanos>0.0LF?pressure*targetNanos/totalNanos:0.0LF;
-                    if(totalSpecies<0.0LF){totalSpecies=0.0LF;for(int species=0;species<headerWord(H_SPECIES_COUNT);species++)totalSpecies+=double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,species));}
+                    if(totalSpecies<0.0LF)totalSpecies=double(readQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr));
                     double fraction=mass==0l?1.0LF:totalSpecies>0.0LF?double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp))/totalSpecies:1.0LF;
                     double equilibrium=101325.0LF*double(exp(float(readDouble(r+8)*(1.0LF/readDouble(r+6)-1.0LF/liquidTemperature))))*fraction;
                     int64_t quantum=readQuantity(r+24);double addNanos=double(quantum)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF);
@@ -382,7 +393,7 @@ void propose(int c) {
                 double film = seriesConductance(1.0LF,readDouble(r + 12),1.0LF,readDouble(r + 14),henry * 8.31446261815324LF * liquidTemperature);
                 double partialPressure = double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * component(node, int(words[r + 1])))) * 1e-9LF *
                                                (101325.0LF / 293.15LF) * gasTemperature / gasVolume;
-                if(totalLiquid<0.0LF){totalLiquid=0.0LF;for(int material=0;material<materials;material++)totalLiquid+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),row(c,material));}
+                if(totalLiquid<0.0LF)totalLiquid=readDouble(workField(FIELD_LIQUID_REFERENCE)+2*c);
                 double area = readDouble(p.header + H_CELL_SIZE) * readDouble(p.header + H_CELL_SIZE) *
                               interfaceArea * min(1.0LF,phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),lr)/max(totalLiquid,1e-300LF));
                 double conductance = film * area,
@@ -474,15 +485,12 @@ void proposeDryWall(int index){
     double area=dryWallArea(c,direction);if(area<=0.0LF)return;
     double temperature=readDouble(headerWord(H_WALL_TEMPERATURE)+2*device),gasTemperature=state(c,0);
     if(!(temperature>0.0LF && gasTemperature>0.0LF))return;
-    double nanos=0.0LF;
-    for(int componentId=0;componentId<gasHeaderWord(GAS_H_COMPONENT_COUNT);componentId++)
-        nanos+=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,componentId)));
+    double nanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*c));
     if(nanos<=0.0LF)return;
     double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,int(words[r+1]))));
     double pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*c+MIXTURE_PRESSURE));
     int64_t quantum=readQuantity(r+24);if(quantum<=0l){reportInvalid();return;}
-    double totalSpecies=0.0LF;
-    for(int species=0;species<headerWord(H_SPECIES_COUNT);species++)totalSpecies+=double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,species));
+    double totalSpecies=double(readQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr));
     double partial=pressure*target/nanos,fraction=0.0LF;
     if(liquidMass>0l && totalSpecies>0.0LF)fraction=double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp))/totalSpecies;
     else {
@@ -501,8 +509,7 @@ void proposeDryWall(int index){
     }
     double equilibrium=fraction*101325.0LF*double(exp(float(readDouble(r+8)*(1.0LF/readDouble(r+6)-1.0LF/temperature))));
     if(partial<=equilibrium)return;
-    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h,reference=0.0LF;
-    for(int material=0;material<headerWord(H_MATERIAL_COUNT);material++)reference+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),row(c,material))*h3;
+    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h,reference=readDouble(workField(FIELD_LIQUID_REFERENCE)+2*c)*h3;
     double capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*c+2))*h3;
     double addNanos=double(quantum)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF);
     double response=vaporResponse(capacity,reference,nanos,target,gasTemperature,pressure,addNanos,
@@ -756,9 +763,18 @@ uvec4 exchange(int node) {
         double moved = double(q) * carried;
         double liquidMoved=wall?double(q)*liquidCarried:moved;
         writePhaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp, addq(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp), dissolve ? q : -q));
+        int quanta=workField(FIELD_LIQUID_QUANTA)+2*lr;
+        writeQuantity(quanta,addq(readQuantity(quanta),dissolve?q:-q));
         writeQuantity(phaseRowField(headerWord(H_PHASE_ROWS_HEADER), LP_FIELD_MASS) + 2 * lr, addq(oldMass, dissolve ? mass : -mass));
-        if(vapor){int delta=phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_DELTA_SVQ)+2*lr;
-            writeQuantity(delta,addq(readQuantity(delta),(dissolve?1l:-1l)*(q/quantum)));}
+        if(vapor){
+            int delta=phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_DELTA_SVQ)+2*lr;
+            writeQuantity(delta,addq(readQuantity(delta),(dissolve?1l:-1l)*(q/quantum)));
+            double reference=0.0LF;
+            for(int material=0;material<headerWord(H_MATERIAL_COUNT);material++)
+                reference+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),row(c,material));
+            int total=workField(FIELD_LIQUID_REFERENCE)+2*c;
+            writeDouble(total,reference);
+        }
         double remainingLiquidEnergy=phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER),lr)+(dissolve?liquidMoved:-liquidMoved);
         if(!dissolve && mass==oldMass){moved+=remainingLiquidEnergy;remainingLiquidEnergy=0.0LF;}
         writeDouble(phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_ENERGY)+2*lr,remainingLiquidEnergy);
@@ -776,6 +792,8 @@ uvec4 exchange(int node) {
         writeQuantity(gasField(GAS_SPECIES_AMOUNTS) + 2 * gs, addq(readQuantity(gasField(GAS_SPECIES_AMOUNTS) + 2 * gs), dissolve ? -q : q));
         writeQuantity(gasField(GAS_MASS_UNITS) + 2 * comp, addq(readQuantity(gasField(GAS_MASS_UNITS) + 2 * comp), dissolve ? -mass : mass));
         writeQuantity(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * comp, addq(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * comp), dissolve ? -nanos : nanos));
+        int totalNanos=workField(FIELD_GAS_NANOS)+2*node;
+        writeQuantity(totalNanos,addq(readQuantity(totalNanos),dissolve?-nanos:nanos));
         energy += dissolve ? -moved : moved;
         int audit = component(int(words[gasField(GAS_COUNTS)]) + (dissolve ? 3 : 2), gm), entry = gasSpecies(audit, sp);
         atomicAdd(longs[(gasField(GAS_SPECIES_AMOUNTS) + 2 * entry) / 2], q);

@@ -274,6 +274,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         bindings.rebindRanges(List.of(arena,errorRange,new FlipKernelBindings.BufferRange(cache)));
     }
     long frozenBytes(){return cache.size();}
+    FlipKernelBindings.BufferIdentity frozenIdentity(){return new FlipKernelBindings.BufferIdentity(cache);}
     void recordImexSamples(VkCommandBuffer command,Layout l,double dt){stage(command,l,40,spatialCapacity(l),0,dt);}
     void recordImexContacts(VkCommandBuffer command,Layout l,double dt,int samples){stage(command,l,41,samples,0,dt);prefix(command,l,samples,Field.CACHE_COUNTS,Field.CACHE_OFFSETS);stage(command,l,44,spatialCapacity(l),0,dt);}
     void recordImexCache(VkCommandBuffer command,Layout l,double dt,int samples){stage(command,l,42,samples,0,dt);}

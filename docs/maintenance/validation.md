@@ -123,24 +123,26 @@
 ./gradlew.bat :gpu-kernel:runGpuSpatialDomainValidation --offline --console=plain --max-workers=1
 ```
 
-2026-11-09，RTX 5070 Ti 上运行 8 步，将相同流动与温差从单块内部平移到跨块通道。稀疏 L 形域实际驻留 1152 格，包围盒为 2304 格；缺失块保持缺失。两份整数质量守恒，跨块液体转移 3.12082 个归一化格容；对应单元最大体积差为 0.000185132 格容、温差为 0.00349018 K。中途恢复 checkpoint 后继续推进；人为卸载跨块通路一侧时，整个物理组的液体、气体、内能及 MAC 动量保持不变。日志 `build/s8-followup.log` 中此任务通过，同批 Fabric 测试编译的结果单独登记。
+2026-11-09，当前有界共同压力与有限驻留输运在 RTX 4060 Ti 上通过空间域验证。相同流动和温差平移到跨块通道，1152 个驻留格组成 L 形域，包围盒为 2304 格；运行 8 步后的最大体积差为 **0.000133425 格容**、最大温差为 **0.000126925 K**，两通道转移量为 2.04110 和 2.04128 格容，相对差为 0.00894%。质量、精确参考体积和物种守恒，checkpoint 后继续推进；卸载跨块通路一侧时，整个物理组的库存、内能与 MAC 动量保持不变。同入口的 Courant 数为 2 的封闭循环以一次完整步输运组成，库存与动能／内能账闭合。记录 `build/perf-delivery-final.log`。
 
-设备候选、拒绝、采用、查询、展示、实体运动及 checkpoint 的 `runGpuResidentStateValidation` 通过，记录 `build/s8-runtime.log`。同批颗粒沉积、再启动和松弛通过，固体 SVQ 与整数质量保持不变。`runGpuActivityMaskValidation` 通过，活动组正常推进，暂停组保存各相库存、热量和动量，记录 `build/s8-host-activity.log`。
+当前驻留状态验证通过设备候选拒绝、采用、机械与独立热推进、固定代次读出、实体插入和完整 checkpoint；热相变及固液反应的整数物种、质量、SVQ 和机械热账通过，记录 `build/perf-complete-validation.log` 中对应任务。扩散的末份溶质、水平及垂向携能交接通过，记录 `build/perf-delivery-final.log`。低压 U 管完成 120 步，气体总体温度约 296 K，两臂液位按压差方向变化，暂停单步、恢复、编辑和续算通过，记录 `build/perf-vacuum-pressure.log`。
 
-六条工艺使用跨计算块的通道与投料位置，沿已有入口运行；冷凝为 1200 步。每条流程检查容器投料、物质与能量收支、停止、取样、保存与恢复续算，全部通过。加热、析出、冷凝及驱动记录于 `build/s8-process.log`，吸收与碳化记录于 `build/s8-process-targeted.log`。冷壁样品为 4.114 mL，乙醇摩尔分率从原料的 0.23591 提高到 0.34829。
+当前六条工艺均沿跨计算块的真实通道、容器、墙体及端口运行，完成物质与能量收支、停止、取样、checkpoint 和恢复续算。加热、吸收脱除、结晶、碳化和驱动记录于 `build/perf-delivery-final.log`；冷凝 1200 步记录于 `build/perf-condensation-final.log`。冷壁收集样品为 **4.470 mL**，乙醇摩尔分率从原料 **0.23591** 提高至 **0.34660**。本轮测量设备为 RTX 4060 Ti。
 
 每次 `motion.step` 的墙钟耗时包含冷导入首步，容器 WAL、采样、存档和绘制在计时外：
 
 | 工艺 | 步数 | 中位数 ms | P95 ms | 最大 ms |
 | --- | ---: | ---: | ---: | ---: |
-| 加热 | 20 | 17.000 | 31.501 | 220.106 |
-| 吸收与脱除 | 40 | 18.030 | 39.472 | 227.822 |
-| 结晶 | 20 | 37.991 | 77.464 | 118.604 |
-| 蒸发与冷凝 | 1200 | 12.148 | 16.826 | 1643.850 |
-| 碳化 | 20 | 17.255 | 37.300 | 153.322 |
-| 规定运动驱动 | 40 | 13.429 | 20.759 | 101.643 |
+| 加热 | 20 | 43.060 | 96.130 | 582.824 |
+| 吸收与脱除 | 40 | 16.451 | 69.056 | 170.619 |
+| 结晶 | 20 | 26.889 | 84.839 | 184.060 |
+| 蒸发与冷凝 | 1200 | 12.164 | 28.998 | 479.675 |
+| 碳化 | 20 | 17.548 | 64.043 | 178.852 |
+| 规定运动驱动 | 40 | 16.923 | 93.433 | 229.912 |
 
 小场景仍有冷导入及相变长步尖峰，后续集中优化。完整步流程与原 64³ 后端预算分别评价。
+
+当前完整水流完成 500 步、实体交互、暂停单步、checkpoint 恢复、库存编辑及续算。499 个非冷导入步墙钟中位 35.688 ms、P95 70.914 ms、最大 256.347 ms，未触发自动暂停。最终 `assemble verifyArchitecture` 通过，架构检查扫描 598 个生产源；上述水流、空间域、扩散和五条工艺记录于 `build/perf-delivery-final.log`。交付产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 `:gpu-kernel:runGpuLiquidDiffusionValidation` 通过：修改世界定义中的水密度、液体及氮气热容，宿主实际库存和 GPU 物性表随定义更新；同一入口的有限扩散、末份溶质、垂向动量和携能交接通过。记录 `build/s8-data-diffusion.log`。
 
@@ -150,7 +152,7 @@
 
 最终 `assemble verifyArchitecture :fabric:runHostValidation -PhostValidation=shape` 通过，记录 `build/s8-delivery-final.log`。楼梯放置使用 310 K 的正式化学、气体及热定义，实际搬迁 6 格液体，体积、整数质量、全部物种和液体携能保持；气体缩容功进入机械功账，总内能与热审计精确闭合。库存验证中的零质量尾量及稀疏空间合同随后通过，记录 `build/s8-host-spatial.log`。交付产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
-新拓扑完整生产 64³／0.5 m 基准沿下文同一命令执行，预热 5 步、测量 10 步。2026-11-09 实测中位数 **137.567 ms**、最大 **234.404 ms**、GPU 均值 **97.867 ms**；单 bank 工作区 **3,760,883,808 B**，设备分配总量 10793.2 MiB。实际子步数为 `[1,1,1,1,1,2,2,2,2,2]`，每步提交 15–27 次。记录 `build/s8-production64.log`。当前未达到 50 ms 预算，较 2026-11-05 生产基线更慢；功能交付后需整体降低完整步计算与提交成本。
+2026-11-09，当前实现的完整生产 64³／0.5 m 输入执行 5 步预热及 50 步连续测量。日志确认实际设备为 RTX 4060 Ti：墙钟中位 **107.802 ms**、P95 **145.266 ms**、最大 **191.613 ms**、GPU 均值 **94.920 ms**，全部按一次完整流体步推进。单 bank 工作区 **3,298,740,960 B**，设备分配 **6325.4 MiB**。记录 `build/perf-delivery-final.log`。RTX 5070 Ti 的最终 50 ms 验收受驱动故障阻断：显式选择该设备时 Java 在设备初始化阶段退出，Windows 记录 `nvoglv64.dll`／`0xc0000409`，见 `build/perf-production5070-final.log` 和 `build/perf-device-failure.log`。恢复驱动后需在日志确认的 RTX 5070 Ti 上复测当前完整实现，50 ms 目标保持未完成。
 
 S1 的针对性入口：
 
@@ -211,7 +213,7 @@ S1 的针对性入口：
 ./gradlew.bat :gpu-kernel:runGpuLiquidMechanicalBenchmark -PgpuMechanicalGrids=64 -PgpuMechanicalScene=cut -PgpuMechanicalGas=true -PgpuMechanicalThermal=true -PgpuMechanicalProduction=true -PgpuMechanicalWarmup=5 -PgpuMechanicalSamples=10 --offline --no-daemon --console=plain --max-workers=1
 ```
 
-该后端预算输入超出默认区域登记规模；相对原 0.25 m 切格机械输入，其边长加倍、物理库存按格容增至 8 倍，分别记录结果。它覆盖设备候选及提交，Minecraft 世界交互与绘制另计。2026-11-05，关闭阶段诊断、预热 5 步并测量 10 步：生产 64³ 中位 99.928 ms、最大 175.604 ms，GPU 均值 74.344 ms，单 bank 工作区为 3,713,109,520 B；测量步实际子步数为 `[1,1,1,1,1,2,2,2,2,2]`，记录 `build/gas-caloric-formal-production64.log`。原 64³ 切格机械场景中位 140.351 ms、最大 191.693 ms，记录 `build/gas-caloric-formal-mechanical64.log`；32³／256 颗粒场景中位 157.254 ms、最大 200.338 ms，记录 `build/gas-caloric-formal-mechanical32.log`。当前耗时高于 50 ms 目标，后续继续优化。
+该后端预算输入超出默认区域登记规模，覆盖设备候选、导热、扩散、反应、相变及提交；Minecraft 世界交互与绘制另计。相对 0.25 m 机械切格输入，其物理边长加倍、库存按格容增至 8 倍，两类输入分别登记。多显卡系统应通过 `-PgpuProbeDevice` 显式选择设备，并以日志中的 `Device:` 为准；设备序号会随驱动状态变化。当前完整生产结果见本节上方，原规模 32³／256 颗粒及长流程尖峰保留独立优化范围。
 
 气体及相变 13 个场景与有限墙通过，记录 `build/final-pressure-phase.log`、`build/final-pressure-walls.log`。纯真空实体关闭与重开、有库存实体对齐关闭通过，记录 `build/entity-vacuum-closure.log`、`build/aligned-body-check.log`。
 

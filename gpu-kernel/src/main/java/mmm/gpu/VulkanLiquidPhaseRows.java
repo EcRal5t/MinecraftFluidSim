@@ -61,6 +61,21 @@ final class VulkanLiquidPhaseRows implements AutoCloseable {
                 case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(source.cellCount(),source.slotCount()))/4);default->rows;};
                 var c=new VulkanLiquidStateLayout.Column(align(cursor,alignment),n,f.width);columns.put(f,c);cursor=c.offset()+c.bindingBytes();}endOffset=align(cursor,alignment);
         }
+        /** Sequential operators share transient rows while retaining separate energy audit columns. */
+        Layout(Layout shared,long base,long alignment){
+            if(base<shared.endOffset||alignment<8||(alignment&(alignment-1))!=0)
+                throw new IllegalArgumentException("Invalid shared phase row workspace");
+            source=shared.source;definitions=shared.definitions;rows=shared.rows;species=shared.species;svqVolume=shared.svqVolume;
+            long cursor=base;
+            for(var field:Field.values()) {
+                if(field==Field.HEADER||field==Field.OLD_ENERGY||field==Field.NEW_ENERGY) {
+                    int count=field==Field.HEADER?80:source.slotCount();
+                    var column=new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,field.width);
+                    columns.put(field,column);cursor=column.offset()+column.bindingBytes();
+                } else columns.put(field,shared.column(field));
+            }
+            endOffset=align(cursor,alignment);
+        }
         VulkanLiquidStateLayout.Column column(Field f){return columns.get(f);}int word(Field f){return Math.toIntExact(column(f).offset()/4);}int headerWord(){return word(Field.HEADER);}
         long feedbackOffset(){return column(Field.CONTROL).offset();}
         ByteBuffer headerBytes(){var b=ByteBuffer.allocateDirect(320).order(ByteOrder.LITTLE_ENDIAN);int[] h=new int[80];

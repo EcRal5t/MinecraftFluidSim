@@ -25,7 +25,7 @@ layout(binding=6,std430) buffer Hierarchy { double hierarchy[]; };
 layout(binding=7,std430) buffer Dispatch { uint dispatchWords[]; };
 layout(push_constant) uniform Params {
     int topology; int schedule; int levelCount; int stage;
-    int base; int peerBase; int peerTopology; int unusedY; int unusedZ; int fineCount; int pressureStride; int factor;
+    int base; int peerBase; int peerTopology; int parentRows; int childRows; int fineCount; int pressureStride; int factor;
     int applyDispatch;
 } p;
 shared double coarseCorrection[64];
@@ -35,10 +35,8 @@ const float OMEGA=0.66666666666666666667;
 int spatialWord(int at){return int(dispatchWords[at]);}
 // SPATIAL_ADDRESS
 int count(int shape){return gridCellsAt(shape);}
-int indexOf(ivec3 at,int shape){return gridCellAt(shape,at);}
 ivec3 coordinate(int row,int shape){return gridPositionAt(shape,row);}
-bool inside(ivec3 at,int shape){return gridCellAt(shape,at)>=0;}
-ivec3 adjacent(ivec3 at,int side) { at[side/2]+=(side&1)==0?-1:1;return at; }
+int neighbor(int row,int side,int shape){return spatialWord(shape+spatialWord(shape+11)+6*row+side);}
 int matrixEntryIndex(int base,int row,int entry) { return base+7*row+entry; }
 int residualIndex(int base,int n,int row) { return 2*base+14*n+row; }
 int correctionIndex(int base,int n,int row) { return 2*base+15*n+row; }
@@ -53,10 +51,9 @@ float scaled(int base,int row,float rhs) {
 }
 float product(int base,int shape,int row,int vectorOffset) {
     precise float result=float(diagonal(base,row))*vectorValue(vectorOffset+row);
-    ivec3 at=coordinate(row,shape);
     for(int side=0;side<6;side++) {
-        ivec3 next=adjacent(at,side);
-        if(inside(next,shape))result+=float(hierarchy[matrixEntryIndex(base,row,side+1)])*vectorValue(vectorOffset+indexOf(next,shape));
+        int next=neighbor(row,side,shape);
+        if(next>=0)result+=float(hierarchy[matrixEntryIndex(base,row,side+1)])*vectorValue(vectorOffset+next);
     }
     return result;
 }
@@ -80,17 +77,15 @@ void buildFine(int row) {
 // Constant prolongation and summed restriction give exactly A_coarse = P^T A_fine P.
 void buildCoarse(int row) {
     double entries[7];for(int entry=0;entry<7;entry++)entries[entry]=0.0;
-    ivec3 at=coordinate(row,p.topology),origin=2*at;
     for(int child=0;child<8;child++) {
-        ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
-        if(!inside(fine,p.peerTopology))continue;
-        int fineRow=indexOf(fine,p.peerTopology);
+        int fineRow=spatialWord(p.childRows+8*row+child);
+        if(fineRow<0)continue;
         entries[0]+=diagonal(p.peerBase,fineRow);
         for(int side=0;side<6;side++) {
-            ivec3 next=adjacent(fine,side);
-            if(!inside(next,p.peerTopology))continue;
+            if(neighbor(fineRow,side,p.peerTopology)<0)continue;
             double value=hierarchy[matrixEntryIndex(p.peerBase,fineRow,side+1)];
-            if(all(equal(next/2,at)))entries[0]+=value;
+            int childBit=(child>>(side/2))&1;
+            if((childBit!=0)==((side&1)==0))entries[0]+=value;
             else entries[side+1]+=value;
         }
     }
@@ -104,12 +99,11 @@ void loadFine(int row,int n) {
 }
 
 void restrictResidual(int row,int n) {
-    ivec3 origin=2*coordinate(row,p.topology);int fineN=count(p.peerTopology);
+    int fineN=count(p.peerTopology);
     precise float rhs=0.0;
     for(int child=0;child<8;child++) {
-        ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
-        if(!inside(fine,p.peerTopology))continue;
-        int fineRow=indexOf(fine,p.peerTopology);
+        int fineRow=spatialWord(p.childRows+8*row+child);
+        if(fineRow<0)continue;
         rhs+=vectorValue(residualIndex(p.peerBase,fineN,fineRow))-product(p.peerBase,p.peerTopology,fineRow,temporaryIndex(p.peerBase,fineN,0));
     }
     writeVector(residualIndex(p.base,n,row),rhs);
@@ -122,9 +116,8 @@ void factorCoarse(int row,int n){
     if(row<n){
         for(int column=0;column<n;column++)hierarchy[p.factor+row*n+column]=0.0;
         hierarchy[p.factor+row*n+row]=diagonal(p.base,row);
-        ivec3 at=coordinate(row,p.topology);
-        for(int side=0;side<6;side++){ivec3 next=adjacent(at,side);if(inside(next,p.topology))
-            hierarchy[p.factor+row*n+indexOf(next,p.topology)]=hierarchy[matrixEntryIndex(p.base,row,side+1)];}
+        for(int side=0;side<6;side++){int next=neighbor(row,side,p.topology);if(next>=0)
+            hierarchy[p.factor+row*n+next]=hierarchy[matrixEntryIndex(p.base,row,side+1)];}
     }
     memoryBarrierBuffer();barrier();
     for(int column=0;column<n;column++){
@@ -171,16 +164,15 @@ void scheduleApply(){
 }
 
 float lifted(int row,int n){
-    int coarseRow=indexOf(coordinate(row,p.topology)/2,p.peerTopology);
+    int coarseRow=spatialWord(p.parentRows+row);
     precise float value=vectorValue(temporaryIndex(p.base,n,row))+vectorValue(correctionIndex(p.peerBase,count(p.peerTopology),coarseRow));
     return value;
 }
 void prolongAndSmooth(int row,int n){
     precise float current=lifted(row,n),productValue=float(diagonal(p.base,row))*current;
-    ivec3 pos=coordinate(row,p.topology);
     for(int side=0;side<6;side++){
-        ivec3 next=adjacent(pos,side);if(inside(next,p.topology))
-            productValue+=float(hierarchy[matrixEntryIndex(p.base,row,side+1)])*lifted(indexOf(next,p.topology),n);
+        int next=neighbor(row,side,p.topology);if(next>=0)
+            productValue+=float(hierarchy[matrixEntryIndex(p.base,row,side+1)])*lifted(next,n);
     }
     writeVector(correctionIndex(p.base,n,row),current+scaled(p.base,row,vectorValue(residualIndex(p.base,n,row))-productValue));
 }

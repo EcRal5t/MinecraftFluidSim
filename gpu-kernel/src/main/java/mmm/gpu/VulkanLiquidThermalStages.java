@@ -38,7 +38,7 @@ final class VulkanLiquidThermalStages {
     int executeReactions(VulkanRegionStorage.Candidate candidate, VulkanGasThermodynamics.Layout sourceEOS,
                          VulkanGasGeometry.Layout previousGeometry, double duration) {
         var activity = candidate.continueBatch((command,input,output,errors,staging,stack)-> {
-            recordLocalState(command,output,errors,duration,true);
+            recordThermodynamicState(command,output,errors,duration);
             region.kernels.reactionKernel.recordLiquidActivity(command,transport.reactions,output,errors);
         },transport.reactions.progress().column(VulkanReactionProgressLayout.Field.CONTROL).offset()+28,4);
         int error=activity.error();
@@ -47,15 +47,29 @@ final class VulkanLiquidThermalStages {
                 region.activeInputs != null && region.activeInputs.phaseChangeEnabled(),
                 region.activeInputs == null ? 0 : region.activeInputs.maximumPhaseOperations(),
                 sourceEOS, previousGeometry, duration,activity.feedback().getInt(0));
-        if (error != 0) return error;
+        return error;
+    }
 
-        return candidate.continueBatch((command,input,output,errors,staging,stack)-> {
-            if(transport.devices!=null && transport.reactions.massTransfer()!=null
-                    && transport.reactions.massTransfer().dryProposals>0)
-                region.kernels.thermalKernel.recordCondensationSettlement(command,output,errors,
-                        transport.devices.state,transport.devices.settlement,transport.devices.thermal);
-            transport.recordSolidGeometry(command,output,errors,stack);
-        },0,0).error();
+    void recordReactionCompletion(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,
+                                  org.lwjgl.system.MemoryStack stack){
+        region.kernels.reactionKernel.recordFinalCaloric(command,transport.reactions,output,errors);
+        if(transport.devices!=null && transport.reactions.massTransfer()!=null
+                && transport.reactions.massTransfer().dryProposals>0)
+            region.kernels.thermalKernel.recordCondensationSettlement(command,output,errors,
+                    transport.devices.state,transport.devices.settlement,transport.devices.thermal);
+        transport.recordSolidGeometry(command,output,errors,stack);
+    }
+
+    /** Thermal and phase exchange use the contact geometry of the completed mechanical transport. */
+    void recordThermodynamicState(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double duration){
+        var occupied=transport.entity==null?workspace.occupied():transport.entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ);
+        region.kernel.rebindRanges(workspace.geometryRanges(output,errors,geometry.get(GeometryField.FACES),occupied));
+        region.kernel.recordTotals(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
+        if(transport.gas!=null)transport.gas.recordThermodynamics(command,output,errors,duration,true);
+        else {
+            region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+            region.mixtureKernel.record(command,workspace.mixture,region.requestCellSize);
+        }
     }
 
     void recordLocalState(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double duration,boolean energyOnly){
@@ -65,7 +79,7 @@ final class VulkanLiquidThermalStages {
         if(transport.gas!=null)transport.gas.recordSource(command,output,errors,duration,region.kernel,energyOnly);
         else {
             region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-            region.mixtureKernel.record(command,workspace.mixture,region.requestCellSize,duration);
+            region.mixtureKernel.record(command,workspace.mixture,region.requestCellSize);
             region.kernel.recordShapes(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
         }
     }
@@ -112,6 +126,7 @@ final class VulkanLiquidThermalStages {
 
         var stableHeader = new HeaderWrite(transport.thermal.contacts().header.offset(), transport.thermal.contacts().headerBytes());
         return candidate.finishBatch(stableHeader.bytes().remaining(), (command, input, output, errors, staging, stack) -> {
+            if(react)recordReactionCompletion(command,output,errors,stack);
             recordLocalState(command,output,errors,duration,!react);
             region.kernels.ledger.record(command, thermal.reservoir());
             region.kernels.ledger.record(command, transport.thermalOnlyRoundoff);

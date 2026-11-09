@@ -13,7 +13,6 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Resident liquid/gas mechanical candidates, with replaceable layouts and shared native pipelines. */
 final class VulkanLiquidRegion implements AutoCloseable {
-    int previousPressureIterations;
     private float previousMechanicalLeafDuration;
     private int previousMechanicalSubsteps;
     private int successfulMechanicalSchedules;
@@ -372,7 +371,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(imported!=null){gasConfiguration=imported.gas();granularConfiguration=imported.granular();thermalConfiguration=imported.heat();coherentConfiguration=imported.coherent();deviceConfiguration=imported.device();reactionConfiguration=enabledReactions(imported.reactions());importRoundoff=importedRoundoff;workspace.sourceBodyState=inputs.bodies();}
             if(updatedHeat!=null)thermalConfiguration=updatedHeat;
             return generation;}}
-        @Override public void close(){synchronized(VulkanLiquidRegion.this){if(closed)return;closed=true;result.close();source.close();for(var w:allocated)if(w!=workspace)w.templates.close();}}
+        @Override public void close(){synchronized(VulkanLiquidRegion.this){if(closed)return;closed=true;result.close();source.close();for(var w:allocated)if(w!=workspace)w.close();}}
     }
     /** Replaces only the thermal face input while retaining every resident inventory and derived field. */
     synchronized Prepared prepareThermalBoundary(Capture source,double[] temperatures) {
@@ -427,7 +426,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         } catch(RuntimeException|Error failure) {
             if(candidate!=null)candidate.close();
             pin.close();
-            for(var allocatedWorkspace:allocated)if(allocatedWorkspace!=workspace)allocatedWorkspace.templates.close();
+            for(var allocatedWorkspace:allocated)if(allocatedWorkspace!=workspace)allocatedWorkspace.close();
             throw failure;
         } finally { activeInputs=previous; }
     }
@@ -520,7 +519,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         var pin=source.retain();var allocated=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<VulkanLiquidWorkspace,Boolean>());allocated.add(workspace);
         try{var spent=new long[1];var result=prepareInterval(pin.capture,pin.layout,pin.geometryValid,parameters,pin.generation()+1,1,0,false,spent,allocated);
             var prepared=new Prepared(pin,result,allocated);prepared.mechanicalAttempts=spent[0];prepared.mechanicalDuration=parameters==null?0:parameters.duration();return prepared;}
-        catch(RuntimeException|Error failure){pin.close();for(var w:allocated)if(w!=workspace)w.templates.close();throw failure;}
+        catch(RuntimeException|Error failure){pin.close();for(var w:allocated)if(w!=workspace)w.close();throw failure;}
     }
     long advanceThermal(double duration){try(var source=captureState();var prepared=prepareThermal(source,duration)){return prepared.commit();}}
     synchronized Prepared prepareThermal(Capture source,double duration,RequestInputs request){var previous=activeInputs;activeInputs=request;try{return prepareThermal(source,duration);}finally{activeInputs=previous;}}
@@ -534,7 +533,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             }catch(VulkanRegionThermal.ContactCapacityGrowth growth){candidate.close();target=target.growThermalContacts(growth.required,growth.baths);allocated.add(target);}
             catch(VulkanRegionReactions.CapacityGrowth growth){candidate.close();target=target.growReactions(growth);allocated.add(target);}
             catch(RuntimeException|Error failure){candidate.close();throw failure;}
-        }}catch(RuntimeException|Error failure){pin.close();for(var w:allocated)if(w!=workspace)w.templates.close();throw failure;}
+        }}catch(RuntimeException|Error failure){pin.close();for(var w:allocated)if(w!=workspace)w.close();throw failure;}
     }
     private record PreparedInterval(VulkanLiquidWorkspace workspace,VulkanRegionStorage.Candidate candidate,boolean geometryValid,boolean gasNodesValid,boolean mechanicalObservation,int substeps,float lastLeafDuration,mmm.world.MovingBodyFluidCoupling.Result bodyResult) implements AutoCloseable{
         @Override public void close(){candidate.close();}
@@ -764,5 +763,5 @@ final class VulkanLiquidRegion implements AutoCloseable {
     static int ceil(int value,int divisor){if(value<0)throw new IllegalArgumentException("Negative device capacity requirement");return (int)(((long)value+divisor-1)/divisor);}
     static int word(VulkanLiquidStateLayout.Column column){return Math.toIntExact(column.offset()/4);}
     static VulkanEnergyLedger.Stream stream(VulkanLiquidStateLayout.Column column,int coefficient){return new VulkanEnergyLedger.Stream(1,word(column),column.count(),2,coefficient);}
-    @Override public void close(){try{workspace.templates.close();if(kernels!=null)kernels.close();mixtureKernel.close();}finally{storage.close();}}
+    @Override public void close(){try{workspace.close();if(kernels!=null)kernels.close();mixtureKernel.close();}finally{storage.close();}}
 }

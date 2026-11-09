@@ -11,7 +11,7 @@ import static org.lwjgl.vulkan.VK10.*;
 final class VulkanMixtureFlux implements AutoCloseable {
     static final class Layout {
         final int sx, sy, sz, cells, faces;
-        final VulkanLiquidStateLayout.Column header, scale, acceptedVelocity, control;
+        final VulkanLiquidStateLayout.Column header, scale, acceptedVelocity;
         final VulkanLiquidStateLayout.Column faceGeometry, fluxes, mixture, masks, targetSolid, gasStates;
         final boolean gasEnabled;
         final boolean sealedExterior;
@@ -26,16 +26,14 @@ final class VulkanMixtureFlux implements AutoCloseable {
             long cursor=align(base,alignment);header=new VulkanLiquidStateLayout.Column(cursor,32,4);cursor=header.offset()+header.bindingBytes();
             scale=new VulkanLiquidStateLayout.Column(align(cursor,alignment),2*cells,8);cursor=scale.offset()+scale.bindingBytes();
             acceptedVelocity=new VulkanLiquidStateLayout.Column(align(cursor,alignment),faces,8);cursor=acceptedVelocity.offset()+acceptedVelocity.bindingBytes();
-            control=new VulkanLiquidStateLayout.Column(align(cursor,alignment),2,4);cursor=control.offset()+control.bindingBytes();
             endOffset=align(cursor,alignment);
         }
         VulkanLiquidStateLayout.Column header(){return header;}
-        VulkanLiquidStateLayout.Column control(){return control;}
         long endOffset(){return endOffset;}
         ByteBuffer headerBytes(){
             var b=ByteBuffer.allocateDirect(128).order(ByteOrder.LITTLE_ENDIAN);
             int[] values={sx,sy,sz,cells,faces,0,word(faceGeometry),word(fluxes),gasEnabled?1:-1,word(mixture),
-                0,0,0,word(scale),word(acceptedVelocity),0,0,sealedExterior?1:0,0,word(control),word(masks),word(targetSolid),gasStates==null?-1:word(gasStates)};
+                0,0,0,word(scale),word(acceptedVelocity),0,0,sealedExterior?1:0,0,0,word(masks),word(targetSolid),gasStates==null?-1:word(gasStates)};
             for(int i=0;i<values.length;i++)b.putInt(i*4,values[i]);return b;
         }
         private static int word(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}
@@ -44,15 +42,13 @@ final class VulkanMixtureFlux implements AutoCloseable {
     private final FlipKernelBindings bindings;
     VulkanMixtureFlux(VulkanDeviceContext context){
         String shader=VulkanLiquidPhaseRows.resource("mixture-flux.comp")
-                .replace("// LOCAL_GAS_GRID",VulkanLiquidPhaseRows.resource("local-gas-grid.glsl"))
-                .replace("// VOLUME_RESOLUTION", "#define VOLUME_RESOLUTION "+mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION+"LF\n");
+                .replace("// LOCAL_GAS_GRID",VulkanLiquidPhaseRows.resource("local-gas-grid.glsl"));
         bindings=new FlipKernelBindings(context,2,shader,32);
     }
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors));}
     void recordAnalyze(VkCommandBuffer command,Layout layout,double h,double dt){
         try(var stack=stackPush()){
             bindings.bind(command,stack);var push=stack.malloc(32);
-            stage(command,layout,1,1,h,dt,stack,push);
             stage(command,layout,2,layout.cells,h,dt,stack,push);
             stage(command,layout,3,layout.faces,h,dt,stack,push);
         }

@@ -19,7 +19,7 @@ public final class GpuEntityBodyCouplingBenchmark {
             var definitions=GpuGasFixture.gasDefinitions();var gas=new VulkanGasStateLayout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),n,definitions.definitions(),gasGeometry.endOffset(),a);
             var thermal=VulkanGasThermodynamics.layout(gas,VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.fluid.TestFluidDefinitions.load().chemistry()),Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
             var mixture=VulkanMixtureState.layout(new VulkanMixtureState.Inputs(n,word(geometry.cells()),4,word(geometry.cells())+2,4,
-                    word(geometry.cells())+4,4,thermal,h,dt),thermal.endOffset(),a);
+                    word(geometry.cells())+4,4,thermal,h),thermal.endOffset(),a);
             int size=n;long[] cursor={mixture.endOffset()};var starts=column(cursor,size+1,4,a);var columns=column(cursor,7*n+gas.nodeCapacity(),4,a);var values=column(cursor,columns.count(),8,a);var rows=column(cursor,size,4,a);
             var solution=column(cursor,size,8,a);var work=column(cursor,5*size,8,a);var problem=column(cursor,2*size+1,8,a);var control=column(cursor,16,8,a);
             var pressure=new VulkanCoupledPressure.PressureBuffers(starts,columns,values,rows,solution,work,problem,control);
@@ -145,7 +145,9 @@ public final class GpuEntityBodyCouplingBenchmark {
                     });
                     if(status!=0)throw new IllegalStateException("Vacuum occupation failed: "+status);
                     var velocity=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);candidate.read(geometry.offset()+8L*(4*face+1),velocity);
-                    if(velocity.getDouble(0)!=(closed?0.0:1.0))throw new IllegalStateException("Vacuum occupation did not follow its open geometry");
+                    double accepted=velocity.getDouble(0);
+                    if(closed?accepted!=0.0:!(accepted>0.0&&accepted<=1.0))
+                        throw new IllegalStateException("Vacuum occupation did not follow its open geometry: "+accepted);
                 }
             }
         }

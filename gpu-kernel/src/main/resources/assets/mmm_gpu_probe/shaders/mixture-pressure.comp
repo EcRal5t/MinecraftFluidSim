@@ -298,7 +298,7 @@ void initializeRow(int row) {
     int count = headerValue(H_LIQUID_COUNT);
     bool enabled = row < count && pressureCell(row);
     double reference = enabled ? mixture(row, Q_PRESSURE) : 0.0;
-    double storage = enabled ? mixture(row, Q_PRESSURE_STORAGE) : 0.0;
+    double storage = enabled ? mixture(row, Q_PRESSURE_COMPLIANCE)/(p.duration*p.duration) : 0.0;
     if (!finite(reference) || reference < 0.0 || !finite(storage) || storage < 0.0) reportInvalidState();
     if (row >= count) {
         int entry = 7 * count + row - count;

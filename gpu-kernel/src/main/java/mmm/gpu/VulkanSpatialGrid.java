@@ -7,9 +7,18 @@ final class VulkanSpatialGrid {
     static final int HEADER_WORDS = 20;
     private VulkanSpatialGrid() { }
 
+    private static int hashCapacity(int blocks) {
+        int capacity=2;
+        while(capacity < 2L*blocks) capacity=Math.multiplyExact(capacity,2);
+        return capacity;
+    }
+    private static int blockHash(SpatialGrid.Block block) {
+        return block.x()*0x8da6b343 ^ block.y()*0xd8163841 ^ block.z()*0xcb1ab31f;
+    }
     static int wordCount(SpatialGrid grid) {
         return Math.toIntExact(HEADER_WORDS + 8L * grid.blockCount()
-                + 14L * grid.cellCount() + 6L * grid.faceCount() + 2L * grid.columnCount());
+                + 14L * grid.cellCount() + 6L * grid.faceCount() + 2L * grid.columnCount()
+                + 1L + hashCapacity(grid.blockCount()));
     }
 
     static int[] encode(SpatialGrid grid) {
@@ -27,8 +36,14 @@ final class VulkanSpatialGrid {
         data[16] = data[14] + 3 * grid.faceCount();
         data[17] = data[16] + grid.cellCount();
         data[18] = grid.columnCount();
+        data[19] = data[17] + 2 * grid.columnCount();
+        int hashCapacity=hashCapacity(grid.blockCount());
+        data[data[19]]=hashCapacity-1;
         for (int slot = 0; slot < grid.blockCount(); slot++) {
             var block = grid.block(slot); int at = data[9] + 8 * slot;
+            int bucket=blockHash(block)&(hashCapacity-1);
+            while(data[data[19]+1+bucket]!=0) bucket=(bucket+1)&(hashCapacity-1);
+            data[data[19]+1+bucket]=slot+1;
             data[at] = block.x(); data[at + 1] = block.y(); data[at + 2] = block.z();
             data[at + 3] = grid.blockCellOffset(slot);
             for (int axis = 0; axis < 3; axis++) data[at + 4 + axis] = grid.blockSize(slot, axis);

@@ -3,7 +3,7 @@
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Push { int header; int count; int unused; uint dtLow; uint dtHigh; uint hLow; uint hHigh; } p;
+layout(push_constant) uniform Push { int header; int count; int unused; uint hLow; uint hHigh; } p;
 // HOST_LAYOUT
 const uint ERROR_MIXTURE_STATE=16777216u;
 int h(int index){return int(words[p.header+index]);}
@@ -13,7 +13,7 @@ bool finiteNumber(double value){return !isnan(value)&&!isinf(value);}
 void invalid(){atomicOr(errors,ERROR_MIXTURE_STATE);}
 void store(int cell,int quantity,double value){put(h(8)+2*(7*cell+quantity),value);}
 void evaluate(int cell){
-    double cellSize=packDouble2x32(uvec2(p.hLow,p.hHigh)),dt=packDouble2x32(uvec2(p.dtLow,p.dtHigh)),bulk=get(p.header+16),reference=get(p.header+18),h3=cellSize*cellSize*cellSize;
+    double cellSize=packDouble2x32(uvec2(p.hLow,p.hHigh)),bulk=get(p.header+16),reference=get(p.header+18),h3=cellSize*cellSize*cellSize;
     double capacity=get(h(5)+2*h(6)*cell)*h3,v0=get(h(1)+2*h(2)*cell)*h3,mass=get(h(3)+2*h(4)*cell);
     int gas=h(7)<0?-1:h(7)+18*cell;double temperature=gas<0?293.15LF:get(gas),constant=gas<0?0.0LF:get(gas+8),gamma=gas<0?1.4LF:get(gas+10);
     if(!(finiteNumber(capacity)&&capacity>=0.0&&finiteNumber(v0)&&v0>=0.0&&finiteNumber(mass)&&mass>=0.0
@@ -40,11 +40,11 @@ void evaluate(int cell){
     double liquid=v0*scale,gasScale=v0>0.0LF?scale:capacity*limit/(capacity*bulk+r);
     double gasVolume=r>0.0LF?r*gasScale/pressure:max(0.0LF,capacity-liquid),density=liquid>0.0LF?mass/liquid:0.0LF;
     double gasCompliance=r>0.0LF?r*limit/(bulk*pressure*pressure*(1.0LF+(gamma-1.0LF)*gasScale)):0.0LF;
-    double storage=(v0/bulk+gasCompliance)/(dt*dt*h3),displacement=scale-1.0LF,elastic=.5LF*bulk*v0*displacement*displacement;
+    double storage=(v0/bulk+gasCompliance)/h3,displacement=scale-1.0LF,elastic=.5LF*bulk*v0*displacement*displacement;
     if(!(finiteNumber(pressure)&&pressure>=0.0&&finiteNumber(scale)&&scale>0.0&&finiteNumber(liquid)&&liquid>=0.0
         &&finiteNumber(gasVolume)&&gasVolume>=0.0&&finiteNumber(density)&&density>=0.0&&finiteNumber(storage)&&storage>=0.0&&finiteNumber(elastic)&&elastic>=0.0)){invalid();return;}
     store(cell,Q_PRESSURE,pressure);store(cell,Q_LIQUID_VOLUME,liquid);store(cell,Q_GAS_VOLUME,gasVolume);store(cell,Q_LIQUID_SCALE,scale);
-    store(cell,Q_LIQUID_DENSITY,density);store(cell,Q_PRESSURE_STORAGE,storage);store(cell,Q_ELASTIC_ENERGY,elastic);
+    store(cell,Q_LIQUID_DENSITY,density);store(cell,Q_PRESSURE_COMPLIANCE,storage);store(cell,Q_ELASTIC_ENERGY,elastic);
     if(h(9)>=0){int outCell=h(9)+8*cell;put(outCell,liquid/h3);put(outCell+2,mass+gasMass);put(outCell+4,capacity/h3);put(outCell+6,liquid/capacity);}
     if(gas>=0){
         put(h(10)+2*cell,gasVolume);

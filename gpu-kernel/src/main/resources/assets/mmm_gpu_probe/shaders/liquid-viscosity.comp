@@ -331,25 +331,22 @@ void compileCellStrain(int id) {
     writeIntField(FIELD_STRAIN_CLASS, row, 0);
     if (!wet(c))
         return;
-    ivec3 pos = cellPosition(c);
     if (kind < 3) {
         int axis = kind;
-        ivec3 e = ivec3(0);
-        e[axis] = 1;
-        compileStrain(3 * c + axis, ivec4(faceAt(pos + e, axis), faceAt(pos, axis), -1, -1),
+        compileStrain(3 * c + axis, ivec4(gridFace(c, 2*axis+1), gridFace(c, 2*axis), -1, -1),
                       2.0 * readDoubleField(FIELD_MU, c) * p.h * min(cellValue(c, CELL_VOLUME), cellValue(c, CELL_CAPACITY)));
         return;
     }
     int pair = kind - 3;
     ivec2 ab = shearAxes(pair);
-    ivec3 ea = ivec3(0), eb = ivec3(0);
-    ea[ab.x] = 1;
-    eb[ab.y] = 1;
-    ivec4 cells = ivec4(cellIndex(pos - ea - eb), cellIndex(pos - ea), cellIndex(pos - eb), c);
+    int minusA = gridNeighbor(c,2*ab.x), minusB = gridNeighbor(c,2*ab.y);
+    if (minusA < 0 || minusB < 0) return;
+    ivec4 cells = ivec4(gridNeighbor(minusA,2*ab.y), minusA, minusB, c);
     for (int i = 0; i < 4; i++)
         if (!wet(cells[i]))
             return;
-    ivec4 ids = ivec4(faceAt(pos, ab.x), faceAt(pos - eb, ab.x), faceAt(pos, ab.y), faceAt(pos - ea, ab.y));
+    ivec4 ids = ivec4(gridFace(c,2*ab.x), gridFace(minusB,2*ab.x),
+                      gridFace(c,2*ab.y), gridFace(minusA,2*ab.y));
     double area = 1.0;
     for (int i = 0; i < 4; i++)
         area = min(area, enabled(ids[i]) ? faceValue(ids[i], FACE_OPEN_AREA) : 0.0);
@@ -449,20 +446,19 @@ void gather(int c) {
     for (int pair = 0; pair < 3; pair++) {
         ivec2 ab = shearAxes(pair);
         for (int corner = 0; corner < 4; corner++) {
-            ivec3 edge = pos;
-            edge[ab.x] += corner & 1;
-            edge[ab.y] += (corner >> 1) & 1;
-            int owner = cellIndex(edge);
+            int owner = c;
+            if ((corner & 1) != 0) owner = gridNeighbor(owner,2*ab.x+1);
+            if ((corner & 2) != 0) {
+                if (owner >= 0) owner = gridNeighbor(owner,2*ab.y+1);
+                else { ivec3 edge=pos; edge[ab.x]++; edge[ab.y]++; owner=cellIndex(edge); }
+            }
             if (owner >= 0)
                 heat += .25 * readDoubleField(FIELD_STRESS_HEAT, 3 * cellCount() + 3 * owner + pair);
         }
     }
     for (int side = 0; side < 6; side++) {
         int axis = side / 2;
-        ivec3 fp = pos;
-        if ((side & 1) != 0)
-            fp[axis]++;
-        int f = faceAt(fp, axis);
+        int f = gridFace(c, side);
         ivec2 adjacent = faceCells(f);
         double conductance = wallConductance(adjacent.x, axis) + wallConductance(adjacent.y, axis);
         if (conductance > 0.0)
@@ -489,9 +485,9 @@ void faceStrains(int f, out int rows[6], out double signs[6]) {
     for (int other = 0; other < 3; other++)
         if (other != axis) {
             int pair = min(axis, other) == 0 ? (max(axis, other) == 1 ? 0 : 1) : 2;
-            ivec3 far = pos;
-            far[other]++;
-            int first = cellIndex(pos), second = cellIndex(far);
+            int first = b, second;
+            if (b >= 0) second = gridNeighbor(b,2*other+1);
+            else { ivec3 far=pos; far[other]++; second=cellIndex(far); }
             rows[at] = first < 0 ? -1 : 3 * cellCount() + 3 * first + pair;
             rows[at + 1] = second < 0 ? -1 : 3 * cellCount() + 3 * second + pair;
             signs[at] = 1.0;

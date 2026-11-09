@@ -44,7 +44,7 @@ final class GpuGasFixture {
                 org.lwjgl.vulkan.VK10.vkCmdUpdateBuffer(command,output.handle(),geometry.mixture().header().offset(),geometry.mixture().headerBytes());
                 VulkanRegionStorage.barrier(command,org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,org.lwjgl.vulkan.VK10.VK_ACCESS_TRANSFER_WRITE_BIT,
                         org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,org.lwjgl.vulkan.VK10.VK_ACCESS_SHADER_READ_BIT,stack);
-                mixtureKernel.record(command,geometry.mixture(),gasGeometry.cellSize(),.05);
+                mixtureKernel.record(command,geometry.mixture(),gasGeometry.cellSize());
                 geometryKernel.recordLocalGeometry(command,gasGeometry);
                 if(eos)thermalKernel.record(command,thermal);
             });
@@ -108,7 +108,7 @@ final class GpuGasFixture {
         long[] cursor={state.bytes()};var masks=column(cursor,cells,4,alignment);var occupied=column(cursor,cells,8,alignment);
         var totals=column(cursor,4*cells,8,alignment);var planes=column(cursor,4*cells,8,alignment);var micro=column(cursor,8*cells,8,alignment);
         var face=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);var walls=column(cursor,12*cells,8,alignment);
-        var mixture=VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,word(totals),4,word(totals)+2,4,word(totals)+4,4,null,.5,.05),cursor[0],alignment);
+        var mixture=VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,word(totals),4,word(totals)+2,4,word(totals)+4,4,null,.5),cursor[0],alignment);
         return new Geometry(masks,occupied,totals,planes,micro,face,flux,walls,mixture,mixture.endOffset());
     }
     static List<FlipKernelBindings.BufferRange> geometryRanges(VulkanLiquidStateLayout state,Geometry geometry,GpuBuffer buffer,GpuBuffer errors) {

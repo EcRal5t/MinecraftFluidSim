@@ -283,6 +283,11 @@ double gasLogRatio(double numerator,double denominator){
     return 2.0LF*z*(1.0LF+square*series)+double(exponent)*.6931471805599453094LF;
 }
 void applyPressureWork(int cell){
+    if(headerWord(54)>=0&&words[headerWord(54)+cell]==0u){
+        putDouble(field(F_WORK)+2*cell,0.0LF);
+        putDouble(field(F_EXTERNAL_PRESSURE_WORK)+2*cell,0.0LF);
+        return;
+    }
     ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));double outgoing=0.0,incoming=0.0,externalVolume=0.0;
     for(int side=0;side<6;side++){
         outgoing+=readDouble(field(F_VOLUME)+2*routePart(cell,side));int other=localGasNeighbor(cell,side,size);

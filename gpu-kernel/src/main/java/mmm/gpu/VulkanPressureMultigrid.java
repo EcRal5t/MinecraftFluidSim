@@ -14,7 +14,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Symmetric aggregation V-cycle over the resident liquid seven-point pressure operator. */
 final class VulkanPressureMultigrid implements AutoCloseable {
-    record Level(SpatialGrid grid, int offset, int topologyOffset) {
+    record Level(SpatialGrid grid, int offset, int topologyOffset, int parentOffset, int childrenOffset) {
         int cells() { return grid.cellCount(); }
     }
 
@@ -51,7 +51,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         var levels = new ArrayList<Level>();
         int cursor = 0;
         while (true) {
-            var level = new Level(grid, cursor,0);
+            var level = new Level(grid, cursor,0,0,0);
             levels.add(level);
             cursor = Math.addExact(cursor,Math.addExact(Math.multiplyExact(7,level.cells()),Math.addExact(Math.toIntExact((3L*level.cells()+1)/2),Math.toIntExact((level.cells()+2L)/2))));
             if (Math.max(grid.sizeX(), Math.max(grid.sizeY(), grid.sizeZ())) <= 4) break;
@@ -67,11 +67,25 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         int dispatch=cursor;cursor=Math.addExact(cursor,Math.multiplyExact(2,levels.size()));
         int topology=2*cursor,words=2*levels.size();
         for(var level:levels)words=Math.addExact(words,VulkanSpatialGrid.wordCount(level.grid()));
+        for(int i=0;i+1<levels.size();i++)
+            words=Math.addExact(words,Math.addExact(levels.get(i).cells(),Math.multiplyExact(8,levels.get(i+1).cells())));
         int[] data=new int[words];int next=2*levels.size();
         for(int i=0;i<levels.size();i++){
             var level=levels.get(i);data[2*i]=level.offset();data[2*i+1]=level.cells();
-            levels.set(i,new Level(level.grid(),level.offset(),topology+next));
+            levels.set(i,new Level(level.grid(),level.offset(),topology+next,0,0));
             int[] encoded=VulkanSpatialGrid.encode(level.grid());System.arraycopy(encoded,0,data,next,encoded.length);next+=encoded.length;
+        }
+        for(int i=0;i+1<levels.size();i++){
+            var fine=levels.get(i);var coarseLevel=levels.get(i+1);
+            int parents=next;next=Math.addExact(next,fine.cells());
+            int children=next;next=Math.addExact(next,Math.multiplyExact(8,coarseLevel.cells()));
+            var fg=fine.grid();var cg=coarseLevel.grid();
+            for(int row=0;row<fine.cells();row++)
+                data[parents+row]=cg.cell(fg.x(row)/2,fg.y(row)/2,fg.z(row)/2);
+            for(int row=0;row<coarseLevel.cells();row++)for(int child=0;child<8;child++)
+                data[children+8*row+child]=fg.cell(2*cg.x(row)+(child&1),2*cg.y(row)+((child>>1)&1),2*cg.z(row)+((child>>2)&1));
+            levels.set(i,new Level(fg,fine.offset(),fine.topologyOffset(),topology+parents,fine.childrenOffset()));
+            levels.set(i+1,new Level(cg,coarseLevel.offset(),coarseLevel.topologyOffset(),coarseLevel.parentOffset(),topology+children));
         }
         cursor=Math.addExact(cursor,(words+1)/2);
         return new Layout(levels, cursor, pressureStride,factor,dispatch,topology,data);
@@ -125,7 +139,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(level.topologyOffset(),layout.topologyOffset(),layout.levels().size(), stage,
-                            level.offset(), peer.offset(),peer.topologyOffset(),0,0,
+                            level.offset(), peer.offset(),peer.topologyOffset(),level.parentOffset(),level.childrenOffset(),
                             layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset(),2*layout.applyDispatchOffset()));
             if(dispatchIndex>=0)vkCmdDispatchIndirect(command,workspace.buffer().handle(),workspace.offset()+8L*layout.applyDispatchOffset()+16L*dispatchIndex);
             else vkCmdDispatch(command, stage==9?level.cells():stage==4||stage==8||stage==10||stage==11?1:(level.cells()+127)/128,1,1);

@@ -129,7 +129,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
         final int[] rules, carriers;
         final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
         final long endOffset;
-        Layout(Inputs input, FluidMaterialRegistry fluids, ChemicalRegistry chemistry, ThermalRegistry thermal,
+        Layout(VulkanLiquidPhaseRows.Layout sharedRows, Inputs input, FluidMaterialRegistry fluids, ChemicalRegistry chemistry, ThermalRegistry thermal,
             long base, long alignment) {
             this.input = input;
             var liquid = input.liquid();
@@ -179,8 +179,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
                     if (phase.materialId().equals(fluids.material(m).id()))
                         for (String id : phase.defaultConcentrationMolPerCubicMeter().keySet())
                             carriers[m * species + chemistry.speciesHandle(id)] = 1;
-            phaseRows =
-                new VulkanLiquidPhaseRows.Layout(liquid, input.definitions(), input.cellSize(), base, alignment);
+            phaseRows = new VulkanLiquidPhaseRows.Layout(sharedRows, base, alignment);
             long cursor = phaseRows.endOffset;
             for (var field : Field.values()) {
                 int n = switch (field) {

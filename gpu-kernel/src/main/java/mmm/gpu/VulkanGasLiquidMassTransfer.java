@@ -89,7 +89,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_RESIDUAL(8),
         PENDING_SLOT(4),
         ORPHAN_ENERGY(8),
-        ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4);
+        ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4),
+        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8);
         final int width;
         Field(int width) {
             this.width = width;
@@ -181,6 +182,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case OLD_K, NEW_K, FACE_P -> faces;
                     case FACE_HEAT -> 2 * faces;
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
+                    case LIQUID_QUANTA -> rows.rows;
                     case NEXT, KG, TEMP, GAS_TEMP -> scratchProposals;
                     case WALL_RESERVATION -> wallDevices;
                     case WALL_DELTA -> Math.multiplyExact(2,wallDevices);
@@ -286,7 +288,9 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     private VulkanStageTimings timings;
     private int completedPhaseBatches;
     int completedPhaseBatches(){return completedPhaseBatches;}
+    private final VulkanCommandTemplates templates;
     VulkanGasLiquidMassTransfer(VulkanDeviceContext c) {
+        templates = new VulkanCommandTemplates(c);
         var shader = VulkanLiquidPhaseRows.resource("gas-liquid-mass-transfer.comp")
                 .replace("// HOST_LAYOUT", shaderLayout()).replace("// SERIES_CONDUCTANCE_LIBRARY", VulkanLiquidPhaseRows.resource("series-conductance.glsl"))
                 .replace("// PHASE_ROWS_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-phase-rows.glsl"))
@@ -344,7 +348,9 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             vkCmdUpdateBuffer(command, output.handle(), l.column(Field.HEADER).offset(), h);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, stack);
-            recordPrepare(command, l);
+            if(timings!=null)recordPrepare(command,l);
+            else templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,0,0,l),
+                    secondary->recordPrepare(secondary,l));
         }, l.rows.feedbackOffset(), 16);
         if (prepared.error() != 0)
             return prepared.error();
@@ -425,6 +431,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     @Override
     public void close() {
         try {
+            templates.close();
             if(timings!=null)timings.close();
         } finally {
             try { rows.close(); } finally {

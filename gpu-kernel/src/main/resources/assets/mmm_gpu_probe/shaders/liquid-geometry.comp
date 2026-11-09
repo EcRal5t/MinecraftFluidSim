@@ -77,20 +77,8 @@ layout(std430, binding = B_ERRORS) buffer Errors {
 layout(std430, binding = B_FLUX_PREFERENCES) buffer FluxPreferences {
     dvec2 faceFlux[];
 };
-int cellIndex(ivec3 p) {
-    return gridCell(p);
-}
-bool inside(ivec3 p) {
-    return gridCell(p)>=0;
-}
-ivec3 position(int i) {
-    return gridPosition(i);
-}
-float sampleCellFill(ivec3 p, float fallback) {
-    if (!inside(p))
-        return fallback;
-    int c = cellIndex(p);
-    return cells[c][CELL_PORE_VOLUME] > 0 ? float(cells[c][CELL_FILL]) : fallback;
+float sampleCellFill(int cell, float fallback) {
+    return cell >= 0 && cells[cell][CELL_PORE_VOLUME] > 0 ? float(cells[cell][CELL_FILL]) : fallback;
 }
 void prepareCellTotals(int cell) {
     double liquidVolume = 0;
@@ -110,14 +98,10 @@ void prepareCellTotals(int cell) {
 }
 // Fixed microbox faces share the PLIC used for liquid transport. Each normal/side
 // stores wet area and the sum of area divided by effective wall distance, in cell units.
-bool solidMicro(ivec3 micro) {
-    ivec3 extent = 2 * ivec3(pc.sx, pc.sy, pc.sz);
-    if (any(lessThan(micro, ivec3(0))) || any(greaterThanEqual(micro, extent)))
-        return pc.sealedExterior != 0;
-    ivec3 c = micro / 2, local = micro - 2 * c;
-    int bit = local.x | (local.y << 1) | (local.z << 2);
-    int cell=cellIndex(c);
-    return cell<0 ? pc.sealedExterior!=0 : (masks[cell] & (1u << bit)) != 0u;
+bool solidMicro(int cell, int bit, int axis, int side) {
+    int coordinate = (bit >> axis) & 1;
+    int neighbor = coordinate == side ? gridNeighbor(cell, 2*axis+side) : cell;
+    return neighbor < 0 ? pc.sealedExterior != 0 : (masks[neighbor] & (1u << (bit ^ (1 << axis)))) != 0u;
 }
 void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
     for (int face = 0; face < 6; face++) {
@@ -126,16 +110,14 @@ void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
     }
     if (cells[cell][CELL_LIQUID_VOLUME] <= 0.0 || support == 0u)
         return;
-    ivec3 cellPos = position(cell);
     bool hasWall = support != 255u;
     if (!hasWall) for (int axis = 0; axis < 3; axis++) for (int side = 0; side < 2; side++) {
-        ivec3 neighbor = cellPos; neighbor[axis] += 2 * side - 1;
+        int neighbor = gridNeighbor(cell, 2*axis+side);
         uint low = axis == 0 ? 0x55u : axis == 1 ? 0x33u : 0x0fu;
         uint face = side == 1 ? low : (low ^ 255u);
-        if (inside(neighbor) ? (masks[cellIndex(neighbor)] & face) != 0u : pc.sealedExterior != 0) hasWall = true;
+        if (neighbor >= 0 ? (masks[neighbor] & face) != 0u : pc.sealedExterior != 0) hasWall = true;
     }
     if (!hasWall) return;
-    ivec3 base = 2 * cellPos;
     bool full = cells[cell][CELL_LIQUID_VOLUME] >= cells[cell][CELL_PORE_VOLUME];
     for (int bit = 0; bit < 8; bit++) {
         if ((support & (1u << bit)) == 0u)
@@ -147,9 +129,7 @@ void prepareWetWalls(int cell, uint support, double porosity, dvec4 plane) {
         for (int axis = 0; axis < 3; axis++) {
             int a = (axis + 1) % 3, b = (axis + 2) % 3;
             for (int side = 0; side < 2; side++) {
-                ivec3 neighbor = base + local;
-                neighbor[axis] += 2 * side - 1;
-                if (!solidMicro(neighbor))
+                if (!solidMicro(cell, bit, axis, side))
                     continue;
                 double coordinate = .5LF * double(local[axis] + side);
                 int tangentBits = (local[a] << a) | (local[b] << b);
@@ -183,11 +163,10 @@ void reconstructInterface(int cell) {
     int axis = 1;
     double sign = 1.0, cut = fill <= 0.0 ? 0.0 : 1.0;
     if (fill > 0.0 && fill < 1.0 && support != 0u) {
-        ivec3 at = position(cell); vec3 gradient;
-        for (int a = 0; a < 3; a++) {
-            ivec3 step = ivec3(0); step[a] = 1;
-            gradient[a] = -(sampleCellFill(at + step, float(fill)) - sampleCellFill(at - step, float(fill)));
-        }
+        vec3 gradient;
+        for (int a = 0; a < 3; a++)
+            gradient[a] = -(sampleCellFill(gridNeighbor(cell,2*a+1), float(fill))
+                    - sampleCellFill(gridNeighbor(cell,2*a), float(fill)));
         if (abs(gradient.x) > abs(gradient.y)) axis = 0;
         if (abs(gradient.z) > abs(gradient[axis])) axis = 2;
         sign = gradient[axis] < 0.0 ? -1.0 : 1.0;
@@ -224,12 +203,11 @@ double portArea(double fill, dvec4 plane, int axis, int side, int firstPort, int
     return plicWetPort(plane, axis, double(side), bit);
 }
 void faceGeometry(int face) {
-    int axis=gridFaceEndpoints(face).z,localFace=face-gridFaceOffset(axis);
-    ivec3 rightPosition=gridFacePosition(face),axisStep=ivec3(0);
-    axisStep[axis] = 1;
-    if (!inside(rightPosition) || !inside(rightPosition - axisStep)) {
-        bool interiorRight = inside(rightPosition);
-        int cell = cellIndex(interiorRight ? rightPosition : rightPosition - axisStep);
+    ivec3 endpoints=gridFaceEndpoints(face);
+    int leftCell=endpoints.x, rightCell=endpoints.y, axis=endpoints.z, localFace=face-gridFaceOffset(axis);
+    if (leftCell < 0 || rightCell < 0) {
+        bool interiorRight = rightCell >= 0;
+        int cell = interiorRight ? rightCell : leftCell;
         double endpointMass = cells[cell][CELL_MASS];
         if (pc.sealedExterior != 0 || cells[cell][CELL_PORE_VOLUME] <= 0.0) {
             faces[face] = dvec4(.5 * endpointMass, 0, 0, 0);
@@ -251,7 +229,7 @@ void faceGeometry(int face) {
         faces[face] = dvec4(mass, openArea > 0.0 && mass > 0.0 ? momentum / mass : 0.0, openArea, 0.0LF);
         return;
     }
-    int leftCell = cellIndex(rightPosition - axisStep), rightCell = cellIndex(rightPosition), firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3;
+    int firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3;
     double openArea = 0, wetArea = 0;
     double leftFill = cells[leftCell][CELL_FILL], rightFill = cells[rightCell][CELL_FILL];
     dvec4 leftPlane = planes[leftCell], rightPlane = planes[rightCell];
@@ -283,16 +261,14 @@ void faceGeometry(int face) {
 // Signed swept volume through the donor's open microboxes and its axis-aligned liquid plane.
 void transportPreference(int face) {
     faceFlux[face] = dvec2(0);
-    int axis=gridFaceEndpoints(face).z;
-    ivec3 right=gridFacePosition(face),left=right;
-    left[axis]--;
-    if (!inside(left) || !inside(right))
-        return;
+    ivec3 endpoints=gridFaceEndpoints(face);
+    int leftCell=endpoints.x, rightCell=endpoints.y, axis=endpoints.z;
+    if (leftCell < 0 || rightCell < 0) return;
     double faceSpeed=faces[face][FACE_VELOCITY],openArea=faces[face][FACE_OPEN_AREA];
     double depth=min(1.0LF,abs(faceSpeed)*double(pc.dt)/double(pc.h));
     if (depth == 0.0 || openArea <= 0.0)
         return;
-    int leftCell = cellIndex(left), rightCell = cellIndex(right), firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3, openPorts = 0;
+    int firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3, openPorts = 0;
     for (int port = 0; port < 4; port++) {
         int bit = ((port & 1) << firstTangent) | ((port >> 1) << secondTangent);
         if (plicOpenPort((~masks[leftCell]) & 255u, (~masks[rightCell]) & 255u, bit | (1 << axis), bit))

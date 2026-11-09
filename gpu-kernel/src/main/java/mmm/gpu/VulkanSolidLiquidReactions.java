@@ -136,15 +136,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         final SignedDyadic volumeUnit;
         final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
         final long endOffset;
-        Layout(VulkanLiquidStateLayout liquid, VulkanGranularStateLayout solid,
-            VulkanReactionDefinitions.Layout definitions, VulkanLiquidThermodynamics.Layout liquidCaloric,
-            VulkanLiquidThermodynamics.Layout solidCaloric, VulkanReactionProgressLayout progress,
-            FluidMaterialRegistry fluid, ChemicalRegistry chemical, GranularRegistry granular, double cellSize,
-            double gravity, int faceGeometryWord, long base, long alignment) {
-            this(liquid, solid, definitions, liquidCaloric, solidCaloric, progress, fluid, chemical, granular, cellSize,
-                gravity, faceGeometryWord, true, base, alignment);
-        }
-        Layout(VulkanLiquidStateLayout liquid, VulkanGranularStateLayout solid,
+        Layout(VulkanLiquidPhaseRows.Layout sharedRows, VulkanLiquidStateLayout liquid, VulkanGranularStateLayout solid,
             VulkanReactionDefinitions.Layout definitions, VulkanLiquidThermodynamics.Layout liquidCaloric,
             VulkanLiquidThermodynamics.Layout solidCaloric, VulkanReactionProgressLayout progress,
             FluidMaterialRegistry fluid, ChemicalRegistry chemical, GranularRegistry granular, double cellSize,
@@ -193,7 +185,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             for (int s = 0; s < species; s++)
                 if (!solid.definitions().speciesIds().get(s).equals(chemical.species(s).id()))
                     throw new IllegalArgumentException("Solid/liquid species handles differ");
-            phaseRows = new VulkanLiquidPhaseRows.Layout(liquid, definitions, cellSize, base, alignment);
+            phaseRows = new VulkanLiquidPhaseRows.Layout(sharedRows, base, alignment);
             long cursor = phaseRows.endOffset;
             for (var f : Field.values()) {
                 var shared = switch (f) {
@@ -317,10 +309,12 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                 arena.duplicate().position(Math.toIntExact(c.offset())).put(c.bytes().duplicate());
         }
         List<VulkanEnergyLedger.Stream> roundoffStreams() {
-            return List.of(stream(Field.LIQUID_ENERGY, 1), stream(Field.SOLID_NEW_ENERGY, 1),
-                stream(Field.LIQUID_OLD_ENERGY, -1), stream(Field.SOLID_OLD_ENERGY, -1), stream(Field.FACE_NEW_K, 1),
+            var streams = new ArrayList<>(phaseRows.energyChangeStreams());
+            streams.addAll(List.of(stream(Field.SOLID_NEW_ENERGY, 1),
+                stream(Field.SOLID_OLD_ENERGY, -1), stream(Field.FACE_NEW_K, 1),
                 stream(Field.FACE_OLD_K, -1), stream(Field.SOLID_NEW_K, 1), stream(Field.SOLID_OLD_K, -1),
-                stream(Field.CELL_NEW_PE, 1), stream(Field.CELL_OLD_PE, -1));
+                stream(Field.CELL_NEW_PE, 1), stream(Field.CELL_OLD_PE, -1)));
+            return List.copyOf(streams);
         }
         List<VulkanEnergyLedger.Stream> mechanicalWorkStreams() {
             return List.of(stream(Field.FACE_OLD_K, 1), stream(Field.FACE_NEW_K, -1), stream(Field.SOLID_OLD_K, 1),

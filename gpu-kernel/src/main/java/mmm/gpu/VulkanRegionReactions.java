@@ -226,11 +226,15 @@ final class VulkanRegionReactions implements AutoCloseable {
         int pending = Math.max(1, Math.max(configuration.initial().pending().size(), pendingCapacity));
         var progress = new VulkanReactionProgressLayout(
             liquid.cellCount(), pending, solidProposals, definitions, definitions.endOffset(), alignment);
+        boolean hasRows = rules > 0 || condensed != null || gas != null && configuration.thermal() != null
+                && (!configuration.chemistry().gasLiquidMassTransfers().isEmpty() || vaporRules > 0)
+                || faceGeometryWord >= 0 && diffusionRules > 0;
+        var sharedRows = hasRows ? new VulkanLiquidPhaseRows.Layout(liquid, definitions, cellSize, progress.endOffset(), alignment) : null;
         var reaction = VulkanLiquidReactions.layout(liquid, definitions, caloric, progress, configuration.fluids(),
-            configuration.chemistry(), progress.endOffset(), alignment, activityCellsWord);
+            configuration.chemistry(), hasRows ? sharedRows.endOffset : progress.endOffset(), alignment, activityCellsWord);
         var exchange = rules == 0
             ? null
-            : new VulkanSolidLiquidReactions.Layout(liquid, solid.transitions().source, definitions, caloric,
+            : new VulkanSolidLiquidReactions.Layout(sharedRows, liquid, solid.transitions().source, definitions, caloric,
                   solid.solidCaloric(), progress, configuration.fluids(), configuration.chemistry(), solid.registry(),
                   solid.cellSize(), configuration.gravity(), solid.faceGeometryWord(),
                   configuration.precipitationEnabled(), reaction.endOffset(), alignment);
@@ -241,20 +245,20 @@ final class VulkanRegionReactions implements AutoCloseable {
                 condensed.coherentCaloric(), definitions, progress, condensed.pressureWord(), condensed.pressureStride(),
                 condensed.fixedMasksWord(), condensed.occupiedAllSvqWord(), condensed.cellSize(), condensed.gravity());
             condensedPhase = new VulkanCondensedPhaseChange.Layout(
-                input, configuration.fluids(), configuration.chemistry(), configuration.thermal(), end, alignment);
+                sharedRows, input, configuration.fluids(), configuration.chemistry(), configuration.thermal(), end, alignment);
             end = condensedPhase.endOffset();
         }
         VulkanGasLiquidMassTransfer.Layout massTransfer = null;
         if (gas != null && configuration.thermal() != null
             && (!configuration.chemistry().gasLiquidMassTransfers().isEmpty() || vaporRules > 0)) {
-            var rows = new VulkanLiquidPhaseRows.Layout(liquid, definitions, gas.geometry().cellSize(), end, alignment);
+            var rows = new VulkanLiquidPhaseRows.Layout(sharedRows, end, alignment);
             var candidateTransfer =
                 new VulkanGasLiquidMassTransfer.Layout(configuration, rows, gas, progress, rows.endOffset, alignment);
             if(candidateTransfer.rules > 0) { massTransfer=candidateTransfer; end=massTransfer.endOffset; }
         }
         VulkanLiquidDiffusion.Layout diffusion = null;
         if (faceGeometryWord >= 0 && diffusionRules > 0) {
-            var rows = new VulkanLiquidPhaseRows.Layout(liquid,definitions,cellSize,end,alignment);
+            var rows = new VulkanLiquidPhaseRows.Layout(sharedRows, end, alignment);
             diffusion = new VulkanLiquidDiffusion.Layout(configuration,rows,caloric,progress,faceGeometryWord,
                     cellSize,activityCellsWord,activityFacesWord,rows.endOffset,alignment);
             end = diffusion.endOffset;
@@ -449,19 +453,22 @@ final class VulkanRegionReactions implements AutoCloseable {
                 return error;
             remaining -= massTransferKernel.completedPhaseBatches();
             boolean inspectCondensed=phaseEnabled && remaining>0 && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
+            if (inspectCondensed) {
             var refreshed = candidate
                         .continueBatch(
                             (command, input, output, errors, staging, stack)
                                 -> {
+                                caloric.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                                 caloric.record(command, layout.liquid().caloric());
-                                if(inspectCondensed)condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors);
+                                condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors);
                             },
-                            inspectCondensed?layout.condensedPhase().feedbackOffset():0, inspectCondensed?4:0);
+                            layout.condensedPhase().feedbackOffset(), 4);
             error=refreshed.error();
-            condensedActive=inspectCondensed && refreshed.feedback().getInt(0)!=0;
+            condensedActive=refreshed.feedback().getInt(0)!=0;
             stage=stageTime("gas-liquid-caloric",stage);
             if (error != 0)
                 return error;
+            }
         }
         if (!phaseEnabled || maximum == 0)
             return 0;
@@ -476,6 +483,7 @@ final class VulkanRegionReactions implements AutoCloseable {
                         .continueBatch(
                             (command, input, output, errors, staging, stack)
                                 -> {
+                                caloric.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                                 caloric.record(command, layout.condensedPhase().input.coherentCaloric());
                             },
                             0, 0)
@@ -492,14 +500,15 @@ final class VulkanRegionReactions implements AutoCloseable {
             stage=stageTime("condensed-phase",stage);
             if (error != 0)
                 return error;
-            var finalStatus = candidate.continueBatch((command,input,output,errors,staging,stack)-> {
-                caloric.record(command, layout.liquid().caloric());
-                caloric.record(command, layout.condensedPhase().input.coherentCaloric());
-            },0,0);
-            stageTime("final-caloric",stage);
-            return finalStatus.error();
         }
         return 0;
+    }
+    void recordFinalCaloric(VkCommandBuffer command, Layout layout, GpuBuffer output, GpuBuffer errors) {
+        boolean condensed = layout.condensedPhase() != null && layout.condensedPhase().enabled();
+        if (layout.massTransfer() == null && !condensed) return;
+        caloric.rebindRanges(new FlipKernelBindings.BufferRange(output), new FlipKernelBindings.BufferRange(errors));
+        caloric.record(command, layout.liquid().caloric());
+        if (condensed) caloric.record(command, layout.condensedPhase().input.coherentCaloric());
     }
     @Override
     public void close() {

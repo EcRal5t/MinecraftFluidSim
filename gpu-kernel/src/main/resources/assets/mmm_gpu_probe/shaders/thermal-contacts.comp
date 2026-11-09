@@ -122,7 +122,7 @@ void prepareTerms(int candidate){
  else for(int c=int(words[headerWord(H_GAS_COMPONENT_OFFSETS)+row]);c<int(words[headerWord(H_GAS_COMPONENT_OFFSETS)+row+1]);c++)if(readQuantity(headerWord(H_GAS_MASS)+2*c)>uint64_t(0)){
   words[headerWord(H_CONDUCTION_TERM_MATERIAL)+outAt]=uint(material(kind,int(words[headerWord(H_GAS_COMPONENT_HANDLES)+c])));writeDouble(headerWord(H_CONDUCTION_TERM_MASS)+2*outAt,double(readQuantity(headerWord(H_GAS_MASS)+2*c))*1e-10LF);writeDouble(conductionField(CONDUCTION_TERM_ETHANOL_MASS)+2*outAt,0.0);outAt++;}
 }
-int liquidCell(int row){int lo=0,hi=headerWord(H_CELL_COUNT);while(lo<hi){int mid=(lo+hi)/2;if(int(words[headerWord(H_LIQUID_CELL_OFFSETS)+mid+1])<=row)lo=mid+1;else hi=mid;}return lo<headerWord(H_CELL_COUNT)?lo:-1;}
+int liquidCell(int row){return row/headerWord(H_LIQUID_MATERIAL_COUNT); }
 void sampleAddress(int id,out int owner,out int cell,out int mask,out double volume){
  owner=-1;cell=-1;mask=0;volume=0.0;
  if(id<headerWord(H_LIQUID_CAPACITY)){owner=ownerFor(id);if(owner<0)return;cell=liquidCell(id);if(cell<0){reportInvalid();return;}mask=int(words[headerWord(H_LIQUID_SUPPORT_MASKS)+id]);if(mask==0)mask=openMask(cell);volume=readDouble(headerWord(H_LIQUID_VOLUMES)+2*id);return;}

@@ -80,10 +80,15 @@ final class VulkanRegionThermal implements AutoCloseable {
     private final VulkanThermalConduction conduction;
     private final VulkanPressureKernel pressure;
     private final VulkanEnergyLedger deviceLedger;
+    private final VulkanCommandTemplates templates;
+    private record PreparationKey(VulkanThermalContacts.Inputs input,VulkanThermalConduction.Layout conduction,
+                                  long header,int cells,int owners,int samples,double duration,
+                                  FlipKernelBindings.BufferIdentity frozen) {}
     private VulkanStageTimings timings;
     VulkanRegionThermal(VulkanDeviceContext context){
         try{caloric=own(new VulkanLiquidThermodynamics(context));
             contacts=own(new VulkanThermalContacts(context));conduction=own(new VulkanThermalConduction(context));pressure=own(new VulkanPressureKernel(context,4096));deviceLedger=own(new VulkanEnergyLedger(context));
+            templates=own(new VulkanCommandTemplates(context));
             if(Boolean.getBoolean("mmm.gpuMechanicalStages")&&context.hasTimestampQueries())timings=own(new VulkanStageTimings(context,384));
         }catch(RuntimeException|Error failure){try{close();}catch(RuntimeException closing){failure.addSuppressed(closing);}throw failure;}
     }
@@ -108,22 +113,13 @@ final class VulkanRegionThermal implements AutoCloseable {
             deviceLedger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);
             conduction.rebindRanges(arena,err);pressure.rebindRanges(l.conduction().pressureRanges(arena,err));
             if(timings!=null)timings.reset(command);
-            timed(command,"thermal-caloric",()->{
-                // Temperature belongs to the post-work inventory, including the local gas transfer.
-                caloric.record(command,l.input().liquidThermal());
-                if(l.input().granular()!=null)caloric.record(command,l.input().granularThermal());
-                if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
-                if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
-            });
-            timed(command,"thermal-samples",()->contacts.recordSpatial(command,l.contacts()));
-            conduction.recordSpatialInitialize(command,l.conduction(),duration);
-            timed(command,"thermal-sample-operator",()->contacts.recordFullTrial(command,l.contacts(),duration));
-            conduction.recordImexPrepare(command,l.conduction(),duration,timings);
-            timed(command,"thermal-imex-classify",()->{
-                conduction.recordImexClassify(command,l.conduction(),duration);
-                contacts.recordImexSamples(command,l.contacts(),duration);
-            });
-            contacts.recordConductionState(command,l.contacts());
+            if(timings!=null)recordPreparation(command,l,duration);
+            else {
+                var c=l.contacts();
+                var key=new PreparationKey(l.input(),l.conduction(),c.header.offset(),c.cells,c.owners,c.samples,duration,contacts.frozenIdentity());
+                templates.record(command,new VulkanCommandTemplates.Key(0,out,errors,0,0,key),
+                        secondary->recordPreparation(secondary,l,duration));
+            }
         },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),44);
         if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
         if(status.error()!=0)return status.error();
@@ -161,6 +157,23 @@ final class VulkanRegionThermal implements AutoCloseable {
             System.out.printf("thermal_imex fast_owners=%d fast_samples=%d frozen_SS_MiB=%.3f%n",fastOwners,fastSamples,contacts.frozenBytes()/1048576.0);
         }
         return finalError;
+    }
+    private void recordPreparation(org.lwjgl.vulkan.VkCommandBuffer command,Layout l,double duration){
+        timed(command,"thermal-caloric",()->{
+            caloric.record(command,l.input().liquidThermal());
+            if(l.input().granular()!=null)caloric.record(command,l.input().granularThermal());
+            if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
+            if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
+        });
+        timed(command,"thermal-samples",()->contacts.recordSpatial(command,l.contacts()));
+        conduction.recordSpatialInitialize(command,l.conduction(),duration);
+        timed(command,"thermal-sample-operator",()->contacts.recordFullTrial(command,l.contacts(),duration));
+        conduction.recordImexPrepare(command,l.conduction(),duration,timings);
+        timed(command,"thermal-imex-classify",()->{
+            conduction.recordImexClassify(command,l.conduction(),duration);
+            contacts.recordImexSamples(command,l.contacts(),duration);
+        });
+        contacts.recordConductionState(command,l.contacts());
     }
     long deviceBytes(){return contacts.frozenBytes();}
     /** Settles the wall energy written by dry-wall condensation after conduction. */

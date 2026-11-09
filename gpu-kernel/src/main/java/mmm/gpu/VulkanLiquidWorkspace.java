@@ -10,7 +10,12 @@ import static mmm.gpu.VulkanLiquidRegion.*;
 import mmm.gpu.VulkanLiquidWorkspaceSections.*;
 import static org.lwjgl.vulkan.VK10.*;
 
-final class VulkanLiquidWorkspace {
+final class VulkanLiquidWorkspace implements AutoCloseable {
+    @Override public void close(){
+        templates.close();
+        if(persistentCopies!=null)persistentCopies.close();
+        if(reusableGeometryCopies!=null)reusableGeometryCopies.close();
+    }
     final VulkanLiquidRegion region;
     private final VulkanLiquidWorkspaceSections sections;
     private final VulkanLiquidThermalStages thermalStages;
@@ -142,22 +147,21 @@ final class VulkanLiquidWorkspace {
         private VulkanMixtureState.Layout liquidOnlyMixture(long base){
             int cells=liquid.cellCount(),cellWord=word(geometry.get(GeometryField.CELLS));
             return VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,cellWord,4,cellWord+2,4,cellWord+4,4,
-                    null,region.requestCellSize,1.0,cellWord),base,liquid.alignment());
+                    null,region.requestCellSize,cellWord),base,liquid.alignment());
         }
         void recordMixtureGeometry(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double duration,boolean reuseGeometry){
             int sx=liquid.sizeX(),sy=liquid.sizeY(),sz=liquid.sizeZ();
             configureExterior(region.kernel);
+            if(reuseGeometry){region.kernel.recordVelocities(command,sx,sy,sz);return;}
             if(region.kernels==null)region.kernel.recordTotals(command,sx,sy,sz);
             else region.kernels.timed(command,"source-liquid-totals",()->region.kernel.recordTotals(command,sx,sy,sz));
             if(transport!=null&&transport.gas!=null){
-                if(reuseGeometry)transport.gas.recordThermodynamics(command,output,errors,duration,false);
-                else transport.gas.recordSource(command,output,errors,duration,region.kernel,false);
+                transport.gas.recordSource(command,output,errors,duration,region.kernel,false);
             } else {
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                region.mixtureKernel.record(command,mixture,region.requestCellSize,duration);
-                if(!reuseGeometry)region.kernel.recordShapes(command,sx,sy,sz);
+                region.mixtureKernel.record(command,mixture,region.requestCellSize);
+                region.kernel.recordShapes(command,sx,sy,sz);
             }
-            if(reuseGeometry)region.kernel.recordVelocities(command,sx,sy,sz);
         }
         /** Prepare derived geometry for a replacement inventory in its private candidate. */
         int prepareImportedGeometry(VulkanRegionStorage.Candidate candidate, VulkanEntityBodyCoupling.Configuration bodies) {
@@ -205,15 +209,11 @@ final class VulkanLiquidWorkspace {
             boolean migrating=source!=this;
             boolean reuseGeometry=!migrating&&sourceGeometryValid&&transport!=null&&transport.entity==null;
             if(parameters!=null && transport==null)throw new IllegalStateException("Mechanical pressure requires resident transport");
-            int maximumPressureIterations=parameters==null?0:parameters.iterations();
-            int predictedPressureIterations=region.previousPressureIterations==0?32
-                    :((region.previousPressureIterations+15)/16)*16;
-            int firstPressureBatch=Math.min(maximumPressureIterations,predictedPressureIterations);
-            int pressureSolverLimit=maximumPressureIterations+1;
+            int pressureSolverLimit=parameters==null?0:Math.min(parameters.iterations(),mmm.fluid.FluidStepBudget.MAXIMUM_PRESSURE_ITERATIONS);
             VulkanLiquidProjection.Parameters solverParameters=parameters==null?null:new VulkanLiquidProjection.Parameters(
                     parameters.cellSize(),parameters.duration(),parameters.gravity(),
-                    Math.max(parameters.tolerance(),(float)(mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION
-                            /(parameters.duration()*parameters.duration()))),parameters.iterations());
+                    Math.max(parameters.tolerance(),(float)(mmm.fluid.FluidStepBudget.MECHANICAL_RESOLUTION_ERROR
+                            /(parameters.duration()*parameters.duration()))),pressureSolverLimit);
             var sourceHeaders=migrating?transport.headers(source.liquid):List.<HeaderWrite>of();
             var stableHeaders=migrating?transport.headers(liquid):List.<HeaderWrite>of();
             long uploadedBytes=headerBytes(sourceHeaders);
@@ -279,7 +279,7 @@ final class VulkanLiquidWorkspace {
                     coarse.add(new FlipKernelBindings.BufferRange(output,multigridColumn.offset(),multigridColumn.bindingBytes()));
                     region.multigrid.rebindRanges(coarse);
                     Runnable initialize=()->region.pressure.recordInitialize(command,pressureRows,pressureRows,pressureSolverLimit,region.multigrid,hierarchy,baseOperator);
-                    Runnable firstBatch=()->recordPressureIterations(command,output,errors,pressureSolverLimit,firstPressureBatch,baseOperator);
+                    Runnable firstBatch=()->recordPressureIterations(command,output,errors,pressureSolverLimit,pressureSolverLimit,baseOperator);
                     if(region.kernels==null){initialize.run();firstBatch.run();}else{
                         region.kernels.timed(command,"common-pressure-initialize",initialize);
                         region.kernels.timed(command,"common-pressure-first-batch",firstBatch);
@@ -294,18 +294,10 @@ final class VulkanLiquidWorkspace {
                 boolean pressureDiagnostics=Boolean.getBoolean("mmm.gpuMechanicalPressureDiagnostics");
                 long controlOffset=pressureColumns.get(PressureField.CONTROL).offset();
                 long runOffset = controlOffset;
-                int feedbackBytes=pressureDiagnostics?128:32,runFeedbackOffset=24;
+                int feedbackBytes=pressureDiagnostics?128:0;
                 var gasOperator=baseOperator;
                 var result=candidate.beginBatch(uploadedBytes,prepare,runOffset,feedbackBytes);
                 error = result.error();
-                int dispatched=firstPressureBatch;
-                while(error==0 && result.feedback().getDouble(runFeedbackOffset)!=0.0 && dispatched<maximumPressureIterations){
-                    int count=Math.min(16,maximumPressureIterations-dispatched);
-                    result=candidate.continueBatch((command,input,output,errors,staging,stack)->
-                            recordPressureIterations(command,output,errors,pressureSolverLimit,count,gasOperator),runOffset,feedbackBytes);
-                    error=result.error();dispatched+=count;
-                }
-                if(error==0)region.previousPressureIterations=(int)result.feedback().getDouble(0);
                 if(pressureDiagnostics)region.pressureProgress=VulkanPressureKernel.Progress.read(result.feedback());
                 traceStage("pressure",stageMark);
                 if(error==0) {
@@ -317,15 +309,12 @@ final class VulkanLiquidWorkspace {
                         region.kernel.recordTransportPreferences(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),parameters.cellSize(),parameters.duration());
                         region.kernels.mixtureFlux.recordAnalyze(command,transport.pressure.constraint,parameters.cellSize(),parameters.duration());
                     };
-                    {
-                        var accepted=candidate.continueBatch((command,input,output,errors,staging,stack)->{
-                            project.record(command,input,output,errors,staging,stack);
-                        },transport.pressure.constraint.control().offset(),8);
+                    boolean movingSolid=transport.entity!=null||transport.dynamics!=null;
+                    if(movingSolid){
+                        var accepted=candidate.continueBatch(project,0,0);
                         if(accepted.error()==4096&&(transport.entity!=null||transport.dynamics!=null))
                             throw new MotionTimeRefinement("Moved solid leaves liquid without an open route");
                         if(accepted.error()!=0)return accepted.error();
-                        int fluidLimit=accepted.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(0);
-                        if(fluidLimit!=0)throw new MotionTimeRefinement("Fluid transport exceeds the available donor inventory: "+fluidLimit+", cell="+accepted.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(4)+", dt="+parameters.duration());
                     }
                     VulkanRegionStorage.ComputeCommands finishProjection=(command,input,output,errors,staging,stack)->{
                         if(transport.entity!=null)region.kernels.entityKernel.recordResult(command,transport.entity,parameters.cellSize(),parameters.duration());
@@ -399,11 +388,17 @@ final class VulkanLiquidWorkspace {
                         if(error==0) {
                             capacityStage="accepted volumes/material routes/gather/future gas geometry";
                             VulkanRegionStorage.ComputeCommands finishTransport=(command,input,output,errors,staging,stack)-> {
+                                if(!movingSolid)project.record(command,input,output,errors,staging,stack);
                                 if(transport.dynamics==null)finishProjection.record(command,input,output,errors,staging,stack);
                                 transport.recordInitialize(command,input,output,errors);
                                 if(transport.entityWork!=null)region.kernels.ledger.record(command,transport.entityWork);
                                 transport.recordFinish(command,output,errors,stack,parameters);
                                 transport.recordEnergy(command,output,errors,parameters);
+                                VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+                                copyColumn(command,output,transport.futureFaces,output,geometry.get(GeometryField.FACES),stack);
+                                VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
                                 if(transport.reactions!=null)region.kernels.activityPending.record(command,output,activityCells,transport.reactions.progress().column(VulkanReactionProgressLayout.Field.PHASE_MOTION_CELLS),transport.reactions.progress().column(VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY));
                             };
                             if(error==0&&(!finalRequest||transport.thermal==null&&transport.reactions==null))error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,(command,input,output,errors,staging,stack)->{
@@ -415,6 +410,7 @@ final class VulkanLiquidWorkspace {
                             else if(error==0){
                                 boolean react=transport.reactions!=null&&(region.activeInputs==null||!region.activeInputs.pendingPhaseSettlementOnly());
                                 VulkanRegionStorage.ComputeCommands finishLedgers=(command,input,output,errors,staging,stack)-> {
+                                    if(react)thermalStages.recordReactionCompletion(command,output,errors,stack);
                                     thermalStages.recordLocalState(command,output,errors,parameters.duration(),!react);
                                     transport.recordLedgers(command,accumulateLedger?source.transport:null,finalRequest,output,errors);if(migrating)writeHeaders(command,output,stableHeaders,stack);
                                 };
@@ -446,13 +442,8 @@ final class VulkanLiquidWorkspace {
         }
         void recordPressureIterations(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,int maximum,int count,VulkanPressureKernel.PressureOperator gasOperator) {
             int rows=pressureColumns.get(PressureField.ROWS).count();
-            // Reuse the same compiled command blocks when batching predicted work.
-            // Converged stages retain the device's zero-work dispatches.
-            for(int remaining=count;remaining>0;){
-                int block=Math.min(16,remaining);remaining-=block;
-                templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,block,maximum,null),
-                        secondary->region.pressure.recordIterations(secondary,rows,rows,maximum,region.multigrid,hierarchy,block,gasOperator));
-            }
+            templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,count,maximum,null),
+                    secondary->region.pressure.recordIterations(secondary,rows,rows,maximum,region.multigrid,hierarchy,count,gasOperator));
         }
 
         private void traceStage(String name,long[] mark){if(mark==null)return;long gpu=region.storage.metrics().gpuNanos(),now=System.nanoTime();
@@ -514,26 +505,27 @@ final class VulkanLiquidWorkspace {
                     if(transport.coherent!=null)for(var f:VulkanCoherentStateLayout.Field.values()){var c=transport.coherent.state.column(f);plan.copy(c,c);}
                     if(transport.devices!=null)for(var f:VulkanThermalDeviceLayout.Field.values()){var c=transport.devices.state.column(f);plan.copy(c,c);}
                 }
-                persistentCopies=plan.build();
+                persistentCopies=plan.build(region.context);
             }
             persistentCopies.record(command,input,output,stack);
-            VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
         private VulkanBufferCopyPlan reusableGeometryCopies;
         void copyReusableGeometry(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer input,GpuBuffer output,org.lwjgl.system.MemoryStack stack){
             if(reusableGeometryCopies==null){
                 var plan=new VulkanBufferCopyPlan.Builder();
-                for(var field:new GeometryField[]{GeometryField.PLANES,GeometryField.LIQUID_MICRO,GeometryField.WALL_GEOMETRY,GeometryField.FACES}){
+                for(var field:new GeometryField[]{GeometryField.CELLS,GeometryField.PLANES,GeometryField.LIQUID_MICRO,GeometryField.WALL_GEOMETRY,GeometryField.FACES}){
                     var c=geometry.get(field);plan.copy(c,c);
                 }
+                plan.copy(mixture.states(),mixture.states());
                 if(transport.gas!=null){
+                    plan.copy(transport.gas.thermo.states(),transport.gas.thermo.states());
+                    plan.copy(transport.gas.thermo.caloricCache(),transport.gas.thermo.caloricCache());
                     var gas=transport.gas.geometry;
                     for(var c:new VulkanLiquidStateLayout.Column[]{gas.presence(),gas.dryVolumes(),gas.dryMasks(),gas.faceAreas(),gas.cellNodes(),gas.microFractions()})plan.copy(c,c);
                 }
-                reusableGeometryCopies=plan.build();
+                reusableGeometryCopies=plan.build(region.context);
             }
             reusableGeometryCopies.record(command,input,output,stack);
-            VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
         void migrate(org.lwjgl.vulkan.VkCommandBuffer command,VulkanLiquidWorkspace source,GpuBuffer input,GpuBuffer output,
                      org.lwjgl.system.MemoryStack stack,List<HeaderWrite> headers) {
@@ -842,7 +834,7 @@ final class VulkanLiquidWorkspace {
                 gas.recordSource(command,output,errors,parameters.duration(),region.kernels.futureGeometry,true);
             }else{
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                region.mixtureKernel.record(command,mixture,region.requestCellSize,parameters.duration());
+                region.mixtureKernel.record(command,mixture,region.requestCellSize);
                 region.kernels.futureGeometry.recordShapes(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
             }
             region.kernels.timed(command,"momentum-resolve",()->region.kernels.momentumKernel.recordResolve(command,momentum));
@@ -864,7 +856,7 @@ final class VulkanLiquidWorkspace {
             if(gas!=null)gas.recordThermodynamics(command,output,errors,parameters.duration(),true);
             else {
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                region.mixtureKernel.record(command,mixture,region.requestCellSize,parameters.duration());
+                region.mixtureKernel.record(command,mixture,region.requestCellSize);
             }
         }
         void recordLedgers(org.lwjgl.vulkan.VkCommandBuffer command,Transport previous,boolean finalRequest,GpuBuffer output,GpuBuffer errors) {

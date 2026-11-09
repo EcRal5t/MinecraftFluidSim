@@ -32,9 +32,6 @@ void writeDouble(int at, double value) {
     words[at] = bits.x;
     words[at + 1] = bits.y;
 }
-ivec3 dimensions() { return gridShape(); }
-bool inside(ivec3 position) { return gridCell(position)>=0; }
-int indexOf(ivec3 position) { return gridCell(position); }
 uint support(int cell) {
     return (~words[headerWord(GEO_H_MASKS) + cell]) & 255u;
 }

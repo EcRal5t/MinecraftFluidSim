@@ -44,7 +44,8 @@ public final class GpuSolidLiquidReactionsValidation {
             var liquidCaloric=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(fluid,thermal),Math.toIntExact(lr/4),Math.toIntExact(ls/4),chemical.species().size(),gs+8L*solids.size()*chemical.species().size(),a);
             var solidCaloric=VulkanLiquidThermodynamics.layout(solid,VulkanLiquidThermodynamics.tables(solids),Math.toIntExact(gr/4),Math.toIntExact(gs/4),chemical.species().size(),liquidCaloric.endOffset(),a);
             var progress=new VulkanReactionProgressLayout(cells,128,128,tables,solidCaloric.endOffset(),a);
-            var phase=new VulkanSolidLiquidReactions.Layout(liquid,solid,tables,liquidCaloric,solidCaloric,progress,fluid,chemical,granular,h,gravity,-1,progress.endOffset(),a);
+            var sharedRows=new VulkanLiquidPhaseRows.Layout(liquid,tables,h,progress.endOffset(),a);
+            var phase=new VulkanSolidLiquidReactions.Layout(sharedRows,liquid,solid,tables,liquidCaloric,solidCaloric,progress,fluid,chemical,granular,h,gravity,-1,true,sharedRows.endOffset,a);
             long cursor=phase.endOffset;
             var fixed=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,8);cursor=fixed.offset()+fixed.bytes();
             var masks=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,4);cursor=masks.offset()+masks.bytes();
