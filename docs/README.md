@@ -29,6 +29,7 @@
 | 后续玩家能力、产品阶段与范围 | [长期产品路线](roadmap/product-roadmap.md) |
 | 下一轮 GPU 单一实现、编辑／恢复迁移及 CPU 路径删除 | [GPU 执行链主线化计划](roadmap/gpu-mainline-execution-plan.md) |
 | GPU 主线化之后的基础物理、热传质、化学与组合工艺交付 | [仿真能力补全计划](roadmap/simulation-capability-completion-plan.md) |
+| 自由构造工业玩法的进出料、运动件、能源、气固作用及表面反应 | [后续工业玩法实施计划](roadmap/emergent-industrial-gameplay-plan.md) |
 | 范围扩张与完整 GPU 后端要求 | [后端扩展参考](roadmap/performance-and-backends.md) |
 | GPU 重设计的固定方法原则、调研依据与换轨条件 | [GPU 完整步重设计只读备忘录](architecture/gpu-execution-principles.md) |
 | 发布检查与部署 | [验收与发布](roadmap/acceptance-and-release.md) |
