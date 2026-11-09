@@ -93,7 +93,7 @@ public final class GasInventory {
 		return new GasInventory(List.copyOf(merged.values()));
 	}
 
-	/** Splits an exact total-nanos portion from this mixture without creating or deleting any integer column. */
+	/** Selects up to the requested volume; indivisible trace components remain in the source. */
 	public Split splitTotal(long firstNanos, GasRegistry registry, ChemicalRegistry chemistry) {
 		if (firstNanos < 0L || firstNanos > standardVolumeNanos) {
 			throw new IllegalArgumentException("Gas split volume is outside the inventory");
@@ -106,14 +106,14 @@ public final class GasInventory {
 		for (int index = 0; index < components.size(); index++) {
 			GasComponentAmount component = components.get(index);
 			GasComponentAmount[] parts = splitComponent(component,
-					new long[] { selected[index], component.standardVolumeNanos() - selected[index] }, registry, chemistry);
+					new long[] { selected[index], component.standardVolumeNanos() - selected[index] }, registry, chemistry, 1);
 			if (parts[0] != null) first.add(parts[0]);
 			if (parts[1] != null) second.add(parts[1]);
 		}
 		return new Split(new GasInventory(first), new GasInventory(second));
 	}
 
-	/** Selects an exact nanos portion of one stable component, leaving every other component untouched. */
+	/** Selects a bounded portion of one component, retaining an indivisible remainder in the source. */
 	public Split splitComponent(String componentId, long selectedNanos, GasRegistry registry, ChemicalRegistry chemistry) {
 		GasComponentAmount selected = component(componentId);
 		if (selected == null || selectedNanos < 0L || selectedNanos > selected.standardVolumeNanos()) {
@@ -121,7 +121,7 @@ public final class GasInventory {
 		}
 		if (selectedNanos == 0L) return new Split(EMPTY, this);
 		GasComponentAmount[] portions = splitComponent(selected,
-				new long[] {selectedNanos, selected.standardVolumeNanos() - selectedNanos}, registry, chemistry);
+				new long[] {selectedNanos, selected.standardVolumeNanos() - selectedNanos}, registry, chemistry, 1);
 		ArrayList<GasComponentAmount> remainder = new ArrayList<>(components.size());
 		for (GasComponentAmount component : components) {
 			if (!component.componentId().equals(componentId)) remainder.add(component);
@@ -141,7 +141,7 @@ public final class GasInventory {
 		for (int child = 0; child < childCount; child++) children.add(new ArrayList<>());
 		for (GasComponentAmount component : components) {
 			long[] shares = allocation.apply(component.standardVolumeNanos());
-			GasComponentAmount[] parts = splitComponent(component, shares, registry, chemistry);
+			GasComponentAmount[] parts = splitComponent(component, shares, registry, chemistry, -1);
 			for (int child = 0; child < parts.length; child++) if (parts[child] != null) children.get(child).add(parts[child]);
 		}
 		ArrayList<GasInventory> result = new ArrayList<>(childCount);
@@ -186,7 +186,7 @@ public final class GasInventory {
 				residual);
 	}
 
-	private static GasComponentAmount[] splitComponent(GasComponentAmount source, long[] requested, GasRegistry registry, ChemicalRegistry chemistry) {
+	private static GasComponentAmount[] splitComponent(GasComponentAmount source, long[] requested, GasRegistry registry, ChemicalRegistry chemistry, int retainedChild) {
 		long[] nanos=requested.clone();long sum=0;
 		for(long value:nanos){if(value<0)throw new IllegalArgumentException("Gas component split volume cannot be negative");sum=Math.addExact(sum,value);}
 		if(sum!=source.standardVolumeNanos())throw new IllegalArgumentException("Gas component split does not close");
@@ -207,6 +207,9 @@ public final class GasInventory {
 				for(int species=0;species<speciesShares.length;species++)if(speciesShares[species][child]>0)
 					mass[child]=Math.addExact(mass[child],Math.multiplyExact(speciesShares[species][child],
 							massPerQuantum(registry,chemistry,source.componentId(),source.species().get(species).speciesId())));
+			}
+			if(retainedChild>=0)for(int child=0;child<nanos.length;child++)if(nanos[child]>0&&mass[child]<=0){
+				var result=new GasComponentAmount[nanos.length];result[retainedChild]=source;return result;
 			}
 			boolean retry=false;
 			for(int child=0;child<nanos.length;child++)if(child!=pivot&&nanos[child]>0&&mass[child]<=0){

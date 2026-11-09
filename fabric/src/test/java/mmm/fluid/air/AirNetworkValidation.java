@@ -12,18 +12,24 @@ public final class AirNetworkValidation {
 
     private static void validateIntegerPartition() {
         var registry=mmm.fluid.TestFluidDefinitions.load().gas();var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();
-        long quanta=4366,residual=479,mass=quanta*440+residual;
+        long unitMass=chemistry.speciesMassUnits(chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.CO2),1);
+        long quanta=4366,residual=479,mass=quanta*unitMass+residual;
         var source=new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.CO2,1_000_003,mass,
                 List.of(new GasComponentAmount.SpeciesAmount(mmm.chemistry.BuiltinChemicalDefinitions.CO2,quanta)),residual)));
         var parts=source.partition(GasPartitionWeights.of(new double[]{.13,.27,.31,.29}),registry,chemistry);
         long totalMass=0,totalQuanta=0,totalResidual=0,totalNanos=0;
         for(var part:parts)for(var component:part.components()){
             long amount=component.species().stream().mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
-            if(component.massUnits()!=amount*440+component.massResidualUnits())throw new AssertionError("Gas part mass and species differ");
+            if(component.massUnits()!=amount*unitMass+component.massResidualUnits())throw new AssertionError("Gas part mass and species differ");
             totalMass+=component.massUnits();totalQuanta+=amount;totalResidual+=component.massResidualUnits();totalNanos+=component.standardVolumeNanos();
         }
         if(totalMass!=mass||totalQuanta!=quanta||totalResidual!=residual||totalNanos!=source.standardVolumeNanos())
             throw new AssertionError("Gas partition changed integer inventory");
+        var trace=new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.CO2,100,unitMass,
+                List.of(new GasComponentAmount.SpeciesAmount(mmm.chemistry.BuiltinChemicalDefinitions.CO2,1)),0)));
+        var selected=trace.splitTotal(90,registry,chemistry);
+        check(selected.first().standardVolumeNanos()<=90&&selected.first().merge(selected.second()).equals(trace),
+                "Bounded extraction moved an indivisible remainder past its quota");
     }
 
 	private static void validateRegistrySnapshot() {

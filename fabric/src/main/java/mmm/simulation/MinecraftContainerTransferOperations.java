@@ -384,7 +384,9 @@ final class MinecraftContainerTransferOperations {
 		var chemistry=world.hasCapability(WorldCapability.CHEMISTRY)?world.chemicalRegistry():null;
 		var thermal=new mmm.thermal.GasThermalModel(world.thermalRegistry(),world.gasRegistry());
 		var split=contents.split(Math.min(requested,contents.inventory().standardVolumeNanos()),world.gasRegistry(),chemistry,thermal);
-		var selected=split.selected();var domain=region.editableHost();int index=domain.grid().cell(cell[0],cell[1],cell[2]);
+		var selected=split.selected();
+		if(selected==null)return new TransferOutcome(false,true,ContainerItemStacks.toStack(contents),"当前配额小于可分配气体库存");
+		var domain=region.editableHost();int index=domain.grid().cell(cell[0],cell[1],cell[2]);
 		if(index<0)return new TransferOutcome(false,true,ContainerItemStacks.toStack(contents),"目标气格不可用");
 		var moved=domain.insertGas(index+1,selected.inventory(),selected.internalEnergy());
 		double remaining=split.remaining()==null?0:split.remaining().internalEnergy();

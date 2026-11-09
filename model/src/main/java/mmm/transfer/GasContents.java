@@ -26,6 +26,7 @@ public record GasContents(String gasRegistryFingerprint, String chemicalRegistry
 		if (nanos <= 0 || nanos > inventory.standardVolumeNanos()) throw new IllegalArgumentException("Invalid gas transfer amount");
 		if (nanos == inventory.standardVolumeNanos()) return new Split(this, null);
 		var portions = inventory.splitTotal(nanos, registry, chemistry);
+		if(portions.first().isEmpty())return new Split(null,this);
 		double[] energies = thermal.partitionEnergy(inventory, internalEnergy, List.of(portions.first(), portions.second()));
 		return new Split(new GasContents(gasRegistryFingerprint, chemicalRegistryFingerprint, portions.first(), energies[0]),
 				new GasContents(gasRegistryFingerprint, chemicalRegistryFingerprint, portions.second(), energies[1]));
