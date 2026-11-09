@@ -440,8 +440,8 @@ valid = creative || pure || material;
 } else {
 boolean pure = beforePure >= 0L && beforePure <= bucket - amount
 && (prepared || afterPure == beforePure + amount);
-boolean material = beforeMaterial == 0L
-&& (prepared || afterMaterial == amount);
+boolean material = beforeMaterial >= 0L && beforeMaterial <= bucket - amount
+&& (prepared || afterMaterial == beforeMaterial + amount);
 valid = pure || material;
 }
 if (!valid) {
@@ -513,7 +513,8 @@ if (journal.operation() == ContainerTransferJournal.Operation.INSERT) {
 valid = creativeSourceInsertion(journal, true) || before >= amount && before>0
 && (prepared || after == before-amount || journal.afterItem().equals(journal.beforeItem()));
 } else {
-valid = before == 0L && (prepared || after == amount);
+valid = before >= 0L && before <= mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER - amount
+&& (prepared || after == before + amount);
 }
 if (!valid) {
 throw new IOException("Container transfer item delta does not match " + journal.operation()

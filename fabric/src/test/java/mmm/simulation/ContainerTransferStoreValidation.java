@@ -508,6 +508,39 @@ public final class ContainerTransferStoreValidation {
 				chemicalBefore, chemicalAfter, 0x6abcL, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(chemicalPartialJournal);
 		check(chemicalPartialJournal.equals(store.read(tx6)), "partial chemical WAL settlement did not round-trip");
+		var tinyBefore = new ChemicalContents(chemicalContents.registryFingerprint(), ChemicalLimits.QUANTA_PER_MOL,
+				List.of(new ChemicalContents.Group("mmm:water",21,195239,35279,List.of(
+						new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.ETHANOL,66),
+						new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O,720)))));
+		var tinyAfter = new ChemicalContents(chemicalContents.registryFingerprint(), ChemicalLimits.QUANTA_PER_MOL,
+				List.of(new ChemicalContents.Group("mmm:water",24,213239,35279,List.of(
+						new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.ETHANOL,66),
+						new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O,820)))));
+		var tinyBeforeItem = new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET,
+				21,-1,tinyBefore.encode(),tinyBefore.totalMassUnits(),ThermalContents.forChemical(PROFILE,tinyBefore,10.0).encode(),PROFILE);
+		var tinyAfterItem = new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET,
+				24,-1,tinyAfter.encode(),tinyAfter.totalMassUnits(),ThermalContents.forChemical(PROFILE,tinyAfter,13.0).encode(),PROFILE);
+		var tinyActor=ContainerTransferActor.player(UUID.randomUUID(), ContainerTransferActor.Hand.MAIN);
+		UUID tinyTx=UUID.randomUUID();
+		var tinyPrepared=ContainerTransferJournal.thermalFluid(tinyTx,region,"minecraft:overworld",6,7,
+				ContainerTransferJournal.Operation.EXTRACT,3,new ContainerTransferJournal.ThermalTransfer(PROFILE,0.0),
+				tinyActor,tinyBeforeItem,tinyBeforeItem,-1,ContainerTransferJournal.Phase.PREPARED);
+		store.write(tinyPrepared);
+		check(tinyPrepared.equals(store.read(tinyTx)),"partially filled chemical bucket PREPARED did not round-trip");
+		var tinyCommitted=ContainerTransferJournal.thermalFluid(tinyTx,region,"minecraft:overworld",6,7,
+				ContainerTransferJournal.Operation.EXTRACT,3,new ContainerTransferJournal.ThermalTransfer(PROFILE,3.0),
+				tinyActor,tinyBeforeItem,tinyAfterItem,0x6123,ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(tinyCommitted);
+		check(tinyCommitted.equals(store.read(tinyTx)),"partially filled chemical bucket settlement did not round-trip");
+		var receipt=mmm.transfer.ContainerTransferManifests.from(tinyCommitted,1000);
+		check(receipt.components().size()==1 && receipt.components().getFirst().amount()==3
+				&& receipt.components().getFirst().massUnits()==18000
+				&& receipt.components().getFirst().species().equals(List.of(new mmm.api.transfer.TransferManifest.Species(BuiltinChemicalDefinitions.H2O,100)))
+				&& receipt.internalEnergyJoules().orElseThrow()==3.0,"chemical receipt lost actual mass, species or energy");
+		var tinyWrong=ContainerTransferJournal.thermalFluid(UUID.randomUUID(),region,"minecraft:overworld",6,7,
+				ContainerTransferJournal.Operation.EXTRACT,3,new ContainerTransferJournal.ThermalTransfer(PROFILE,0.0),
+				tinyActor,tinyBeforeItem,tinyBeforeItem,0x6123,ContainerTransferJournal.Phase.REGION_COMMITTED);
+		checkThrows(IOException.class,()->store.write(tinyWrong),"unchanged chemical bucket accepted a committed extraction");
 
 		ContainerTransferJournal wrongFamily = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
@@ -551,6 +584,20 @@ public final class ContainerTransferStoreValidation {
 		check(granular.requiresGranularRegistry() && granular.requiresChemicalRegistry(),
 				"reactive granular WAL did not declare both registry dependencies");
 		granular.validateGranularRegistry(granularRegistry, mmm.fluid.TestFluidDefinitions.load().chemistry());
+		var granularPart=granularContents.split(inertSvq / 2,mmm.fluid.TestFluidDefinitions.load().chemistry()).inserted();
+		var granularPartItem=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER,
+				-1,granularPart.totalSolidVolumeSvq(),granularPart.encode(),granularPart.totalMassUnits(),null,PROFILE);
+		long addedSolid=granularContents.totalSolidVolumeSvq()-granularPart.totalSolidVolumeSvq();
+		UUID granularCollectTx=UUID.randomUUID();
+		var granularCollectPrepared=ContainerTransferJournal.granular(granularCollectTx,region,"minecraft:overworld",6,7,
+				ContainerTransferJournal.Operation.EXTRACT,addedSolid,tinyActor,granularPartItem,granularPartItem,-1,
+				ContainerTransferJournal.Phase.PREPARED);
+		store.write(granularCollectPrepared);
+		var granularCollectCommitted=ContainerTransferJournal.granular(granularCollectTx,region,"minecraft:overworld",6,7,
+				ContainerTransferJournal.Operation.EXTRACT,addedSolid,tinyActor,granularPartItem,granularBefore,0x6124,
+				ContainerTransferJournal.Phase.REGION_COMMITTED);
+		store.write(granularCollectCommitted);
+		check(granularCollectCommitted.equals(store.read(granularCollectTx)),"partially filled granular container settlement did not round-trip");
 		checkThrows(IllegalArgumentException.class,
 				() -> granular.validateGranularRegistry(mmm.fluid.TestFluidDefinitions.load().granular(), null),
 				"reactive granular WAL was accepted without chemistry");
