@@ -110,7 +110,7 @@ public final class CommittedWorldRegistries {
 
 	public ItemStack bindActualContainerProfile(ItemStack stack) {
 		if (stack.get(MmmComponents.FLUID_VOLUME) != null || stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
-				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
+				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null || stack.get(MmmComponents.GAS_CONTENTS) != null) {
 			if (!startup.profileProven()) {
 				throw new IllegalStateException("Authoritative world profile is unavailable");
 			}

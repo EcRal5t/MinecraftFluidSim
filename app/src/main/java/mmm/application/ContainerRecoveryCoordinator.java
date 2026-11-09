@@ -134,7 +134,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 
 	public void retryDispenserChunk(String dimensionId, int chunkX, int chunkZ) {
 		if (dimensionId == null || dimensionId.isBlank()) return;
-		retry(journal -> journal.actor() instanceof ContainerTransferActor.Dispenser dispenser
+		retry(journal -> journal.actor() instanceof ContainerTransferActor.BlockInventory dispenser
 				&& dispenser.dimensionId().equals(dimensionId)
 				&& Math.floorDiv(dispenser.blockX(), 16) == chunkX
 				&& Math.floorDiv(dispenser.blockZ(), 16) == chunkZ);

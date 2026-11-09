@@ -1,0 +1,15 @@
+{
+  "reference_temperature_k": "293.15",
+  "reference_specific_energy_j_per_kg": "0.0",
+  "specific_heat_j_per_kg_k": "500.0",
+  "effective_area_factor": "1.0",
+  "site_capacity_mol_per_kg": "0.0",
+  "exchange_mol_per_m2_s": "0.0",
+  "minimum_temperature_k": "250.0",
+  "maximum_temperature_k": "500.0",
+  "maximum_pressure_pa": "2000000.0",
+  "adsorbates": [],
+  "catalysis": [
+    { "reaction": "mmm:co2_hydration", "multiplier_per_m2": "10.0" }
+  ]
+}

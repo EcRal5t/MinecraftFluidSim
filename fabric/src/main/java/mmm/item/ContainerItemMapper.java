@@ -28,6 +28,13 @@ public final class ContainerItemMapper {
 		}
 		if (stack.getItem() instanceof MaterialBucketItem) return materialFingerprint(stack);
 		if (stack.getItem() instanceof GranularContainerItem) return granularFingerprint(stack);
+		if (stack.getItem() instanceof GasContainerItem) {
+			if (GasContainerItem.isEmpty(stack)) return snapshot(ContainerTransferJournal.ItemKind.EMPTY_GAS_CONTAINER);
+			var contents = GasContainerItem.contents(stack);
+			if (contents == null) throw new IllegalArgumentException("Gas container has invalid contents");
+			return actualFingerprint(stack, ContainerTransferJournal.ItemKind.GAS_CONTAINER,
+					contents.inventory().standardVolumeNanos(), -1, contents.encode(), contents.inventory().totalMassUnits());
+		}
 		if (stack.getItem() instanceof CreativeSourceItem) {
 			CreativeSourceDescriptor descriptor = CreativeSourceItem.descriptor(stack);
 			if (descriptor == null) throw new IllegalArgumentException("Creative source descriptor is invalid");
@@ -48,6 +55,8 @@ public final class ContainerItemMapper {
 			case CHEMICAL_BUCKET -> chemicalStack(snapshot);
 			case EMPTY_GRANULAR_CONTAINER -> new ItemStack(MmmItems.GRANULAR_CONTAINER);
 			case GRANULAR_CONTAINER -> granularStack(snapshot);
+			case EMPTY_GAS_CONTAINER -> new ItemStack(MmmItems.GAS_CONTAINER);
+			case GAS_CONTAINER -> ContainerItemStacks.toStack(mmm.transfer.GasContents.decode(snapshot.contents()));
 			case CREATIVE_SOURCE -> CreativeSourceItem.stack(CreativeSourceDescriptor.decode(snapshot.contents()));
 		};
 		if (snapshot.profileFingerprint() != null) {

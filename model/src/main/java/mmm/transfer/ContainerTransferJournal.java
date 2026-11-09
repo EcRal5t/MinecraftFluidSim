@@ -156,6 +156,8 @@ public record ContainerTransferJournal(
 		CHEMICAL_BUCKET,
 		EMPTY_GRANULAR_CONTAINER,
 		GRANULAR_CONTAINER,
+		EMPTY_GAS_CONTAINER,
+		GAS_CONTAINER,
 		CREATIVE_SOURCE
 	}
 
@@ -171,7 +173,7 @@ public record ContainerTransferJournal(
 	) {
 		public ItemFingerprint {
 			boolean actual = kind == ItemKind.MATERIAL_BUCKET || kind == ItemKind.CHEMICAL_BUCKET
-					|| kind == ItemKind.GRANULAR_CONTAINER;
+					|| kind == ItemKind.GRANULAR_CONTAINER || kind == ItemKind.GAS_CONTAINER;
 			if (actual != (profileFingerprint != null)) {
 				throw new IllegalArgumentException("Only filled typed containers require a world profile fingerprint");
 			}
@@ -233,7 +235,7 @@ public record ContainerTransferJournal(
 				case CHEMICAL_BUCKET -> ThermalContents.forChemical(
 						fingerprint, ChemicalContents.decode(contents), thermal.internalEnergy());
 				case GRANULAR_CONTAINER -> ThermalContents.forGranular(fingerprint,GranularContents.decode(contents),thermal.internalEnergy());
-				case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, CREATIVE_SOURCE ->
+				case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, EMPTY_GAS_CONTAINER, GAS_CONTAINER, CREATIVE_SOURCE ->
 						throw new IllegalArgumentException("Empty WAL item carries thermal contents");
 			};
 			if (expected.underlyingKind() != thermal.underlyingKind()

@@ -235,6 +235,7 @@ double vaporResponse(double capacity,double liquid,double nanos,double component
     return abs(trial*target/total-previous)/quantumMoles;
 }
 void initialize(int i) {
+    if(i<headerWord(H_WALL_CAPACITY))words[workField(FIELD_SURFACE_CHANGED)+i]=0u;
     if (i < headerWord(H_GROUP_COUNT))
         words[workField(FIELD_HEAD) + i] = uint(-1);
     if (i < 7 * headerWord(H_CELL_COUNT)) {
@@ -242,6 +243,8 @@ void initialize(int i) {
         writeQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+2*i,0l);
     }
     if (i < headerWord(H_CELL_COUNT)) {
+        writeQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*i,0l);
+        words[workField(FIELD_SURFACE_RECEIVER)+i]=uint(-1);
         writeDouble(workField(FIELD_GAS_TRANSFER) + 2 * i, 0.0);
         words[workField(FIELD_GAS_TRANSFER_TARGET)+i]=uint(-1);
         writeDouble(workField(FIELD_ORPHAN_ENERGY) + 2 * i, 0.0);
@@ -532,7 +535,7 @@ double wallHeatBetween(int device,double from,double to){
     for(int segment=first;segment<=last && from<to;segment++){
         double upper=segment==last?to:readDouble(int(words[header+CAL_SEGMENT_UPPER])+2*segment);
         if(from>=upper)continue;
-        double end=min(to,upper),capacity=mass*readDouble(int(words[header+CAL_SEGMENT_CAPACITY])+2*segment);
+        double end=min(to,upper),capacity=mass*readDouble(int(words[header+CAL_SEGMENT_CAPACITY])+2*segment)+readDouble(headerWord(H_SURFACE_CAPACITY)+2*device);
         sum+=(end-from)*capacity;from=end;
     }
     return sum;
@@ -542,16 +545,18 @@ double wallTemperatureAfter(int device,double temperature,double energy){
     double mass=double(readQuantity(headerWord(H_WALL_MASS)+2*device))*massUnit();
     int first=int(words[int(words[header+CAL_SEGMENT_OFFSETS])+material]);
     int last=int(words[int(words[header+CAL_SEGMENT_OFFSETS])+material+1])-1;
-    for(int segment=first;segment<=last;segment++){
-        double upper=readDouble(int(words[header+CAL_SEGMENT_UPPER])+2*segment);
-        if(segment<last && temperature>=upper)continue;
-        double capacity=mass*readDouble(int(words[header+CAL_SEGMENT_CAPACITY])+2*segment);
+    int segment=first;
+    while(segment<last && temperature>=readDouble(int(words[header+CAL_SEGMENT_UPPER])+2*segment))segment++;
+    for(;;){
+        double capacity=mass*readDouble(int(words[header+CAL_SEGMENT_CAPACITY])+2*segment)+readDouble(headerWord(H_SURFACE_CAPACITY)+2*device);
         if(!(capacity>0.0LF)){reportInvalid();return temperature;}
-        double span=segment==last?energy:(upper-temperature)*capacity;
-        if(energy<=span || segment==last)return temperature+energy/capacity;
-        energy-=span;temperature=upper;
+        if(energy>=0.0LF){double upper=readDouble(int(words[header+CAL_SEGMENT_UPPER])+2*segment),span=(upper-temperature)*capacity;
+            if(segment==last||energy<=span)return temperature+energy/capacity;
+            energy-=span;temperature=upper;segment++;
+        }else{double lower=segment==first?0.0LF:readDouble(int(words[header+CAL_SEGMENT_UPPER])+2*(segment-1)),span=(temperature-lower)*capacity;
+            if(segment==first||-energy<=span)return temperature+energy/capacity;
+            energy+=span;temperature=lower;segment--;}
     }
-    return temperature;
 }
 double liquidSpeciesEnergy(int material,int species,int64_t unit,double temperature){
     double specific=specificLiquid(material,temperature);
@@ -612,15 +617,124 @@ void commitWall(int device){
     if(headerWord(H_WALL_COUNTS)<0 || device>=int(words[headerWord(H_WALL_COUNTS)]))return;
     double old=readDouble(headerWord(H_WALL_ENERGY)+2*device),heat=readDouble(workField(FIELD_WALL_RESERVATION)+2*device);
     int change=headerWord(H_WALL_ENERGY_CHANGE)+4*device,delta=workField(FIELD_WALL_DELTA)+4*device;
-    if(heat==0.0LF){writeDouble(change,0.0LF);writeDouble(change+2,0.0LF);return;}
+    bool surfaceChanged=words[workField(FIELD_SURFACE_CHANGED)+device]!=0u;
+    if(heat==0.0LF && !surfaceChanged){writeDouble(change,0.0LF);writeDouble(change+2,0.0LF);return;}
     double value=old+heat;if(!isFinite(value)){reportInvalid();return;}
     writeDouble(headerWord(H_WALL_ENERGY)+2*device,value);
     writeDouble(change,value);writeDouble(change+2,-old);
     writeDouble(delta,value);writeDouble(delta+2,-old);
-    if(value!=old){
+    if(value!=old || surfaceChanged){
         int generation=headerWord(H_WALL_GENERATION)+2*device,request=headerWord(H_WALL_REQUEST_GENERATION)+2*device;
         uint64_t next=uint64_t(readQuantity(request))+uint64_t(1);
         words[generation]=uint(next);words[generation+1]=uint(next>>32);
+    }
+}
+
+// A single owner settles fixed surfaces in stable device/face/port order.
+void exchangeSurfaces(){
+    int count=headerWord(H_SURFACE_RULE_COUNT),table=workField(FIELD_SURFACE_RULES);
+    int ports=int(words[headerWord(H_WALL_COUNTS)+1]),devices=int(words[headerWord(H_WALL_COUNTS)]);
+    double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
+    for(int d=0;d<devices;d++)writeDouble(workField(FIELD_SURFACE_TEMPERATURE)+2*d,
+            wallTemperatureAfter(d,readDouble(headerWord(H_WALL_TEMPERATURE)+2*d),readDouble(workField(FIELD_WALL_RESERVATION)+2*d)));
+    for(int first=0;first<count;){
+        int row=table+28*first,slot=int(words[row+4]),end=first+1;
+        while(end<count && int(words[table+28*end+4])==slot)end++;
+        int device=int(words[row]),direction=int(words[row+1]);
+        double capacity=readDouble(row+8),occupied=0.0LF;
+        for(int k=first;k<end;k++)occupied+=double(readQuantity(headerWord(H_SURFACE_AMOUNTS)+2*int(words[table+28*k+5])));
+        for(int port=0;port<ports;port++){
+            if(int(words[headerWord(H_WALL_PORT_DEVICE)+port])!=device||int(words[headerWord(H_WALL_PORT_DIRECTION)+port])!=direction)continue;
+            int node=int(words[headerWord(H_WALL_PORT_CELL)+port]);if(node<0||node>=headerWord(H_CELL_COUNT)||!activeCell(node))continue;
+            double area=dryWallArea(node,direction);if(area<=0.0LF)continue;
+            if(headerWord(H_SCREEN_FACES)>=0){int face=gridFace(node,direction);if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;
+                if(readDouble(screen)>0.0LF)area*=1.0LF-clamp(readDouble(screen+2),0.0LF,1.0LF);}}
+            area*=readDouble(p.header+H_CELL_SIZE)*readDouble(p.header+H_CELL_SIZE);if(area<=0.0LF)continue;
+            double wallT=readDouble(workField(FIELD_SURFACE_TEMPERATURE)+2*device);
+            if(wallT<readDouble(row+22)||wallT>readDouble(row+24))continue;
+            double nanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*node));
+            double pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*node+MIXTURE_PRESSURE));
+            if(pressure<0.0LF||pressure>readDouble(row+26))continue;
+            double weightSum=1.0LF;
+            for(int k=first;k<end;k++){
+                int r=table+28*k,comp=component(node,int(words[r+2]));
+                double partial=nanos>0.0LF?pressure*double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp))/nanos:0.0LF;
+                double affinity=readDouble(r+12)*double(exp(float(readDouble(r+16)/8.31446261815324LF*(1.0LF/wallT-1.0LF/readDouble(r+14)))));
+                weightSum+=affinity*partial;
+            }
+            if(!isFinite(weightSum)||weightSum<=0.0LF){reportInvalid();return;}
+            for(int k=first;k<end;k++){
+                int r=table+28*k,index=int(words[r+5]),gm=int(words[r+2]),sp=int(words[r+3]);
+                int comp=component(node,gm),gs=gasSpecies(comp,sp);if(gs<0){reportInvalid();return;}
+                double partial=nanos>0.0LF?pressure*double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp))/nanos:0.0LF;
+                double affinity=readDouble(r+12)*double(exp(float(readDouble(r+16)/8.31446261815324LF*(1.0LF/wallT-1.0LF/readDouble(r+14)))));
+                int64_t present=readQuantity(headerWord(H_SURFACE_AMOUNTS)+2*index);
+                double demand=readDouble(r+10)*area*readDouble(p.header+H_DURATION)*(affinity*partial/weightSum-double(present)/capacity)
+                        +readDouble(headerWord(H_SURFACE_RESIDUALS)+2*index);
+                if(!isFinite(demand)||abs(demand)>9e15LF){reportInvalid();return;}
+                int64_t signedQ=demand>=0.0LF?int64_t(floor(demand)):-int64_t(floor(-demand));
+                double nextResidual=demand-double(signedQ);
+                if(nextResidual!=readDouble(headerWord(H_SURFACE_RESIDUALS)+2*index))words[workField(FIELD_SURFACE_CHANGED)+device]=1u;
+                writeDouble(headerWord(H_SURFACE_RESIDUALS)+2*index,nextResidual);
+                bool adsorb=signedQ>0l;int64_t q=signedQ>=0l?signedQ:-signedQ,unit=readQuantity(r+6);
+                if(unit<=0l){reportInvalid();return;}
+                if(adsorb){q=min(q,readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs));
+                    q=min(q,max(0l,readQuantity(gasField(GAS_MASS_UNITS)+2*comp))/unit);
+                    q=min(q,int64_t(max(0.0LF,floor(capacity-occupied))));
+                }else {q=min(q,present);q=min(q,(0x7fffffffffffffffl-readQuantity(gasField(GAS_MASS_UNITS)+2*comp))/unit);
+                    q=min(q,0x7fffffffffffffffl-readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs));}
+                if(q<=0l){
+                    bool pending=signedQ==0l && demand!=0.0LF && (demand>0.0LF
+                        ? readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)>0l && capacity-occupied>=1.0LF : present>0l);
+                    if(pending){words[headerWord(H_PHASE_MOTION_CELLS)+node]=1u;atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)],1u);}
+                    continue;
+                }
+                double gasT=adsorb?state(node,0):wallT;if(!(gasT>0.0LF))gasT=wallT;
+                double reference=readDouble(gasHeaderWord(GAS_H_SPECIES_REFERENCE)+2*(gm*gasHeaderWord(GAS_H_SPECIES_STRIDE)+sp));
+                double carried=double(unit)*massUnit()*specificGas(gm,gasT)+reference;
+                double surfaceAtT=1e-6LF*(readDouble(r+18)+readDouble(r+20)*(wallT-readDouble(r+14)));
+                double sensible=wallHeatBetween(device,minimum,wallT);
+                double cost=adsorb?surfaceAtT-carried:carried-surfaceAtT;
+                q=coldLimit(q,sensible,cost);
+                if(adsorb)q=coldLimit(q,readDouble(gasField(GAS_INTERNAL_ENERGY)+2*node)-gasCold(node),
+                        carried-double(unit)*massUnit()*specificGas(gm,minimum)-reference);
+                int64_t gasMass=readQuantity(gasField(GAS_MASS_UNITS)+2*comp),movedMass=q*unit;
+                int64_t componentNanos=readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp);
+                int64_t movedNanos=q>0l?max(1l,int64_t(floor(double(q)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF)+.5LF))):0l;
+                if(adsorb && q>0l){if(movedMass==gasMass)movedNanos=componentNanos;else movedNanos=min(movedNanos,max(0l,componentNanos-1l));
+                    if(movedNanos==0l)q=0l;}
+                if(q<=0l)continue;
+                movedMass=q*unit;
+                double energy=readDouble(gasField(GAS_INTERNAL_ENERGY)+2*node),moved=double(q)*carried;
+                bool complete=adsorb&&movedMass==gasMass&&readQuantity(gasField(GAS_MASS_RESIDUAL_UNITS)+2*comp)==0l;
+                if(complete){for(int m=0;m<gasHeaderWord(GAS_H_COMPONENT_COUNT);m++)if(m!=gm&&readQuantity(gasField(GAS_MASS_UNITS)+2*component(node,m))>0l)complete=false;
+                    for(int a=int(words[gasField(GAS_COMPONENT_SPECIES_OFFSETS)+comp]);a<int(words[gasField(GAS_COMPONENT_SPECIES_OFFSETS)+comp+1]);a++)if(a!=gs&&readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*a)>0l)complete=false;}
+                if(complete)moved=energy;
+                double sign=adsorb?1.0LF:-1.0LF,intercept=1e-6LF*(readDouble(r+18)-readDouble(r+20)*readDouble(r+14)),cp=1e-6LF*readDouble(r+20);
+                writeQuantity(headerWord(H_SURFACE_AMOUNTS)+2*index,addq(present,adsorb?q:-q));
+                words[workField(FIELD_SURFACE_CHANGED)+device]=1u;
+                writeDouble(headerWord(H_SURFACE_INTERCEPT)+2*device,readDouble(headerWord(H_SURFACE_INTERCEPT)+2*device)+sign*double(q)*intercept);
+                writeDouble(headerWord(H_SURFACE_CAPACITY)+2*device,readDouble(headerWord(H_SURFACE_CAPACITY)+2*device)+sign*double(q)*cp);
+                wallT=wallTemperatureAfter(device,wallT,sign*(moved-double(q)*surfaceAtT));
+                writeDouble(workField(FIELD_SURFACE_TEMPERATURE)+2*device,wallT);
+                writeDouble(workField(FIELD_WALL_RESERVATION)+2*device,readDouble(workField(FIELD_WALL_RESERVATION)+2*device)+sign*moved);
+                writeQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs,addq(readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs),adsorb?-q:q));
+                writeQuantity(gasField(GAS_MASS_UNITS)+2*comp,addq(gasMass,adsorb?-movedMass:movedMass));
+                writeQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp,addq(componentNanos,adsorb?-movedNanos:movedNanos));
+                writeQuantity(workField(FIELD_GAS_NANOS)+2*node,addq(readQuantity(workField(FIELD_GAS_NANOS)+2*node),adsorb?-movedNanos:movedNanos));
+                writeQuantity(workField(FIELD_NEW_MASS)+2*node,addq(readQuantity(workField(FIELD_NEW_MASS)+2*node),adsorb?-movedMass:movedMass));
+                words[headerWord(H_PHASE_MOTION_CELLS)+node]=1u;atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)],1u);
+                if(adsorb){writeQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*node,addq(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*node),movedMass));
+                    words[workField(FIELD_SURFACE_RECEIVER)+node]=uint(device);}
+                writeDouble(gasField(GAS_INTERNAL_ENERGY)+2*node,energy-sign*moved);
+                int audit=component(int(words[gasField(GAS_COUNTS)])+(adsorb?3:2),gm),entry=gasSpecies(audit,sp);
+                writeQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*entry,addq(readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*entry),q));
+                writeQuantity(gasField(GAS_MASS_UNITS)+2*audit,addq(readQuantity(gasField(GAS_MASS_UNITS)+2*audit),movedMass));
+                writeQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*audit,addq(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*audit),movedNanos));
+                occupied+=sign*double(q);nanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*node));
+            }
+        }
+        first=end;
     }
 }
 // Each gas cell grants proposals against live stocks; face batches keep liquid writers disjoint.
@@ -817,7 +931,7 @@ double cmass(int c, int field) {
 // donor's two-face average, so the pair of receiving faces gains the same momentum.
 double cellMomentumDelta(int c, int component, double faceVelocity) {
     if(c<0)return 0.0LF;
-    double result=0.0LF;int cells=headerWord(H_CELL_COUNT);
+    double result=-double(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*c))*massUnit()*faceVelocity;int cells=headerWord(H_CELL_COUNT);
     for(int pass=1;pass<7;pass++){
         int other=contactNode(c,pass);if(other<0)continue;
         int route=2*(pass*cells+c),reverse=2*(pass*cells+other);
@@ -920,6 +1034,12 @@ void cellHeat(int c) {
     if(gasDelta!=0.0LF){writeDouble(workField(FIELD_GAS_TRANSFER)+2*c,gasDelta);words[workField(FIELD_GAS_TRANSFER_TARGET)+c]=uint(c);}
     if(remaining!=0.0LF){
         if(ownerCapacity>0.0LF){reportInvalid();return;}
+        int device=int(words[workField(FIELD_SURFACE_RECEIVER)+c]);
+        if(device>=0){int at=workField(FIELD_WALL_RESERVATION)+2*device;int64_t raw=atomicAdd(longs[at/2],0l);
+            for(;;){double old=packDouble2x32(uvec2(uint(raw),uint(uint64_t(raw)>>32))),next=old+remaining;
+                if(!isFinite(next)){reportInvalid();return;}
+                uvec2 bits=unpackDouble2x32(next);int64_t target=int64_t(uint64_t(bits.x)|(uint64_t(bits.y)<<32));
+                int64_t previous=atomicCompSwap(longs[at/2],raw,target);if(previous==raw)return;raw=previous;}}
         int node=-1,cells=headerWord(H_CELL_COUNT);
         for(int pass=0;pass<7 && node<0;pass++)
             if(readQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+2*(pass*cells+c))>0l)
@@ -1044,7 +1164,8 @@ void main() {
     }
     if (errors != 0u)
         return;
-    if(p.stage==15){
+    if(p.stage==16){exchangeSurfaces();}
+    else if(p.stage==15){
         int node=contactNode(i,6);
         if(activeCell(i) && node>=0 && activeCell(node))clearUnavailablePending(i);
     } else if(p.stage==13)

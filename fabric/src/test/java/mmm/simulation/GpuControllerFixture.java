@@ -62,6 +62,24 @@ final class GpuControllerFixture {
             FluidRegionManager manager, FluidRegionOperations operations, boolean distillation, boolean crossBlock) throws IOException {
         initializeItems();
         var layout = crossBlock ? crossBlockLayout(distillation) : distillation ? distillationLayout() : ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
+        return createLayout(startup,world,manager,operations,layout,distillation,crossBlock,null);
+    }
+
+    static GpuControllerFixture createIndustrial(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
+            FluidRegionManager manager, FluidRegionOperations operations, IndustrialLayout.Scenario scenario) throws IOException {
+        initializeItems();
+        initializeIndustrialBlocks();
+        var industrial=IndustrialLayout.at(new BlockPos(14,64,20),scenario);
+        var first=industrial.ports().getFirst();
+        var shell=industrial.blocks().entrySet().stream().filter(e->mmm.block.MmmBlocks.isBoundary(e.getValue())).map(Map.Entry::getKey).toList();
+        var layout=new ControllerDemoLayout(industrial.minimum(),industrial.controller(),first.position(),first.outward(),
+                List.copyOf(industrial.blocks().keySet()),shell);
+        return createLayout(startup,world,manager,operations,layout,false,false,industrial);
+    }
+
+    private static GpuControllerFixture createLayout(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
+            FluidRegionManager manager, FluidRegionOperations operations, ControllerDemoLayout layout,
+            boolean distillation, boolean crossBlock, IndustrialLayout industrial) throws IOException {
         Set<Long> shell = new HashSet<>();
         layout.shell().forEach(position -> shell.add(position.asLong()));
         var worldView = new FluidBoundaryScanner.ScanWorld() {
@@ -75,11 +93,18 @@ final class GpuControllerFixture {
         var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false, world,
                 () -> null, candidate -> {
                     if (distillation) installDistillationWalls(candidate, crossBlock ? 6 : 0);
+                    if (industrial != null) installIndustrialGeometry(candidate,industrial);
                     world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep());
                 },
                 operations::checkpoint);
         if (result.failure() != null) throw new IllegalStateException("controller creation: " + result.failure());
         FluidRegion region = result.region();
+        if(industrial!=null && region.hasThermalState()) {
+            new OrdinaryThermalWalls(world.thermalRegistry(),new ThermalBoundaryResolver(world.thermalRegistry()))
+                    .refresh(region,FluidRegionFactory.CELLS_PER_BLOCK,industrial.blocks());
+            IndustrialWorkbench.initializeThermal(region,industrial,world.thermalRegistry());
+            attachOrdinaryWallPorts(region,world.thermalRegistry());
+        }
         var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension, layout.port(),
                 layout.portOutward(), layout.portOutward().getOpposite());
         if (target == null) throw new IllegalStateException("controller port did not resolve its interior");
@@ -91,6 +116,25 @@ final class GpuControllerFixture {
         var transactions = new MinecraftContainerTransactionAdapter(manager, operations, recovery,
                 world.profile().profileFingerprint(), world.thermalRegistryFingerprint());
         return new GpuControllerFixture(region, cell, transactions, recovery, journal, actor, world);
+    }
+
+    private static void installIndustrialGeometry(FluidRegion region,IndustrialLayout layout) {
+        var host=region.editableHost();int scale=FluidRegionFactory.CELLS_PER_BLOCK;var origin=region.origin();
+        for(var entry:layout.blocks().entrySet()) {
+            var position=entry.getKey();var state=entry.getValue();
+            boolean iron=state.is(net.minecraft.world.level.block.Blocks.IRON_BLOCK)||state.is(net.minecraft.world.level.block.Blocks.STONE),valve=state.is(mmm.block.MmmBlocks.VALVE);
+            if(!iron&&!valve)continue;
+            for(int z=0;z<scale;z++)for(int y=0;y<scale;y++)for(int x=0;x<scale;x++) {
+                int cx=(position.getX()-origin.getX())*scale+x,cy=(position.getY()-origin.getY())*scale+y,cz=(position.getZ()-origin.getZ())*scale+z;
+                if(region.grid().cell(cx,cy,cz)<0)continue;
+                int mask=iron?255:FluidRegionWorldInteraction.sampleCutCellMask(mmm.block.ValveBlock.shutter(state),x,y,z,scale,1e-7);
+                host.setSolidMicroMask(cx,cy,cz,mask);
+            }
+        }
+        for(var screen:layout.screens()) {
+            for(int face:IndustrialOperations.screenFaces(region,screen.position(),layout.blocks().get(screen.position())))
+                host.setScreenFace(face,screen.poreDiameter(),screen.openFraction());
+        }
     }
 
     private static ControllerDemoLayout crossBlockLayout(boolean distillation) {
@@ -143,6 +187,51 @@ final class GpuControllerFixture {
 		initializeContainerDefaults();
 		componentsInitialized = true;
 	}
+	private static synchronized void initializeIndustrialBlocks() {
+		if(industrialBlocksInitialized)return;
+		try {
+			registerOffline(net.minecraft.core.registries.BuiltInRegistries.BLOCK, true, () -> {
+				try { registerOffline(net.minecraft.core.registries.BuiltInRegistries.ITEM, true, () -> {
+					try { registerOffline(net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE, true, mmm.block.MmmBlocks::register); }
+					catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
+				}); } catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
+			});
+			initializeContainerDefaults();initializeThermalWallTags();industrialBlocksInitialized=true;
+		} catch(ReflectiveOperationException failure) { throw new IllegalStateException("Cannot initialize offline industrial blocks",failure); }
+	}
+	private static void initializeThermalWallTags() {
+        var registry=net.minecraft.core.registries.BuiltInRegistries.BLOCK;
+        var tags=new java.util.HashMap<net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block>,java.util.List<net.minecraft.core.Holder<net.minecraft.world.level.block.Block>>>();
+        registry.getTags().forEach(tag->tags.put(tag.key(),tag.stream().toList()));
+        for(String material:java.util.List.of("stone","metal","glass")) {
+            String id="ordinary_"+material+"_thermal_walls";
+            String resource="/data/mmm/tags/block/"+id+".json";
+            try(var stream=GpuControllerFixture.class.getResourceAsStream(resource)) {
+                if(stream==null)throw new IllegalStateException("Missing wall tag "+resource);
+                var json=com.google.gson.JsonParser.parseReader(new java.io.InputStreamReader(stream,java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
+                var members=new java.util.ArrayList<net.minecraft.core.Holder<net.minecraft.world.level.block.Block>>();
+                for(var value:json.getAsJsonArray("values")) {
+                    var name=net.minecraft.resources.Identifier.parse(value.getAsString());
+                    members.add(registry.get(name).orElseThrow(()->new IllegalArgumentException("Unknown wall block "+name)));
+                }
+                tags.put(net.minecraft.tags.TagKey.create(Registries.BLOCK,net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm",id)),members);
+            } catch(IOException failure) { throw new java.io.UncheckedIOException(failure); }
+        }
+        registry.prepareTagReload(new net.minecraft.tags.TagLoader.LoadResult<>(Registries.BLOCK,tags)).apply();
+    }
+
+    static void attachOrdinaryWallPorts(FluidRegion region,mmm.thermal.ThermalRegistry registry) {
+        var attached=new java.util.ArrayList<mmm.fluid.FluidStateAccess.DevicePort>();
+        var connections=new java.util.ArrayList<int[]>();
+        for(var device:region.finiteThermalDevices(registry.fingerprint()).devices()) {
+            var ports=OrdinaryThermalWalls.ports(region,device,registry);
+            attached.addAll(ports.stream().map(port->new mmm.fluid.FluidStateAccess.DevicePort(device.providerId(),device.objectId(),port)).toList());
+            connections.add(ports.stream().mapToInt(port->region.grid().cell(port.cellX(),port.cellY(),port.cellZ())).distinct().toArray());
+        }
+        region.replaceDevicePorts(attached,connections);
+    }
+
+	private static boolean industrialBlocksInitialized;
 
 	/** Apply the registered vanilla and mod initializers for the actual container items used here. */
 	@SuppressWarnings({"rawtypes", "unchecked"})
@@ -249,6 +338,42 @@ final class GpuControllerFixture {
         transfer(before, false, cell);
     }
 
+    /** Offline box slot using the same bounded transfer plan and durable block actor as a live port. */
+    ItemStack transferBox(ItemStack batch, int[] cell, boolean extract, long maximum) throws IOException {
+		Direction outward=cell[0]==0?Direction.WEST:cell[0]==region.sizeX()-1?Direction.EAST:cell[2]==0?Direction.NORTH:cell[2]==region.sizeZ()-1?Direction.SOUTH:cell[1]==0?Direction.DOWN:Direction.UP;
+		return transferBox(batch,cell,outward,extract,maximum);
+    }
+    ItemStack transferBox(ItemStack batch, int[] cell, Direction outward, boolean extract, long maximum) throws IOException {
+		if(maximum<=0)return batch;
+		var quantity=batch.getItem() instanceof mmm.item.GasContainerItem?new mmm.api.transfer.TransferQuantity.Gas(maximum,0)
+				:batch.getItem() instanceof mmm.item.GranularContainerItem?new mmm.api.transfer.TransferQuantity.Granular(maximum)
+				:new mmm.api.transfer.TransferQuantity.Liquid(maximum,java.util.OptionalDouble.empty());
+		int scale=FluidRegionFactory.CELLS_PER_BLOCK;var interior=region.origin().offset(cell[0]/scale,cell[1]/scale,cell[2]/scale);
+		cell=FluidWorldTargetResolver.transferCell(region,interior,outward,quantity,extract);
+		if(cell==null)return batch;
+        var before=mmm.block.MaterialBoxBlockEntity.newBatch(batch);
+        var state=mmm.transfer.TransferActorState.decode(before.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
+        var identity=new ContainerTransferActor.BlockInventory(region.dimension().identifier().toString(),
+                region.origin().getX()-1,region.origin().getY(),region.origin().getZ(),0,state.instanceId(),state.generation());
+        var boxActor=new Actor(actor.path.resolveSibling("controller-fixture-box.txt"),actor.operations,actor.manager,world,identity);
+        boxActor.current=before.copy();boxActor.persist();
+        var boxRecovery=new ContainerRecoveryCoordinator(journal,boxActor,Map.of(),Set.of());
+        var adapter=new MinecraftContainerTransactionAdapter(actor.manager,actor.operations,boxRecovery,
+                world.profile().profileFingerprint(),world.thermalRegistryFingerprint());
+        var resolution=MinecraftContainerTransferPlan.resolveDirected(adapter,world,region,cell,before,extract);
+        if(!resolution.resolved())return batch;
+        var plan=resolution.plan();long requested=Math.min(maximum,plan.requestedAmount());
+        var result=adapter.executeForRegion(region,identity,before,plan.sourceStack(),
+                extract?ContainerTransferJournal.Operation.EXTRACT:ContainerTransferJournal.Operation.INSERT,
+                plan.resourceKind(),requested,plan.baseAmount(),plan::executeExact,(raw,old)->raw,null);
+        if(result.status()==mmm.application.ContainerTransferUseCase.Status.NOT_TRANSFERRED)return batch;
+        if(result.status()!=mmm.application.ContainerTransferUseCase.Status.COMMITTED)
+            throw new IllegalStateException("Box transfer "+result.status()+": "+result.outcome().message());
+        boxActor.current=result.outcome().stack().copy();adapter.completeCommitted(result.transactionId());
+        if(boxRecovery.hasPending(region.id()))throw new IllegalStateException("box transaction remains pending");
+        return boxActor.current;
+    }
+
     void ventGas() throws IOException {
         region.setPaused(true);
         var candidate = region.beginHostEdit();
@@ -322,11 +447,14 @@ final class GpuControllerFixture {
         final FluidRegionOperations operations;
         final FluidRegionManager manager;
         final CommittedWorldRegistries world;
-        final ContainerTransferActor.PlayerHand identity = ContainerTransferActor.player(UUID.randomUUID(), ContainerTransferActor.Hand.MAIN);
+        final ContainerTransferActor identity;
         ItemStack current;
         String failure;
         Actor(Path path, FluidRegionOperations operations, FluidRegionManager manager, CommittedWorldRegistries world) {
-            this.path = path; this.operations = operations; this.manager = manager; this.world = world;
+            this(path,operations,manager,world,ContainerTransferActor.player(UUID.randomUUID(), ContainerTransferActor.Hand.MAIN));
+        }
+        Actor(Path path, FluidRegionOperations operations, FluidRegionManager manager, CommittedWorldRegistries world,ContainerTransferActor identity) {
+            this.path = path; this.operations = operations; this.manager = manager; this.world = world;this.identity=identity;
         }
         void persist() throws IOException {
             var value = ContainerItemMapper.fingerprint(current);

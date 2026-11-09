@@ -13,7 +13,7 @@ public record TransferManifest(
 		OptionalDouble internalEnergyJoules
 ) {
 	public TransferManifest {
-		if (quantity == null || quantity instanceof TransferQuantity.Gas || components == null || components.isEmpty()
+		if (quantity == null || components == null || components.isEmpty()
 				|| internalEnergyJoules == null
 				|| internalEnergyJoules.isPresent() && !Double.isFinite(internalEnergyJoules.getAsDouble())
 				|| quantity instanceof TransferQuantity.Liquid liquid
@@ -26,8 +26,8 @@ public record TransferManifest(
 			if (!materials.add(component.materialId())) throw new IllegalArgumentException("Duplicate material component");
 			amount = Math.addExact(amount, component.amount());
 		}
-		long expected = quantity instanceof TransferQuantity.Liquid liquid
-				? liquid.volumeNanos() : ((TransferQuantity.Granular) quantity).solidVolumeSvq();
+		long expected = quantity instanceof TransferQuantity.Liquid liquid ? liquid.volumeNanos()
+				: quantity instanceof TransferQuantity.Gas gas ? gas.standardVolumeNanos() : ((TransferQuantity.Granular) quantity).solidVolumeSvq();
 		if (amount != expected) throw new IllegalArgumentException("Manifest component amounts disagree with quantity");
 		requireFingerprint(chemicalRegistryFingerprint);
 		requireFingerprint(granularRegistryFingerprint);

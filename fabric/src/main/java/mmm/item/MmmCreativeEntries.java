@@ -27,6 +27,10 @@ public final class MmmCreativeEntries {
 		entries.accept(MmmItems.QUICK_START_GUIDE);
 		entries.accept(MmmBlocks.FLUID_BOUNDARY);
 		entries.accept(MmmBlocks.FLUID_PORT);
+		entries.accept(MmmBlocks.MATERIAL_BOX);
+		entries.accept(MmmBlocks.VALVE);
+		entries.accept(MmmBlocks.PROCESS_SENSOR);
+		entries.accept(MmmBlocks.SCREEN);
 		entries.accept(MmmBlocks.FLUID_CONTROLLER);
 		entries.accept(MmmItems.FIELD_PROBE);
 		entries.accept(MmmItems.MATERIAL_BUCKET);
@@ -39,8 +43,11 @@ public final class MmmCreativeEntries {
 					id, ContainerFluidLedger.NANOS_PER_BLOCK, 293.15)));
 		}
 		entries.accept(MmmItems.GRANULAR_CONTAINER);
+		entries.accept(MmmItems.GAS_CONTAINER);
+		entries.accept(MmmItems.CO2_ADSORBENT);
+		entries.accept(MmmItems.HYDRATION_CATALYST);
 		for (String id : java.util.List.of(
-				"mmm:source/granular/fine_sand", "mmm:source/granular/light_beads")) {
+				"mmm:source/granular/fine_sand", "mmm:source/granular/fine_silt", "mmm:source/granular/light_beads")) {
 			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(id, SolidVolume.SVQ_PER_CUBIC_METER, null)));
 		}
 		for (String gas : java.util.List.of("nitrogen", "oxygen", "co2", "water_vapor", "ethanol_vapor", "air")) {

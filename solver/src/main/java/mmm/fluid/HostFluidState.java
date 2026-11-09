@@ -330,6 +330,7 @@ public final class HostFluidState {
 	public float setSolid(int x, int y, int z, boolean value) { return domainCollision.setSolid(x, y, z, value); }
 	public float setSolidMicroMask(int x, int y, int z, int mask) { return domainCollision.setSolidMicroMask(x, y, z, mask); }
 	public FlipChemicalParticleState exportChemicalParticleState() { return domainCollision.exportChemicalParticleState(); }
+	public void handoffCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies) { domainCollision.handoffCollisionBodies(edits, bodies); }
 	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) { return domainCollision.planCollisionEdits(edits); }
 	public void beginCollisionEdits(CollisionEditPlan plan) { domainCollision.beginCollisionEdits(plan); }
 	public float applyCollisionEdits(List<CollisionEdit> edits) { return domainCollision.applyCollisionEdits(edits); }
@@ -343,12 +344,29 @@ public final class HostFluidState {
 	public void setVolumes(float[] cellVolumes) { domainCollision.setVolumes(cellVolumes); }
 	public void setVolumes(float[] cellVolumes,int[] materialHandles) { domainCollision.setVolumes(cellVolumes, materialHandles); }
 	public float volume(int x, int y, int z) { return domainCollision.volume(x, y, z); }
+	/** Free normalized volume after fixed geometry, moving bodies, solids and liquid. */
+	public double cellCondensedRoom(int x,int y,int z) {
+		int cell=domainFlowFields.cellIndexChecked(x,y,z);
+		domainFlowFields.preparePhysicalState();
+		return Math.max(0,domainCollision.effectiveOpenCellVolume(cell)-liquidCells.exactCellVolume(cell).toDouble());
+	}
+	/** Physical gas space in a cell, independent of its current gas inventory. */
+	public double cellGasVolume(int x,int y,int z) {
+		int cell=domainFlowFields.cellIndexChecked(x,y,z);domainCapabilities.initializeSpatialGas();
+		var state=gasState.spatial;
+		return DomainGasInventory.mixture(this,cell,state.cells().get(cell),state.energyAt(cell)).gasVolumeM3();
+	}
 	public float pressure(int x, int y, int z) { return domainCollision.pressure(x, y, z); }
 	public float totalVolume() { return domainCollision.totalVolume(); }
 	public double totalVolumeExact() { return domainCollision.totalVolumeExact(); }
 	public float totalOpenVolume() { return domainCollision.totalOpenVolume(); }
 	/** Read-only fixed pore capacity, independent of entity and condensed-carrier occupation. */
 	public double fixedOpenVolumeExact() { return geometry.cutCells.snapshot().totalOpenCellVolume(); }
+	/** Configures or removes the screen on a shared face of the current grid. */
+	public void setScreenFace(int face, double poreDiameterMeters, double openFraction) {
+		geometry.cutCells.setScreen(face, new ScreenFace(face, poreDiameterMeters, openFraction));
+	}
+	public void removeScreenFace(int face) { geometry.cutCells.setScreen(face, null); }
 
 	public double totalOpenVolumeExact() { return domainCollision.totalOpenVolumeExact(); }
 	public long totalMassUnits() { return domainCollision.totalMassUnits(); }
@@ -426,6 +444,9 @@ public final class HostFluidState {
 	/** Null component selects the ambient insertion recipe or the existing extraction mixture. */
 	public GasEdit editGas(int node, String componentId, long nanos, double temperatureK, boolean extract) {
 		return domainPhaseInventory.editGas(node, componentId, nanos, temperatureK, extract);
+	}
+	public GasEdit insertGas(int node, mmm.fluid.air.GasInventory inventory, double internalEnergy) {
+		return DomainGasInventory.insert(this, node, inventory, internalEnergy);
 	}
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) { domainPhaseInventory.setGasNodeStandardVolume(nodeId, standardVolume); }
 	public void sealDomainBoundary() { domainPhaseInventory.sealDomainBoundary(); }

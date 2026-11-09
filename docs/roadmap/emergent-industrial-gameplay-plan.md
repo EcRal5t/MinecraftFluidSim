@@ -2,21 +2,21 @@
 
 近期目标是用少量基础方块形成连续的分离、换热、过滤、吸附与催化工艺。新增内容集中于阀门、筛、传感器、抽象物料箱及其交互；普通墙、填料和真实流道承担装置结构。活动机构由原版活塞或外部 Mod 提供，MMM 完成几何、流体作用、惯量响应和机械功交接。
 
-当前实现与源码索引见[设计书](../architecture/system-overview.md)，进度由[主实施计划](solver-consolidation-plan.md)维护，验证方法与预算见[验证指南](../maintenance/validation.md)。本计划对应的三维场景及未来代码测试规格见[工业装置仿真测试规格](industrial-simulation-test-plan.md)。
+当前实现与源码索引见[设计书](../architecture/system-overview.md)，进度由[主实施计划](solver-consolidation-plan.md)维护，验证方法与预算见[验证指南](../maintenance/validation.md)。本计划对应的三维场景及操作规格见[工业装置仿真测试规格](industrial-simulation-test-plan.md)。
 
 ## 实施顺序
 
 | 顺序 | 交付 | 玩家收益 | 依赖及复用 |
 |---|---|---|---|
-| P0 | 颗粒与长流程成本整理 | 持续工艺和颗粒场景稳定运行 | 优化颗粒、冷导入、编辑重建与长流程尖峰；保持完整生产步预算 |
 | P1 | 物料箱与真实端口进出料 | 无玩家值守的连续投料、收集和局部取样 | 复用容器载荷、发射器、公开转移及 HEAD/WAL |
 | P2 | 真实开口阀门与测量控制 | 隔断、调流、液位／温度控制 | 复用固定几何、压力面响应、探针和红石 |
 | P3 | 世界方块更新与活塞耦合 | 放拆方块、活塞开关与挤压能正确影响物料 | 复用批碰撞编辑和运动物体耦合，贯通惯量／冲量／功 |
 | P4 | 筛分与有限滤渣 | 浆料过滤、截留、堵塞和清理 | 复用颗粒、沉积、床层阻力及 P2 的共享面数据 |
 | P5 | 吸附剂与催化表面 | 固定床吸附再生、接触催化 | 复用有限热墙、气液库存和局部计量网络 |
 | P6 | 三维组合装置交付 | 蒸馏、筛分结晶、吸附与催化连续流程 | 用正式方块和操作组合 P1—P5，按测试规格交付 |
+| P0（下一轮） | 颗粒与长流程成本整理 | 持续工艺和颗粒场景稳定运行 | 整理颗粒、冷导入、编辑重建与长流程尖峰，恢复完整生产步预算 |
 
-P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受影响场景预算交付。测试按所依赖工作包分批加入代码，既有通过结果继续复用。具体交付范围与进度由主实施计划维护。
+本轮依次完成 P1—P6 的实现、正常操作、持久恢复和旧路径清理。P0 专项耗时优化安排在功能流程全部交付后的下一轮。共享规则直接由生产入口承担，验证集中于新增的物理交接和装置流程，已有相关结果继续复用。具体进度由主实施计划维护。
 
 近期保持已有热源与规定驱动的外部供能语义，机械外功仍完整记账。能源生产、消耗品能源、传动轴、电网、叶轮、风机、浮顶、涡轮及自研机构装配放在后续独立需求中。气固流化、燃烧／气化和炼油反应网络按目标工艺收益另行安排。
 
@@ -50,7 +50,7 @@ P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受�
 
 每次操作沿现有计划、WAL、HEAD 和持久回执提交，箱与区域记录同一笔接受量。两端不可用时等待；重复请求读取已有回执。空箱、满箱、暂停、卸载和重启保持物料及操作配置。到期投料可唤醒物理休眠，主动暂停保留运行意图。
 
-**完成条件：** 箱到反应腔、反应腔到产物箱均能连续运行，输入输出后的质量、组成、U 和参考体积完整交接；真实物品装卸和发射器继续可用。当前玩家主手周期投料迁到相同操作入口。
+完成条件： 箱到反应腔、反应腔到产物箱均能连续运行，输入输出后的质量、组成、U 和参考体积完整交接；真实物品装卸和发射器继续可用。持续投料统一由物料箱和端口承担。
 
 ## P2 阀门与传感控制
 
@@ -66,7 +66,7 @@ P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受�
 
 首批输出为阈值加滞环，并可将有界读数映射到 0—15 红石强度。阀门、进料、出料沿同一红石输入响应。扩展现有控制器与探针配置这些测点，控制过程使用已提交代；门限状态和设置随方块保存。
 
-**完成条件：** 相同压差下开度改变流量，关闭后隔离并在重开后恢复；液位控制能停止／恢复进料，温度阈值能切换进出料。传感器观测保持区域库存和代次，拆除／重进后恢复设置。
+完成条件： 相同压差下开度改变流量，关闭后隔离并在重开后恢复；液位控制能停止／恢复进料，温度阈值能切换进出料。传感器观测保持区域库存和代次，拆除／重进后恢复设置。
 
 ## P3 世界更新和运动耦合
 
@@ -94,7 +94,7 @@ P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受�
 
 核心代码依赖上述中立请求，版本适配器读取外部构件形状、运动和可提供的惯量响应，并返回其支持的负载信息。具体 Create 适配以匹配 Minecraft／加载器的发行版和公开接口为前提；核心功能由原版活塞及正式测试提供器交付。当前项目为 Fabric 26.2，[Create Fabric 仓库](https://github.com/Fabricators-of-Create/Create)与[Create 主仓库](https://github.com/Creators-of-Create/Create)分别维护，适配时单独选择匹配目标。
 
-**完成条件：** 内部活塞伸缩和推块具有实际表面速度、真实排水与功，运动到静态交接后库存不再二次迁移；受阻、反向和重启可继续。有限质量夹具在同一压力耦合中受流体减速。实现清理重复的世界刷新／隐式运动路径，保留一个运动耦合入口。
+完成条件： 内部活塞伸缩和推块具有实际表面速度、真实排水与功，运动到静态交接后库存不再二次迁移；受阻、反向和重启可继续。有限质量夹具在同一压力耦合中受流体减速。实现清理重复的世界刷新／隐式运动路径，保留一个运动耦合入口。
 
 ## P4 筛分和滤渣
 
@@ -104,7 +104,7 @@ P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受�
 
 清理沿现有颗粒提取与箱转移执行。首批使用液体浆料，复用已有液固阻力；气固流化和空气除尘按后续需求扩展。
 
-**完成条件：** 两档粒径在同一筛面上表现出不同的通过比例；截留持续增加阻力，清理后流量恢复；随滤渣搬走的组成和 U 完整守恒。扩散后的溶解物种随液体通过筛，普通筛只按实体颗粒筛分。
+完成条件： 两档粒径在同一筛面上表现出不同的通过比例；截留持续增加阻力，清理后流量恢复；随滤渣搬走的组成和 U 完整守恒。扩散后的溶解物种随液体通过筛，普通筛只按实体颗粒筛分。
 
 ## P5 吸附剂与催化表面
 
@@ -126,7 +126,7 @@ P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受�
 
 测试先使用明确的代理催化材料，验证接触、有限速率和守恒。实际材料的适用反应与倍率在定义中声明，气固催化、催化剂失活、结焦及裂化网络另按实际工艺需求增加。
 
-**完成条件：** 固定表面对 CO₂ 有限吸附并发生穿透，降压／升温后释放可回收物料；有／无催化接触的早期转化率不同，闭合体系的最终平衡趋势相同。拆装、补料及恢复保持表面库存，所有效果通过共享接触与局部反应执行。
+完成条件： 固定表面对 CO₂ 有限吸附并发生穿透，降压／升温后释放可回收物料；有／无催化接触的早期转化率不同，闭合体系的最终平衡趋势相同。拆装、补料及恢复保持表面库存，所有效果通过共享接触与局部反应执行。
 
 ## P6 三维装置与验收
 
@@ -137,13 +137,13 @@ P1/P2 的交互、配置与宿主事务可先推进；数值扩展随 P0 的受�
 ## 当前代码入口
 
 - [MmmBlocks](../../fabric/src/main/java/mmm/block/MmmBlocks.java)：新增基础方块及既有接口注册。
-- [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：现有投料、驱动、取样入口，迁入共同端口和运动配置。
+- [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、局部取样与停止操作。
 - [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)：有限转移、持久回执与恢复。
 - [FluidRegionWorldInteraction](../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java)：批碰撞刷新和私有后继。
-- [MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)：当前静态 VoxelShape 采样，运动采集与其衔接。
-- [MovingBodyFluidCoupling](../../model/src/main/java/mmm/world/MovingBodyFluidCoupling.java)：当前 AABB／规定平移请求，扩展表面运动和惯量响应。
+- [MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)：静态 VoxelShape 与活塞移动形状采集。
+- [MovingBodyFluidCoupling](../../model/src/main/java/mmm/world/MovingBodyFluidCoupling.java)：形状、中心、线速度、角速度与轴向逆惯量响应。
 - [VulkanEntityBodyCoupling](../../gpu-kernel/src/main/java/mmm/gpu/VulkanEntityBodyCoupling.java)：占据、压力和剪切。
 - [VulkanMixturePressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixturePressure.java)：共同压力和有限质量响应。
 - [VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：热化学及表面交换阶段归属。
 - [ChemicalReaction](../../model/src/main/java/mmm/chemistry/ChemicalReaction.java)：计量和正逆动力学。
-- [GpuProcessFlowsValidation](../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)：既有组合工艺与恢复验证，未来扩展装置入口。
+- [GpuProcessFlowsValidation](../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)：共享工业布局、实际箱转移、组合工艺与恢复流程。

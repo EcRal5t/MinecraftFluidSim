@@ -122,6 +122,7 @@ final class CreativeSourceCatalog {
 		String name = descriptor.templateStableId().substring("mmm:source/granular/".length());
 		String materialId = switch (name) {
 			case "fine_sand" -> BuiltinGranularDefinitions.FINE_SAND;
+			case "fine_silt" -> BuiltinGranularDefinitions.FINE_SILT;
 			case "light_beads" -> BuiltinGranularDefinitions.LIGHT_BEADS;
 			default -> throw new IllegalArgumentException("creative granular template is not whitelisted");
 		};

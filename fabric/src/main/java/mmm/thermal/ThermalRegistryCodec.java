@@ -59,7 +59,7 @@ public final class ThermalRegistryCodec {
 				Map.entry("GasFingerprint", Tag.TAG_STRING),
 				Map.entry("Materials", Tag.TAG_LIST), Map.entry("SpeciesOffsets", Tag.TAG_LIST),
 				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST),
-				Map.entry("FiniteDevices", Tag.TAG_LIST)));
+				Map.entry("FiniteDevices", Tag.TAG_LIST), Map.entry("SurfaceMaterials", Tag.TAG_LIST)));
 		if (!mmm.units.Mass.ENCODING.equals(root.getStringOr("MassEncoding", ""))
 				|| !root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !ThermalRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
@@ -78,7 +78,8 @@ public final class ThermalRegistryCodec {
 					decodeOffsets(root.getListOrEmpty("SpeciesOffsets")),
 					decodeTransitions(root.getListOrEmpty("Transitions")),
 					decodeBoundaries(root.getListOrEmpty("Boundaries")),
-					decodeDevices(root.getListOrEmpty("FiniteDevices")), chemical, granular, gas);
+					decodeDevices(root.getListOrEmpty("FiniteDevices")), decodeSurfaces(root.getListOrEmpty("SurfaceMaterials")),
+					chemical, granular, gas);
 			if (!registry.fingerprint().equals(root.getStringOr("Fingerprint", ""))
 					|| !java.util.Arrays.equals(registry.canonicalBytes(), root.getByteArray("Canonical").orElseThrow())) {
 				throw new IOException("Thermal registry fingerprint/canonical bytes mismatch");
@@ -168,7 +169,73 @@ public final class ThermalRegistryCodec {
 			devices.add(tag);
 		}
 		root.put("FiniteDevices", devices);
+		ListTag surfaces = new ListTag();
+		for (var surface : registry.surfaceMaterials()) {
+			CompoundTag tag = new CompoundTag();
+			tag.putString("Id", surface.id());
+			tag.putDouble("ReferenceTemperature", surface.referenceTemperatureK());
+			tag.putDouble("ReferenceSpecificEnergy", surface.referenceSpecificEnergyJPerKg());
+			tag.putDouble("SpecificHeat", surface.specificHeatJPerKgK());
+			tag.putDouble("Area", surface.effectiveAreaFactor());
+			tag.putDouble("Capacity", surface.siteCapacityMolesPerKg());
+			tag.putDouble("Rate", surface.exchangeMolesPerSquareMeterSecond());
+			tag.putDouble("MinimumTemperature", surface.minimumTemperatureK());
+			tag.putDouble("MaximumTemperature", surface.maximumTemperatureK());
+			tag.putDouble("MaximumPressure", surface.maximumPressurePa());
+			ListTag adsorbates = new ListTag();
+			for (var value : surface.adsorbates()) {
+				CompoundTag entry = new CompoundTag();
+				entry.putString("Component", value.componentId()); entry.putString("Species", value.speciesId());
+				entry.putDouble("Affinity", value.affinityPerPa()); entry.putDouble("ReferenceTemperature", value.referenceTemperatureK());
+				entry.putDouble("AdsorptionHeat", value.adsorptionHeatJPerMol()); entry.putDouble("ReferenceEnergy", value.referenceEnergyJPerMol());
+				entry.putDouble("HeatCapacity", value.heatCapacityJPerMolK()); adsorbates.add(entry);
+			}
+			tag.put("Adsorbates", adsorbates);
+			ListTag catalysis = new ListTag();
+			for (var value : surface.catalysis()) {
+				CompoundTag entry = new CompoundTag(); entry.putString("Reaction", value.reactionId());
+				entry.putDouble("Multiplier", value.multiplierPerSquareMeter()); catalysis.add(entry);
+			}
+			tag.put("Catalysis", catalysis); surfaces.add(tag);
+		}
+		root.put("SurfaceMaterials", surfaces);
 		return root;
+	}
+
+	private static List<SurfaceMaterialDefinition> decodeSurfaces(ListTag list) throws IOException {
+		if (list.size() > ThermalLimits.MAX_MATERIALS) throw new IOException("Invalid surface material count");
+		var result = new ArrayList<SurfaceMaterialDefinition>();
+		for (int i = 0; i < list.size(); i++) {
+			CompoundTag tag = compound(list, i, "surface material");
+			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("ReferenceTemperature", Tag.TAG_DOUBLE),
+					Map.entry("ReferenceSpecificEnergy", Tag.TAG_DOUBLE), Map.entry("SpecificHeat", Tag.TAG_DOUBLE), Map.entry("Area", Tag.TAG_DOUBLE),
+					Map.entry("Capacity", Tag.TAG_DOUBLE), Map.entry("Rate", Tag.TAG_DOUBLE),
+					Map.entry("MinimumTemperature", Tag.TAG_DOUBLE), Map.entry("MaximumTemperature", Tag.TAG_DOUBLE),
+					Map.entry("MaximumPressure", Tag.TAG_DOUBLE), Map.entry("Adsorbates", Tag.TAG_LIST), Map.entry("Catalysis", Tag.TAG_LIST)));
+			var adsorbates = new ArrayList<SurfaceMaterialDefinition.Adsorbate>();
+			ListTag encodedAdsorbates = tag.getListOrEmpty("Adsorbates");
+			for (int j = 0; j < encodedAdsorbates.size(); j++) {
+				CompoundTag a = compound(encodedAdsorbates, j, "adsorbate");
+				requireAll(a, Map.of("Component", Tag.TAG_STRING, "Species", Tag.TAG_STRING, "Affinity", Tag.TAG_DOUBLE,
+						"ReferenceTemperature", Tag.TAG_DOUBLE, "AdsorptionHeat", Tag.TAG_DOUBLE,
+						"ReferenceEnergy", Tag.TAG_DOUBLE, "HeatCapacity", Tag.TAG_DOUBLE));
+				adsorbates.add(new SurfaceMaterialDefinition.Adsorbate(a.getStringOr("Component", ""), a.getStringOr("Species", ""),
+						a.getDoubleOr("Affinity", 0), a.getDoubleOr("ReferenceTemperature", 0), a.getDoubleOr("AdsorptionHeat", 0),
+						a.getDoubleOr("ReferenceEnergy", 0), a.getDoubleOr("HeatCapacity", 0)));
+			}
+			var catalysts = new ArrayList<SurfaceMaterialDefinition.Catalysis>();
+			ListTag encodedCatalysts = tag.getListOrEmpty("Catalysis");
+			for (int j = 0; j < encodedCatalysts.size(); j++) {
+				CompoundTag c = compound(encodedCatalysts, j, "catalyst");
+				requireAll(c, Map.of("Reaction", Tag.TAG_STRING, "Multiplier", Tag.TAG_DOUBLE));
+				catalysts.add(new SurfaceMaterialDefinition.Catalysis(c.getStringOr("Reaction", ""), c.getDoubleOr("Multiplier", 0)));
+			}
+			result.add(new SurfaceMaterialDefinition(tag.getStringOr("Id", ""), tag.getDoubleOr("ReferenceTemperature", 0),
+					tag.getDoubleOr("ReferenceSpecificEnergy", 0), tag.getDoubleOr("SpecificHeat", 0), tag.getDoubleOr("Area", 0),
+					tag.getDoubleOr("Capacity", 0), tag.getDoubleOr("Rate", 0), tag.getDoubleOr("MinimumTemperature", 0),
+					tag.getDoubleOr("MaximumTemperature", 0), tag.getDoubleOr("MaximumPressure", 0), adsorbates, catalysts));
+		}
+		return List.copyOf(result);
 	}
 
 	private static List<ThermalMaterialDefinition> decodeMaterials(ListTag list) throws IOException {

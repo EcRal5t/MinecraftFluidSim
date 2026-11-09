@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "mmm_gametest",
+  "version": "1.0.0",
+  "name": "MMM piston game test",
+  "environment": "server",
+  "entrypoints": {
+    "fabric-gametest": [
+      "mmm.simulation.PistonWorldGameTest",
+      "mmm.simulation.IndustrialControlGameTest",
+      "mmm.simulation.PistonPumpGameTest"
+    ]
+  },
+  "depends": {
+    "mmm": "*",
+    "fabric-gametest-api-v1": "*"
+  }
+}

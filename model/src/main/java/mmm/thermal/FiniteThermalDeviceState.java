@@ -1,17 +1,24 @@
 package mmm.thermal;
 
 import java.util.Comparator;
+import java.util.List;
 
 /** Provider-stable identity and authoritative body truth for one finite-capacity thermal device. */
 public record FiniteThermalDeviceState(
 		String providerId,
 		String objectId,
 		String deviceTypeId,
-		FiniteThermalBodyState body
+		FiniteThermalBodyState body,
+		List<FixedSurfaceState> surfaces
 ) implements Comparable<FiniteThermalDeviceState> {
 	private static final Comparator<FiniteThermalDeviceState> ORDER = Comparator
 			.comparing(FiniteThermalDeviceState::providerId)
 			.thenComparing(FiniteThermalDeviceState::objectId);
+
+	public FiniteThermalDeviceState(String providerId, String objectId, String deviceTypeId,
+			FiniteThermalBodyState body) {
+		this(providerId, objectId, deviceTypeId, body, List.of());
+	}
 
 	public FiniteThermalDeviceState {
 		ThermalIds.requireId(providerId, "finite thermal device provider id");
@@ -26,6 +33,12 @@ public record FiniteThermalDeviceState(
 			}
 		}
 		if (body == null) throw new IllegalArgumentException("Finite thermal device body is missing");
+		var faces = new java.util.HashSet<FiniteThermalDeviceDefinition.LocalFace>();
+		var ordered = new java.util.ArrayList<>(surfaces);
+		ordered.sort(Comparator.comparing(FixedSurfaceState::face));
+		for (var surface : ordered)
+			if (!faces.add(surface.face())) throw new IllegalArgumentException("Duplicate fixed surface face");
+		surfaces = List.copyOf(ordered);
 	}
 
 	@Override public int compareTo(FiniteThermalDeviceState other) { return ORDER.compare(this, other); }

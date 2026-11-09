@@ -18,8 +18,39 @@ public final class ThermalDefinitionCodec {
 	public static final String TRANSITIONS_PATH = "mmm/phase_transitions";
 	public static final String BOUNDARIES_PATH = "mmm/thermal_boundaries";
 	public static final String DEVICES_PATH = "mmm/finite_thermal_devices";
+	public static final String SURFACES_PATH = "mmm/surface_materials";
 
 	private ThermalDefinitionCodec() { }
+
+	public static SurfaceMaterialDefinition decodeSurface(String id, Reader input) {
+		JsonObject root = object(input);
+		requireOnly(root, "reference_temperature_k", "reference_specific_energy_j_per_kg", "specific_heat_j_per_kg_k",
+				"effective_area_factor", "site_capacity_mol_per_kg", "exchange_mol_per_m2_s",
+				"minimum_temperature_k", "maximum_temperature_k", "maximum_pressure_pa", "adsorbates", "catalysis");
+		var adsorbates = new ArrayList<SurfaceMaterialDefinition.Adsorbate>();
+		for (JsonElement element : required(root, "adsorbates").getAsJsonArray()) {
+			JsonObject value = element.getAsJsonObject();
+			requireOnly(value, "component", "species", "affinity_per_pa", "reference_temperature_k",
+					"adsorption_heat_j_per_mol", "reference_energy_j_per_mol", "heat_capacity_j_per_mol_k");
+			adsorbates.add(new SurfaceMaterialDefinition.Adsorbate(string(value, "component"), string(value, "species"),
+					finiteDouble(value, "affinity_per_pa"), finiteDouble(value, "reference_temperature_k"),
+					finiteDouble(value, "adsorption_heat_j_per_mol"), finiteDouble(value, "reference_energy_j_per_mol"),
+					finiteDouble(value, "heat_capacity_j_per_mol_k")));
+		}
+		var catalysts = new ArrayList<SurfaceMaterialDefinition.Catalysis>();
+		for (JsonElement element : required(root, "catalysis").getAsJsonArray()) {
+			JsonObject value = element.getAsJsonObject();
+			requireOnly(value, "reaction", "multiplier_per_m2");
+			catalysts.add(new SurfaceMaterialDefinition.Catalysis(string(value, "reaction"),
+					finiteDouble(value, "multiplier_per_m2")));
+		}
+		return new SurfaceMaterialDefinition(id, finiteDouble(root, "reference_temperature_k"),
+				finiteDouble(root, "reference_specific_energy_j_per_kg"), finiteDouble(root, "specific_heat_j_per_kg_k"),
+				finiteDouble(root, "effective_area_factor"),
+				finiteDouble(root, "site_capacity_mol_per_kg"), finiteDouble(root, "exchange_mol_per_m2_s"),
+				finiteDouble(root, "minimum_temperature_k"), finiteDouble(root, "maximum_temperature_k"),
+				finiteDouble(root, "maximum_pressure_pa"), adsorbates, catalysts);
+	}
 
 	public static ThermalMaterialDefinition decodeMaterial(String stableId, Reader input) {
 		JsonObject root = object(input);

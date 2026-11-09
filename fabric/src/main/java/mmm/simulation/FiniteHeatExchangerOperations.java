@@ -90,6 +90,72 @@ public final class FiniteHeatExchangerOperations {
 	public boolean hasPending(UUID region) {
 		return scanFailed || pending.values().stream().anyMatch(journal -> journal.regionId().equals(region));
 	}
+    public boolean hasSurfaceAt(ServerLevel level,BlockPos position){return surfaceDevice(level,position)!=null;}
+    public boolean inspectSurface(ServerPlayer player,BlockPos position){
+        var device=surfaceDevice(player.level(),position);if(device==null)return false;
+        var registry=world.thermalRegistry();
+        player.sendSystemMessage(Component.literal(String.format(java.util.Locale.ROOT,"%.2f K",SurfaceThermalState.temperature(registry,device))));
+        for(var surface:device.surfaces()){
+            var definition=registry.surfaceMaterial(surface.materialId());
+            player.sendSystemMessage(Component.literal(surface.face()+" · "+surface.materialId()+" · "+mmm.units.Mass.kilograms(surface.loadingMassUnits())+" kg"));
+            surface.speciesQuanta().forEach((species,quanta)->player.sendSystemMessage(Component.literal(species+" · "+quanta/(double)mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL+" mol")));
+            for(var reaction:definition.catalysis())player.sendSystemMessage(Component.literal(reaction.reactionId()));
+        }
+        return true;
+    }
+	private FiniteThermalDeviceState surfaceDevice(ServerLevel level,BlockPos position){
+        if(world.thermalOrNull()==null)return null;
+        String prefix=position.asLong()+"@";
+        for(var region:regions.regions()){
+            if(!region.dimension().equals(level.dimension()))continue;
+            var footprint=region.footprint();
+            if(footprint!=null&&!footprint.containsInterior(position)&&!footprint.boundaryBlocks().contains(position.asLong())
+                &&java.util.Arrays.stream(Direction.values()).noneMatch(direction->footprint.containsInterior(position.relative(direction))))continue;
+            try {
+                var inventory=region.solverLoaded()?region.finiteThermalDevices(world.thermalRegistry().fingerprint()):operations.readFiniteDevices(region.id());
+                for(var device:inventory.devices())if(device.providerId().equals(OrdinaryThermalWalls.PROVIDER)
+                    &&device.objectId().startsWith(prefix)&&!device.surfaces().isEmpty())return device;
+            }catch(IOException failure){throw new java.io.UncheckedIOException("无法读取表面库存："+position.toShortString(),failure);}
+        }
+        return null;
+    }
+	public InteractionResult surface(ServerPlayer player,InteractionHand hand,BlockPos position,Direction face,boolean remove){
+		try {
+			var region=targets.regionAtBlock(player.level(),position.relative(face));
+			if(region==null)region=targets.regionAtBlock(player.level(),position);
+			requireReady(player.level(),region);
+			var registry=world.thermalRegistry();var inventory=region.finiteThermalDevices(registry.fingerprint());
+			String prefix=position.asLong()+"@";
+			var wall=inventory.devices().stream().filter(d->d.providerId().equals(OrdinaryThermalWalls.PROVIDER)&&d.objectId().startsWith(prefix)).findFirst()
+				.orElseThrow(()->new IllegalArgumentException("请在已启用区域的普通热墙或筛上装填"));
+			var localFace=FiniteThermalDeviceDefinition.LocalFace.valueOf(face.name());
+			ItemStack before=player.getItemInHand(hand).copy(),after;
+			FiniteThermalDeviceState next;double energy;
+			if(remove){
+				if(!before.isEmpty())throw new IllegalArgumentException("请空手提取表面材料");
+				var detached=SurfaceThermalState.detach(registry,wall,localFace);next=detached.device();energy=detached.surfaceEnergyJ();
+				after=mmm.item.SurfaceCoatingItem.stack(new SurfaceCoatingContents(registry.fingerprint(),detached.surface(),energy));
+			}else{
+				if(!(before.getItem() instanceof mmm.item.SurfaceCoatingItem item)||before.getCount()!=1)throw new IllegalArgumentException("每次装填一份表面材料");
+				String encoded=before.get(MmmComponents.SURFACE_COATING);FixedSurfaceState coating;
+				if(encoded==null){
+					coating=new FixedSurfaceState(localFace,item.materialId(),mmm.units.Mass.fromKilograms(1),Map.of());
+					energy=SurfaceThermalState.surfaceEnergyAtTemperature(registry,coating,registry.surfaceMaterial(item.materialId()).referenceTemperatureK());
+				}else{
+					var carried=SurfaceCoatingContents.decode(encoded);if(!carried.registryFingerprint().equals(registry.fingerprint()))throw new IllegalArgumentException("材料定义与当前世界不同");
+					coating=new FixedSurfaceState(localFace,carried.surface().materialId(),carried.surface().loadingMassUnits(),carried.surface().speciesQuanta(),carried.surface().residualQuanta());energy=carried.internalEnergyJ();
+				}
+				next=SurfaceThermalState.attach(registry,wall,coating,energy);after=ItemStack.EMPTY;
+			}
+			var devices=new ArrayList<>(inventory.devices());devices.set(devices.indexOf(wall),next);
+			var amount=mmm.units.SignedDyadic.of(energy);var audit=inventory.audit();
+			var change=mmm.units.SignedDyadic.of(next.body().internalEnergyJ()).subtract(mmm.units.SignedDyadic.of(wall.body().internalEnergyJ()));
+			var roundoff=remove?change.add(amount):change.subtract(amount);
+			var updated=new FiniteThermalDeviceInventory(registry.fingerprint(),devices,new FiniteThermalDeviceAudit(audit.initialInventory(),remove?audit.externalSource():audit.externalSource().add(amount),remove?audit.externalSink().add(amount):audit.externalSink(),audit.solverExchange(),audit.roundoffResidual().add(roundoff)));
+			transact(player,hand,position,region,next,"",!remove,false,updated,before,after);
+			player.sendSystemMessage(Component.literal(remove?"表面材料已取回":"表面材料已装填"));return InteractionResult.SUCCESS;
+		}catch(IOException|RuntimeException failure){return fail(player,failure);}
+	}
 	public FaultPoint fault() { return fault; }
 	public void setFault(FaultPoint value) { fault=java.util.Objects.requireNonNull(value); }
 
@@ -120,12 +186,12 @@ public final class FiniteHeatExchangerOperations {
 				if (!PROVIDER.equals(body.providerId()) || !PROVIDER.equals(body.deviceTypeId())
 						|| !ItemStack.isSameItemSameComponents(source,FiniteHeatExchangerBlockItem.createStack(body,profile())))
 					throw new IllegalArgumentException("设备物品与当前世界能力不一致");
-				body=new FiniteThermalDeviceState(PROVIDER,Long.toString(position.asLong()),PROVIDER,body.body());
+				body=new FiniteThermalDeviceState(PROVIDER,Long.toString(position.asLong()),PROVIDER,body.body(),body.surfaces());
 			}
 			requireAvailablePorts(region, position, registry.finiteDevice(body.deviceTypeId()), registry);
 			var inventory=region.finiteThermalDevices(registry.fingerprint()).insertExternal(body);
 			inventory.requireCompatible(registry);
-			transact(player,hand,position,region,body,encoded==null?"":encoded,true,false,inventory);
+			transact(player,hand,position,region,body,encoded==null?"":encoded,true,false,inventory,null,null);
 			player.sendSystemMessage(Component.literal("有限换热器已安装"));
 			return InteractionResult.SUCCESS;
 		} catch (IOException | RuntimeException failure) { return fail(player,failure); }
@@ -145,7 +211,7 @@ public final class FiniteHeatExchangerOperations {
 					&& device.objectId().equals(locator.objectId())).findFirst()
 					.orElseThrow(() -> new IllegalStateException("设备方块与区域库存不一致"));
 			requireAvailablePorts(region, position, world.thermalRegistry().finiteDevice(body.deviceTypeId()), world.thermalRegistry());
-			transact(player,hand,position,region,body,"",false,drop,inventory.extractExternal(PROVIDER,body.objectId()));
+			transact(player,hand,position,region,body,"",false,drop,inventory.extractExternal(PROVIDER,body.objectId()),null,null);
 			player.sendSystemMessage(Component.literal("有限换热器已拆卸，保留质量与内能"));
 			return InteractionResult.SUCCESS;
 		} catch (IOException | RuntimeException failure) { return fail(player,failure); }
@@ -163,8 +229,7 @@ public final class FiniteHeatExchangerOperations {
 					.filter(value -> value.providerId().equals(PROVIDER) && value.objectId().equals(locator.objectId()))
 					.findFirst().orElseThrow(() -> new IllegalStateException("设备方块与区域库存不一致"));
 			var body=device.body();
-			double temperature=new ThermalStateFunction(registry).stateForInternalEnergy(
-					registry.materialHandle(body.thermalMaterialId()),body.massKilograms(),Map.of(),body.internalEnergyJ()).temperatureK();
+			double temperature=SurfaceThermalState.temperature(registry,device);
 			player.sendSystemMessage(Component.translatable("message.mmm.finite_heat_exchanger.state",
 					String.format(java.util.Locale.ROOT,"%.3f",temperature),body.massKilograms(),
 					mmm.units.UnitFormat.energy(body.internalEnergyJ()),body.generation()));
@@ -196,7 +261,7 @@ public final class FiniteHeatExchangerOperations {
 
 	private void transact(ServerPlayer player,InteractionHand hand,BlockPos position,FluidRegion region,
 			FiniteThermalDeviceState body,String source,boolean placing,boolean drop,
-			FiniteThermalDeviceInventory inventory) throws IOException {
+			FiniteThermalDeviceInventory inventory,ItemStack surfaceBefore,ItemStack surfaceAfter) throws IOException {
 		// Persist the exact external preimage before publishing recovery evidence.
 		persistPlayer(player.getUUID(),hand==InteractionHand.OFF_HAND);
 		player.level().save(null,true,false);
@@ -204,7 +269,7 @@ public final class FiniteHeatExchangerOperations {
 		var journal=new Journal(UUID.randomUUID(),region.id(),region.dimension().identifier().toString(),position.asLong(),
 				base,Math.addExact(base,1),-1,CrossDomainRecovery.JournalPhase.PREPARED,placing,drop,
 				player.getUUID(),hand==InteractionHand.OFF_HAND,UUID.randomUUID(),source,
-				FiniteThermalDeviceItemCodec.encode(body),profile());
+				FiniteThermalDeviceItemCodec.encode(body),profile(),surfaceBefore==null?null:encodeItem(surfaceBefore),surfaceAfter==null?null:encodeItem(surfaceAfter));
 		pending.put(journal.operationId(),journal); store.write(journal);
 		fault(FaultPoint.AFTER_PREPARED);
 		FluidRegion candidate=region.finiteDeviceCandidate(inventory,world.thermalRegistry());
@@ -265,7 +330,7 @@ public final class FiniteHeatExchangerOperations {
 		boolean device=loaded && level.getBlockState(position).is(MmmBlocks.FINITE_HEAT_EXCHANGER)
 				&& level.getBlockEntity(position) instanceof FiniteHeatExchangerBlockEntity locator
 				&& journal.regionId().equals(locator.regionId()) && body.objectId().equals(locator.objectId());
-		var worldTruth=CrossDomainRecovery.classify(loaded,journal.placing()?boundary:device,journal.placing()?device:boundary,readback);
+		var worldTruth=journal.surface()?CrossDomainRecovery.classify(loaded,true,true,readback):CrossDomainRecovery.classify(loaded,journal.placing()?boundary:device,journal.placing()?device:boundary,readback);
 		ItemStack current=null;
 		boolean itemAvailable;
 		if (journal.drop()) {
@@ -283,15 +348,18 @@ public final class FiniteHeatExchangerOperations {
 		return List.of(worldTruth,CrossDomainRecovery.classify(itemAvailable,before,after,readback));
 	}
 	private ItemStack beforeItem(Journal journal) {
+		if(journal.surface())return decodeItem(journal.surfaceBefore());
 		if (!journal.placing()) return ItemStack.EMPTY;
 		return journal.sourceContents().isEmpty()?new ItemStack(MmmBlocks.FINITE_HEAT_EXCHANGER):
 				FiniteHeatExchangerBlockItem.createStack(FiniteThermalDeviceItemCodec.decode(journal.sourceContents()),journal.profile());
 	}
 	private ItemStack afterItem(Journal journal) {
+		if(journal.surface())return decodeItem(journal.surfaceAfter());
 		return journal.placing()?ItemStack.EMPTY:
 				FiniteHeatExchangerBlockItem.createStack(FiniteThermalDeviceItemCodec.decode(journal.bodyContents()),journal.profile());
 	}
 	private void applyWorld(Journal journal,ServerLevel level) throws IOException {
+		if(journal.surface())return;
 		BlockPos position=BlockPos.of(journal.position());
 		if (!level.setBlock(position,(journal.placing()?MmmBlocks.FINITE_HEAT_EXCHANGER:MmmBlocks.FLUID_BOUNDARY).defaultBlockState(),3))
 			throw new IOException("World rejected finite device slot replacement");
@@ -301,6 +369,8 @@ public final class FiniteHeatExchangerOperations {
 			locator.bind(journal.regionId(),FiniteThermalDeviceItemCodec.decode(journal.bodyContents()).objectId());
 		}
 	}
+    private String encodeItem(ItemStack item){return ItemStack.OPTIONAL_CODEC.encodeStart(server.registryAccess().createSerializationContext(com.mojang.serialization.JsonOps.INSTANCE),item).getOrThrow().toString();}
+    private ItemStack decodeItem(String encoded){return ItemStack.OPTIONAL_CODEC.parse(server.registryAccess().createSerializationContext(com.mojang.serialization.JsonOps.INSTANCE),com.google.gson.JsonParser.parseString(encoded)).getOrThrow();}
 	private void applyItem(Journal journal,ServerLevel level) throws IOException {
 		if(journal.drop()) {
 			BlockPos position=BlockPos.of(journal.position());

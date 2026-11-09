@@ -385,7 +385,7 @@ double contactConductance(int contact, double mu) {
     return mu * distance;
 }
 double contactVelocity(int contact, int axis) {
-    return candidateDouble(headerWord(H_CONTACT_VELOCITIES) + 2 * (3 * int(words[headerWord(H_CONTACT_BODY_HANDLES) + contact]) + axis));
+    return candidateDouble(headerWord(H_CONTACT_VELOCITIES) + 2 * contact);
 }
 void prepareFaceScale(int f) {
     if (!enabled(f)) {

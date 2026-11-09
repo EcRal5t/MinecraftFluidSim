@@ -34,7 +34,9 @@ final class VulkanLiquidReactions implements AutoCloseable {
         SPECIES_CAPACITY(15),
         TOTAL_QUANTA(40),
         INITIAL_ENERGIES(41),
-        ACTIVITY_CELLS(42), PROGRESS(43), PENDING_INDEX(44), FINITE_RULE_COUNT(45);
+        ACTIVITY_CELLS(42), PROGRESS(43), PENDING_INDEX(44), FINITE_RULE_COUNT(45),
+        CATALYST_COUNT(46), CATALYSTS(47), PORT_COUNTS(48), PORT_DEVICE(49), PORT_CELL(50), PORT_DIRECTION(51),
+        PLIC_PLANES(52), PLIC_CELLS(53), FIXED_MASKS(54), SCREEN_FACES(55);
         final int word;
         Header(int word) {
             this.word = word;
@@ -48,6 +50,7 @@ final class VulkanLiquidReactions implements AutoCloseable {
     }
 
     static final int READY = 2, NEED_CAPACITY = 1;
+    record SurfaceInputs(VulkanThermalDeviceLayout devices,int plicPlanesWord,int plicCellsWord,int fixedMasksWord,int screenFacesWord,double cellSize) {}
     record Layout(VulkanLiquidStateLayout liquid, VulkanReactionDefinitions.Layout definitions,
         VulkanLiquidThermodynamics.Layout caloric, VulkanReactionProgressLayout progress, int[] phases,
         VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column phaseTable,
@@ -56,7 +59,8 @@ final class VulkanLiquidReactions implements AutoCloseable {
         VulkanLiquidStateLayout.Column amounts, VulkanLiquidStateLayout.Column residuals,
         VulkanLiquidStateLayout.Column energies, VulkanLiquidStateLayout.Column initialEnergies,
         VulkanLiquidStateLayout.Column totalQuanta, VulkanLiquidStateLayout.Column scan,
-        VulkanLiquidStateLayout.Column pendingIndex, int finiteRuleCount, long endOffset, int activityCellsWord) {
+        VulkanLiquidStateLayout.Column pendingIndex, int finiteRuleCount, long endOffset, int activityCellsWord,
+        SurfaceInputs surface,VulkanLiquidStateLayout.Column catalysts,ByteBuffer catalystData) {
         int word(VulkanLiquidStateLayout.Column c) {
             return Math.toIntExact(c.offset() / 4);
         }
@@ -88,6 +92,13 @@ final class VulkanLiquidReactions implements AutoCloseable {
             h[Header.PROGRESS.word] = progress.word(VulkanReactionProgressLayout.Field.HEADER);
             h[Header.PENDING_INDEX.word] = word(pendingIndex);
             h[Header.FINITE_RULE_COUNT.word] = finiteRuleCount;
+            h[Header.CATALYST_COUNT.word] = catalystData.remaining()/24;
+            h[Header.CATALYSTS.word] = word(catalysts);
+            h[Header.PORT_COUNTS.word] = surface==null?-1:surface.devices().word(VulkanThermalDeviceLayout.Field.COUNTS)+1;
+            if(surface!=null){var d=surface.devices();h[Header.PORT_DEVICE.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_DEVICE);
+                h[Header.PORT_CELL.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_CELL);h[Header.PORT_DIRECTION.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_DIRECTION);
+                h[Header.PLIC_PLANES.word]=surface.plicPlanesWord();h[Header.PLIC_CELLS.word]=surface.plicCellsWord();
+                h[Header.FIXED_MASKS.word]=surface.fixedMasksWord();h[Header.SCREEN_FACES.word]=surface.screenFacesWord();}
             for (var f : VulkanLiquidStateLayout.Field.values())
                 h[16 + f.ordinal()] = Math.toIntExact(liquid.column(f).offset() / 4);
             for (int i = 0; i < h.length; i++)
@@ -98,7 +109,10 @@ final class VulkanLiquidReactions implements AutoCloseable {
             var data = ByteBuffer.allocateDirect(Math.multiplyExact(4, phases.length)).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i < phases.length; i++)
                 data.putInt(4 * i, phases[i]);
-            return List.of(new VulkanGasThermodynamics.TableChunk(phaseTable.offset(), data));
+            var chunks=new java.util.ArrayList<VulkanGasThermodynamics.TableChunk>();
+            if(data.remaining()>0)chunks.add(new VulkanGasThermodynamics.TableChunk(phaseTable.offset(),data));
+            if(catalystData.hasRemaining())chunks.add(new VulkanGasThermodynamics.TableChunk(catalysts.offset(),catalystData.duplicate()));
+            return List.copyOf(chunks);
         }
         List<VulkanEnergyLedger.Stream> roundoffStreams() {
             return List.of(new VulkanEnergyLedger.Stream(1, word(energies), energies.count(), 2, 1),
@@ -118,6 +132,11 @@ final class VulkanLiquidReactions implements AutoCloseable {
     static Layout layout(VulkanLiquidStateLayout liquid, VulkanReactionDefinitions.Layout definitions,
         VulkanLiquidThermodynamics.Layout caloric, VulkanReactionProgressLayout progress, FluidMaterialRegistry fluid,
         ChemicalRegistry chemical, long base, long alignment, int activityCellsWord) {
+        return layout(liquid,definitions,caloric,progress,fluid,chemical,base,alignment,activityCellsWord,null);
+    }
+    static Layout layout(VulkanLiquidStateLayout liquid, VulkanReactionDefinitions.Layout definitions,
+        VulkanLiquidThermodynamics.Layout caloric, VulkanReactionProgressLayout progress, FluidMaterialRegistry fluid,
+        ChemicalRegistry chemical, long base, long alignment, int activityCellsWord,SurfaceInputs surface) {
         if (base < Math.max(progress.endOffset(), caloric.endOffset()) || alignment < 8
             || (alignment & (alignment - 1)) != 0 || definitions.speciesCount() > 256
             || caloric.speciesStride() < definitions.speciesCount()
@@ -144,11 +163,21 @@ final class VulkanLiquidReactions implements AutoCloseable {
         int finiteRuleCount=Math.toIntExact(chemical.reactions().stream()
             .filter(rule->rule.kind()==mmm.chemistry.ChemicalReaction.Kind.FINITE_RATE).count());
         var pendingIndex=column(c,Math.multiplyExact(liquid.stockCapacity(),finiteRuleCount),4,alignment);
+        var entries=new java.util.ArrayList<Object[]>();
+        if(surface!=null)for(var slot:surface.devices().definitions().surfaces())for(var catalyst:slot.catalysts()){
+            int rule=definitions.identity().rules().indexOf(catalyst.reactionId());
+            if(rule<0)throw new IllegalArgumentException("Catalytic reaction is absent");
+            int direction=switch(slot.face()){case WEST->1;case EAST->0;case DOWN->3;case UP->2;case NORTH->5;case SOUTH->4;};
+            entries.add(new Object[]{slot.device(),direction,rule,slot.areaFactor()*catalyst.multiplierPerSquareMeter()*surface.cellSize()*surface.cellSize()});
+        }
+        var catalysts=column(c,Math.multiplyExact(entries.size(),6),4,alignment);
+        var catalystData=ByteBuffer.allocateDirect(Math.multiplyExact(entries.size(),24)).order(ByteOrder.LITTLE_ENDIAN);
+        for(var entry:entries){catalystData.putInt((int)entry[0]).putInt((int)entry[1]).putInt((int)entry[2]).putInt(0).putDouble((double)entry[3]);}catalystData.flip();
         var scan =
             column(c, Math.toIntExact(VulkanPrefixScan.workspaceBytes(liquid.stockCapacity()) / 4), 4, alignment);
         return new Layout(liquid, definitions, caloric, progress, phases, header, phase, dense, counts, offsets,
             handles, amounts, residual, energy, initialEnergy, total, scan, pendingIndex, finiteRuleCount,
-            align(c[0], alignment), activityCellsWord);
+            align(c[0], alignment), activityCellsWord,surface,catalysts,catalystData);
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
@@ -235,7 +264,8 @@ final class VulkanLiquidReactions implements AutoCloseable {
                  "/assets/mmm_gpu_probe/shaders/liquid-reactions.comp")) {
             if (in == null)
                 throw new IllegalStateException("Liquid reaction shader missing");
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout()+"\n#define SPECIES_WORKSPACE "+Math.max(1,species)+"\n#define REACTION_WORKSPACE "+Math.max(1,rules)+"\n");
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout()+"\n#define SPECIES_WORKSPACE "+Math.max(1,species)+"\n#define REACTION_WORKSPACE "+Math.max(1,rules)+"\n")
+                    .replace("// PLIC_FACE_LIBRARY",VulkanLiquidPhaseRows.resource("plic-face.glsl"));
         } catch (IOException failure) {
             throw new IllegalStateException("Liquid reaction shader unavailable", failure);
         }

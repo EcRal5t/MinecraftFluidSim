@@ -47,25 +47,21 @@ public final class PlayerContainerTransferAdapter {
 
 	public static InteractionResult handle(ServerPlayer player, InteractionHand hand) {
 		return MmmRuntimeRegistry.require(player.level().getServer()).playerContainerTransfers()
-				.handlePlayer(player, hand, null);
+				.handlePlayer(player, hand);
 	}
 
-	InteractionResult feedSelectedRegion(ServerPlayer player, UUID regionId) {
-		return handlePlayer(player, InteractionHand.MAIN_HAND, regionId);
-	}
-
-	private InteractionResult handlePlayer(ServerPlayer player, InteractionHand hand, UUID feedRegionId) {
+	private InteractionResult handlePlayer(ServerPlayer player, InteractionHand hand) {
 		if (!startup.authoritativeWritesReady()) return null;
 		ItemStack held = player.getItemInHand(hand);
 		if (held.isEmpty()) return null;
 		if (held.getItem() instanceof CreativeSourceItem) {
-			return feedRegionId == null ? handleCreativeSource(player, hand, held) : InteractionResult.FAIL;
+			return handleCreativeSource(player, hand, held);
 		}
 
 		MinecraftContainerTransferOperations.TransferKind kind =
 				MinecraftContainerTransferOperations.classify(held);
 		if (kind == MinecraftContainerTransferOperations.TransferKind.NONE) return null;
-		if ((kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
+		if ((kind == MinecraftContainerTransferOperations.TransferKind.GAS_POUR || kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)
 				&& !world.acceptsActualContainerProfile(held)) {
 			message(player, "FOREIGN_PROFILE：actual container 不属于当前世界；库存保持不变");
@@ -74,8 +70,7 @@ public final class PlayerContainerTransferAdapter {
 		ServerLevel level = player.level();
 		boolean pouring = kind == MinecraftContainerTransferOperations.TransferKind.POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
-				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR;
-		if (feedRegionId != null && !pouring) return InteractionResult.FAIL;
+				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR || kind == MinecraftContainerTransferOperations.TransferKind.GAS_POUR;
 		BlockHitResult hit = playerBlockHit(player);
 		BlockPos targetBlock = pouring ? playerPourTargetBlock(player, hit) : null;
 		if (pouring && targetBlock == null) return null;
@@ -90,7 +85,6 @@ public final class PlayerContainerTransferAdapter {
 		}
 		FluidRegion region = target != null ? target.region() : pouring ? null : targets.aimedRegion(player);
 		if (region == null || !region.solverLoaded()) return null;
-		if (feedRegionId != null && !region.id().equals(feedRegionId)) return InteractionResult.FAIL;
 		if (held.getCount() != 1) {
 			message(player, "物质、运动与力学转移一次只接受 1 个桶；堆叠保持不变");
 			return InteractionResult.FAIL;
@@ -104,7 +98,7 @@ public final class PlayerContainerTransferAdapter {
 			return InteractionResult.FAIL;
 		}
 		int[] cell = target != null
-				? target.cell()
+				? target.outward()==null?target.cell():target.cell(MinecraftContainerTransferOperations.contactQuantity(kind),!pouring)
 				: kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP
 						? targets.aimedGranularCellNear(player, region)
 						: targets.aimedCellNear(player, region, true);
@@ -112,7 +106,7 @@ public final class PlayerContainerTransferAdapter {
 
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
 				transactions, world, region, cell, held, player.hasInfiniteMaterials(),
-				kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_SCOOP && player.isShiftKeyDown() ? 0 : 6);
+				(target != null && target.outward() != null) || (kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_SCOOP && player.isShiftKeyDown()) ? 0 : 6);
 		if (!resolution.resolved()) {
 			message(player, resolution.diagnostic());
 			return InteractionResult.FAIL;
@@ -177,13 +171,13 @@ public final class PlayerContainerTransferAdapter {
 		if (region == null || !region.controllerManaged()
 				|| !ensureAvailableFor(player, region)) return InteractionResult.FAIL;
 		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
-		int[] cell = target.cell();
+		ItemStack actual = resolved.actualStack();
+		int[] cell = target.outward()==null?target.cell():target.cell(MinecraftContainerTransferOperations.contactQuantity(MinecraftContainerTransferOperations.classify(actual)),false);
 		if (cell == null) return InteractionResult.FAIL;
 
 		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
-		ItemStack actual = resolved.actualStack();
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				transactions, world, region, cell, actual, true, 6);
+				transactions, world, region, cell, actual, true, target.outward() == null ? 6 : 0);
 		if (!resolution.resolved()) {
 			message(player, resolution.diagnostic());
 			return InteractionResult.FAIL;

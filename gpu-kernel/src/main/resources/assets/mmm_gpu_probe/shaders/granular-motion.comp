@@ -22,6 +22,7 @@ const int STAGE_ACCEPT_SEPARATION = 9;
 const int STAGE_CHECK_SEPARATION = 10;
 const int STAGE_BUILD_BED_HEIGHT = 11;
 const int STAGE_CLEAR_SEPARATION_FLAG = 12;
+const int STAGE_CLEAR_SCREEN_CAPTURE = 13;
 const uint ERROR_GRANULAR_MOTION = 4194304u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
@@ -217,6 +218,34 @@ int enumerateContacts(int particle, bool writeContacts) {
 void computeTrialPosition(int particle) {
     dvec3 position = readVector(headerValue(H_POSITION), particle), displacement = readVector(headerValue(H_VELOCITY), particle) * p.duration;
     double radius = particleRadius(particle), travelFraction = 1.0;
+    words[fieldOffset(FIELD_SCREEN_HIT) + particle] = 0u;
+    if (words[fieldOffset(FIELD_SCREEN_CAPTURED) + particle] != 0u) {
+        writeVector(fieldOffset(FIELD_POSITION), particle, position);
+        return;
+    }
+    int material = int(words[headerValue(H_MATERIAL) + particle]);
+    double diameter = readDouble(headerValue(H_DIAMETERS) + 2 * material);
+    ivec3 source = cellCoordinates(position);
+    double screenFraction = 2.0;
+    int screenFace = -1;
+    for (int axis = 0; axis < 3; axis++) {
+        if (displacement[axis] == 0.0) continue;
+        bool positive = displacement[axis] > 0.0;
+        double plane = double(source[axis] + (positive ? 1 : 0)) * p.cellSize;
+        double time = (plane - (positive ? radius : -radius) - position[axis]) / displacement[axis];
+        if (time < 0.0 && abs(plane - position[axis]) <= radius) time = 0.0;
+        if (time < 0.0 || time > travelFraction) continue;
+        ivec3 crossing = cellCoordinates(position + time * displacement);
+        crossing[axis] = source[axis] + (positive ? 1 : 0);
+        int face = gridFaceAt(crossing, axis);
+        if (face < 0) continue;
+        double pore = readDouble(headerValue(H_SCREEN_FACES) + 4 * face);
+        if (pore > 0.0 && diameter > pore) {
+            travelFraction = max(0.0, time - 1e-6 * p.cellSize / abs(displacement[axis]));
+            screenFraction = travelFraction;
+            screenFace = face;
+        }
+    }
     for (int a = 0; a < 3; a++)
         if (displacement[a] != 0.0) {
             double wall = displacement[a] > 0.0 ? double(gridDimensions()[a]) * p.cellSize - radius : radius;
@@ -237,6 +266,7 @@ void computeTrialPosition(int particle) {
                         travelFraction = min(travelFraction, hitTime);
                 }
             }
+    if (travelFraction == screenFraction) words[fieldOffset(FIELD_SCREEN_HIT) + particle] = uint(screenFace + 1);
     writeVector(fieldOffset(FIELD_POSITION), particle, dvec3(vec3(position + travelFraction * displacement)));
 }
 double particleMass(int i) {
@@ -325,12 +355,25 @@ void separateParticles(int particle) {
             }
     position += correction / double(max(1, contactCount));
     position += fixedCorrection(position, particleRadius(particle));
+    int screen = int(words[fieldOffset(FIELD_SCREEN_HIT) + particle]);
+    if (screen == 0) screen = int(words[fieldOffset(FIELD_SCREEN_CAPTURED) + particle]);
+    if (screen != 0) {
+        int face = screen - 1, axis = gridFaceEndpoints(face).z;
+        double plane = double(gridFacePosition(face)[axis]) * p.cellSize;
+        double before = readVector(headerValue(H_POSITION), particle)[axis];
+        if (before < plane) position[axis] = min(position[axis], plane - 1e-6 * p.cellSize);
+        else position[axis] = max(position[axis], plane + 1e-6 * p.cellSize);
+    }
     writeVector(fieldOffset(FIELD_NEXT_POSITION), particle, position);
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
     if (id >= p.count || errors != 0u)
         return;
+    if (p.stage == STAGE_CLEAR_SCREEN_CAPTURE) {
+        words[fieldOffset(FIELD_SCREEN_CAPTURED) + id] = 0u;
+        return;
+    }
     if (p.stage == STAGE_BUILD_BED_HEIGHT) {
         double volume = 0.0;
         if (headerValue(H_GEOMETRY_OFFSETS) >= 0)
@@ -422,6 +465,8 @@ void main() {
     else if (p.stage == STAGE_PUBLISH_POSITION) {
         dvec3 x = readVector(fieldOffset(FIELD_POSITION), id);
         writeVector(headerValue(H_POSITION), id, x);
+        if (words[fieldOffset(FIELD_SCREEN_HIT) + id] != 0u)
+            words[fieldOffset(FIELD_SCREEN_CAPTURED) + id] = words[fieldOffset(FIELD_SCREEN_HIT) + id];
         writeDouble(headerValue(H_FINAL_Y) + 2 * id, x.y);
     } else if (p.stage == STAGE_SEPARATE_PARTICLES)
         separateParticles(id);

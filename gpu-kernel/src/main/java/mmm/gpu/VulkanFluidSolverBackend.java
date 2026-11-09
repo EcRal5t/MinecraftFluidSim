@@ -369,6 +369,8 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             source.close();
             if (failure instanceof CandidateEvaluationRejectedException rejected)
                 throw rejected;
+            if (failure instanceof VulkanLiquidRegion.MotionTimeRefinement blocked)
+                throw new MotionBlockedException("Moving solid cannot displace its inventory: " + blocked.getMessage(), blocked);
             throw new CandidateEvaluationRejectedException(
                 "Vulkan private candidate failed: " + failure.getMessage(), failure);
         } catch (Error failure) {
@@ -650,6 +652,12 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                     return cellAt(x, y, z).carriers();
                 });
             }
+        }
+        @Override public double observeLiquidFlow(int[] faces) {
+            synchronized(owner()) { return deviceCall(() -> { ensure();return capture.liquidFlow(faces,codec.template().config().cellSize()); }); }
+        }
+        @Override public double observeGasFlow(int[] faces) {
+            synchronized(owner()) { return deviceCall(() -> { ensure();return capture.gasFlow(faces); }); }
         }
         @Override
         public boolean hasGranularOccupancy(int x, int y, int z) {

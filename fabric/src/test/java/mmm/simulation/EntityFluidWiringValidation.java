@@ -28,7 +28,60 @@ public final class EntityFluidWiringValidation {
 		bodySweepIntoUnavailableGroupRetainsPreviousPose();
 		pausedObservationsDoNotExhaustBodyBudget();
 		manualStepRetainsObservedBodiesAndDrive();
+		pistonShapeAndOccupationHandoff();
+		vanillaPistonFrameUsesMovedBlock();
 		System.out.println("Entity fluid wiring passed");
+	}
+
+	private static void vanillaPistonFrameUsesMovedBlock() {
+		net.minecraft.SharedConstants.tryDetectVersion();
+		net.minecraft.server.Bootstrap.bootStrap();
+		var pos=new net.minecraft.core.BlockPos(2,1,1);
+		var piston=new net.minecraft.world.level.block.piston.PistonMovingBlockEntity(pos,
+				net.minecraft.world.level.block.Blocks.MOVING_PISTON.defaultBlockState(),
+				net.minecraft.world.level.block.Blocks.STONE.defaultBlockState(),net.minecraft.core.Direction.EAST,true,false);
+		var frame=MinecraftWorldUpdates.capturePiston(net.minecraft.world.level.EmptyBlockGetter.INSTANCE,pos,net.minecraft.core.BlockPos.ZERO,piston);
+		require(frame.source().size()==1 && frame.target().size()==1, "Vanilla moved block lost its shape");
+		var bounds=frame.source().getFirst().bounds();
+		require(bounds.minimumX()==1 && bounds.maximumX()==2 && bounds.minimumY()==1 && bounds.maximumY()==2,
+				"Vanilla piston source pose differs from its moved stone block");
+		require(frame.source().getFirst().bodyId().equals(frame.target().getFirst().bodyId()), "Piston identity changed during movement");
+		var reverse=new net.minecraft.world.level.block.piston.PistonMovingBlockEntity(new net.minecraft.core.BlockPos(1,1,1),
+				net.minecraft.world.level.block.Blocks.MOVING_PISTON.defaultBlockState(),
+				net.minecraft.world.level.block.Blocks.STONE.defaultBlockState(),net.minecraft.core.Direction.EAST,false,false);
+		var retracted=MinecraftWorldUpdates.capturePiston(net.minecraft.world.level.EmptyBlockGetter.INSTANCE,
+				new net.minecraft.core.BlockPos(1,1,1),net.minecraft.core.BlockPos.ZERO,reverse);
+		require(frame.source().getFirst().bodyId().equals(retracted.source().getFirst().bodyId()),
+				"Pushed block identity changed when the piston reversed");
+	}
+
+	private static void pistonShapeAndOccupationHandoff() {
+		var shape = net.minecraft.world.phys.shapes.Shapes.or(
+				net.minecraft.world.phys.shapes.Shapes.box(.75,0,0,1,1,1),
+				net.minecraft.world.phys.shapes.Shapes.box(0,.375,.375,.75,.625,.625));
+		var boxes = MinecraftCollisionWorldPort.movingBoxes(shape,2);
+		byte[] masks = MinecraftCollisionWorldPort.sampleBlockMasks(shape,2);
+		for (int z=0;z<4;z++) for (int y=0;y<4;y++) for (int x=0;x<4;x++) {
+			int cell=((z/2)*2+y/2)*2+x/2, bit=(x&1)+2*((y&1)+2*(z&1));
+			double px=(x+.5)/4, py=(y+.5)/4, pz=(z+.5)/4;
+			boolean covered=false;
+			for(var box:boxes) covered |= px>box.minX && px<box.maxX && py>box.minY && py<box.maxY && pz>box.minZ && pz<box.maxZ;
+			require(covered == ((masks[cell] & (1<<bit)) != 0), "Moving piston changed its sampled shape");
+		}
+		var bounds=new MovingBodyFluidCoupling.Bounds(.5,.5,.5,1,1,1);
+		var body=new MovingBodyFluidCoupling.Request(BODY,bounds,1,0,0,.75,.75,.75,0,0,2,0,1.0/100);
+		require(Math.abs(body.surfaceVelocity(1,1.25,.75,.75)-1.0)<1e-12, "Angular surface velocity differs");
+		var definitions=mmm.fluid.TestFluidDefinitions.load();
+		var domain=new mmm.fluid.HostFluidState(4,4,4,new mmm.fluid.FluidSolverConfig(.5f,9.81f,.05f,200,1e-5f,.002f),definitions);
+		var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(definitions.material().entry("mmm:water").material()));
+		domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(definitions.material());
+		domain.setSolid(1,1,1,true);domain.setVolume(2,1,1,.4f);domain.sealDomainBoundary();
+		domain.bindGasRegistry(definitions.gas());domain.bindThermal(definitions.thermal(),fluids,300);
+		long mass=domain.totalMassUnits();double volume=domain.totalVolumeExact(), energy=domain.totalInternalEnergy();
+		domain.handoffCollisionBodies(List.of(new mmm.fluid.FluidDomainContracts.CollisionEdit(1,1,1,0)),new mmm.fluid.EntityBodyState(List.of(body)));
+		require(domain.solidMicroMask(1,1,1)==0 && domain.entityBodyState().bodies().size()==1, "Piston did not leave fixed geometry");
+		domain.handoffCollisionBodies(List.of(new mmm.fluid.FluidDomainContracts.CollisionEdit(1,1,1,255)),mmm.fluid.EntityBodyState.EMPTY);
+		require(domain.solidMicroMask(1,1,1)==255 && domain.totalMassUnits()==mass && domain.totalVolumeExact()==volume && domain.totalInternalEnergy()==energy, "Piston handoff changed inventory or energy");
 	}
 
 	private static void displacementObservationSpansConsecutiveTicks() {

@@ -14,7 +14,6 @@ final class RegionHostHandoffValidation {
         ordinaryWallContactsSpanBothSides();
         sparseControllerSharesWallInventory();
         processSettingsSurviveRestartAndStop();
-        periodicFeedRemainsDueDuringSleep();
         driverStopUsesClickedBlock();
         touchingUnavailableCellKeepsBodyAvailable();
         hostEditsRespectCurrentActivity();
@@ -24,36 +23,14 @@ final class RegionHostHandoffValidation {
     private static void processSettingsSurviveRestartAndStop() throws Exception {
         var root=java.nio.file.Files.createTempDirectory("mmm-process-settings-");
         var region=UUID.randomUUID();var player=UUID.randomUUID();
-        var first=new MinecraftProcessOperations(root,null,null,null,null);
-        var feed=new MinecraftProcessOperations.Feed(player,12);
+        var first=new MinecraftProcessOperations(root,null,null,null);
         var drive=new MinecraftProcessOperations.Drive(20,220,1,2,3,.5,1,123L);
-        first.setFeed(region,feed);first.setDrive(region,drive);
-        var restored=new MinecraftProcessOperations(root,null,null,null,null);
-        require(feed.equals(restored.feed(region)),"Feed settings did not survive restart");
+        first.setDrive(region,drive);
+        var restored=new MinecraftProcessOperations(root,null,null,null);
         require(drive.equals(restored.drive(region)),"Drive settings did not survive restart");
         restored.clear(region);
-        var stopped=new MinecraftProcessOperations(root,null,null,null,null);
-        require(stopped.feed(region)==null && stopped.drive(region)==null,"Stopped process restarted after reload");
-    }
-
-    private static void periodicFeedRemainsDueDuringSleep() {
-        var region=region(new HostFluidState(2,2,2,new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f), mmm.fluid.TestFluidDefinitions.load()));
-        region.setPaused(false);
-        for(int step=0;step<200;step++)region.lifecycle().observeCompletedStep(true,200);
-        require(region.lifecycle().state()==FluidRegionLifecycle.State.HYDROSTATIC_SLEEP&&!region.canStep(),
-                "Feed fixture did not enter hydrostatic sleep");
-        require(MinecraftProcessOperations.feedDue(region,12),"Hydrostatic sleep stopped scheduled feed");
-        region.incrementTick();
-        require(!MinecraftProcessOperations.feedDue(region,12),"Scheduled feed ignored its interval");
-        for(int tick=1;tick<12;tick++)region.incrementTick();
-        region.setPaused(true);
-        require(!MinecraftProcessOperations.feedDue(region,12),"Operator pause allowed scheduled feed");
-        region.setPaused(false);
-        region.setAvailabilityFailure(mmm.api.RegionAvailabilityReason.CHUNK_MISSING,"Waiting for chunks");
-        require(!MinecraftProcessOperations.feedDue(region,12),"Unavailable region allowed scheduled feed");
-        region.setAvailabilityFailure(null);
-        require(region.recordPublishedCheckpoint(1)&&region.releaseSolverAfterCheckpoint(1),"Feed fixture unload failed");
-        require(!MinecraftProcessOperations.feedDue(region,12),"Unloaded region allowed scheduled feed");
+        var stopped=new MinecraftProcessOperations(root,null,null,null);
+        require(stopped.drive(region)==null,"Stopped process restarted after reload");
     }
 
     private static void driverStopUsesClickedBlock() throws Exception {
@@ -63,7 +40,7 @@ final class RegionHostHandoffValidation {
         var manager=new FluidRegionManager(new mmm.application.RegionCatalog.Limits(4,100,400));
         require(manager.add(first).accepted()&&manager.addAndSelect(second).accepted(),"Drive regions were not admitted");
         var root=java.nio.file.Files.createTempDirectory("mmm-driver-target-");
-        var processes=new MinecraftProcessOperations(root,manager,null,null,null);
+        var processes=new MinecraftProcessOperations(root,manager,null,null);
         var firstAnchor=new BlockPos(-1,0,0);var secondAnchor=new BlockPos(9,0,0);
         var firstDrive=new MinecraftProcessOperations.Drive(0,200,0,0,0,.5,0,firstAnchor.asLong());
         var secondDrive=new MinecraftProcessOperations.Drive(0,200,0,0,0,.5,0,secondAnchor.asLong());
@@ -74,7 +51,6 @@ final class RegionHostHandoffValidation {
 		require(processes.manualBodies(first.id(),prior).size()==1
 				&& processes.manualBodies(first.id(),prior).getFirst().velocityXMetresPerSecond()==0,
 				"Paused manual step lost the configured drive pose");
-        var feed=new MinecraftProcessOperations.Feed(UUID.randomUUID(),12);processes.setFeed(first.id(),feed);
         var dimensions=net.minecraft.resources.ResourceKey.<Level>createRegistryKey(
                 net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","handoff_dimensions"));
         var otherDimension=net.minecraft.resources.ResourceKey.create(dimensions,
@@ -82,10 +58,9 @@ final class RegionHostHandoffValidation {
         require(!processes.stopDriveAt(otherDimension,firstAnchor)
                 &&!processes.stopDriveAt(first.dimension(),BlockPos.ZERO),"Foreign dimension or inactive block stopped a drive");
         require(processes.stopDriveAt(first.dimension(),firstAnchor)&&manager.selected()==second
-                &&processes.drive(first.id())==null&&secondDrive.equals(processes.drive(second.id()))
-                &&feed.equals(processes.feed(first.id())),"Clicked drive stop changed the selected region or another process");
+                &&processes.drive(first.id())==null&&secondDrive.equals(processes.drive(second.id())),"Clicked drive stop changed the selected region or another process");
 		require(processes.manualBodies(first.id(),prior).isEmpty(),"Stopped drive retained occupancy on manual step");
-        var restored=new MinecraftProcessOperations(root,manager,null,null,null);
+        var restored=new MinecraftProcessOperations(root,manager,null,null);
         require(restored.drive(first.id())==null&&secondDrive.equals(restored.drive(second.id())),"Clicked drive stop did not survive restart");
     }
 

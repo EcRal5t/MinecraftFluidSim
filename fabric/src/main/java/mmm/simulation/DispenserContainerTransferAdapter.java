@@ -47,7 +47,7 @@ public final class DispenserContainerTransferAdapter {
 		MinecraftContainerTransferOperations.TransferKind kind =
 				MinecraftContainerTransferOperations.classify(stack);
 		if (kind == MinecraftContainerTransferOperations.TransferKind.NONE) return stack;
-		if ((kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
+		if ((kind == MinecraftContainerTransferOperations.TransferKind.GAS_POUR || kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)
 				&& !world.acceptsActualContainerProfile(stack)) return stack;
 
@@ -59,18 +59,18 @@ public final class DispenserContainerTransferAdapter {
 		if (region == null) return vanillaItem ? null : stack;
 		boolean inventoryDecrease = kind == MinecraftContainerTransferOperations.TransferKind.SCOOP
 				|| kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_SCOOP
-				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP;
+				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP || kind == MinecraftContainerTransferOperations.TransferKind.GAS_SCOOP;
 		if (stack.getCount() != 1 || !(inventoryDecrease
 				? availability.ensureForInventoryDecrease(level, region) : availability.ensure(level, region))) return stack;
 		if (!phaseWorkBarrier.settle(level, region)) return stack;
 		if (MinecraftContainerTransferOperations.thermalTransferFailure(world, region, stack, kind) != null) {
 			return stack;
 		}
-		int[] cell = transferTarget.cell();
+		int[] cell = transferTarget.outward()==null?transferTarget.cell():transferTarget.cell(MinecraftContainerTransferOperations.contactQuantity(kind),inventoryDecrease);
 		if (cell == null) return stack;
 
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				transactions, world, region, cell, stack, false, 6);
+				transactions, world, region, cell, stack, false, 0);
 		if (!resolution.resolved()) return stack;
 		MinecraftContainerTransferPlan plan = resolution.plan();
 
@@ -89,7 +89,7 @@ public final class DispenserContainerTransferAdapter {
 			String encoded=stack.get(mmm.item.MmmComponents.TRANSFER_ACTOR);
 			actorState=encoded==null?null:mmm.transfer.TransferActorState.decode(encoded);
 		} catch(RuntimeException invalid) { return stack; }
-		var actor = new ContainerTransferActor.Dispenser(
+		var actor = new ContainerTransferActor.BlockInventory(
 				level.dimension().identifier().toString(), actorPosition.getX(), actorPosition.getY(),
 				actorPosition.getZ(), slot,actorState==null?null:actorState.instanceId(),actorState==null?0:actorState.generation());
 		MinecraftContainerTransactionAdapter.Result transaction = plan.executeManaged(

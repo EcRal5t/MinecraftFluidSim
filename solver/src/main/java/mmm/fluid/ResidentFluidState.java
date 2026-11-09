@@ -19,6 +19,8 @@ public interface ResidentFluidState extends FluidStateAccess {
     FluidDomainContracts.BodyFluidSample sampleBody(double minX,double minY,double minZ,double maxX,double maxY,double maxZ);
     FluidCellInventoryView observeCellInventory(int x,int y,int z);
     CellCarrierInventoryView observeCellCarriers(int x,int y,int z);
+    double observeLiquidFlow(int[] faces);
+    double observeGasFlow(int[] faces);
     boolean hasGranularOccupancy(int x,int y,int z);
     java.util.List<FluidDomainContracts.WaterContact> waterContacts(java.util.List<FluidDomainContracts.WaterContactFace> faces);
 

@@ -68,6 +68,9 @@ layout(std430, binding = B_MICRO) buffer Micro {
 layout(std430, binding = B_FACES) buffer Faces {
     dvec4 faces[];
 };
+layout(std430, binding = B_SCREEN_FACES) readonly buffer ScreenFaces { dvec2 screenFaces[]; };
+layout(std430, binding = B_BED_SOLID) readonly buffer BedSolid { int64_t bedSolid[]; };
+layout(std430, binding = B_COHERENT_SOLID) readonly buffer CoherentSolid { int64_t coherentSolid[]; };
 layout(std430, binding = B_WALL_GEOMETRY) buffer WallGeometry {
     double wallGeometry[];
 };
@@ -250,6 +253,14 @@ void faceGeometry(int face) {
             double dryArea = dry ? (hi.x - lo.x) * (hi.y - lo.y) : 0.0;
             wetArea += .25LF - dryArea;
         }
+    if (screenFaces[face].x > 0.0) {
+        double deposited = double(max(int64_t(0), bedSolid[leftCell] - coherentSolid[leftCell])
+                + max(int64_t(0), bedSolid[rightCell] - coherentSolid[rightCell])) / SOLID_VOLUME_UNITS_PER_CELL;
+        double remaining = max(.01, 1.0 - deposited / .6);
+        double factor = screenFaces[face].y * remaining * remaining;
+        openArea *= factor;
+        wetArea *= factor;
+    }
     double mass = .5 * (cells[leftCell][CELL_MASS] + cells[rightCell][CELL_MASS]), velocity = openArea > 0 && mass > 0 ? (axis == 0   ? momentumX[localFace]
                                                                                   : axis == 1 ? momentumY[localFace]
                                                                                               : momentumZ[localFace]) /

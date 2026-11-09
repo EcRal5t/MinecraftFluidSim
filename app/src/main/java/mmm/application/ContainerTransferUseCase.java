@@ -21,6 +21,10 @@ public final class ContainerTransferUseCase {
 		if (invalid == null) invalid = validateProfile(command.sourceItem(), command.expectedProfileFingerprint());
 		if (invalid != null) return Result.rejected(command, invalid);
 
+		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS && command.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE) {
+			if (!command.regionHasThermalState()) return Result.rejected(command, "气体转移需要热区域");
+			return coordinator.execute(new Plan(command, 0.0));
+		}
 		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
 			if (!command.regionHasThermalState() || command.actor().kind() != mmm.transfer.ContainerTransferActor.Kind.PLAYER_HAND
 					|| command.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE
@@ -83,7 +87,7 @@ public final class ContainerTransferUseCase {
 		return switch (item.kind()) {
 			case WATER_BUCKET -> mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK;
 			case PARTIAL, MATERIAL_BUCKET, CHEMICAL_BUCKET -> item.nanos();
-			case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER,
+			case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, EMPTY_GAS_CONTAINER, GAS_CONTAINER,
 					GRANULAR_CONTAINER, CREATIVE_SOURCE ->
 					throw new IllegalArgumentException("Thermal source item has no liquid inventory");
 		};

@@ -54,6 +54,8 @@ public final class FieldProbeItem extends Item {
 		if (!(context.getLevel() instanceof ServerLevel level)
 				|| !(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
 		var runtime=MmmRuntimeRegistry.require(level.getServer());
+		boolean surface=runtime.finiteHeatExchangers().inspectSurface(player,context.getClickedPos());
+		if(runtime.industrial().probe(player,context.getClickedPos())||surface)return InteractionResult.SUCCESS_SERVER;
 		var waterHit=getPlayerPOVHitResult(level,player,net.minecraft.world.level.ClipContext.Fluid.SOURCE_ONLY);
 		var poolHit=waterHit.getType()==net.minecraft.world.phys.HitResult.Type.BLOCK
 				&& level.getBlockState(waterHit.getBlockPos()).is(net.minecraft.world.level.block.Blocks.WATER)

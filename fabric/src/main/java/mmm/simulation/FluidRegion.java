@@ -271,6 +271,7 @@ public final class FluidRegion {
 	int solidMicroMask(int x,int y,int z) {
 		var device=deviceState(); return device==null?editableHost().solidMicroMask(x,y,z):device.fixedGeometry().mask(grid().cell(x,y,z));
 	}
+	mmm.fluid.FixedGeometrySnapshot fixedGeometry() { var device=deviceState();return device==null?editableHost().captureAuthoritativeState().fixedGeometry():device.fixedGeometry(); }
 	double fixedOpenVolume() { var device=deviceState(); return device==null?editableHost().fixedOpenVolumeExact():device.fixedGeometry().totalOpenCellVolume(); }
 	boolean worldCellAvailable(int cell) { return worldAvailability==null ? deviceResident() || editableHost().worldCellAvailable(cell) : worldAvailability[cell]; }
 	boolean allWorldCellsAvailable() {
@@ -380,6 +381,8 @@ public final class FluidRegion {
 	mmm.fluid.FluidDomainContracts.BodyFluidSample sampleBody(double x0,double y0,double z0,double x1,double y1,double z1) {
 		var device=deviceState(); return device==null?editableHost().sampleAxisAlignedBody(x0,y0,z0,x1,y1,z1):device.sampleBody(x0,y0,z0,x1,y1,z1);
 	}
+	double observeLiquidFlow(int[] faces) { var device=deviceState();return device==null?0:device.observeLiquidFlow(faces); }
+	double observeGasFlow(int[] faces) { var device=deviceState();return device==null?0:device.observeGasFlow(faces); }
 	mmm.fluid.FluidCellInventoryView observeCellInventory(int x,int y,int z) {
         var device=deviceState();return device==null?editableHost().observeCellInventory(x,y,z):device.observeCellInventory(x,y,z);
     }
@@ -630,7 +633,7 @@ public final class FluidRegion {
 	boolean hasRemovableThermalDevices() {
 		var devices = currentFiniteDevices();
 		return devices != null && devices.devices().stream()
-				.anyMatch(device -> !device.providerId().equals(OrdinaryThermalWalls.PROVIDER));
+				.anyMatch(device -> !device.providerId().equals(OrdinaryThermalWalls.PROVIDER) || !device.surfaces().isEmpty());
 	}
 
 	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */

@@ -117,21 +117,34 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
 5. 日常查询与展示读取设备观察；checkpoint 和宿主编辑显式导出所需代次。
 
-普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
+普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。工业装置的世界建造与工艺验证共用同一方块标签、墙库存、端口与初始化规则；预热、冷却和表面装填按实际设备内能记入外部源汇。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
 
-管理员可用 `/mmm process feed <间隔tick>` 周期性执行主手容器事务，用 `/mmm process drive <秒数>` 启动对准格的有限时长往复驱动；`stop` 停止两者，`sample` 读取格内液体、气体和固体库存。周期投料按加载状态、玩家运行意图与区域可用性调度，静水休眠时继续接受到期投料；容器事务唤醒物理计算。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击按当前维度与方块位置停止对应驱动。驱动使用规定运动的共同压力、黏性和外功结算。工艺配置按区域保存，区域移除时清除；物理状态由常规 checkpoint 恢复。
+物料箱保存九个有限批次，液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和回执提交；取样组成来自接触格。空批次接收对应物相，兼容批次合并组成与内能，满箱和断料保持配置等待。暂停与卸载保留运行意图，到期供料唤醒休眠区域。物料箱面板选择批次，手持实际容器点击交换所选批次。
+
+阀门的五档开度转换为共享 VoxelShape，固定碰撞编辑负责占容和物料交接。红石信号的目标开度在碰撞事务成功后提交；区域暂不可用或占容受阻时，方块按当前信号继续尝试，直至动作完成或信号改变。传感器从已提交状态读取指定格域的液位、温度、压力或截面流量；流量按实际接受面量和对应仿真步时长派生。阈值与滞环或连续映射产生 0—15 红石输出。探针打开方块原生配置面板，设置随方块实体保存。
+
+筛网按实际网格面保存孔径与开孔率，液气通流和颗粒运动读取同一面配置。活动颗粒碰到筛面时按材料的一次粒径决定穿过或截留，截留库存进入上游床层；床层沿坡面滑移与沉降时也按同一筛孔限制跨面移动。床层占容影响通流，接口从实际接触格取出滤渣，筛网随方块刷新、转向与拆除更新。
+
+管理员使用 `/mmm process drive <秒数>` 启动对准格的规定往复驱动，`stop` 停止驱动，`sample` 读取局部库存。机械驱动器方块安装在区域外壳，点击后沿所点面的法线驱动内部构件，潜行点击停止。驱动配置按区域保存，运动、压力作用和外功沿共同候选结算。
 
 区域按同代物理连通关系划分活动组：开放格面、局部气体、颗粒接触范围、实体扫掠范围和有限热设备端口共同决定分组。缺失区块使关联组暂停，其余组沿同一设备候选继续推进；暂停组保留库存、内能、动量和未决相变任务。详见[运行时](runtime-and-lifecycle.md)。
 
-实体输入先采集全部目标姿态并合并扫掠分组，再筛选可执行请求及检查设备请求预算；受阻实体保留旧占位。位移历史按维度与实体 UUID 保存，进入新维度后的首次观测采用零规定速度。实体可用性按包围盒实际占据的半开单元范围检查，贴面接触保持相邻组独立。宿主快照及编辑候选使用区域当前有效组可用性，容器预览与执行共用该状态，待位移相变按操作涉及的可用物理组检查，暂停组任务保留。卸载清理同代设备库存、端口和派生缓存，恢复从已发布 checkpoint 重建。区域 tick 的设备访问统一处理设备失效，暂停并清理未发布实体响应，保留 HEAD/WAL 恢复路径。
+世界方块变更唤醒相邻区域并刷新实际碰撞与热墙。活塞机座与运动头按完整方块表达，被推动方块采用实际形状；运动部件采集逐步姿态与表面速度，结束后把占容及有限墙库存交回静态几何。实体输入合并扫掠分组，按实际占据的半开单元范围检查可用性和设备预算；受阻实体保留旧占位，贴面接触保持相邻组独立。
+
+接触速度包括平动和绕作用中心的转动。压力与黏性作用产生冲量、力矩和对应功；有限轴向惯量参与共同压力响应，规定运动按实际作用结算外功。位移历史按维度与实体 UUID 保存，进入新维度后的首次观测采用零规定速度。
+
+宿主快照及编辑候选使用区域当前有效组可用性，容器预览与执行共用该状态；待位移相变按涉及的物理组检查，暂停组任务保留。卸载清理同代设备库存、端口和派生缓存，恢复从已发布 checkpoint 重建。区域 tick 统一处理设备失效，暂停并清理未发布实体响应，保留 HEAD/WAL 恢复路径。
 
 主要入口：
 
 - [MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java)、[MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)：世界服务、设备和 tick。
 - [PhysicalActivityGraph](../../solver/src/main/java/mmm/fluid/PhysicalActivityGraph.java)、[VulkanLiquidWorkspace](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspace.java)：同代物理分组和设备活动输入。
-- [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)：区块可用性、碰撞和实体输入。
+- [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftWorldUpdates](../../fabric/src/main/java/mmm/simulation/MinecraftWorldUpdates.java)：区块可用性、世界碰撞、活塞运动和实体输入。
 - [OrdinaryThermalWalls](../../fabric/src/main/java/mmm/simulation/OrdinaryThermalWalls.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
-- [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：周期投料、规定运动、取样及工艺配置恢复。
+- [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、取样及驱动配置恢复。
+- [IndustrialOperations](../../fabric/src/main/java/mmm/simulation/IndustrialOperations.java)、[IndustrialDialogs](../../fabric/src/main/java/mmm/simulation/IndustrialDialogs.java)：物料箱、端口调度、阀门占容、传感器与原生交互面板。
+- [MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)、[GasContents](../../model/src/main/java/mmm/transfer/GasContents.java)：有限批次与气体载荷。
+- [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)、[IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：共享三维方块布局、有限墙初始化与工艺验证。
 - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交；[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 的 `manualStep` 负责原生单步输入和实体响应，失败采用共同暂停分类。
 - [FluidRegion](../../fabric/src/main/java/mmm/simulation/FluidRegion.java)：已提交代、`hostSnapshot`、`beginHostEdit/commitHostEdit` 和设备候选采用。
 - [VulkanFluidSolverBackend](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidSolverBackend.java)、[VulkanFluidStateCodec](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidStateCodec.java)：设备请求、导入与导出。
@@ -142,6 +155,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 设备准备同代固定几何、相占据与物性，以共享有限应变冲量结算黏性，再计算力和一个有界批次的半隐式共同压力。上风开放微盒与液面平面裁剪扫掠需求，两相按有限驻留时间接受出流，共同面速度由实际接受量确定。库存、MAC 动量、气体压缩功和机械热沿这份量交接；局部状态方程按后继库存确定占容和压力。移动固体排水需要细分时按请求时段插值，普通流体推进保持一次完整步。
 
 导热、反应和相变按完整请求时长执行，热与传质共用输运后的接触几何。导热按实际组成的有限热容和接触热导计算成对热量，两端使用相同接受量，有限墙与流体共用这一规则；高刚性接触会减慢趋近平衡的速度。机械能结算后交接目标面数据，使扩散的面惯量与动量保持同代。阶段间更新组成、温度和局部状态方程，提交前统一重建相形状。相转换共用液相候选行，各算子保存实际物料及能量账；气液接触将局部提案与实际交换合并录制。独立热步使用同一候选与提交协议，相变产生的待位移状态交给后续力学处理。算法和尺度限制见[流体求解](fluid-solver.md)、[气体](gas-state.md)和[热学](thermal-state.md)。
+
+固定表面附着在有限墙的指定面，表面材料、装填量、吸附物与分数量子进度随设备库存和物品事务交接。气体接触按实际开放面积、有限位点和局部分压交换物种，实际质量、动量与内能进入共同候选；墙与涂层、吸附物共享总内能和温度。催化表面按液体实际接触面积等比例改变已有反应的正逆速率，继续使用共同的反应物竞争与热结算。筛面接触使用筛实体面积，普通墙使用实际接触面。
 
 候选代保留权威库存、未决计算、物性表和可复用几何。状态方程保存与步长无关的压力顺应性，压力装配时应用当前时长；宿主导入和实体几何变化重新准备相应派生状态。`VulkanBufferCopyPlan` 并行交接明确的持久字段，压力、输运与热接触复用绑定当前布局和缓冲区的命令模板。颗粒调度读取本次候选的实际颗粒与床层计数：空库存完成必要快照及账目初始化后进入共同输运，有库存时执行运动和床层转换。相变生成的颗粒随后继代进入同一流程。复制计划和命令资源随工作区释放，已提交库存及失败候选保持原子代次隔离。
 
@@ -158,8 +173,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [VulkanMixtureFlux](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixtureFlux.java)、[mixture-flux.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/mixture-flux.comp)：按两相有限驻留时间接受实际面量，并为关闭格沿开放面完成库存扫掠；纯气体关闭格可沿开放外界面排气，速度、液气通量与实际交接使用同一结果。[VulkanLocalGasTransport](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLocalGasTransport.java) 保存逐格气体的实际面转移、外界源汇及环境压力功。
 - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMaterialRoutes.java)、[VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGather.java)、[VulkanLiquidMomentum](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMomentum.java)：物质输运、归并及动量。
 - [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMechanicalEnergy.java)：液气与颗粒的共同机械能结算；外侧面混合热按实际质量分配，连通体沿真实外排气路完全排空后将剩余机械能记入环境交换。
-- [VulkanGranularMotion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularMotion.java)：颗粒运动；气体占容随共同局部状态更新。
+- [VulkanGranularMotion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularMotion.java)、[VulkanGranularTransitions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularTransitions.java)：颗粒运动、筛面截留与床层迁移；气体占容随共同局部状态更新。
 - [VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)、[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：实际组成的热载体、接触热导、成对有限热交换与反应。
+- [FixedSurfaceState](../../model/src/main/java/mmm/thermal/FixedSurfaceState.java)、[SurfaceMaterialDefinition](../../model/src/main/java/mmm/thermal/SurfaceMaterialDefinition.java)、[SurfaceThermalState](../../model/src/main/java/mmm/thermal/SurfaceThermalState.java)：固定表面库存、数据定义与有限墙温度；[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java) 结算实际吸附与解吸，[VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java) 应用接触催化。
 - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidThermodynamics.java)、[liquid-caloric-state.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-caloric-state.glsl)：液体混合热容和分段温度反演，供库存与扩散携能共用。
 - [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasThermodynamics.java)、[gas-thermodynamics.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp)：气体组成物性和分段温度反演；组成改变时完整求值，纯内能变化复用当前热容段，跨段时执行相同的完整求值。
 - [VulkanLiquidDiffusion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidDiffusion.java)、[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java)：同相扩散，以及 Henry 与多挥发组分共用的有限速率气液交换。

@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.spatial.SpatialGrid;
+import java.util.List;
 
 /** Immutable fixed collision masks, cell capacities, face apertures and solid-wall areas. */
 public final class FixedGeometrySnapshot {
@@ -10,11 +11,19 @@ public final class FixedGeometrySnapshot {
 	private volatile FaceIncidence faceIncidence;
 	private final float[] openCellVolume;
 	private final float[][] openFaces, solidWallArea;
+	private final List<ScreenFace> screens;
 
-	private FixedGeometrySnapshot(SpatialGrid grid,byte[] masks) {
+	private FixedGeometrySnapshot(SpatialGrid grid,byte[] masks,List<ScreenFace> screens) {
 		if(grid==null||masks==null||masks.length!=grid.cellCount())
 			throw new IllegalArgumentException("Fixed collision geometry shape differs");
 		this.grid=grid;occupancy=masks;
+		var ordered = new java.util.TreeMap<Integer, ScreenFace>();
+		for (var screen : screens) {
+			if (screen.face() >= grid.faceCount() || grid.faceLeft(screen.face()) < 0 || grid.faceRight(screen.face()) < 0
+					|| ordered.put(screen.face(), screen) != null)
+				throw new IllegalArgumentException("Invalid or duplicate screen face");
+		}
+		this.screens = List.copyOf(ordered.values());
 		openCellVolume=new float[grid.cellCount()];openFaces=new float[3][];solidWallArea=new float[3][];
 		for(int axis=0;axis<3;axis++){openFaces[axis]=new float[grid.faceCount(axis)];solidWallArea[axis]=new float[grid.cellCount()];}
 		double total=0;
@@ -24,6 +33,7 @@ public final class FixedGeometrySnapshot {
 		totalOpenCellVolume=total;buildFaces();
 	}
 	public SpatialGrid grid(){return grid;}
+	public List<ScreenFace> screens(){return screens;}
 	public double totalOpenCellVolume(){return totalOpenCellVolume;}
 	FaceIncidence faceIncidence(){
 		var prepared=faceIncidence;
@@ -49,9 +59,13 @@ public final class FixedGeometrySnapshot {
 	}
 	public static FixedGeometrySnapshot fromMasks(int x,int y,int z,byte[] masks){return fromMasks(SpatialGrid.rectangular(x,y,z),masks);}
 	public static FixedGeometrySnapshot fromMasks(SpatialGrid grid,byte[] masks){
-		if(masks==null)throw new IllegalArgumentException("Fixed collision masks are missing");return new FixedGeometrySnapshot(grid,masks.clone());
+		return fromMasks(grid,masks,List.of());
 	}
-	static FixedGeometrySnapshot takeMasks(SpatialGrid grid,byte[] masks){return new FixedGeometrySnapshot(grid,masks);}
+	public static FixedGeometrySnapshot fromMasks(SpatialGrid grid,byte[] masks,List<ScreenFace> screens){
+		if(masks==null)throw new IllegalArgumentException("Fixed collision masks are missing");return new FixedGeometrySnapshot(grid,masks.clone(),screens);
+	}
+	static FixedGeometrySnapshot takeMasks(SpatialGrid grid,byte[] masks,List<ScreenFace> screens){return new FixedGeometrySnapshot(grid,masks,screens);}
+	static FixedGeometrySnapshot takeMasks(SpatialGrid grid,byte[] masks){return takeMasks(grid,masks,List.of());}
 	static FixedGeometrySnapshot takeMasks(int x,int y,int z,byte[] masks){return takeMasks(SpatialGrid.rectangular(x,y,z),masks);}
 	public boolean matchesShape(int x,int y,int z){return grid.sizeX()==x&&grid.sizeY()==y&&grid.sizeZ()==z;}
 	public int cellCount(){return occupancy.length;}

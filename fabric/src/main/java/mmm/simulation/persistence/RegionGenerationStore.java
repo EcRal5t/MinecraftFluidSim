@@ -310,6 +310,13 @@ public final class RegionGenerationStore {
 		return activeStore.readManifest(region, headStore.read(region, id));
 	}
 
+	public mmm.thermal.FiniteThermalDeviceInventory readFiniteDevices(UUID id, ThermalRegistry registry) throws IOException {
+        for(var extension:readManifest(id).extensions())
+            if(extension.type().equals(FiniteThermalDeviceCodec.MANIFEST_EXTENSION))
+                return new FiniteThermalDeviceCodec().decode(extension.payload(),registry);
+        return mmm.thermal.FiniteThermalDeviceInventory.empty(registry.fingerprint());
+    }
+
 	public RegionState read(UUID id) throws IOException {
 		Path region = regionPath(id);
 		return activeStore.readGeneration(region, headStore.read(region, id));

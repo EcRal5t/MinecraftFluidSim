@@ -22,6 +22,7 @@ final class FlipCutCellGeometry {
 	private final SpatialGrid grid;
 	private FixedGeometrySnapshot layout;
 	private byte[] writableMasks;
+	private java.util.List<ScreenFace> screens = java.util.List.of();
 
 	FlipCutCellGeometry(int sizeX,int sizeY,int sizeZ) {
 		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ));
@@ -33,14 +34,22 @@ final class FlipCutCellGeometry {
 
 	FixedGeometrySnapshot snapshot() {
 		if(layout==null){
-			layout=FixedGeometrySnapshot.takeMasks(grid,writableMasks==null?new byte[cellCount]:writableMasks);
+			layout=FixedGeometrySnapshot.takeMasks(grid,writableMasks==null?new byte[cellCount]:writableMasks,screens);
 			writableMasks=null;
 		}
 		return layout;
 	}
 	void restoreSnapshot(FixedGeometrySnapshot snapshot) {
 		if(snapshot==null||!snapshot.grid().equals(grid))throw new IllegalArgumentException("Fixed collision geometry shape differs");
-		layout=snapshot;writableMasks=null;
+		layout=snapshot;writableMasks=null;screens=snapshot.screens();
+	}
+	void setScreen(int face, ScreenFace screen) {
+		var next = new java.util.ArrayList<>(screens);
+		next.removeIf(value -> value.face() == face);
+		if (screen != null) next.add(screen);
+		var current = snapshot();
+		layout = FixedGeometrySnapshot.fromMasks(grid, current.copyMasks(), next);
+		screens = layout.screens();
 	}
 
 	boolean matchesShape(int x, int y, int z) { return sizeX == x && sizeY == y && sizeZ == z; }

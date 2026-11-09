@@ -49,8 +49,11 @@ final class LiquidCollisionEdit {
 			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
 			var source = domain.liquidCells.stocksInCell(cell);
 			var components = LiquidCellInventory.connectedSupports(edit.mask());
-			var capacities = CellRemapMicroTopology.capacities(edit.mask(), SignedDyadic.of(Integer.bitCount(~edit.mask() & 255), -3)
-					.subtract(SignedDyadic.of(occupied[cell], -24)));
+			var futurePore = SignedDyadic.of(Integer.bitCount(~edit.mask() & 255), -3)
+					.subtract(SignedDyadic.of(occupied[cell], -24));
+			if (futurePore.signum() < 0)
+				throw new FluidDomainContracts.CollisionEditBlockedException("Fixed geometry overlaps an occupied moving body", null);
+			var capacities = CellRemapMicroTopology.capacities(edit.mask(), futurePore);
 			var proposed = new SignedDyadic[source.size()][components.size()];
 			for (int i = 0; i < source.size(); i++) {
 				if (!components.isEmpty()) proposed[i][0] = source.get(i).volume();

@@ -12,6 +12,7 @@ layout(binding = 1, std430) buffer Errors {
 layout(binding = 2, std430) buffer AtomicArena {
     int64_t integers[];
 };
+// SPATIAL_GRID
 layout(push_constant) uniform Params {
     int header;
     int stage;
@@ -24,6 +25,7 @@ p;
 shared int64_t initializedQuanta[128];
 bool activeCell(int cell);
 // HOST_LAYOUT
+// PLIC_FACE_LIBRARY
 const uint ERROR_INVALID_STATE = 268435456u;
 const double MASS_UNIT_KG = 1e-10;
 const int STAGE_INITIALIZE = 0;
@@ -311,6 +313,37 @@ double temperatureFor(int begin, int end, double energy, double coldEnergy) {
     }
 }
 int ruleAt(int index) { return definitionDataWord(definitionWord(5) + 2 * index + 1); }
+double catalystMultiplier(int cell,int supportMask,int ruleIndex) {
+    int count=headerWord(H_CATALYST_COUNT);if(count==0)return 1.0LF;
+    int mask=int(words[headerWord(H_FIXED_MASKS)+cell]),open=(~mask)&255,boxes=bitCount(uint(open));
+    if(boxes==0)return 1.0LF;
+    int cellBase=headerWord(H_PLIC_CELLS)+8*cell;
+    double fill=readDouble(cellBase+6);if(fill<=0.0LF)return 1.0LF;
+    double porosity=readDouble(cellBase+4)/(.125LF*double(boxes));
+    int planeAt=headerWord(H_PLIC_PLANES)+8*cell;
+    dvec4 plane=dvec4(readDouble(planeAt),readDouble(planeAt+2),readDouble(planeAt+4),readDouble(planeAt+6));
+    int eligible=supportMask==0?open:(supportMask&open);
+    double multiplier=1.0LF;
+    for(int port=0;port<int(words[headerWord(H_PORT_COUNTS)]);port++){
+        if(int(words[headerWord(H_PORT_CELL)+port])!=cell)continue;
+        int device=int(words[headerWord(H_PORT_DEVICE)+port]),direction=int(words[headerWord(H_PORT_DIRECTION)+port]);
+        int axis=direction/2,side=direction&1,a=(axis+1)%3,b=(axis+2)%3;double area=0.0LF;
+        for(int i=0;i<2;i++)for(int j=0;j<2;j++){
+            int bit=(side<<axis)|(i<<a)|(j<<b);if((eligible&(1<<bit))==0)continue;
+            dvec2 lo=dvec2(.5LF*double(i),.5LF*double(j)),hi=lo+dvec2(.5LF);
+            if(fill<1.0LF&&!plicContactRect(plane,axis,double(side),true,lo,hi))continue;
+            area+=max(0.0LF,hi.x-lo.x)*max(0.0LF,hi.y-lo.y);
+        }
+        area*=porosity;
+        if(headerWord(H_SCREEN_FACES)>=0){int face=gridFace(cell,direction);if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;
+            if(readDouble(screen)>0.0LF)area*=1.0LF-clamp(readDouble(screen+2),0.0LF,1.0LF);}}
+        for(int i=0;i<count;i++){int at=headerWord(H_CATALYSTS)+6*i;
+            if(int(words[at])==device&&int(words[at+1])==direction&&int(words[at+2])==ruleIndex)
+                multiplier+=area*readDouble(at+4);
+        }
+    }
+    return multiplier;
+}
 int coefficient(int rule, int side, int species) {
     int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
     for (int t = 0; t < count; t++) if (definitionDataWord(start + 2 * t) == species) return definitionDataWord(start + 2 * t + 1);
@@ -448,7 +481,7 @@ void cell(int c) {
             if (same(first, r))
                 previousCold += rowCold(r);
         double otherCold = coldEnergy - previousCold;
-        double proposals[REACTION_WORKSPACE], residual[REACTION_WORKSPACE];
+        double proposals[REACTION_WORKSPACE], residual[REACTION_WORKSPACE], catalyticFactors[REACTION_WORKSPACE];
         int pendingRows[REACTION_WORKSPACE];
         double volume = 0.0;
         for (int r = first; r < end; r++) if (same(first,r))
@@ -457,6 +490,7 @@ void cell(int c) {
         int finiteOrdinal=0;
         for (int i = 0; i < ruleCount; i++) {
             pendingRows[i] = -1; residual[i] = 0.0LF;
+            catalyticFactors[i] = catalystMultiplier(c,support(first),i);
             int rule = ruleAt(i);
             if (definitionDataWord(rule + 1) == 2) {
                 if (definitionDataWord(rule) == phase(first)) {
@@ -479,7 +513,7 @@ void cell(int c) {
                 bool finiteRate = definitionDataWord(rule + 1) == 2;
                 double proposal;
                 if (finiteRate) {
-                    double forward = rate(rule,0,volume,temperature,amounts), reverse = rate(rule,1,volume,temperature,amounts);
+                    double forward = catalyticFactors[i]*rate(rule,0,volume,temperature,amounts), reverse = catalyticFactors[i]*rate(rule,1,volume,temperature,amounts);
                     double slope = derivative(rule,0,forward,amounts) - derivative(rule,1,reverse,amounts);
                     double dt = p.duration / 8.0LF;
                     proposal = dt * (forward - reverse) / (1.0LF + dt * max(0.0LF,-slope)) + residual[i];

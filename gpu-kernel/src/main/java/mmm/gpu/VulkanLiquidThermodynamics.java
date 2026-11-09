@@ -43,7 +43,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         SPECIES_HANDLES(28),
         SPECIES_AMOUNTS(29),
         SECONDARY_BEGIN(40),
-        SECONDARY_COUNTS(41),
+        SECONDARY_COUNTS(41), SURFACE_INTERCEPT(42), SURFACE_CAPACITY(43),
         MINIMUM_TEMPERATURE(44),
         AQUEOUS_MATERIAL(46), ETHANOL_SPECIES(47), ETHANOL_HEAT_CAPACITY(48), ETHANOL_MOLAR_MASS(50), ETHANOL_CONDUCTIVITY(52);
         final int word;
@@ -67,25 +67,27 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
 
     /** Both live ranges exclude reserved rows and source/sink audit inventories. */
     record Inventory(int rows,int countsWord,int secondaryBegin,int secondaryCountsWord,int cells,int cellOffsetsWord,
-                     int materialsWord,int massesWord,int energiesWord,int speciesOffsetsWord,int speciesHandlesWord,int speciesAmountsWord) {
+                     int materialsWord,int massesWord,int energiesWord,int speciesOffsetsWord,int speciesHandlesWord,int speciesAmountsWord,
+                     int surfaceInterceptWord,int surfaceCapacityWord) {
         static Inventory liquid(VulkanLiquidStateLayout layout){return new Inventory(layout.stockCapacity(),word(layout.column(VulkanLiquidStateLayout.Field.COUNTS)),
                 layout.stockCapacity(),-1,layout.cellCount(),word(layout.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS)),
                 word(layout.column(VulkanLiquidStateLayout.Field.MATERIALS)),word(layout.column(VulkanLiquidStateLayout.Field.MASS_UNITS)),
                 word(layout.column(VulkanLiquidStateLayout.Field.ENERGY_BITS)),word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS)),
-                word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_HANDLES)),word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS)));}
+                word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_HANDLES)),word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS)),-1,-1);}
         static Inventory granular(VulkanGranularStateLayout layout){return new Inventory(Math.addExact(layout.particleCapacity(),layout.depositCapacity()),
                 layout.word(VulkanGranularStateLayout.Field.COUNTS),layout.particleCapacity(),layout.word(VulkanGranularStateLayout.Field.COUNTS)+1,0,-1,
                 layout.word(VulkanGranularStateLayout.Field.MATERIAL),layout.word(VulkanGranularStateLayout.Field.MASS_UNITS),
                 layout.word(VulkanGranularStateLayout.Field.INTERNAL_ENERGY),layout.word(VulkanGranularStateLayout.Field.SPECIES_OFFSETS),
-                layout.word(VulkanGranularStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanGranularStateLayout.Field.SPECIES_AMOUNTS));}
+                layout.word(VulkanGranularStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanGranularStateLayout.Field.SPECIES_AMOUNTS),-1,-1);}
         static Inventory coherent(VulkanCoherentStateLayout layout){return new Inventory(layout.groupCapacity(),layout.word(VulkanCoherentStateLayout.Field.COUNTS),
                 layout.groupCapacity(),-1,0,-1,layout.word(VulkanCoherentStateLayout.Field.MATERIAL),layout.word(VulkanCoherentStateLayout.Field.MASS_UNITS),
                 layout.word(VulkanCoherentStateLayout.Field.INTERNAL_ENERGY),layout.word(VulkanCoherentStateLayout.Field.SPECIES_OFFSETS),
-                layout.word(VulkanCoherentStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanCoherentStateLayout.Field.SPECIES_AMOUNTS));}
+                layout.word(VulkanCoherentStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanCoherentStateLayout.Field.SPECIES_AMOUNTS),-1,-1);}
         static Inventory device(VulkanThermalDeviceLayout layout){return new Inventory(layout.deviceCapacity(),layout.word(VulkanThermalDeviceLayout.Field.COUNTS),
                 layout.deviceCapacity(),-1,0,-1,layout.word(VulkanThermalDeviceLayout.Field.MATERIAL),layout.word(VulkanThermalDeviceLayout.Field.MASS_UNITS),
                 layout.word(VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_OFFSETS),
-                layout.word(VulkanThermalDeviceLayout.Field.SPECIES_HANDLES),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_AMOUNTS));}
+                layout.word(VulkanThermalDeviceLayout.Field.SPECIES_HANDLES),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_AMOUNTS),
+                layout.word(VulkanThermalDeviceLayout.Field.SURFACE_ENERGY_INTERCEPT),layout.word(VulkanThermalDeviceLayout.Field.SURFACE_HEAT_CAPACITY));}
     }
     record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible,
                   int aqueousMaterial,int ethanolSpecies,double ethanolMolarMass,double ethanolHeatCapacity,double ethanolConductivity) {
@@ -137,6 +139,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
             data[Header.MASSES.word]=inventory.massesWord();data[Header.ENERGIES.word]=inventory.energiesWord();data[Header.SPECIES_OFFSETS.word]=inventory.speciesOffsetsWord();
             data[Header.SPECIES_HANDLES.word]=inventory.speciesHandlesWord();data[Header.SPECIES_AMOUNTS.word]=inventory.speciesAmountsWord();
             data[Header.SECONDARY_BEGIN.word]=inventory.secondaryBegin();data[Header.SECONDARY_COUNTS.word]=inventory.secondaryCountsWord();
+            data[Header.SURFACE_INTERCEPT.word]=inventory.surfaceInterceptWord();data[Header.SURFACE_CAPACITY.word]=inventory.surfaceCapacityWord();
             data[Header.AQUEOUS_MATERIAL.word]=tables.aqueousMaterial();data[Header.ETHANOL_SPECIES.word]=tables.ethanolSpecies();
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(4 * Header.MINIMUM_TEMPERATURE.word,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);out.putDouble(4 * Header.ETHANOL_HEAT_CAPACITY.word,tables.ethanolHeatCapacity());out.putDouble(4 * Header.ETHANOL_MOLAR_MASS.word,tables.ethanolMolarMass());out.putDouble(4 * Header.ETHANOL_CONDUCTIVITY.word,tables.ethanolConductivity());return out;
         }

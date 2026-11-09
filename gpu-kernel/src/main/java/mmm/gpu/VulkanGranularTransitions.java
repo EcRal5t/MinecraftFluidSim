@@ -36,7 +36,7 @@ final class VulkanGranularTransitions implements AutoCloseable {
         GEOMETRY_OFFSETS(17),
         GEOMETRY_ENTRIES(18),
         FIXED_SVQ(19),
-        ACTIVITY_CELLS(20);
+        ACTIVITY_CELLS(20), SCREEN_CAPTURED(21), SCREEN_FACES(22);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -103,9 +103,11 @@ final class VulkanGranularTransitions implements AutoCloseable {
                     state.rowCapacity(),state.speciesCapacity(),state.definitions().materialIds().size(),state.definitions().speciesIds().size(),
                     hashSize,word(masks),word(cells),word(faces),word(viscosity),
                     word(liquid.column(VulkanLiquidStateLayout.Field.MOMENTUM_X)),word(liquid.column(VulkanLiquidStateLayout.Field.MOMENTUM_Z)),
-                    geometry.word(VulkanGranularGeometry.Field.OFFSETS),geometry.word(VulkanGranularGeometry.Field.ENTRIES),geometry.word(VulkanGranularGeometry.Field.FIXED_SVQ),-1};
+                    geometry.word(VulkanGranularGeometry.Field.OFFSETS),geometry.word(VulkanGranularGeometry.Field.ENTRIES),geometry.word(VulkanGranularGeometry.Field.FIXED_SVQ),-1,-1,-1};
         }
         void bindActivity(int cellWord) { inputs[Header.ACTIVITY_CELLS.word] = cellWord; }
+        void bindScreenCaptured(int word) { inputs[Header.SCREEN_CAPTURED.word] = word; }
+        void bindScreens(int word) { inputs[Header.SCREEN_FACES.word] = word; }
         VulkanLiquidStateLayout.Column column(Field f){return columns.get(f);}int word(Field f){return word(column(f));}
         int headerWord(){return word(header);}long endOffset(){return endOffset;}
         List<VulkanEnergyLedger.Stream> roundoffStreams(){

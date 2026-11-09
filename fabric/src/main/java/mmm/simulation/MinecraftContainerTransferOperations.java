@@ -380,6 +380,30 @@ final class MinecraftContainerTransferOperations {
 						100.0 * taken / SolidVolume.SVQ_PER_CUBIC_METER, planned[0].groups().size()), taken, carriedEnergy);
 	}
 
+	static TransferOutcome pourGas(CommittedWorldRegistries world, FluidRegion region, int[] cell, mmm.transfer.GasContents contents, long requested) {
+		var chemistry=world.hasCapability(WorldCapability.CHEMISTRY)?world.chemicalRegistry():null;
+		var thermal=new mmm.thermal.GasThermalModel(world.thermalRegistry(),world.gasRegistry());
+		var split=contents.split(Math.min(requested,contents.inventory().standardVolumeNanos()),world.gasRegistry(),chemistry,thermal);
+		var selected=split.selected();var domain=region.editableHost();int index=domain.grid().cell(cell[0],cell[1],cell[2]);
+		if(index<0)return new TransferOutcome(false,true,ContainerItemStacks.toStack(contents),"目标气格不可用");
+		var moved=domain.insertGas(index+1,selected.inventory(),selected.internalEnergy());
+		double remaining=split.remaining()==null?0:split.remaining().internalEnergy();
+		double coupled=SignedDyadic.of(contents.internalEnergy()).subtract(SignedDyadic.of(remaining)).toDouble();
+		domain.settleExternalContainerInsertion(selected.internalEnergy(),coupled);
+		ItemStack after=split.remaining()==null?new ItemStack(MmmItems.GAS_CONTAINER):ContainerItemStacks.toStack(split.remaining());
+		region.wakeForActivity();region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
+		return new TransferOutcome(true,true,after,"已注入气体",moved.moved().standardVolumeNanos(),coupled);
+	}
+	static TransferOutcome scoopGas(CommittedWorldRegistries world, FluidRegion region, int[] cell, long requested) {
+		var domain=region.editableHost();int index=domain.grid().cell(cell[0],cell[1],cell[2]);
+		if(index<0)return new TransferOutcome(false,false,new ItemStack(MmmItems.GAS_CONTAINER),"目标气格不可用");
+		var moved=domain.editGas(index+1,null,requested,0,true);
+		if(moved.moved().isEmpty())return new TransferOutcome(false,false,new ItemStack(MmmItems.GAS_CONTAINER),"目标气格没有气体");
+		var contents=new mmm.transfer.GasContents(world.gasRegistry().fingerprint(),world.hasCapability(WorldCapability.CHEMISTRY)?world.chemicalRegistry().fingerprint():"",moved.moved(),moved.internalEnergy().toDouble());
+		region.wakeForActivity();region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
+		return new TransferOutcome(true,false,ContainerItemStacks.toStack(contents),"已装取气体",moved.moved().standardVolumeNanos(),contents.internalEnergy());
+	}
+
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
 	static FluidMixture mixtureFromExtraction(
 			HostFluidState domain, java.util.List<FluidDomainContracts.MaterialPortion> portions, long capacityNanos
@@ -477,12 +501,21 @@ final class MinecraftContainerTransferOperations {
 		MATERIAL_SCOOP,
 		GRANULAR_POUR,
 		GRANULAR_SCOOP
+		, GAS_POUR, GAS_SCOOP
+	}
+	static mmm.api.transfer.TransferQuantity contactQuantity(TransferKind kind) {
+		return switch(kind) {
+			case GAS_POUR, GAS_SCOOP -> new mmm.api.transfer.TransferQuantity.Gas(1,0);
+			case GRANULAR_POUR, GRANULAR_SCOOP -> new mmm.api.transfer.TransferQuantity.Granular(1);
+			default -> new mmm.api.transfer.TransferQuantity.Liquid(1,java.util.OptionalDouble.empty());
+		};
 	}
 
 	static String thermalTransferFailure(
 			CommittedWorldRegistries world, FluidRegion region, ItemStack stack, TransferKind kind
 	) {
 		if (kind == TransferKind.NONE) return null;
+		if (kind == TransferKind.GAS_POUR || kind == TransferKind.GAS_SCOOP) return region.hasThermalState()?null:"气体转移需要热区域";
 		ThermalContents contents;
 		try {
 			contents = ContainerItemStacks.thermalContents(stack);
@@ -510,6 +543,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static TransferKind classify(ItemStack stack) {
+		if (stack.getItem() instanceof mmm.item.GasContainerItem) return mmm.item.GasContainerItem.isEmpty(stack) ? TransferKind.GAS_SCOOP : TransferKind.GAS_POUR;
 		if (stack.is(Items.WATER_BUCKET)) return TransferKind.POUR;
 		if (stack.is(Items.BUCKET)) return TransferKind.SCOOP;
 		if (stack.getItem() instanceof PartialWaterBucketItem) {

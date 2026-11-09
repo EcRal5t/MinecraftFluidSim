@@ -254,10 +254,20 @@ public final class FluidRegionLifecycleValidation {
 				new BlockPos(1,64,2),net.minecraft.core.Direction.NORTH,mmm.network.DemoPreset.CHEMISTRY,true);
 		new DemoWorkbenchStore(root).save(List.of(entry));
 		java.nio.file.Files.copy(root.resolve("mmm/demo-workbench.nbt"),root.resolve("mmm/demo-workbench.nbt.tmp"));
+		var address=new mmm.api.transfer.BlockInventoryAddress("minecraft:overworld",2,64,2,0);
+		var binding=new mmm.simulation.persistence.PublicTransferReceiptStore.Binding(address.actorRef(),address,UUID.randomUUID());
+		new mmm.simulation.persistence.PublicTransferReceiptStore(root).bind(binding);
+		java.nio.file.Files.createDirectories(root.resolve("mmm/device-transfer"));
+		var driveRegion=UUID.randomUUID();var drive=new MinecraftProcessOperations.Drive(0,200,1,1,1,.5,0,null);
+		new MinecraftProcessOperations(root,new FluidRegionManager(initial.config().limits()),null,initial).setDrive(driveRegion,drive);
+		java.nio.file.Files.copy(root.resolve("mmm/processes.properties"),root.resolve("mmm/processes.properties.tmp"));
 		var reopened=WorldStartupCoordinator.start(root,()->definitions);
 		require(reopened.authoritativeWritesReady()&&new DemoWorkbenchStore(root).loadAll().equals(List.of(entry)),
 				"Existing demo metadata blocked the committed world on restart: " + reopened);
 		var manager=new FluidRegionManager(reopened.config().limits());
+		require(new mmm.simulation.persistence.PublicTransferReceiptStore(root).binding(binding.actor()).equals(binding)
+				&&new MinecraftProcessOperations(root,manager,null,reopened).drive(driveRegion).equals(drive),
+				"Industrial actor binding or drive configuration did not survive world restart");
 		var operations=new FluidRegionOperations(root,manager,reopened);
 		require(!operations.creationLocked(),"Reopened demo world was unexpectedly locked");
 		var lockedRoot=java.nio.file.Files.createTempDirectory("mmm-locked-world-start-");

@@ -16,15 +16,62 @@ import java.util.List;
 public final class ContainerItemStacks {
 	private ContainerItemStacks() { }
 
+	/** Combines compatible resting batches while retaining each integer material ledger. */
+	public static ItemStack merge(ItemStack first,ItemStack second) {
+		ItemStack result;
+		if(MaterialBucketItem.isEmptyMaterialBucket(first)||GranularContainerItem.isEmpty(first)||GasContainerItem.isEmpty(first))return second;
+		if(first.getItem() instanceof GasContainerItem && second.getItem() instanceof GasContainerItem) {
+			var a=GasContainerItem.contents(first);var b=GasContainerItem.contents(second);
+			if(a==null||b==null||!a.gasRegistryFingerprint().equals(b.gasRegistryFingerprint())||!a.chemicalRegistryFingerprint().equals(b.chemicalRegistryFingerprint()))throw new IllegalArgumentException("气体批次定义不同");
+			return bindProfile(toStack(new mmm.transfer.GasContents(a.gasRegistryFingerprint(),a.chemicalRegistryFingerprint(),a.inventory().merge(b.inventory()),a.internalEnergy()+b.internalEnergy())),profileFingerprint(first));
+		}
+		if(first.get(MmmComponents.CHEMICAL_CONTENTS)!=null&&second.get(MmmComponents.CHEMICAL_CONTENTS)!=null){
+			var a=ChemicalContents.decode(first.get(MmmComponents.CHEMICAL_CONTENTS));var b=ChemicalContents.decode(second.get(MmmComponents.CHEMICAL_CONTENTS));
+			if(!a.registryFingerprint().equals(b.registryFingerprint()))throw new IllegalArgumentException("批次材料定义不同");
+			var groups=new java.util.TreeMap<String,ChemicalContents.Group>();
+			for(var g:a.groups())groups.put(g.materialId(),g);
+			for(var g:b.groups())groups.merge(g.materialId(),g,(x,y)->{
+				var amounts=new java.util.TreeMap<String,Long>();
+				for(var v:x.species())amounts.put(v.speciesId(),v.amountQuanta());
+				for(var v:y.species())amounts.merge(v.speciesId(),v.amountQuanta(),Math::addExact);
+				return new ChemicalContents.Group(x.materialId(),Math.addExact(x.volumeNanos(),y.volumeNanos()),Math.addExact(x.massUnits(),y.massUnits()),Math.addExact(x.massResidualUnits(),y.massResidualUnits()),amounts.entrySet().stream().map(v->new ChemicalContents.SpeciesAmount(v.getKey(),v.getValue())).toList());
+			});
+			result=toStack(new ChemicalContents(a.registryFingerprint(),a.quantaPerMol(),List.copyOf(groups.values())));
+		}else if(first.get(MmmComponents.GRANULAR_CONTENTS)!=null&&second.get(MmmComponents.GRANULAR_CONTENTS)!=null){
+			var a=GranularContents.decode(first.get(MmmComponents.GRANULAR_CONTENTS));var b=GranularContents.decode(second.get(MmmComponents.GRANULAR_CONTENTS));
+			if(!a.registryFingerprint().equals(b.registryFingerprint()))throw new IllegalArgumentException("批次材料定义不同");
+			var groups=new java.util.TreeMap<String,GranularContents.Group>();for(var g:a.groups())groups.put(g.materialId(),g);
+			for(var g:b.groups())groups.merge(g.materialId(),g,(x,y)->{
+				var amounts=new java.util.TreeMap<String,Long>();for(var v:x.composition())amounts.put(v.speciesId(),v.amountQuanta());for(var v:y.composition())amounts.merge(v.speciesId(),v.amountQuanta(),Math::addExact);
+				return new GranularContents.Group(x.materialId(),Math.addExact(x.solidVolumeSvq(),y.solidVolumeSvq()),Math.addExact(x.massUnits(),y.massUnits()),Math.addExact(x.massResidualUnits(),y.massResidualUnits()),amounts.entrySet().stream().map(v->new GranularContents.SpeciesAmount(v.getKey(),v.getValue())).toList());
+			});
+			result=toStack(new GranularContents(a.registryFingerprint(),a.svqPerCubicMeter(),List.copyOf(groups.values())));
+		}else{
+			var a=fluidMixture(first);var b=fluidMixture(second);if(a==null||b==null)throw new IllegalArgumentException("请选择相同物相的批次");
+			var parts=new java.util.TreeMap<String,FluidMixture.Component>();for(var c:a.components())parts.put(c.materialId(),c);
+			for(var c:b.components())parts.merge(c.materialId(),c,(x,y)->new FluidMixture.Component(x.materialId(),Math.addExact(x.volumeNanos(),y.volumeNanos()),Math.addExact(x.massUnits(),y.massUnits())));
+			result=toStack(new FluidMixture(List.copyOf(parts.values())));
+		}
+		var heatA=thermalContents(first);var heatB=thermalContents(second);
+		if(heatA!=null&&heatB!=null)attachThermal(result,heatA.registryFingerprint(),heatA.internalEnergy()+heatB.internalEnergy());
+		else if(heatA!=null||heatB!=null)throw new IllegalArgumentException("批次热状态不一致");
+		return bindProfile(result,profileFingerprint(first));
+	}
+
 	public static ItemStack bindProfile(ItemStack stack, String fingerprint) {
 		if (fingerprint == null || !fingerprint.matches("[0-9a-f]{64}")) {
 			throw new IllegalArgumentException("Container world profile fingerprint is invalid");
 		}
 		if (fluidMixture(stack) == null && stack.get(MmmComponents.CHEMICAL_CONTENTS) == null
-				&& stack.get(MmmComponents.GRANULAR_CONTENTS) == null) {
+				&& stack.get(MmmComponents.GRANULAR_CONTENTS) == null && stack.get(MmmComponents.GAS_CONTENTS) == null) {
 			throw new IllegalArgumentException("Only a filled typed container may bind a world profile");
 		}
 		stack.set(MmmComponents.PROFILE_FINGERPRINT, fingerprint);
+		return stack;
+	}
+	public static ItemStack toStack(mmm.transfer.GasContents contents) {
+		ItemStack stack = new ItemStack(MmmItems.GAS_CONTAINER);
+		stack.set(MmmComponents.GAS_CONTENTS, contents.encode());
 		return stack;
 	}
 

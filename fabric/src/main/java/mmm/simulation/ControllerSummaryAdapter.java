@@ -11,10 +11,8 @@ import mmm.granular.GranularLimits;
 import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.thermal.ThermalLimits;
 import mmm.thermal.ThermalRegistry;
-import mmm.thermal.ThermalStateFunction;
 import mmm.worldprofile.WorldCapabilityProfile;
 
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -137,12 +135,8 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 			if (thermalRegistry != null) {
 				var devices = region.finiteThermalDevices(thermalRegistry.fingerprint());
 				totalInternalEnergy += devices.exactInternalEnergy().toDouble();
-				ThermalStateFunction stateFunction = new ThermalStateFunction(thermalRegistry);
 				for (var device : devices.devices()) {
-					var body = device.body();
-					double temperature = stateFunction.stateForInternalEnergy(
-							thermalRegistry.materialHandle(body.thermalMaterialId()), body.massKilograms(),
-							Map.of(), body.internalEnergyJ()).temperatureK();
+					double temperature = mmm.thermal.SurfaceThermalState.temperature(thermalRegistry, device);
 					minimumTemperature = Math.min(minimumTemperature, temperature);
 					maximumTemperature = Math.max(maximumTemperature, temperature);
 				}

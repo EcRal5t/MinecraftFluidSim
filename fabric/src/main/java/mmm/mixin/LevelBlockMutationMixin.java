@@ -22,4 +22,13 @@ public abstract class LevelBlockMutationMixin {
 					|| !runtime.pools().allowsBlockChange(level,position,state))) callback.setReturnValue(false);
 		}
 	}
+	@Inject(method="setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;II)Z",at=@At("RETURN"))
+	private void mmm$recordWorldChange(BlockPos position,BlockState state,int flags,int recursion,
+			CallbackInfoReturnable<Boolean> callback) {
+		if (callback.getReturnValueZ() && (Object)this instanceof ServerLevel level) {
+			var runtime = MmmRuntimeRegistry.find(level.getServer());
+			if (runtime != null) runtime.worldUpdates().changed(level, position);
+		}
+	}
+
 }

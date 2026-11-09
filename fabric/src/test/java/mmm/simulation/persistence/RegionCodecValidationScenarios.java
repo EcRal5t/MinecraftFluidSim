@@ -210,7 +210,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			var prepared = new FiniteDeviceJournalStore.Journal(new UUID(401, operation), new UUID(409, 419),
 					"minecraft:overworld", new net.minecraft.core.BlockPos(-17, 64, 31).asLong(), 4, 5, -1,
 					mmm.recovery.CrossDomainRecovery.JournalPhase.PREPARED, placing, drop,
-					new UUID(421, 431), operation == 1, new UUID(433, operation), placing ? body : "", body, fingerprint);
+					new UUID(421, 431), operation == 1, new UUID(433, operation), placing ? body : "", body, fingerprint,null,null);
 			store.write(prepared);
 			Path temporary=root.resolve("mmm/device-transfer").resolve(prepared.operationId()+".nbt.tmp");
 			Files.writeString(temporary,"interrupted publication");

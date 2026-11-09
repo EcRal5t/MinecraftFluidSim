@@ -21,7 +21,7 @@ import java.util.ArrayList;
 final class FiniteThermalDeviceCodec {
 	static final String MANIFEST_EXTENSION = "mmm:finite_thermal_devices";
 	private static final int MAGIC = 0x52574644; // RWFD
-	private static final int FORMAT = 2;
+	private static final int FORMAT = 3;
 	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encode(FiniteThermalDeviceInventory inventory) throws IOException {
@@ -45,6 +45,7 @@ final class FiniteThermalDeviceCodec {
 				output.writeUTF(body.thermalMaterialId());
 				output.writeLong(body.massUnits());
 				output.writeLong(Double.doubleToRawLongBits(body.internalEnergyJ()));
+				mmm.thermal.FiniteThermalDeviceItemCodec.writeSurfaces(output, device.surfaces());
 			}
 		}
 		byte[] payload = bytes.toByteArray();
@@ -80,7 +81,8 @@ final class FiniteThermalDeviceCodec {
 				long mass = input.readLong();
 				double energy = Double.longBitsToDouble(input.readLong());
 				devices.add(new FiniteThermalDeviceState(providerId, objectId, deviceTypeId,
-						new FiniteThermalBodyState(generation, fingerprint, materialId, mass, energy)));
+						new FiniteThermalBodyState(generation, fingerprint, materialId, mass, energy),
+						mmm.thermal.FiniteThermalDeviceItemCodec.readSurfaces(input)));
 			}
 			if (input.read() != -1) throw new IOException("Trailing finite thermal device bytes");
 			FiniteThermalDeviceInventory inventory = new FiniteThermalDeviceInventory(fingerprint, devices, audit);

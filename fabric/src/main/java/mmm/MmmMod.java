@@ -42,6 +42,15 @@ public final class MmmMod implements ModInitializer {
 				MmmRuntimeRegistry.require(level.getServer()).finiteHeatExchangers().releaseCompletedDelivery(item);
 		});
 		PlayerBlockBreakEvents.BEFORE.register((level, player, position, state, blockEntity) -> {
+			if(level instanceof net.minecraft.server.level.ServerLevel inventoryLevel
+					&& blockEntity instanceof mmm.block.MaterialBoxBlockEntity box
+					&& MmmRuntimeRegistry.require(inventoryLevel.getServer()).industrial().boxTransferPending(inventoryLevel,box)){
+				player.sendSystemMessage(net.minecraft.network.chat.Component.literal("物料交接恢复中"));return false;
+			}
+			if(level instanceof net.minecraft.server.level.ServerLevel surfaceLevel
+					&& MmmRuntimeRegistry.require(surfaceLevel.getServer()).finiteHeatExchangers().hasSurfaceAt(surfaceLevel,position)){
+				player.sendSystemMessage(net.minecraft.network.chat.Component.literal("空手潜行点击表面，取回装填材料"));return false;
+			}
 			if (state.is(MmmBlocks.FINITE_HEAT_EXCHANGER)
 					&& player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
 				mmm.simulation.FiniteHeatExchangerOperations.breakDevice(serverPlayer, position);
@@ -53,6 +62,13 @@ public final class MmmMod implements ModInitializer {
 			player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
 					"message.mmm.controller.break_blocked"));
 			return false;
+		});
+		net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player,level,hand,hit)->{
+			if(player instanceof net.minecraft.server.level.ServerPlayer serverPlayer&&player.isShiftKeyDown()&&player.getItemInHand(hand).isEmpty()){
+				var devices=MmmRuntimeRegistry.require(serverPlayer.level().getServer()).finiteHeatExchangers();
+				if(devices.hasSurfaceAt(serverPlayer.level(),hit.getBlockPos()))return devices.surface(serverPlayer,hand,hit.getBlockPos(),hit.getDirection(),true);
+			}
+			return net.minecraft.world.InteractionResult.PASS;
 		});
 		ServerTickEvents.END_SERVER_TICK.register(server -> MmmRuntimeRegistry.require(server).tick(server));
 		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) ->
@@ -91,6 +107,10 @@ public final class MmmMod implements ModInitializer {
 			return result != null ? result : stack;
 		});
 		DispenserBlock.registerBehavior(MmmItems.GRANULAR_CONTAINER, (source, stack) -> {
+			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
+			return result != null ? result : stack;
+		});
+		DispenserBlock.registerBehavior(MmmItems.GAS_CONTAINER, (source, stack) -> {
 			ItemStack result = DispenserContainerTransferAdapter.handle(source, stack);
 			return result != null ? result : stack;
 		});

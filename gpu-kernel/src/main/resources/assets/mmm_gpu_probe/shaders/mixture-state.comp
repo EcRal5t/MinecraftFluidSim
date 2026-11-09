@@ -6,6 +6,7 @@ layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Push { int header; int count; int unused; uint hLow; uint hHigh; } p;
 // HOST_LAYOUT
 const uint ERROR_MIXTURE_STATE=16777216u;
+const uint ERROR_ZERO_PORE=4096u;
 int h(int index){return int(words[p.header+index]);}
 double get(int address){return packDouble2x32(uvec2(words[address],words[address+1]));}
 void put(int address,double value){uvec2 bits=unpackDouble2x32(value);words[address]=bits.x;words[address+1]=bits.y;}
@@ -20,7 +21,7 @@ void evaluate(int cell){
         &&finiteNumber(temperature)&&temperature>0.0&&finiteNumber(constant)&&constant>=0.0&&finiteNumber(gamma)&&gamma>=1.0)){invalid();return;}
     double gasMass=gas<0?0.0LF:get(gas+4);
     if(capacity==0.0){
-        if(v0!=0.0||mass!=0.0||constant!=0.0){invalid();return;}
+        if(v0!=0.0||mass!=0.0||constant!=0.0){atomicOr(errors,ERROR_ZERO_PORE);return;}
         for(int i=0;i<7;i++)store(cell,i,i==Q_LIQUID_SCALE?1.0LF:0.0LF);
         if(h(9)>=0)for(int i=0;i<4;i++)put(h(9)+8*cell+2*i,0.0LF);
         if(gas>=0)put(h(10)+2*cell,0.0LF);return;

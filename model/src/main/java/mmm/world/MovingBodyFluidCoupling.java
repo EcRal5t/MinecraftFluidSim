@@ -36,14 +36,51 @@ public final class MovingBodyFluidCoupling {
       Bounds bounds,
       double velocityXMetresPerSecond,
       double velocityYMetresPerSecond,
-      double velocityZMetresPerSecond) {
+      double velocityZMetresPerSecond,
+      double centerXMetres, double centerYMetres, double centerZMetres,
+      double angularXPerSecond, double angularYPerSecond, double angularZPerSecond,
+      int responseAxis, double inverseMassPerKilogram) {
+    public Request(java.util.UUID bodyId, Bounds bounds, double vx, double vy, double vz) {
+      this(bodyId, bounds, vx, vy, vz, (bounds.minimumX() + bounds.maximumX()) * .5,
+          (bounds.minimumY() + bounds.maximumY()) * .5, (bounds.minimumZ() + bounds.maximumZ()) * .5,
+          0, 0, 0, -1, 0);
+    }
+
     public Request {
       java.util.Objects.requireNonNull(bodyId, "Body identity is missing");
       java.util.Objects.requireNonNull(bounds, "Body bounds are missing");
       if (!(Double.isFinite(velocityXMetresPerSecond)
           && Double.isFinite(velocityYMetresPerSecond)
-          && Double.isFinite(velocityZMetresPerSecond)))
+          && Double.isFinite(velocityZMetresPerSecond)
+          && Double.isFinite(centerXMetres) && Double.isFinite(centerYMetres) && Double.isFinite(centerZMetres)
+          && Double.isFinite(angularXPerSecond) && Double.isFinite(angularYPerSecond) && Double.isFinite(angularZPerSecond)
+          && responseAxis >= -1 && responseAxis < 3 && Double.isFinite(inverseMassPerKilogram)
+          && inverseMassPerKilogram >= 0 && (responseAxis >= 0 || inverseMassPerKilogram == 0)))
         throw new IllegalArgumentException("Body velocity must be finite");
+    }
+
+
+    /** Linear and angular velocity at a world-space point relative to this region. */
+    public double surfaceVelocity(int axis, double x, double y, double z) {
+      double rx = x - centerXMetres, ry = y - centerYMetres, rz = z - centerZMetres;
+      return switch (axis) {
+        case 0 -> velocityXMetresPerSecond + angularYPerSecond * rz - angularZPerSecond * ry;
+        case 1 -> velocityYMetresPerSecond + angularZPerSecond * rx - angularXPerSecond * rz;
+        case 2 -> velocityZMetresPerSecond + angularXPerSecond * ry - angularYPerSecond * rx;
+        default -> throw new IllegalArgumentException("Invalid surface axis");
+      };
+    }
+
+    public Request withBounds(Bounds next) {
+      return new Request(bodyId, next, velocityXMetresPerSecond, velocityYMetresPerSecond, velocityZMetresPerSecond,
+          centerXMetres + .5 * (next.minimumX() + next.maximumX() - bounds.minimumX() - bounds.maximumX()),
+          centerYMetres + .5 * (next.minimumY() + next.maximumY() - bounds.minimumY() - bounds.maximumY()),
+          centerZMetres + .5 * (next.minimumZ() + next.maximumZ() - bounds.minimumZ() - bounds.maximumZ()),
+          angularXPerSecond, angularYPerSecond, angularZPerSecond, responseAxis, inverseMassPerKilogram);
+    }
+
+    public Request stationary() {
+      return new Request(bodyId, bounds, 0, 0, 0, centerXMetres, centerYMetres, centerZMetres, 0, 0, 0, -1, 0);
     }
 
     public float localXMetres() {
@@ -68,12 +105,15 @@ public final class MovingBodyFluidCoupling {
       java.util.UUID bodyId,
       double impulseXKilogramMetresPerSecond,
       double impulseYKilogramMetresPerSecond,
-      double impulseZKilogramMetresPerSecond) {
+      double impulseZKilogramMetresPerSecond,
+      double angularImpulseX, double angularImpulseY, double angularImpulseZ) {
+    public BodyImpulse(java.util.UUID bodyId, double x, double y, double z) { this(bodyId, x, y, z, 0, 0, 0); }
     public BodyImpulse {
       java.util.Objects.requireNonNull(bodyId, "Body impulse identity is missing");
       if (!(Double.isFinite(impulseXKilogramMetresPerSecond)
           && Double.isFinite(impulseYKilogramMetresPerSecond)
-          && Double.isFinite(impulseZKilogramMetresPerSecond)))
+          && Double.isFinite(impulseZKilogramMetresPerSecond)
+          && Double.isFinite(angularImpulseX) && Double.isFinite(angularImpulseY) && Double.isFinite(angularImpulseZ)))
         throw new IllegalArgumentException("Body impulse must be finite");
     }
 
@@ -81,7 +121,8 @@ public final class MovingBodyFluidCoupling {
       if (!bodyId.equals(other.bodyId)) throw new IllegalArgumentException("Cannot merge different body impulses");
       return new BodyImpulse(bodyId, impulseXKilogramMetresPerSecond + other.impulseXKilogramMetresPerSecond,
           impulseYKilogramMetresPerSecond + other.impulseYKilogramMetresPerSecond,
-          impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond);
+          impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond,
+          angularImpulseX + other.angularImpulseX, angularImpulseY + other.angularImpulseY, angularImpulseZ + other.angularImpulseZ);
     }
   }
 

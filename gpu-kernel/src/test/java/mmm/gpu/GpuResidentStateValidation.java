@@ -62,6 +62,7 @@ public final class GpuResidentStateValidation {
             }
             System.out.println("Production state import, rejected private candidate, mechanical/thermal adoption, device readout and exact checkpoint passed");
         }
+        validateFiniteBodyResponse(device,initial);
         validateAmbientBodyClosure(device,thermal,false);
         validateAmbientBodyClosure(device,thermal,true);
         validateSmallGeometry(device,thermal);
@@ -72,6 +73,34 @@ public final class GpuResidentStateValidation {
             validateBackend(device,initial,expectedMass,expectedGasMass);
         }
     }
+    private static void validateFiniteBodyResponse(int device, FluidDomainState initial) {
+        var id=java.util.UUID.fromString("a7184c41-7a9c-4c56-8b2a-e7d7b474ca24");
+        double[] inverse={1.0/20.0,1.0/2000.0}, response=new double[2];
+        for(int i=0;i<inverse.length;i++){
+            var domain=HostFluidState.restoreAuthoritativeState(initial);
+            var before=new mmm.world.MovingBodyFluidCoupling.Bounds(1,.6,1,1.25,.85,1.25);
+            var after=new mmm.world.MovingBodyFluidCoupling.Bounds(1.025,.6,1,1.275,.85,1.25);
+            var source=new mmm.world.MovingBodyFluidCoupling.Request(id,before,.5,0,0,1.125,.725,1.125,0,0,0,0,inverse[i]);
+            var target=new mmm.world.MovingBodyFluidCoupling.Request(id,after,.5,0,0,1.15,.725,1.125,0,0,0,0,inverse[i]);
+            domain.restoreEntityBodyState(new EntityBodyState(List.of(source)));
+            FluidStateAccess current=domain.captureAuthoritativeState();
+            try(var backend=new VulkanFluidSolverBackend(device);
+                var candidate=backend.evaluate(new FluidStepRequest(0,current,List.of(target),false,0,false,false));
+                var prepared=candidate.claimPreparedDeviceState()) {
+                var impulse=candidate.movingBodyCoupling().bodyImpulses().stream().filter(value->value.bodyId().equals(id)).findFirst().orElseThrow();
+                response[i]=inverse[i]*impulse.impulseXKilogramMetresPerSecond();
+                var next=prepared.commit();
+                try {
+                    if(!((ResidentFluidState)next).observation().thermalAuditClosed())
+                        throw new AssertionError("Finite body pressure/kinetic energy ledger is not closed");
+                } finally {next.close();}
+            } finally {current.close();}
+        }
+        if(!(response[0]<0 && response[1]<0 && Math.abs(response[0])>Math.abs(response[1])))
+            throw new AssertionError("Finite body did not respond to fluid resistance: "+java.util.Arrays.toString(response));
+        System.out.println("finite_body_velocity_change="+java.util.Arrays.toString(response));
+    }
+
     private static void validateAmbientBodyClosure(int device,ThermalRegistry thermal,boolean high){
         var domain=new HostFluidState(3,3,3,new FluidSolverConfig(.5f,0,.05f,200,1e-5f,.002f), mmm.fluid.TestFluidDefinitions.load());
         var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));

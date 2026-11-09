@@ -19,7 +19,7 @@ import net.minecraft.nbt.NbtIo;
 
 /** Durable actor bindings and replay receipts; physical recovery remains in the container WAL. */
 public final class PublicTransferReceiptStore {
-	public record Binding(ActorRef actor,DispenserAddress address,UUID instanceId) { }
+	public record Binding(ActorRef actor,BlockInventoryAddress address,UUID instanceId) { }
 	public enum State { PENDING, COMMITTED, NOT_COMMITTED }
 	public record Entry(TransferRequest request,Binding binding,ContainerTransferJournal settlement,State state) {
 		public TransferReceipt receipt(double waterDensity) {
@@ -56,11 +56,11 @@ public final class PublicTransferReceiptStore {
 							throw new IOException("Public transfer operation identity differs from file");
 						var old=entries.get(entry.request().operationId());
 						if(old==null || receipt) entries.put(entry.request().operationId(),entry);
-					} else throw new IOException("Unrecognized public transfer evidence: "+path);
+					} else throw new IOException("Unrecognized public transfer file: "+path);
 				}
 			}
 		} catch(IOException | RuntimeException invalid) {
-			failure=new IOException("Public transfer receipt store is unavailable; evidence preserved",invalid);
+			failure=new IOException("Could not load public transfer receipts",invalid);
 		}
 	}
 	public void requireReady() throws IOException { if(failure!=null) throw failure; }
@@ -78,7 +78,7 @@ public final class PublicTransferReceiptStore {
 		if(bindings.values().stream().anyMatch(value -> value.instanceId().equals(binding.instanceId())))
 			throw new IOException("Persistent inventory is already bound to another actor ref");
 		if(entries.values().stream().anyMatch(value -> value.state()==State.PENDING && value.binding().address().equals(binding.address())))
-			throw new IOException("Dispenser slot has a pending public operation");
+			throw new IOException("Inventory slot has a pending public operation");
 		publish(bindingPath(binding.actor()),encodeBinding(binding)); bindings.put(binding.actor(),binding);
 	}
 	public void prepare(TransferRequest request,Binding binding,ContainerTransferJournal preview) throws IOException {
@@ -91,7 +91,7 @@ public final class PublicTransferReceiptStore {
 		publish(operationPath(request.operationId()),encodeEntry(entry));
 	}
 	public void validate(ContainerTransferJournal journal) throws IOException {
-		if(!(journal.actor() instanceof ContainerTransferActor.Dispenser dispenser) || dispenser.inventoryId()==null) return;
+		if(!(journal.actor() instanceof ContainerTransferActor.BlockInventory dispenser) || dispenser.inventoryId()==null) return;
 		requireReady();
 		var entry=entries.get(journal.transactionId());
 		if(entry==null) return; // A registered container may also be used by the built-in dispenser adapter.
@@ -165,7 +165,7 @@ public final class PublicTransferReceiptStore {
 	}
 	private static Binding decodeBinding(CompoundTag data) {
 		return new Binding(new ActorRef(data.getStringOr("Provider",""),data.getStringOr("Object","")),
-				new DispenserAddress(data.getStringOr("Dimension",""),data.getIntOr("X",0),data.getIntOr("Y",0),data.getIntOr("Z",0),data.getIntOr("Slot",-1)),
+				new BlockInventoryAddress(data.getStringOr("Dimension",""),data.getIntOr("X",0),data.getIntOr("Y",0),data.getIntOr("Z",0),data.getIntOr("Slot",-1)),
 				UUID.fromString(data.getStringOr("Instance","")));
 	}
 	private static CompoundTag encodeEntry(Entry entry) throws IOException {
@@ -176,12 +176,14 @@ public final class PublicTransferReceiptStore {
 		data.putString("Dimension",request.dimensionId());data.putDouble("X",request.worldXMetres());data.putDouble("Y",request.worldYMetres());data.putDouble("Z",request.worldZMetres());
 		data.putString("Direction",request.direction().name());
 		data.putBoolean("Granular",request.quantity() instanceof TransferQuantity.Granular);
-		data.putLong("RequestedAmount",request.quantity() instanceof TransferQuantity.Granular granular?granular.solidVolumeSvq():((TransferQuantity.Liquid)request.quantity()).volumeNanos());
+		data.putBoolean("Gas",request.quantity() instanceof TransferQuantity.Gas);
+		data.putLong("RequestedAmount",request.quantity() instanceof TransferQuantity.Granular granular?granular.solidVolumeSvq():request.quantity() instanceof TransferQuantity.Gas gas?gas.standardVolumeNanos():((TransferQuantity.Liquid)request.quantity()).volumeNanos());
+		if(request.quantity() instanceof TransferQuantity.Gas gas)data.putDouble("GasEnergy",gas.internalEnergyJoules());
 		return data;
 	}
 	private static Entry decodeEntry(CompoundTag data) throws IOException {
 		var binding=decodeBinding(data.getCompoundOrEmpty("Binding"));long amount=data.getLongOr("RequestedAmount",0);
-		TransferQuantity quantity=data.getBooleanOr("Granular",false)?new TransferQuantity.Granular(amount):new TransferQuantity.Liquid(amount,java.util.OptionalDouble.empty());
+		TransferQuantity quantity=data.getBooleanOr("Granular",false)?new TransferQuantity.Granular(amount):data.getBooleanOr("Gas",false)?new TransferQuantity.Gas(amount,data.getDoubleOr("GasEnergy",0)):new TransferQuantity.Liquid(amount,java.util.OptionalDouble.empty());
 		var request=new TransferRequest(UUID.fromString(data.getStringOr("Operation","")),binding.actor(),data.getLongOr("ExpectedActorGeneration",-1),
 				UUID.fromString(data.getStringOr("Region","")),data.getStringOr("Dimension",""),data.getDoubleOr("X",Double.NaN),data.getDoubleOr("Y",Double.NaN),data.getDoubleOr("Z",Double.NaN),
 				TransferRequest.Direction.valueOf(data.getStringOr("Direction","")),quantity);

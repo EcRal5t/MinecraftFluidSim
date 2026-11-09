@@ -15,7 +15,7 @@ const int MICROCELL_COUNT = 8;
 const double MICROCELL_SIZE = .5, MICROFACE_AREA = .25;
 const double SOLID_QUANTA_PER_CELL = 16777216.0;
 const double OCCUPATION_ROUNDOFF_TOLERANCE = 1e-9;
-const uint ERROR_INVALID_BODY = 16777216u;
+const uint ERROR_INVALID_BODY = 2048u;
 
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
@@ -298,6 +298,7 @@ void gatherCellOccupation(int cellIndex) {
     writeInt64At(fieldWordOffset(F_OCCUPIED_SVQ) + 2 * cellIndex, occupiedQuanta);
     writeInt64At(fieldWordOffset(F_COMBINED_SVQ) + 2 * cellIndex, baseSolidQuanta + occupiedQuanta);
 }
+// Interpolate body contact forces to nearby MAC velocities, including bodies wholly inside one cell.
 void buildEntryFaceContacts(int entry, bool scatter) {
     int cellIndex = readIntField(F_ENTRY_CELL, entry);
     if (cellIndex < 0)
@@ -331,18 +332,64 @@ void buildEntryFaceContacts(int entry, bool scatter) {
         }
     }
 }
+// A shared face transports fluid only through its fixed opening outside the actual body union.
+double bodyUnionAreaOnMicroface(int begin, int end, int axis, dvec3 micro) {
+    int a = axis == 0 ? 1 : 0, b = axis == 2 ? 1 : 2;
+    double plane = micro[axis], cursor = micro[a], area = 0.0;
+    while (cursor < micro[a] + MICROCELL_SIZE) {
+        double next = micro[a] + MICROCELL_SIZE;
+        for (int contact = begin; contact < end; contact++) {
+            int body = readIntField(F_CONTACT_BODY, contact);
+            dvec3 lo = bodyMinimum(body), hi = bodyMaximum(body);
+            if (lo[axis] > plane || hi[axis] < plane) continue;
+            double first = max(micro[a], lo[a]), last = min(micro[a] + MICROCELL_SIZE, hi[a]);
+            if (last <= first) continue;
+            if (first > cursor) next = min(next, first);
+            if (last > cursor) next = min(next, last);
+        }
+        if (next <= cursor) break;
+        double middle = .5 * (cursor + next), covered = micro[b], length = 0.0;
+        while (covered < micro[b] + MICROCELL_SIZE) {
+            double first = micro[b] + MICROCELL_SIZE, last = covered;
+            for (int contact = begin; contact < end; contact++) {
+                int body = readIntField(F_CONTACT_BODY, contact);
+                dvec3 lo = bodyMinimum(body), hi = bodyMaximum(body);
+                if (lo[axis] > plane || hi[axis] < plane || middle < lo[a] || middle >= hi[a]) continue;
+                double start = max(micro[b], lo[b]), stop = min(micro[b] + MICROCELL_SIZE, hi[b]);
+                if (stop <= covered) continue;
+                if (start <= covered) last = max(last, stop);
+                else first = min(first, start);
+            }
+            if (last > covered) { length += last - covered; covered = last; }
+            else if (first > covered) covered = first;
+            else break;
+        }
+        area += (next - cursor) * length;
+        cursor = next;
+    }
+    return area;
+}
 void gatherFaceOccupation(int faceIndex) {
+    int begin = readIntField(F_FACE_OFFSETS, faceIndex), end = readIntField(F_FACE_OFFSETS, faceIndex + 1);
     double totalShare = 0.0;
-    for (int contact = readIntField(F_FACE_OFFSETS, faceIndex); contact < readIntField(F_FACE_OFFSETS, faceIndex + 1);
-         contact++)
-        totalShare += readDoubleField(F_CONTACT_SHARE, contact);
-    writeDoubleField(F_FACE_AREA, faceIndex, min(openFaceArea(faceIndex), totalShare));
+    for (int contact = begin; contact < end; contact++) totalShare += readDoubleField(F_CONTACT_SHARE, contact);
+    double blocked = 0.0;
+    ivec2 adjacent = adjacentCells(faceIndex);
+    if (begin < end && adjacent.x >= 0 && adjacent.y >= 0) {
+        int axis = faceAxis(faceIndex), a = axis == 0 ? 1 : 0, b = axis == 2 ? 1 : 2;
+        ivec3 origin = cellCoordinates(adjacent.y) * 2;
+        for (int port = 0; port < 4; port++) {
+            ivec3 right = origin; right[a] += port & 1; right[b] += port >> 1;
+            ivec3 left = right; left[axis]--;
+            if (isMicrocellOpen(left) && isMicrocellOpen(right))
+                blocked += bodyUnionAreaOnMicroface(begin, end, axis, dvec3(right) * MICROCELL_SIZE);
+        }
+    }
+    writeDoubleField(F_FACE_AREA, faceIndex, blocked);
     if (totalShare > 0.0)
-        for (int contact = readIntField(F_FACE_OFFSETS, faceIndex);
-             contact < readIntField(F_FACE_OFFSETS, faceIndex + 1); contact++)
-            writeDoubleField(
-                F_CONTACT_SHARE, contact,
-                readDoubleField(F_CONTACT_SHARE, contact) * min(openFaceArea(faceIndex), totalShare) / totalShare);
+        for (int contact = begin; contact < end; contact++)
+            writeDoubleField(F_CONTACT_SHARE, contact,
+                    readDoubleField(F_CONTACT_SHARE, contact) * min(openFaceArea(faceIndex), totalShare) / totalShare);
     if (faceIndex == 0)
         writeIntField(F_CONTROL, CONTROL_CONTACT_COUNT, readIntField(F_FACE_OFFSETS, headerWord(H_FACES)));
 }
@@ -413,6 +460,42 @@ void buildPressureContacts(int contact) {
         writeDoubleField(F_PRESSURE_COEFFICIENT, index, coefficient);
     }
 }
+void assembleBodyVelocity(int body) {
+    int velocity = headerWord(H_RESPONSE_VELOCITY_BASE) + body;
+    double inverse = body < bodyCount() ? readDoubleField(F_INVERSE_MASS, body) : 0.0;
+    writeDoubleAt(coupledFieldWordOffset(COUPLED_F_INVERSE_MASS) + 2 * velocity,
+                  inverse * params.cellSize * params.cellSize * params.cellSize);
+    double shearImpulse = 0.0;
+    if (body < bodyCount() && inverse > 0.0 && headerWord(H_CONTACT_IMPULSE) >= 0) {
+        int axis = readIntField(F_RESPONSE_AXIS, body);
+        for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
+            for (int slot = 0; slot < CELL_SIDE_COUNT; slot++) {
+                int contact = readIntField(F_ENTRY_CONTACTS, CELL_SIDE_COUNT * entry + slot);
+                if (contact >= 0 && faceAxis(readIntField(F_CONTACT_FACE, contact)) == axis)
+                    shearImpulse += readDoubleAt(headerWord(H_CONTACT_IMPULSE) + 2 * contact);
+            }
+    }
+    writeDoubleAt(coupledFieldWordOffset(COUPLED_F_PREDICTED_VELOCITY) + 2 * velocity, inverse * shearImpulse);
+    writeDoubleAt(coupledFieldWordOffset(COUPLED_F_FIXED_REFERENCE_FORCE) + 2 * velocity, 0.0);
+}
+
+void assembleBodyIncidence(int contact) {
+    if (contact >= contactCount()) return;
+    int body = readIntField(F_CONTACT_BODY, contact);
+    if (readDoubleField(F_INVERSE_MASS, body) <= 0.0 ||
+        readIntField(F_RESPONSE_AXIS, body) != faceAxis(readIntField(F_CONTACT_FACE, contact))) return;
+    int velocity = headerWord(H_RESPONSE_VELOCITY_BASE) + body;
+    for (int side = 0; side < 2; side++) {
+        int index = 2 * contact + side, row = readIntField(F_PRESSURE_ROW, index);
+        if (row < 0) continue;
+        int term = headerWord(H_RESPONSE_TERM_BASE) + index;
+        arenaWords[coupledFieldWordOffset(COUPLED_F_TERM_ROW) + term] = uint(row);
+        arenaWords[coupledFieldWordOffset(COUPLED_F_TERM_VELOCITY) + term] = uint(velocity);
+        writeDoubleAt(coupledFieldWordOffset(COUPLED_F_TERM_COEFFICIENT) + 2 * term,
+                      readDoubleField(F_PRESSURE_COEFFICIENT, index));
+    }
+}
+
 void assembleBodyVolumeRate(int row) {
     double bodyVolumeRate = row < headerWord(H_CELLS)
         ? double(readInt64At(headerWord(H_SOURCE_OCCUPATION) + 2 * row) - readInt64At(fieldWordOffset(F_OCCUPIED_SVQ) + 2 * row)) /
@@ -426,12 +509,25 @@ void assembleBodyVolumeRate(int row) {
         readDoubleAt(coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row) - bodyVolumeRate / params.duration);
     arenaWords[coupledFieldWordOffset(COUPLED_F_ROW_ENABLED) + row] = 1u;
 }
+dvec3 contactPoint(int contact) {
+    int face = readIntField(F_CONTACT_FACE, contact), axis = faceAxis(face);
+    dvec3 point = (dvec3(gridFacePosition(face)) + dvec3(0.5)) * params.cellSize;
+    point[axis] -= 0.5 * params.cellSize;
+    return point;
+}
+
+dvec3 bodyVector(int field, int body) {
+    return dvec3(readDoubleField(field, 3 * body), readDoubleField(field, 3 * body + 1),
+                 readDoubleField(field, 3 * body + 2));
+}
+
 void gatherBodyResult(int body) {
     for (int component = 0; component < BODY_RESULT_STRIDE; component++)
         writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + component, 0.0);
     if (body >= bodyCount())
         return;
-    dvec3 pressureImpulse = dvec3(0.0), shearImpulse = dvec3(0.0);
+    dvec3 pressureImpulse = dvec3(0.0), shearImpulse = dvec3(0.0), angularImpulse = dvec3(0.0);
+    dvec3 center = bodyVector(F_CENTERS, body);
     double volume = 0.0;
     for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
         for (int slot = 0; slot < CELL_SIDE_COUNT; slot++) {
@@ -443,24 +539,70 @@ void gatherBodyResult(int body) {
             for (int side = 0; side < 2; side++)
                 pressureForceDensity += readDoubleField(F_PRESSURE_COEFFICIENT, 2 * contact + side) *
                                         physicalRowPressure(readIntField(F_PRESSURE_ROW, 2 * contact + side));
-            pressureImpulse[axis] -=
-                params.duration * params.cellSize * params.cellSize * params.cellSize * pressureForceDensity;
-            if (headerWord(H_CONTACT_IMPULSE) >= 0)
-                shearImpulse[axis] -= readDoubleAt(headerWord(H_CONTACT_IMPULSE) + 2 * contact);
+            double pressure = -params.duration * params.cellSize * params.cellSize * params.cellSize * pressureForceDensity;
+            double shear = headerWord(H_CONTACT_IMPULSE) < 0 ? 0.0 :
+                -readDoubleAt(headerWord(H_CONTACT_IMPULSE) + 2 * contact);
+            pressureImpulse[axis] += pressure;
+            shearImpulse[axis] += shear;
+            dvec3 impulse = dvec3(0.0);
+            impulse[axis] = pressure + shear;
+            angularImpulse += cross(contactPoint(contact) - center, impulse);
         }
     for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
         volume += readDoubleField(F_ENTRY_VOLUME, entry) * params.cellSize * params.cellSize * params.cellSize;
     for (int axis = 0; axis < 3; axis++)
         writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_IMPULSE_X + axis,
                          pressureImpulse[axis] + shearImpulse[axis]);
+    for (int axis = 0; axis < 3; axis++)
+        writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_TORQUE_X + axis, angularImpulse[axis]);
     writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_COUPLED_VOLUME, volume);
 }
+double finiteSourceVolume(int cellIndex) {
+    double volume = 0.0;
+    int offsets = headerWord(H_SOURCE_CELL_OFFSETS), entries = headerWord(H_SOURCE_CELL_ENTRIES);
+    for (int slot = int(arenaWords[offsets + cellIndex]); slot < int(arenaWords[offsets + cellIndex + 1]); slot++) {
+        int entry = int(arenaWords[entries + slot]), body = int(arenaWords[headerWord(H_SOURCE_ENTRY_BODY) + entry]);
+        if (readDoubleAt(headerWord(H_SOURCE_INVERSE_MASS) + 2 * body) > 0.0)
+            volume += readDoubleAt(headerWord(H_SOURCE_ENTRY_VOLUME) + 2 * entry);
+    }
+    return volume;
+}
+
 void settleCellExternalWork(int cellIndex) {
     double externalWork =
         headerWord(H_SOURCE_CELL_WORK) < 0 ? 0.0 : readDoubleAt(headerWord(H_SOURCE_CELL_WORK) + 2 * cellIndex);
-    externalWork -= params.duration * params.cellSize * params.cellSize * params.cellSize *
-                    readDoubleField(F_ROW_BODY_RATE, cellIndex) * physicalRowPressure(pressureRowForCell(cellIndex));
-    writeDoubleField(F_SOURCE_WORK, cellIndex, externalWork);
+    double h3 = params.cellSize * params.cellSize * params.cellSize;
+    double finiteTarget = 0.0, correction = 0.0;
+    for (int slot = readIntField(F_CELL_OFFSETS, cellIndex); slot < readIntField(F_CELL_OFFSETS, cellIndex + 1); slot++) {
+        int entry = readIntField(F_CELL_ENTRIES, slot), body = readIntField(F_ENTRY_BODY, entry);
+        double inverse = readDoubleField(F_INVERSE_MASS, body);
+        if (inverse <= 0.0) continue;
+        double volume = readDoubleField(F_ENTRY_VOLUME, entry);
+        finiteTarget += volume;
+        double total = readDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_COUPLED_VOLUME);
+        int axis = readIntField(F_RESPONSE_AXIS, body);
+        double impulse = readDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_IMPULSE_X + axis);
+        if (total > 0.0) correction -= 0.5 * inverse * impulse * impulse * volume * h3 / total;
+    }
+    double finiteRate = (finiteSourceVolume(cellIndex) - finiteTarget) / params.duration;
+    externalWork -= params.duration * h3 * (readDoubleField(F_ROW_BODY_RATE, cellIndex) - finiteRate) *
+                    physicalRowPressure(pressureRowForCell(cellIndex));
+    for (int side = 0; side < CELL_SIDE_COUNT; side++) {
+        int face = gridFace(cellIndex, side);
+        for (int contact = readIntField(F_FACE_OFFSETS, face); contact < readIntField(F_FACE_OFFSETS, face + 1); contact++) {
+            int body = readIntField(F_CONTACT_BODY, contact);
+            if (readDoubleField(F_INVERSE_MASS, body) <= 0.0) continue;
+            int axis = readIntField(F_RESPONSE_AXIS, body);
+            if (axis != faceAxis(face)) continue;
+            for (int part = 0; part < 2; part++) {
+                int index = 2 * contact + part;
+                if (readIntField(F_PRESSURE_ROW, index) == cellIndex)
+                    externalWork -= readDoubleField(F_VELOCITIES, 3 * body + axis) * params.duration * h3 *
+                        readDoubleField(F_PRESSURE_COEFFICIENT, index) * physicalRowPressure(cellIndex);
+            }
+        }
+    }
+    writeDoubleField(F_SOURCE_WORK, cellIndex, externalWork + correction);
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
@@ -546,10 +688,21 @@ void main() {
         double total = readDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_CONTACT_VOLUME_X + axis);
         writeDoubleField(F_CONTACT_DISTANCE, id,
                          total > 0.0 ? area / params.cellSize * readDoubleField(F_CONTACT_SHARE, id) / total : 0.0);
+        dvec3 velocity = bodyVector(F_VELOCITIES, body) +
+            cross(bodyVector(F_ANGULAR_VELOCITIES, body), contactPoint(id) - bodyVector(F_CENTERS, body));
+        writeDoubleField(F_CONTACT_SPEED, id, velocity[axis]);
         return;
     }
     if (params.stage == STAGE_BUILD_PRESSURE_CONTACTS) {
         buildPressureContacts(id);
+        return;
+    }
+    if (params.stage == STAGE_ASSEMBLE_BODY_VELOCITY) {
+        assembleBodyVelocity(id);
+        return;
+    }
+    if (params.stage == STAGE_ASSEMBLE_BODY_INCIDENCE) {
+        assembleBodyIncidence(id);
         return;
     }
     if (params.stage == STAGE_ASSEMBLE_BODY_VOLUME_RATE) {

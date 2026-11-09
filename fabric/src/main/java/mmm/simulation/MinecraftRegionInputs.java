@@ -30,6 +30,12 @@ final class MinecraftRegionInputs {
 	private final Map<UUID, List<Interaction>> pendingResponses = new HashMap<>();
 	private final ThermalBoundaryResolver thermalBoundaries;
 	private final OrdinaryThermalWalls ordinaryWalls;
+	private MinecraftWorldUpdates worldUpdates;
+	boolean hasPendingWorldMotion(FluidRegion region) { return worldUpdates != null && worldUpdates.hasPendingMotion(region); }
+	void worldUpdates(MinecraftWorldUpdates updates) {
+		worldUpdates = java.util.Objects.requireNonNull(updates);
+		if (ordinaryWalls != null) ordinaryWalls.worldUpdates(updates);
+	}
 	private java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> prescribedBodies = (region,tick) -> List.of();
 	void prescribedBodies(java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> source) { prescribedBodies=java.util.Objects.requireNonNull(source); }
 	private java.util.function.Function<FluidRegion,List<MovingBodyFluidCoupling.Request>> manualPrescribedBodies = region -> List.of();
@@ -47,7 +53,7 @@ final class MinecraftRegionInputs {
 
 	FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {
 		FluidRegion.CollisionStats collisions = FluidRegionWorldInteraction.refreshCollisions(
-				level, region, cellsPerBlock);
+				level, region, cellsPerBlock, worldUpdates);
 		if (collisions.changedCells() > 0 || collisions.displacedCellVolume() > 0.0F
 				|| collisions.escapedCellVolume() > 0.0F || collisions.markerBudgetLimited()) {
 			region.setLastCollisionStats(collisions);
@@ -84,6 +90,7 @@ final class MinecraftRegionInputs {
 		List<MovingBodyFluidCoupling.Request> requestedBodies = new ArrayList<>(manual
 				? manualBodies(motions, manualPrescribedBodies.apply(region)) : bodyObservations(motions));
 		if (!manual) requestedBodies.addAll(prescribedBodies.apply(region, tick));
+		if (worldUpdates != null) requestedBodies.addAll(worldUpdates.targetBodies(region));
 		boolean[] activeCells = region.activityForBodies(requestedBodies);
 		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
 		checkBodyBudget(requestedBodies);
@@ -118,13 +125,14 @@ final class MinecraftRegionInputs {
 			accepted.add(body); ids.add(body.bodyId());
 		}
 		for (var body : previous) if (!ids.contains(body.bodyId()) && !available.test(body.bounds()))
-			accepted.add(new MovingBodyFluidCoupling.Request(body.bodyId(), body.bounds(), 0, 0, 0));
+			accepted.add(body.stationary());
 		return List.copyOf(accepted);
 	}
 
 	void finishServerTick() { motion.rotate(); pendingResponses.clear(); }
 
 	void commitEntityResponse(ServerLevel level, FluidRegion region, MovingBodyFluidCoupling.Result result) {
+		if (worldUpdates != null) worldUpdates.completed(level, region);
 		var responses = pendingResponses.remove(region.id());
 		if (responses == null) return;
 		for (var interaction : responses) {

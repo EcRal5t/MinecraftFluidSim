@@ -110,11 +110,11 @@ public final class ContainerTransferStoreValidation {
 		double waterDensity=mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material().referenceDensity();
 		var root=Files.createTempDirectory("mmm-public-transfer-");
 		var receipts=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
-		var address=new mmm.api.transfer.DispenserAddress("minecraft:overworld",1,2,3,0);
+		var address=new mmm.api.transfer.BlockInventoryAddress("minecraft:overworld",1,2,3,0);
 		var ref=address.actorRef("first");var instance=UUID.randomUUID();var region=UUID.randomUUID();var operation=UUID.randomUUID();
 		var binding=new mmm.simulation.persistence.PublicTransferReceiptStore.Binding(ref,address,instance);
 		receipts.bind(binding);
-		var actor=new ContainerTransferActor.Dispenser(address.dimensionId(),1,2,3,0,instance,3);
+		var actor=new ContainerTransferActor.BlockInventory(address.dimensionId(),1,2,3,0,instance,3);
 		var before=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET,-1,null);
 		var after=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL,750_000_000L,null);
 		var request=new mmm.api.transfer.TransferRequest(operation,ref,3,region,address.dimensionId(),2.25,3.25,4.25,
@@ -173,7 +173,7 @@ public final class ContainerTransferStoreValidation {
 		var restarted=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
 		check(restarted.entry(operation).receipt(waterDensity).manifest().equals(manifest) && restarted.entry(operation).receipt(waterDensity).actorAfterGeneration()==4,
 				"Restart lost the actual manifest or durable actor generation");
-		var next=UUID.randomUUID();var actor2=new ContainerTransferActor.Dispenser(address.dimensionId(),1,2,3,0,instance,4);
+		var next=UUID.randomUUID();var actor2=new ContainerTransferActor.BlockInventory(address.dimensionId(),1,2,3,0,instance,4);
 		var after2=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL,500_000_000L,null);
 		var request2=new mmm.api.transfer.TransferRequest(next,ref,4,region,address.dimensionId(),2.25,3.25,4.25,request.direction(),request.quantity());
 		var settlement2=new ContainerTransferJournal(next,region,address.dimensionId(),5,6,ContainerTransferJournal.Operation.INSERT,250_000_000L,
@@ -400,7 +400,7 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal dispenser = new ContainerTransferJournal(
 				tx2, region, "minecraft:the_nether", 1L, 2L,
 				ContainerTransferJournal.Operation.EXTRACT, 250_000_000L,
-				ContainerTransferActor.dispenser("minecraft:the_nether", 3, 4, 5, 2),
+				ContainerTransferActor.blockInventory("minecraft:the_nether", 3, 4, 5, 2),
 				before, before, ContainerTransferJournal.Phase.PREPARED
 		);
 		store.write(dispenser);
@@ -409,12 +409,12 @@ public final class ContainerTransferStoreValidation {
 				() -> ContainerTransferActor.player(UUID.randomUUID(), null),
 				"unknown player hand was accepted and would fall back to main hand");
 		checkThrows(IllegalArgumentException.class,
-				() -> ContainerTransferActor.dispenser("minecraft:the_nether", 3, 4, 5, 9),
-				"out-of-range dispenser slot was accepted");
+				() -> ContainerTransferActor.blockInventory("minecraft:the_nether", 3, 4, 5, 256),
+				"out-of-range block inventory slot was accepted");
 		ContainerTransferJournal crossDimensionDispenser = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 1L, 2L,
 				ContainerTransferJournal.Operation.EXTRACT, 250_000_000L,
-				ContainerTransferActor.dispenser("minecraft:the_nether", 3, 4, 5, 2),
+				ContainerTransferActor.blockInventory("minecraft:the_nether", 3, 4, 5, 2),
 				before, before, ContainerTransferJournal.Phase.PREPARED);
 		checkThrows(IOException.class, () -> store.write(crossDimensionDispenser),
 				"cross-dimension dispenser actor was accepted");

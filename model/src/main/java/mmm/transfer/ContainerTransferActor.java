@@ -6,10 +6,10 @@ import java.util.UUID;
 
 /** Loader-neutral durable identity of the external state changed by a container transaction. */
 public sealed interface ContainerTransferActor
-		permits ContainerTransferActor.PlayerHand, ContainerTransferActor.Dispenser {
+		permits ContainerTransferActor.PlayerHand, ContainerTransferActor.BlockInventory {
 	Kind kind();
 	default boolean sameInventory(ContainerTransferActor other) {
-		if (this instanceof Dispenser first && other instanceof Dispenser second)
+		if (this instanceof BlockInventory first && other instanceof BlockInventory second)
 			return first.dimensionId().equals(second.dimensionId()) && first.blockX()==second.blockX()
 					&& first.blockY()==second.blockY() && first.blockZ()==second.blockZ() && first.slot()==second.slot();
 		return equals(other);
@@ -19,13 +19,13 @@ public sealed interface ContainerTransferActor
 		return new PlayerHand(playerId, hand);
 	}
 
-	static Dispenser dispenser(
+	static BlockInventory blockInventory(
 			String dimensionId, int blockX, int blockY, int blockZ, int slot
 	) {
-		return new Dispenser(dimensionId, blockX, blockY, blockZ, slot);
+		return new BlockInventory(dimensionId, blockX, blockY, blockZ, slot);
 	}
 
-	enum Kind { PLAYER_HAND, DISPENSER }
+	enum Kind { PLAYER_HAND, BLOCK_INVENTORY }
 
 	enum Hand { MAIN, OFF }
 
@@ -39,20 +39,20 @@ public sealed interface ContainerTransferActor
 		@Override public Kind kind() { return Kind.PLAYER_HAND; }
 	}
 
-	record Dispenser(
+	record BlockInventory(
 			String dimensionId, int blockX, int blockY, int blockZ, int slot, UUID inventoryId, long generation
 	) implements ContainerTransferActor {
-		public Dispenser(String dimensionId,int blockX,int blockY,int blockZ,int slot) {
+		public BlockInventory(String dimensionId,int blockX,int blockY,int blockZ,int slot) {
 			this(dimensionId,blockX,blockY,blockZ,slot,null,0);
 		}
-		public Dispenser {
+		public BlockInventory {
 			StableId.require(dimensionId, 128, "dimension id");
-			if (slot < 0 || slot >= 9 || generation<0 || generation==Long.MAX_VALUE
+			if (slot < 0 || slot >= 256 || generation<0 || generation==Long.MAX_VALUE
 					|| inventoryId==null && generation!=0) {
-				throw new IllegalArgumentException("Dispenser container transfer actor is invalid");
+				throw new IllegalArgumentException("Block inventory transfer actor is invalid");
 			}
 		}
 
-		@Override public Kind kind() { return Kind.DISPENSER; }
+		@Override public Kind kind() { return Kind.BLOCK_INVENTORY; }
 	}
 }

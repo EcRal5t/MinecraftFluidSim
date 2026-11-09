@@ -29,7 +29,7 @@ final class VulkanGranularMotion implements AutoCloseable {
         GEOMETRY_OFFSETS(13),
         GEOMETRY_ENTRIES(14),
         DEPOSIT_POROSITY(15),
-        ACTIVITY_CELLS(40);
+        ACTIVITY_CELLS(40), SCREEN_FACES(41), DIAMETERS(42);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -43,7 +43,7 @@ final class VulkanGranularMotion implements AutoCloseable {
         return result + VulkanShaderLayout.fields("FIELD_", Field.values()) + VulkanShaderLayout.fields("CONTACT_", VulkanGranularContacts.Field.values());
     }
 
-    enum Field { COUNTS,OFFSETS,CURSORS,ENTRIES,CONTACT_COUNTS,CONTACT_OFFSETS,SCAN,POSITION,RADIUS,MATERIAL,NEXT_POSITION,BED_HEIGHT,MAX_SPEED }
+    enum Field { COUNTS,OFFSETS,CURSORS,ENTRIES,CONTACT_COUNTS,CONTACT_OFFSETS,SCAN,POSITION,RADIUS,MATERIAL,NEXT_POSITION,BED_HEIGHT,MAX_SPEED,SCREEN_HIT,SCREEN_CAPTURED }
     static final class Layout {
         final VulkanGranularStateLayout state;
         final VulkanGranularContacts.Layout contacts;
@@ -61,7 +61,7 @@ final class VulkanGranularMotion implements AutoCloseable {
             header=new VulkanLiquidStateLayout.Column(align(base,alignment),64,4);long cursor=header.offset()+header.bytes();
             for(var f:Field.values()){
                 int count=switch(f){case COUNTS,CURSORS,BED_HEIGHT->state.cells();case OFFSETS->state.cells()+1;
-                    case CONTACT_COUNTS,RADIUS->state.particleCapacity();case CONTACT_OFFSETS->state.particleCapacity()+1;
+                    case CONTACT_COUNTS,RADIUS,SCREEN_HIT,SCREEN_CAPTURED->state.particleCapacity();case CONTACT_OFFSETS->state.particleCapacity()+1;
                     case ENTRIES->state.particleCapacity();case POSITION,NEXT_POSITION->3*state.particleCapacity();
                     case MATERIAL->3*state.definitions().materialIds().size();
                     case MAX_SPEED->1;
@@ -69,15 +69,18 @@ final class VulkanGranularMotion implements AutoCloseable {
                 var c=new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,f==Field.POSITION||f==Field.NEXT_POSITION||f==Field.RADIUS||f==Field.MATERIAL||f==Field.BED_HEIGHT?8:4);
                 columns.put(f,c);cursor=c.offset()+c.bindingBytes();
             }endOffset=align(cursor,alignment);
-            headerData=new int[]{state.sizeX(),state.sizeY(),state.sizeZ(),state.particleCapacity(),state.cells(),masksWord,
+            headerData=new int[64];
+            int[] initial={state.sizeX(),state.sizeY(),state.sizeZ(),state.particleCapacity(),state.cells(),masksWord,
                     state.word(VulkanGranularStateLayout.Field.COUNTS),state.word(VulkanGranularStateLayout.Field.POSITION),
                     state.word(VulkanGranularStateLayout.Field.VELOCITY),state.word(VulkanGranularStateLayout.Field.SOLID_VOLUME_SVQ),
                     state.word(VulkanGranularStateLayout.Field.MATERIAL),contacts.headerWordOffset(),
                     Math.toIntExact(finalY.offset()/4),-1,-1,state.word(VulkanGranularStateLayout.Field.DEPOSIT_POROSITY)};
+            System.arraycopy(initial,0,headerData,0,initial.length);
         }
         private final int[] headerData;
         private int activityCellWord=-1;
         void bindActivity(int word){activityCellWord=word;}
+        void bindScreens(int screens, int diameters) { headerData[Header.SCREEN_FACES.word] = screens; headerData[Header.DIAMETERS.word] = diameters; }
         int word(Field f){return Math.toIntExact(columns.get(f).offset()/4);}
         long endOffset(){return endOffset;}
         /** Source occupancy must be rebuilt before contacts; bed height is derived from its actual deposit rows. */
@@ -104,6 +107,7 @@ final class VulkanGranularMotion implements AutoCloseable {
         stage(command,l,0,Math.max(l.state.cells(),l.state.particleCapacity()),h,0);
         stage(command,l,1,l.state.particleCapacity(),h,0);
     }
+    void recordBeginInterval(VkCommandBuffer command,Layout l,double h){stage(command,l,13,l.state.particleCapacity(),h,0);}
     static double maximumSpeed(VulkanRegionStorage.Candidate candidate,Layout layout){
         var data=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
         candidate.read(layout.columns.get(Field.MAX_SPEED).offset(),data);

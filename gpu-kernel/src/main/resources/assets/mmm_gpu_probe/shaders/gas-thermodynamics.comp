@@ -20,7 +20,7 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
-const uint ERROR_INVALID_STATE = 16384u;
+const uint ERROR_INVALID_STATE = 128u;
 int headerWord(int index) {
     return int(words[p.header + index]);
 }

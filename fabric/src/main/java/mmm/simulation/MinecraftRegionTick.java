@@ -72,6 +72,7 @@ final class MinecraftRegionTick {
 	void manualStep(ServerLevel level, FluidRegion region, MinecraftMotionExecutor motion) {
 		inputs.discardEntityResponse(region);
 		try {
+			if (region.collisionRefreshRequired()) refreshRegionInputs(level, region);
 			activityConnections.accept(region);
 			MinecraftRegionInputs.TickInputs captured;
 			try { captured = inputs.captureManualStep(level, region, profile.hasCapability(WorldCapability.THERMAL)); }
@@ -311,6 +312,10 @@ final class MinecraftRegionTick {
 					"物质、运动与力学无法从冻结真值构造私有候选；在线区域未修改并已安全暂停："
 							+ rejected.getMessage() + "；请查看 /mmm status"));
 			snapshots.sendToLevel(level, region);
+			return true;
+		}
+		if (failure instanceof FluidSolverBackend.MotionBlockedException blocked && inputs.hasPendingWorldMotion(region)) {
+			blockCollisionEdit(level, region, new FluidDomainContracts.CollisionEditBlockedException(blocked.getMessage(), blocked));
 			return true;
 		}
 		if (failure instanceof FluidSolverBackend.CandidateEvaluationRejectedException rejected) {

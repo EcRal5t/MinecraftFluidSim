@@ -9,6 +9,18 @@ base {
 
 version = project.mod_version
 
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += output + sourceSets.main.output + sourceSets.main.compileClasspath + sourceSets.main.runtimeClasspath
+    }
+}
+
+configurations {
+    gametestImplementation.extendsFrom implementation
+    gametestRuntimeOnly.extendsFrom runtimeOnly
+}
+
 repositories {
 	maven {
 		name = 'Modrinth'
@@ -25,7 +37,19 @@ loom {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
 		}
+        'mmm_gametest' { sourceSet sourceSets.gametest }
 	}
+    runs {
+        gameTest {
+            server()
+            source sourceSets.gametest
+            name 'MMM Game Test'
+            runDir 'build/gametest'
+            vmArg '-Dfabric-api.gametest'
+            vmArg '--enable-native-access=ALL-UNNAMED'
+            vmArg '-Xmx2g'
+        }
+    }
 }
 
 dependencies {
@@ -44,10 +68,11 @@ dependencies {
 	include project(':solver')
 	include project(':app')
 	include project(':gpu-kernel')
+	include('org.lwjgl:lwjgl:3.4.1') { transitive = false }
 	include('org.lwjgl:lwjgl:3.4.1:unsafe') { transitive = false }
 	include('org.lwjgl:lwjgl:3.4.1:natives-windows') { transitive = false }
 	['lwjgl-vulkan', 'lwjgl-shaderc', 'lwjgl-vma'].each { module ->
-		include("org.lwjgl:${module}:3.4.1") { transitive = false }
+		include implementation("org.lwjgl:${module}:3.4.1") { transitive = false }
 	}
 	['lwjgl-shaderc', 'lwjgl-vma'].each { module ->
 		include("org.lwjgl:${module}:3.4.1:natives-windows") { transitive = false }
@@ -75,6 +100,11 @@ tasks.withType(JavaCompile).configureEach {
 
 tasks.withType(Test).configureEach {
 	failOnNoDiscoveredTests = false
+}
+
+tasks.named('runGameTest') {
+	dependsOn tasks.named('gametestClasses')
+	classpath += project(':gpu-kernel').configurations.compileClasspath
 }
 
 def validationMetadataDir = layout.buildDirectory.dir('generated/validation-metadata')
@@ -150,8 +180,9 @@ tasks.register('runGpuProcessFlowsValidation', JavaExec) {
     systemProperty 'mmm.solverBackend', 'vulkan'
     systemProperty 'mmm.gpuDevice', providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 	systemProperty 'mmm.gpuDeviceName', providers.gradleProperty('gpuProbeDeviceName').getOrElse('')
-    args providers.gradleProperty('gpuProcessScenario').getOrElse('heat'), providers.gradleProperty('gpuProcessSteps').getOrElse('20')
-    def workDir = layout.buildDirectory.dir('gpu-process-flows-work').get().asFile
+    def scenario = providers.gradleProperty('gpuProcessScenario').getOrElse('heat')
+    args scenario, providers.gradleProperty('gpuProcessSteps').getOrElse('20')
+    def workDir = layout.buildDirectory.dir("gpu-process-flows-work/${scenario}").get().asFile
     workingDir workDir
     doFirst { workDir.mkdirs() }
 }

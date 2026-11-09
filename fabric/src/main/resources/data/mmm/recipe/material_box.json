@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    "III",
+    "IBI",
+    "III"
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "B": "minecraft:barrel"
+  },
+  "result": {
+    "id": "mmm:material_box",
+    "count": 1
+  }
+}

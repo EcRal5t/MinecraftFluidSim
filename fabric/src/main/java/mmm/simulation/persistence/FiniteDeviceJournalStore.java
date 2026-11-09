@@ -19,7 +19,7 @@ public final class FiniteDeviceJournalStore {
 	public record Journal(UUID operationId, UUID regionId, String dimensionId, long position,
 			long baseGeneration, long targetGeneration, long targetChecksum,
 			CrossDomainRecovery.JournalPhase phase, boolean placing, boolean drop,
-			UUID playerId, boolean offHand, UUID dropId, String sourceContents, String bodyContents, String profile) {
+			UUID playerId, boolean offHand, UUID dropId, String sourceContents, String bodyContents, String profile, String surfaceBefore, String surfaceAfter) {
 		public Journal {
 			if (operationId == null || regionId == null || playerId == null || dropId == null
 					|| dimensionId == null || phase == null || targetGeneration != baseGeneration + 1
@@ -30,10 +30,11 @@ public final class FiniteDeviceJournalStore {
 			FiniteThermalDeviceItemCodec.decode(bodyContents);
 			if (!sourceContents.isEmpty()) FiniteThermalDeviceItemCodec.decode(sourceContents);
 		}
+		public boolean surface() { return surfaceBefore != null; }
 		public Journal committed(long checksum) {
 			return new Journal(operationId, regionId, dimensionId, position, baseGeneration, targetGeneration,
 					checksum, CrossDomainRecovery.JournalPhase.REGION_COMMITTED, placing, drop, playerId,
-					offHand, dropId, sourceContents, bodyContents, profile);
+					offHand, dropId, sourceContents, bodyContents, profile, surfaceBefore, surfaceAfter);
 		}
 	}
 	private final Path directory;
@@ -47,7 +48,7 @@ public final class FiniteDeviceJournalStore {
 				// Only the atomically published WAL can precede a HEAD commit.
 				if (Files.isRegularFile(path) && name.endsWith(".nbt.tmp")) continue;
 				if (!Files.isRegularFile(path) || !name.endsWith(".nbt"))
-					throw new IOException("Unrecognized finite-device recovery evidence: " + path);
+					throw new IOException("Unrecognized finite-device journal file: " + path);
 				Journal journal = read(path);
 				if (!name.equals(journal.operationId() + ".nbt")) throw new IOException("Finite device WAL identity differs from filename");
 				result.add(journal);
@@ -88,7 +89,7 @@ public final class FiniteDeviceJournalStore {
 					tag.getBooleanOr("Placing", false), tag.getBooleanOr("Drop", false),
 					UUID.fromString(tag.getStringOr("Player", "")), tag.getBooleanOr("OffHand", false),
 					UUID.fromString(tag.getStringOr("DropId", "")), tag.getStringOr("Source", ""),
-					tag.getStringOr("Body", ""), tag.getStringOr("Profile", ""));
+					tag.getStringOr("Body", ""), tag.getStringOr("Profile", ""), tag.getString("SurfaceBefore").orElse(null), tag.getString("SurfaceAfter").orElse(null));
 		} catch (IllegalArgumentException invalid) { throw new IOException("Invalid finite device WAL", invalid); }
 	}
 	private CompoundTag encode(Journal journal) {
@@ -101,6 +102,7 @@ public final class FiniteDeviceJournalStore {
 		tag.putString("Player", journal.playerId().toString()); tag.putBoolean("OffHand", journal.offHand());
 		tag.putString("DropId", journal.dropId().toString()); tag.putString("Source", journal.sourceContents());
 		tag.putString("Body", journal.bodyContents()); tag.putString("Profile", journal.profile());
+		if(journal.surface()){tag.putString("SurfaceBefore",journal.surfaceBefore());tag.putString("SurfaceAfter",journal.surfaceAfter());}
 		return tag;
 	}
 }

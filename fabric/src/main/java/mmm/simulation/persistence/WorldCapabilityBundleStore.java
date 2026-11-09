@@ -56,13 +56,10 @@ public final class WorldCapabilityBundleStore {
 	/** The bundle is immutable once published: registries never change after the world's first admission. */
 	private static final long GENERATION = 1L;
 	private static final String POLICY_FILE = "server.properties";
-	/**
-	 * Persistence domains that carry their own committed truth and therefore require a committed bundle.
-	 * Registry snapshots are not here: the bundle is their only root, so a per-kind registry directory is
-	 * an unknown entry and locks the world rather than being adopted or migrated.
-	 */
+	/** Durable inventories and configuration interpreted by the committed world definitions. */
 	private static final Set<String> AUTHORITY_ROOTS = Set.of(
-			"container-transfer", "ownership", "region-state", "demo-workbench.nbt", "demo-workbench.nbt.tmp");
+			"container-transfer", "public-transfer", "device-transfer", "ownership", "region-state",
+			"processes.properties", "processes.properties.tmp", "demo-workbench.nbt", "demo-workbench.nbt.tmp");
 	/** Domains this store may create or read without proving authority. */
 	private static final Set<String> NON_AUTHORITY_ROOTS = Set.of(
 			"quarantine", POLICY_FILE, "world-capabilities");
@@ -139,10 +136,7 @@ public final class WorldCapabilityBundleStore {
 		return readCommitted();
 	}
 
-	/**
-	 * Authority roots may only exist under a committed bundle. Anything else under `mmm/` is unprovable
-	 * and is left byte for byte rather than adopted, reinterpreted or migrated.
-	 */
+	/** Checks the world's registered persistence domains against its capability bundle. */
 	private void validateMmmInventory(boolean committed) throws IOException {
 		if (!Files.exists(mmmDirectory, LinkOption.NOFOLLOW_LINKS)) return;
 		requireDirectory(mmmDirectory, "MMM persistence root");
@@ -161,7 +155,8 @@ public final class WorldCapabilityBundleStore {
 		}
 		for (String name : entries) {
 			Path entry = mmmDirectory.resolve(name);
-			if (name.equals(POLICY_FILE) || name.equals("demo-workbench.nbt") || name.equals("demo-workbench.nbt.tmp"))
+			if (name.equals(POLICY_FILE) || name.equals("demo-workbench.nbt") || name.equals("demo-workbench.nbt.tmp")
+					|| name.equals("processes.properties") || name.equals("processes.properties.tmp"))
 				requireRegularFile(entry, "MMM persistence file " + name);
 			else requireDirectory(entry, "MMM persistence domain " + name);
 		}

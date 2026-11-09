@@ -25,6 +25,18 @@ public final class MmmBlocks {
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
 	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
 	public static final Block MECHANICAL_DRIVER = register("mechanical_driver", MechanicalDriverBlock::new);
+	public static final Block MATERIAL_BOX = register("material_box", MaterialBoxBlock::new);
+	public static final Block VALVE = register("valve", ValveBlock::new);
+	public static final Block PROCESS_SENSOR = register("process_sensor", ProcessSensorBlock::new);
+	public static final Block SCREEN = register("screen", ScreenBlock::new);
+	public static final BlockEntityType<ScreenBlockEntity> SCREEN_ENTITY = Registry.register(
+			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("screen"),new BlockEntityType<>(ScreenBlockEntity::new,Set.of(SCREEN)));
+	public static final BlockEntityType<ProcessSensorBlockEntity> PROCESS_SENSOR_ENTITY = Registry.register(
+			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("process_sensor"),new BlockEntityType<>(ProcessSensorBlockEntity::new,Set.of(PROCESS_SENSOR)));
+	public static final BlockEntityType<MaterialBoxBlockEntity> MATERIAL_BOX_ENTITY = Registry.register(
+			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("material_box"),new BlockEntityType<>(MaterialBoxBlockEntity::new,Set.of(MATERIAL_BOX)));
+	public static final BlockEntityType<FluidPortBlockEntity> FLUID_PORT_ENTITY = Registry.register(
+			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("fluid_port"),new BlockEntityType<>(FluidPortBlockEntity::new,Set.of(FLUID_PORT)));
 	public static final BlockEntityType<FiniteHeatExchangerBlockEntity> FINITE_HEAT_EXCHANGER_ENTITY = Registry.register(
 			BuiltInRegistries.BLOCK_ENTITY_TYPE, MmmMod.id("finite_heat_exchanger"),
 			new BlockEntityType<>(FiniteHeatExchangerBlockEntity::new, Set.of(FINITE_HEAT_EXCHANGER)));
@@ -41,7 +53,7 @@ public final class MmmBlocks {
 	}
 
 	public static boolean isBoundary(BlockState state) {
-		return state.is(FLUID_BOUNDARY) || state.is(FLUID_PORT) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER) || state.is(MECHANICAL_DRIVER);
+		return state.is(FLUID_BOUNDARY) || state.is(FLUID_PORT) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER) || state.is(MECHANICAL_DRIVER) || state.is(PROCESS_SENSOR);
 	}
 
 	private static Block register(String path, Function<BlockBehaviour.Properties, Block> factory) {

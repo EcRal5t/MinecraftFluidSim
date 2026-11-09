@@ -40,7 +40,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         ACTIVITY_CELLS(30),
         ACTIVITY_FACES(31),
         PHASE_ENABLED(32),
-        MAXIMUM_PHASE_BATCHES(33), AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49);
+        MAXIMUM_PHASE_BATCHES(33), AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
+        SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55);
         final int word;
         Header(int word) {
             this.word = word;
@@ -65,7 +66,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
 
     enum Field {
         HEADER(4),
-        RULES(4),
+        RULES(4), SURFACE_RULES(4),
         CONTROL(4),
         HEAD(4),
         NEXT(4),
@@ -89,7 +90,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_RESIDUAL(8),
         PENDING_SLOT(4),
         ORPHAN_ENERGY(8),
-        ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4),
+        ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4), SURFACE_TEMPERATURE(8), SURFACE_CHANGED(4), SURFACE_REMOVED_MASS(8), SURFACE_RECEIVER(4),
         LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8);
         final int width;
         Field(int width) {
@@ -99,14 +100,17 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     record Inputs(VulkanGasThermodynamics.Layout gas, VulkanGasGeometry.Layout geometry,
         VulkanLiquidThermodynamics.Layout liquid, double gravity, long ambientMassUnits,
         VulkanThermalDeviceLayout device,
-        VulkanLiquidThermodynamics.Layout deviceCaloric) {}
+        VulkanLiquidThermodynamics.Layout deviceCaloric,int screenFacesWord) {
+        Inputs(VulkanGasThermodynamics.Layout gas,VulkanGasGeometry.Layout geometry,VulkanLiquidThermodynamics.Layout liquid,double gravity,long ambientMassUnits,
+               VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceCaloric){this(gas,geometry,liquid,gravity,ambientMassUnits,device,deviceCaloric,-1);}
+    }
     static final class Layout {
         int activityCellsWord = -1, activityFacesWord = -1;
         final VulkanLiquidPhaseRows.Layout rows;
         final Inputs inputs;
         final VulkanReactionProgressLayout progress;
-        final int rules, groups, cells, faces, dryProposals, scratchProposals, wallDevices;
-        final ByteBuffer ruleBytes;
+        final int rules, surfaceRules, groups, cells, faces, dryProposals, scratchProposals, wallDevices;
+        final ByteBuffer ruleBytes,surfaceRuleBytes;
         final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
         final long endOffset;
         Layout(VulkanRegionReactions.Configuration config, VulkanLiquidPhaseRows.Layout rows,
@@ -121,6 +125,25 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             var henryRules=config.chemistry().gasLiquidMassTransfers().stream().filter(r->carriers.contains(config.chemistry().phases().get(config.chemistry().phaseHandle(r.liquidPhaseId())).materialId())).toList();
             var vaporRules=config.thermal().transitions().stream().filter(t->t.interfaceRequirement()==mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS && carriers.contains(config.thermal().material(config.thermal().materialHandle(t.lowerEnergyMaterialId())).carrierId())).toList();
             rules = Math.addExact(henryRules.size(),vaporRules.size());
+            surfaceRules=inputs.device()==null?0:inputs.device().definitions().surfaceSpeciesCount();
+            surfaceRuleBytes=ByteBuffer.allocateDirect(Math.multiplyExact(112,surfaceRules)).order(ByteOrder.LITTLE_ENDIAN);
+            if(inputs.device()!=null){int index=0,slotIndex=0;for(var slot:inputs.device().definitions().surfaces()){
+                var material=slot.definition();
+                int direction=switch(slot.face()){case WEST->1;case EAST->0;case DOWN->3;case UP->2;case NORTH->5;case SOUTH->4;};
+                for(var adsorbate:slot.adsorbates()){
+                    int component=inputs.gas().gas().definitions().componentIds().indexOf(adsorbate.componentId());
+                    int species=config.chemistry().speciesHandle(adsorbate.speciesId());
+                    if(component<0||!inputs.gas().gas().definitions().allowedSpecies().get(component).contains(adsorbate.speciesId()))
+                        throw new IllegalArgumentException("Surface gas species is unavailable");
+                    long unit=config.chemistry().speciesMassUnits(species,1);
+                    surfaceRuleBytes.putInt(slot.device()).putInt(direction).putInt(component).putInt(species).putInt(slotIndex).putInt(index++).putLong(unit);
+                    for(double value:new double[]{mmm.units.Mass.kilograms(slot.loadingMassUnits())*material.siteCapacityMolesPerKg()*1e6,
+                            material.exchangeMolesPerSquareMeterSecond()*material.effectiveAreaFactor()*1e6,
+                            adsorbate.affinityPerPa(),adsorbate.referenceTemperatureK(),adsorbate.adsorptionHeatJPerMol(),
+                            adsorbate.referenceEnergyJPerMol(),adsorbate.heatCapacityJPerMolK(),material.minimumTemperatureK(),
+                            material.maximumTemperatureK(),material.maximumPressurePa()})surfaceRuleBytes.putDouble(value);
+                }slotIndex++;}}
+            surfaceRuleBytes.flip();
             dryProposals=inputs.device()==null?0:Math.multiplyExact(inputs.device().portCapacity(),rules);
             scratchProposals=Math.max(Math.multiplyExact(cells,rules),dryProposals);
             wallDevices=inputs.device()==null?0:inputs.device().deviceCapacity();
@@ -175,6 +198,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 int count = switch (f) {
                     case HEADER -> 160;
                     case RULES -> 32 * rules;
+                    case SURFACE_RULES -> 28 * surfaceRules;
                     case CONTROL -> 8;
                     case HEAD -> groups;
                     case GAS_TO_LIQUID_MASS, LIQUID_TO_GAS_MASS -> Math.multiplyExact(cells, 7);
@@ -184,7 +208,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
                     case LIQUID_QUANTA -> rows.rows;
                     case NEXT, KG, TEMP, GAS_TEMP -> scratchProposals;
-                    case WALL_RESERVATION -> wallDevices;
+                    case WALL_RESERVATION, SURFACE_TEMPERATURE, SURFACE_CHANGED -> wallDevices;
                     case WALL_DELTA -> Math.multiplyExact(2,wallDevices);
                     case WALL_PENDING -> dryProposals==0?0:Math.multiplyExact(cells,rules);
                     default -> cells;
@@ -217,6 +241,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             h[Header.PHASE_PENDING_SUMMARY.word] =
                 progress.word(VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY);
             h[Header.GROUP_COUNT.word] = groups;
+            h[Header.SURFACE_RULE_COUNT.word]=surfaceRules;
+            h[Header.SCREEN_FACES.word]=inputs.screenFacesWord();
             h[Header.FACE_COUNT.word] = faces;
             h[Header.MATERIAL_COUNT.word] = rows.source.materialCount();
             h[Header.SPECIES_COUNT.word] = rows.species;
@@ -244,6 +270,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 h[Header.WALL_GENERATION.word]=device.word(VulkanThermalDeviceLayout.Field.GENERATION);
                 h[Header.WALL_REQUEST_GENERATION.word]=device.word(VulkanThermalDeviceLayout.Field.REQUEST_GENERATION);
                 h[Header.WALL_ENERGY_CHANGE.word]=device.word(VulkanThermalDeviceLayout.Field.DEVICE_ENERGY_CHANGE);
+                h[Header.SURFACE_AMOUNTS.word]=device.word(VulkanThermalDeviceLayout.Field.SURFACE_AMOUNTS);
+                h[Header.SURFACE_RESIDUALS.word]=device.word(VulkanThermalDeviceLayout.Field.SURFACE_RESIDUALS);
+                h[Header.SURFACE_INTERCEPT.word]=device.word(VulkanThermalDeviceLayout.Field.SURFACE_ENERGY_INTERCEPT);
+                h[Header.SURFACE_CAPACITY.word]=device.word(VulkanThermalDeviceLayout.Field.SURFACE_HEAT_CAPACITY);
             } else h[Header.WALL_COUNTS.word]=-1;
             for (var f : Field.values())
                 h[WORK_FIELDS + f.ordinal()] = word(f);
@@ -262,7 +292,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     rows.column(VulkanLiquidPhaseRows.Field.HEADER).offset(), rows.headerBytes()));
         }
         List<VulkanGasThermodynamics.TableChunk> tables() {
-            return List.of(new VulkanGasThermodynamics.TableChunk(column(Field.RULES).offset(), ruleBytes.duplicate()));
+            var chunks=new ArrayList<VulkanGasThermodynamics.TableChunk>();
+            if(ruleBytes.hasRemaining())chunks.add(new VulkanGasThermodynamics.TableChunk(column(Field.RULES).offset(),ruleBytes.duplicate()));
+            if(surfaceRuleBytes.hasRemaining())chunks.add(new VulkanGasThermodynamics.TableChunk(column(Field.SURFACE_RULES).offset(),surfaceRuleBytes.duplicate()));
+            return List.copyOf(chunks);
         }
         List<VulkanEnergyLedger.Stream> roundoffStreams() {
             var a = new ArrayList<>(rows.energyChangeStreams());
@@ -388,15 +421,16 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             timed(c,"gas-transfer-dry-wall",()->{
                 stage(c,l,13,l.dryProposals);
                 stage(c,l,4,l.groups,7);
-                stage(c,l,14,l.wallDevices);
             });
         }
+        if(l.surfaceRules>0)stage(c,l,16,1);
         timed(c,"gas-transfer-momentum-heat",()->{
             stage(c,l,5,l.faces);
             stage(c,l,6,l.cells);
             stage(c,l,7,l.inputs.gas().gas().nodeCapacity());
             stage(c,l,11,l.cells);
         });
+        if(l.dryProposals>0 || l.surfaceRules>0)stage(c,l,14,l.wallDevices);
         timed(c,"gas-transfer-assemble",()->rows.recordAssemble(c,l.rows));
     }
     void recordPublish(VkCommandBuffer c, Layout l) {

@@ -247,7 +247,7 @@ void largeProduct(int index, int lane) {
 // velocities required to evaluate each marked row against the complete vector.
 void markInducedVelocity(int velocity){
     int rows=headerValue(H_ROW_COUNT),liquid=headerValue(H_LIQUID_COUNT);
-    int faces=headerValue(H_VELOCITY_COUNT)-(rows-liquid),owner=rows+velocity;
+    int faces=headerValue(H_FACE_COUNT),owner=rows+velocity;
     bool induced=false;
     for(int i=readIntField(FIELD_OFFSETS,owner);i<readIntField(FIELD_OFFSETS,owner+1);i++){
         int term=readIntField(FIELD_ENTRIES,i),row=readIntField(FIELD_TERM_ROW,term);

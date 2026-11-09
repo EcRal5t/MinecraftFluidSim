@@ -26,15 +26,23 @@ final class VulkanThermalDeviceLayout {
     enum Field {
         COUNTS(4),GENERATION(8),REQUEST_GENERATION(8),MATERIAL(4),MASS_UNITS(8),INTERNAL_ENERGY(8),SPECIES_OFFSETS(4),SPECIES_HANDLES(4),SPECIES_AMOUNTS(8),
         PORT_DEVICE(4),PORT_CELL(4),PORT_DIRECTION(4),PORT_WALL_THICKNESS(8),PORT_WALL_K(8),PORT_FILM_THICKNESS(8),
-        AUDIT(4),DEVICE_ENERGY_CHANGE(8),FLUID_EXCHANGE(4),EXCHANGE_ROUNDOFF(4);
+        AUDIT(4),DEVICE_ENERGY_CHANGE(8),FLUID_EXCHANGE(4),EXCHANGE_ROUNDOFF(4),SURFACE_AMOUNTS(8),SURFACE_RESIDUALS(8),SURFACE_ENERGY_INTERCEPT(8),SURFACE_HEAT_CAPACITY(8);
         final int width;Field(int width){this.width=width;}
     }
     enum Audit { INITIAL_INVENTORY,EXTERNAL_SOURCE,EXTERNAL_SINK,SOLVER_EXCHANGE,ROUNDOFF_RESIDUAL }
     record Identity(String providerId,String objectId,String deviceTypeId) {
         static Identity of(FiniteThermalDeviceState value){return new Identity(value.providerId(),value.objectId(),value.deviceTypeId());}
     }
-    record Definitions(String thermalRegistryFingerprint,List<String> materialIds,List<Identity> identities){
-        Definitions{materialIds=List.copyOf(materialIds);identities=List.copyOf(identities);}
+    record SurfaceSlot(int device,mmm.thermal.FiniteThermalDeviceDefinition.LocalFace face,String materialId,long loadingMassUnits,
+                       double referenceTemperature,double referenceSpecificEnergy,double specificHeat,double areaFactor,
+                       List<mmm.thermal.SurfaceMaterialDefinition.Adsorbate> adsorbates,List<mmm.thermal.SurfaceMaterialDefinition.Catalysis> catalysts,
+                       mmm.thermal.SurfaceMaterialDefinition definition){
+        SurfaceSlot{adsorbates=List.copyOf(adsorbates);catalysts=List.copyOf(catalysts);}
+    }
+    record Definitions(String thermalRegistryFingerprint,List<String> materialIds,List<Identity> identities,List<SurfaceSlot> surfaces){
+        Definitions(String fingerprint,List<String> materials,List<Identity> identities){this(fingerprint,materials,identities,List.of());}
+        Definitions{materialIds=List.copyOf(materialIds);identities=List.copyOf(identities);surfaces=List.copyOf(surfaces);}
+        int surfaceSpeciesCount(){return surfaces.stream().mapToInt(value->value.adsorbates().size()).sum();}
     }
     /** Captured port direction is -X,+X,-Y,+Y,-Z,+Z. Exposed area is derived by the thermal contact producer. */
     record Port(String providerId,String objectId,int cell,int direction,double wallThickness,double wallConductivity,double filmThickness){
@@ -48,8 +56,14 @@ final class VulkanThermalDeviceLayout {
         static Configuration fromRegistries(State initial,ThermalRegistry registry){
             initial.inventory().requireCompatible(registry);
             var materials=registry.materials().stream().filter(m->m.carrierKind()==ThermalMaterialDefinition.CarrierKind.DEVICE).toList();
+            var surfaces=new ArrayList<SurfaceSlot>();
+            for(int i=0;i<initial.inventory().devices().size();i++)for(var surface:initial.inventory().devices().get(i).surfaces()){
+                var material=registry.surfaceMaterial(surface.materialId());
+                surfaces.add(new SurfaceSlot(i,surface.face(),surface.materialId(),surface.loadingMassUnits(),material.referenceTemperatureK(),
+                        material.referenceSpecificEnergyJPerKg(),material.specificHeatJPerKgK(),material.effectiveAreaFactor(),material.adsorbates(),material.catalysis(),material));
+            }
             var definitions=new Definitions(registry.fingerprint(),materials.stream().map(ThermalMaterialDefinition::id).toList(),
-                    initial.inventory().devices().stream().map(Identity::of).toList());
+                    initial.inventory().devices().stream().map(Identity::of).toList(),surfaces);
             return new Configuration(definitions,initial,VulkanLiquidThermodynamics.tables(materials),
                     materials.stream().mapToDouble(ThermalMaterialDefinition::referenceSpecificEnergyJPerKg).toArray());
         }
@@ -73,7 +87,8 @@ final class VulkanThermalDeviceLayout {
         for(var f:Field.values()){
             int count=switch(f){case COUNTS->2;case SPECIES_OFFSETS->devices+1;case SPECIES_HANDLES,SPECIES_AMOUNTS->0;
                 case PORT_DEVICE,PORT_CELL,PORT_DIRECTION,PORT_WALL_THICKNESS,PORT_WALL_K,PORT_FILM_THICKNESS->ports;
-                case AUDIT->DYADIC_WORDS*Audit.values().length;case DEVICE_ENERGY_CHANGE->2*devices;case FLUID_EXCHANGE,EXCHANGE_ROUNDOFF->DYADIC_WORDS;default->devices;};
+                case AUDIT->DYADIC_WORDS*Audit.values().length;case DEVICE_ENERGY_CHANGE->2*devices;case FLUID_EXCHANGE,EXCHANGE_ROUNDOFF->DYADIC_WORDS;
+                case SURFACE_AMOUNTS,SURFACE_RESIDUALS->definitions.surfaceSpeciesCount();default->devices;};
             var column=new VulkanLiquidStateLayout.Column(align(cursor),count,f.width);columns.put(f,column);cursor=column.offset()+column.bindingBytes();
         }endOffset=align(cursor);Math.toIntExact(endOffset/4);
     }
@@ -92,6 +107,26 @@ final class VulkanThermalDeviceLayout {
             putLong(b,Field.GENERATION,i,body.generation());putLong(b,Field.REQUEST_GENERATION,i,body.generation());putInt(b,Field.MATERIAL,i,material);putLong(b,Field.MASS_UNITS,i,body.massUnits());putLong(b,Field.INTERNAL_ENERGY,i,Double.doubleToRawLongBits(body.internalEnergyJ()));
             putLong(b,Field.DEVICE_ENERGY_CHANGE,2*i,0);putLong(b,Field.DEVICE_ENERGY_CHANGE,2*i+1,0);
         }
+        int surfaceIndex=0,speciesIndex=0;
+        for(int i=0;i<devices;i++){putDouble(b,Field.SURFACE_ENERGY_INTERCEPT,i,0);putDouble(b,Field.SURFACE_HEAT_CAPACITY,i,0);}
+        for(int i=0;i<inventory.devices().size();i++)for(var surface:inventory.devices().get(i).surfaces()){
+            if(surfaceIndex>=definitions.surfaces().size())throw new IllegalArgumentException("Unexpected fixed surface");
+            var slot=definitions.surfaces().get(surfaceIndex++);
+            if(slot.device()!=i||slot.face()!=surface.face()||!slot.materialId().equals(surface.materialId())||slot.loadingMassUnits()!=surface.loadingMassUnits())
+                throw new IllegalArgumentException("Fixed surface identities changed");
+            double loading=mmm.units.Mass.kilograms(slot.loadingMassUnits());
+            putDouble(b,Field.SURFACE_ENERGY_INTERCEPT,i,number(b,Field.SURFACE_ENERGY_INTERCEPT,i)+loading*(slot.referenceSpecificEnergy()-slot.specificHeat()*slot.referenceTemperature()));
+            putDouble(b,Field.SURFACE_HEAT_CAPACITY,i,number(b,Field.SURFACE_HEAT_CAPACITY,i)+loading*slot.specificHeat());
+            for(var adsorbate:slot.adsorbates()){
+                long amount=surface.speciesQuanta().getOrDefault(adsorbate.speciesId(),0L);
+                putLong(b,Field.SURFACE_AMOUNTS,speciesIndex,amount);
+                putDouble(b,Field.SURFACE_RESIDUALS,speciesIndex++,surface.residualQuanta().getOrDefault(adsorbate.speciesId(),0.0));
+                double moles=amount/(double)mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL;
+                putDouble(b,Field.SURFACE_ENERGY_INTERCEPT,i,number(b,Field.SURFACE_ENERGY_INTERCEPT,i)+moles*(adsorbate.referenceEnergyJPerMol()-adsorbate.heatCapacityJPerMolK()*adsorbate.referenceTemperatureK()));
+                putDouble(b,Field.SURFACE_HEAT_CAPACITY,i,number(b,Field.SURFACE_HEAT_CAPACITY,i)+moles*adsorbate.heatCapacityJPerMolK());
+            }
+        }
+        if(surfaceIndex!=definitions.surfaces().size())throw new IllegalArgumentException("Fixed surface is missing");
         var seen=new java.util.HashSet<String>();
         for(int i=0;i<state.ports().size();i++){var port=state.ports().get(i);int device=identity(port.providerId(),port.objectId());
             if(device<0||port.cell()>=cells||!seen.add(device+":"+port.cell()+":"+port.direction()))throw new IllegalArgumentException("Finite device port is absent, repeated or outside the region");
@@ -107,9 +142,16 @@ final class VulkanThermalDeviceLayout {
         var b=view(source);int count=getInt(b,Field.COUNTS,0),portCount=getInt(b,Field.COUNTS,1);
         if(count!=definitions.identities().size()||count>devices||portCount<0||portCount>ports)throw new IllegalStateException("Finite device checkpoint counts differ from identities");
         var result=new ArrayList<FiniteThermalDeviceState>();var capturedPorts=new ArrayList<Port>();
+        int surfaceIndex=0,speciesIndex=0;
         for(int i=0;i<count;i++){var id=definitions.identities().get(i);int material=getInt(b,Field.MATERIAL,i);if(material<0||material>=definitions.materialIds().size())throw new IllegalStateException("Finite thermal material handle exceeds definitions");
             var body=new FiniteThermalBodyState(getLong(b,Field.GENERATION,i),definitions.thermalRegistryFingerprint(),definitions.materialIds().get(material),getLong(b,Field.MASS_UNITS,i),Double.longBitsToDouble(getLong(b,Field.INTERNAL_ENERGY,i)));
-            result.add(new FiniteThermalDeviceState(id.providerId(),id.objectId(),id.deviceTypeId(),body));}
+            var surfaces=new ArrayList<mmm.thermal.FixedSurfaceState>();
+            while(surfaceIndex<definitions.surfaces().size()&&definitions.surfaces().get(surfaceIndex).device()==i){
+                var slot=definitions.surfaces().get(surfaceIndex++);var amounts=new java.util.TreeMap<String,Long>();var residuals=new java.util.TreeMap<String,Double>();
+                for(var adsorbate:slot.adsorbates()){long amount=getLong(b,Field.SURFACE_AMOUNTS,speciesIndex);double residual=number(b,Field.SURFACE_RESIDUALS,speciesIndex++);if(amount>0)amounts.put(adsorbate.speciesId(),amount);else if(amount<0)throw new IllegalStateException("Negative adsorbed inventory");if(residual!=0)residuals.put(adsorbate.speciesId(),residual);}
+                surfaces.add(new mmm.thermal.FixedSurfaceState(slot.face(),slot.materialId(),slot.loadingMassUnits(),amounts,residuals));
+            }
+            result.add(new FiniteThermalDeviceState(id.providerId(),id.objectId(),id.deviceTypeId(),body,surfaces));}
         for(int i=0;i<portCount;i++){int device=getInt(b,Field.PORT_DEVICE,i);if(device<0||device>=count)throw new IllegalStateException("Finite device port handle exceeds identities");var id=definitions.identities().get(device);
             capturedPorts.add(new Port(id.providerId(),id.objectId(),getInt(b,Field.PORT_CELL,i),getInt(b,Field.PORT_DIRECTION,i),number(b,Field.PORT_WALL_THICKNESS,i),number(b,Field.PORT_WALL_K,i),number(b,Field.PORT_FILM_THICKNESS,i)));}
         var audit=new FiniteThermalDeviceAudit(readAudit(b,Audit.INITIAL_INVENTORY),readAudit(b,Audit.EXTERNAL_SOURCE),readAudit(b,Audit.EXTERNAL_SINK),readAudit(b,Audit.SOLVER_EXCHANGE),readAudit(b,Audit.ROUNDOFF_RESIDUAL));

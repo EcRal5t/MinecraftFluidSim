@@ -40,7 +40,8 @@ final class SolverRuntimeCodec {
 			for(var body:bodies){
 				out.writeLong(body.bodyId().getMostSignificantBits());out.writeLong(body.bodyId().getLeastSignificantBits());
 				var bounds=body.bounds();
-				for(double value:new double[]{bounds.minimumX(),bounds.minimumY(),bounds.minimumZ(),bounds.maximumX(),bounds.maximumY(),bounds.maximumZ(),body.velocityXMetresPerSecond(),body.velocityYMetresPerSecond(),body.velocityZMetresPerSecond()})out.writeLong(Double.doubleToRawLongBits(value));
+				for(double value:new double[]{bounds.minimumX(),bounds.minimumY(),bounds.minimumZ(),bounds.maximumX(),bounds.maximumY(),bounds.maximumZ(),body.velocityXMetresPerSecond(),body.velocityYMetresPerSecond(),body.velocityZMetresPerSecond(),body.centerXMetres(),body.centerYMetres(),body.centerZMetres(),body.angularXPerSecond(),body.angularYPerSecond(),body.angularZPerSecond(),body.inverseMassPerKilogram()})out.writeLong(Double.doubleToRawLongBits(value));
+				out.writeInt(body.responseAxis());
 			}
 		}return bytes.toByteArray();
 	}
@@ -73,7 +74,10 @@ final class SolverRuntimeCodec {
 			for(int i=0;i<bodyCount;i++){
 				var id=new java.util.UUID(input.readLong(),input.readLong());
 				var bounds=new MovingBodyFluidCoupling.Bounds(readDoubleBits(input),readDoubleBits(input),readDoubleBits(input),readDoubleBits(input),readDoubleBits(input),readDoubleBits(input));
-				bodies.add(new MovingBodyFluidCoupling.Request(id,bounds,readDoubleBits(input),readDoubleBits(input),readDoubleBits(input)));
+				double vx=readDoubleBits(input),vy=readDoubleBits(input),vz=readDoubleBits(input);
+				double cx=readDoubleBits(input),cy=readDoubleBits(input),cz=readDoubleBits(input);
+				double wx=readDoubleBits(input),wy=readDoubleBits(input),wz=readDoubleBits(input),inverseMass=readDoubleBits(input);
+				bodies.add(new MovingBodyFluidCoupling.Request(id,bounds,vx,vy,vz,cx,cy,cz,wx,wy,wz,input.readInt(),inverseMass));
 			}
 			if(input.read()!=-1)throw new IOException("Trailing solver continuation bytes");return new Data(grid,sealed,precip,substeps,dirty,cursor,List.copyOf(pending),boundary,pressure,granular,new EntityBodyState(bodies));
 		}catch(IllegalArgumentException|ArithmeticException invalid){throw new IOException("Invalid solver continuation",invalid);}

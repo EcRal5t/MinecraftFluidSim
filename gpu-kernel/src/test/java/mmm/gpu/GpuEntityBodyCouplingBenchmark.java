@@ -24,12 +24,12 @@ public final class GpuEntityBodyCouplingBenchmark {
             var solution=column(cursor,size,8,a);var work=column(cursor,5*size,8,a);var problem=column(cursor,2*size+1,8,a);var control=column(cursor,16,8,a);
             var pressure=new VulkanCoupledPressure.PressureBuffers(starts,columns,values,rows,solution,work,problem,control);
             int faceCount=geometry.faces().count()/4;
-            var coupled=new VulkanCoupledPressure.Layout(n,n,faceCount,2*faceCount,pressure,cursor[0],a);
-            cursor[0]=coupled.endOffset();
-            var temperatures=column(cursor,liquid.slotCount(),8,a);
-            var first=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,1),new mmm.world.MovingBodyFluidCoupling.Bounds(.5,.75,.75,1.25,1.25,1.5),.4,.2,0);
+            var first=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,1),new mmm.world.MovingBodyFluidCoupling.Bounds(.5,.75,.75,1.25,1.25,1.5),.4,.2,0,.875,1.0,1.125,0,0,.5,-1,0);
             var second=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,2),new mmm.world.MovingBodyFluidCoupling.Bounds(.75,.875,1,1.5,1.375,1.75),.4,.2,0);
             var config=new VulkanEntityBodyCoupling.Configuration(new mmm.fluid.EntityBodyState(List.of(first,second)),grid,grid,grid,h);
+            var coupled=new VulkanCoupledPressure.Layout(n,n,faceCount,faceCount+4,2*faceCount+24*config.cellEntries(),pressure,cursor[0],a);
+            cursor[0]=coupled.endOffset();
+            var temperatures=column(cursor,liquid.slotCount(),8,a);
             var body=new VulkanEntityBodyCoupling.Layout(mmm.spatial.SpatialGrid.rectangular(grid,grid,grid),4,2*config.cellEntries(),size,geometry.masks(),geometry.cells(),geometry.faces(),geometry.occupied(),cursor[0],a);
             var viscous=new VulkanLiquidViscosity.Layout(liquid,geometry.cells(),geometry.faces(),geometry.walls(),word(temperatures),-1,
                     new VulkanLiquidViscosity.Tables(new int[]{0,1,2},new double[]{273,1000,.001,.003,273,1000,.05,.1}),body.prescribedContacts(),false,body.endOffset(),a);
@@ -67,8 +67,14 @@ public final class GpuEntityBodyCouplingBenchmark {
                     },body.column(VulkanEntityBodyCoupling.Field.BODY_RESULTS).offset(),VulkanEntityBodyCoupling.BODY_RESULT_BYTES*config.bodies().bodies().size());
                     if(feedback.error()!=0)throw new IllegalStateException("Entity body candidate error="+feedback.error());int error=candidate.finishBatch((cmd,input,output,errors,staging,stack)->{});if(error!=0)throw new IllegalStateException("Entity body finish error="+error);
                     var occupied=ByteBuffer.allocate(8*n).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.OCCUPIED_SVQ).offset(),occupied);exactVolume=0;for(int c=0;c<n;c++)exactVolume+=occupied.getLong(8*c);
+                    int face=liquid.grid().faceAt(2,2,2,0);
+                    var faceArea=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+                    candidate.read(body.column(VulkanEntityBodyCoupling.Field.FACE_AREA).offset()+8L*face,faceArea);
+                    if(Math.abs(faceArea.getDouble(0)-.75)>1e-12)
+                        throw new IllegalStateException("Moving bodies did not close their shared face by geometric union");
                     var sourceWork=ByteBuffer.allocate(8*n).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.SOURCE_WORK).offset(),sourceWork);sumWork=0;for(int c=0;c<n;c++)sumWork+=sourceWork.getDouble(8*c);
                     result=body.result(feedback.feedback(),config,sumWork);
+                    requireContactVelocity(candidate,body,liquid.grid(),first,h,dt,solution,viscous,result);
                     double viscousWork=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.SOURCE_CELL_WORK));
                     double viscousHeat=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT));
                     double beforeK=sum(candidate,viscous.column(VulkanLiquidViscosity.Field.SOURCE_FACE_K));
@@ -90,6 +96,38 @@ public final class GpuEntityBodyCouplingBenchmark {
             System.out.printf("Entity module complete: exactUnionSvq=%d externalWork=%.12g sourceWork=%.12g%n",exactVolume,result.externalWorkJoules(),sumWork);
         }
     }
+    private static void requireContactVelocity(VulkanRegionStorage.Candidate candidate,VulkanEntityBodyCoupling.Layout body,
+                                               mmm.spatial.SpatialGrid grid,mmm.world.MovingBodyFluidCoupling.Request source,double h,double dt,
+                                               VulkanLiquidStateLayout.Column pressure,VulkanLiquidViscosity.Layout viscosity,mmm.world.MovingBodyFluidCoupling.Result result){
+        var count=ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.CONTROL).offset(),count);
+        int contacts=count.getInt(8),capacity=body.contactCapacity;
+        var owners=ByteBuffer.allocate(4*capacity).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.CONTACT_BODY).offset(),owners);
+        var faces=ByteBuffer.allocate(4*capacity).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.CONTACT_FACE).offset(),faces);
+        var speeds=ByteBuffer.allocate(8*capacity).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.CONTACT_SPEED).offset(),speeds);
+        var rows=ByteBuffer.allocate(8*capacity).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.PRESSURE_ROW).offset(),rows);
+        var coefficients=ByteBuffer.allocate(16*capacity).order(ByteOrder.LITTLE_ENDIAN);candidate.read(body.column(VulkanEntityBodyCoupling.Field.PRESSURE_COEFFICIENT).offset(),coefficients);
+        var shear=ByteBuffer.allocate(8*capacity).order(ByteOrder.LITTLE_ENDIAN);candidate.read(viscosity.column(VulkanLiquidViscosity.Field.CONTACT_IMPULSE).offset(),shear);
+        var pressures=ByteBuffer.allocate(Math.toIntExact(pressure.bytes())).order(ByteOrder.LITTLE_ENDIAN);candidate.read(pressure.offset(),pressures);
+        double[] torque=new double[3];boolean angular=false;
+        for(int i=0;i<contacts;i++)if(owners.getInt(4*i)==0){
+            int face=faces.getInt(4*i),axis=grid.faceAxis(face);double[] point=new double[3];
+            for(int a=0;a<3;a++)point[a]=(grid.faceCoordinate(face,a)+(a==axis?0:.5))*h;
+            double expected=source.surfaceVelocity(axis,point[0],point[1],point[2]);
+            if(Math.abs(speeds.getDouble(8*i)-expected)>1e-12)throw new AssertionError("Contact did not use surface velocity");
+            double linear=axis==0?source.velocityXMetresPerSecond():axis==1?source.velocityYMetresPerSecond():source.velocityZMetresPerSecond();
+            angular |= Math.abs(expected-linear)>1e-8;
+            double impulse=shear.getDouble(8*i);
+            for(int side=0;side<2;side++){int row=rows.getInt(8*i+4*side);if(row>=0)impulse+=dt*h*h*h*coefficients.getDouble(16*i+8*side)*Math.max(0,pressures.getDouble(8*row));}
+            double[] r={point[0]-source.centerXMetres(),point[1]-source.centerYMetres(),point[2]-source.centerZMetres()};
+            torque[(axis+1)%3]+=r[(axis+2)%3]*impulse;torque[(axis+2)%3]-=r[(axis+1)%3]*impulse;
+        }
+        if(!angular)throw new AssertionError("Body contacts did not sample angular velocity");
+        var impulse=result.bodyImpulses().stream().filter(value->value.bodyId().equals(source.bodyId())).findFirst().orElseThrow();
+        double[] actual={impulse.angularImpulseX(),impulse.angularImpulseY(),impulse.angularImpulseZ()};
+        for(int axis=0;axis<3;axis++)if(Math.abs(actual[axis]-torque[axis])>1e-8*Math.max(1,Math.abs(torque[axis])))
+            throw new AssertionError("Body angular impulse lost its contact point");
+    }
+
     private static void ambientClosure(VulkanDeviceContext context){
         int faces=6;long alignment=Math.max(8,context.storageOffsetAlignment());long[] cursor={0};
         var geometry=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);

@@ -31,7 +31,7 @@ final class MinecraftContainerActorAdapter {
 	ContainerRecoveryCoordinator.Convergence applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
 		return switch (journal.actor()) {
 			case ContainerTransferActor.PlayerHand player -> convergePlayer(server, player, journal);
-			case ContainerTransferActor.Dispenser dispenser -> convergeDispenser(server, dispenser, journal);
+			case ContainerTransferActor.BlockInventory dispenser -> convergeDispenser(server, dispenser, journal);
 		};
 	}
 
@@ -43,7 +43,7 @@ final class MinecraftContainerActorAdapter {
 		if(current==null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
 		try {
 			mmm.transfer.TransferActorState state=null;
-			if(journal.actor() instanceof ContainerTransferActor.Dispenser actor && actor.inventoryId()!=null)
+			if(journal.actor() instanceof ContainerTransferActor.BlockInventory actor && actor.inventoryId()!=null)
 				state=mmm.transfer.TransferActorState.decode(current.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
 			return classifyInventory(ContainerItemMapper.fingerprint(current),state,journal,readback);
 		} catch(RuntimeException third) { return CrossDomainRecovery.ExternalTruth.THIRD; }
@@ -51,7 +51,7 @@ final class MinecraftContainerActorAdapter {
 	static CrossDomainRecovery.ExternalTruth classifyInventory(ContainerTransferJournal.ItemFingerprint inventory,
 			mmm.transfer.TransferActorState state,ContainerTransferJournal journal,boolean readback) {
 		boolean before=true,after=true;
-		if(journal.actor() instanceof ContainerTransferActor.Dispenser actor && actor.inventoryId()!=null) {
+		if(journal.actor() instanceof ContainerTransferActor.BlockInventory actor && actor.inventoryId()!=null) {
 			before=state!=null && state.instanceId().equals(actor.inventoryId()) && state.generation()==actor.generation();
 			after=state!=null && state.instanceId().equals(actor.inventoryId()) && state.generation()==actor.generation()+1;
 		}
@@ -74,7 +74,7 @@ final class MinecraftContainerActorAdapter {
 				PlayerInventorySaveVerifier.forceAndVerify(server.getWorldPath(LevelResource.PLAYER_DATA_DIR)
 						.resolve(playerActor.playerId() + ".dat"), expected.buildResult());
 			}
-			case ContainerTransferActor.Dispenser dispenser -> {
+			case ContainerTransferActor.BlockInventory dispenser -> {
 				ServerLevel level = level(server, dispenser.dimensionId());
 				if (level == null) throw new IOException("Container transfer actor dimension is not loaded");
 				// Minecraft exposes only a dimension-wide public flush here. A non-flushing autosave
@@ -107,13 +107,13 @@ final class MinecraftContainerActorAdapter {
 
 	private static ContainerRecoveryCoordinator.Convergence convergeDispenser(
 			MinecraftServer server,
-			ContainerTransferActor.Dispenser actor,
+			ContainerTransferActor.BlockInventory actor,
 			ContainerTransferJournal journal
 	) {
 		ServerLevel level = level(server, actor.dimensionId());
 		BlockPos position = new BlockPos(actor.blockX(), actor.blockY(), actor.blockZ());
 		if (level == null || !level.hasChunkAt(position)) return ContainerRecoveryCoordinator.Convergence.UNAVAILABLE;
-		if (!(level.getBlockEntity(position) instanceof DispenserBlockEntity dispenser)
+		if (!(level.getBlockEntity(position) instanceof net.minecraft.world.Container dispenser)
 				|| actor.slot() >= dispenser.getContainerSize()) {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
@@ -143,11 +143,11 @@ final class MinecraftContainerActorAdapter {
 						? InteractionHand.MAIN_HAND : InteractionHand.OFF_HAND;
 				yield owner.getItemInHand(hand);
 			}
-			case ContainerTransferActor.Dispenser dispenser -> {
+			case ContainerTransferActor.BlockInventory dispenser -> {
 				ServerLevel owner = level(server, dispenser.dimensionId());
 				BlockPos position = new BlockPos(dispenser.blockX(), dispenser.blockY(), dispenser.blockZ());
 				if (owner == null || !owner.hasChunkAt(position)) yield null;
-				if (!(owner.getBlockEntity(position) instanceof DispenserBlockEntity inventory)
+				if (!(owner.getBlockEntity(position) instanceof net.minecraft.world.Container inventory)
 						|| dispenser.slot() >= inventory.getContainerSize()) yield ItemStack.EMPTY;
 				yield inventory.getItem(dispenser.slot());
 			}
@@ -162,13 +162,13 @@ final class MinecraftContainerActorAdapter {
 		}
 	}
 	static boolean matchesGeneration(ItemStack item,ContainerTransferActor actor,boolean after) {
-		if (!(actor instanceof ContainerTransferActor.Dispenser dispenser) || dispenser.inventoryId()==null) return true;
+		if (!(actor instanceof ContainerTransferActor.BlockInventory dispenser) || dispenser.inventoryId()==null) return true;
 		try {
 			var state=mmm.transfer.TransferActorState.decode(item.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
 			return state.instanceId().equals(dispenser.inventoryId()) && state.generation()==dispenser.generation()+(after?1:0);
 		} catch (RuntimeException invalid) { return false; }
 	}
-	static void attachAfterGeneration(ItemStack item,ContainerTransferActor.Dispenser actor) {
+	static void attachAfterGeneration(ItemStack item,ContainerTransferActor.BlockInventory actor) {
 		if(actor.inventoryId()!=null) item.set(mmm.item.MmmComponents.TRANSFER_ACTOR,
 				new mmm.transfer.TransferActorState(actor.inventoryId(),Math.addExact(actor.generation(),1)).encode());
 	}

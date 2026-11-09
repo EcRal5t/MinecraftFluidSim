@@ -1,0 +1,119 @@
+{
+  "variants": {
+    "facing=north,opening=0": {
+      "model": "mmm:block/valve_0"
+    },
+    "facing=north,opening=1": {
+      "model": "mmm:block/valve_1"
+    },
+    "facing=north,opening=2": {
+      "model": "mmm:block/valve_2"
+    },
+    "facing=north,opening=3": {
+      "model": "mmm:block/valve_3"
+    },
+    "facing=north,opening=4": {
+      "model": "mmm:block/valve_4"
+    },
+    "facing=south,opening=0": {
+      "model": "mmm:block/valve_0",
+      "y": 180
+    },
+    "facing=south,opening=1": {
+      "model": "mmm:block/valve_1",
+      "y": 180
+    },
+    "facing=south,opening=2": {
+      "model": "mmm:block/valve_2",
+      "y": 180
+    },
+    "facing=south,opening=3": {
+      "model": "mmm:block/valve_3",
+      "y": 180
+    },
+    "facing=south,opening=4": {
+      "model": "mmm:block/valve_4",
+      "y": 180
+    },
+    "facing=west,opening=0": {
+      "model": "mmm:block/valve_0",
+      "y": 270
+    },
+    "facing=west,opening=1": {
+      "model": "mmm:block/valve_1",
+      "y": 270
+    },
+    "facing=west,opening=2": {
+      "model": "mmm:block/valve_2",
+      "y": 270
+    },
+    "facing=west,opening=3": {
+      "model": "mmm:block/valve_3",
+      "y": 270
+    },
+    "facing=west,opening=4": {
+      "model": "mmm:block/valve_4",
+      "y": 270
+    },
+    "facing=east,opening=0": {
+      "model": "mmm:block/valve_0",
+      "y": 90
+    },
+    "facing=east,opening=1": {
+      "model": "mmm:block/valve_1",
+      "y": 90
+    },
+    "facing=east,opening=2": {
+      "model": "mmm:block/valve_2",
+      "y": 90
+    },
+    "facing=east,opening=3": {
+      "model": "mmm:block/valve_3",
+      "y": 90
+    },
+    "facing=east,opening=4": {
+      "model": "mmm:block/valve_4",
+      "y": 90
+    },
+    "facing=up,opening=0": {
+      "model": "mmm:block/valve_0",
+      "x": 270
+    },
+    "facing=up,opening=1": {
+      "model": "mmm:block/valve_1",
+      "x": 270
+    },
+    "facing=up,opening=2": {
+      "model": "mmm:block/valve_2",
+      "x": 270
+    },
+    "facing=up,opening=3": {
+      "model": "mmm:block/valve_3",
+      "x": 270
+    },
+    "facing=up,opening=4": {
+      "model": "mmm:block/valve_4",
+      "x": 270
+    },
+    "facing=down,opening=0": {
+      "model": "mmm:block/valve_0",
+      "x": 90
+    },
+    "facing=down,opening=1": {
+      "model": "mmm:block/valve_1",
+      "x": 90
+    },
+    "facing=down,opening=2": {
+      "model": "mmm:block/valve_2",
+      "x": 90
+    },
+    "facing=down,opening=3": {
+      "model": "mmm:block/valve_3",
+      "x": 90
+    },
+    "facing=down,opening=4": {
+      "model": "mmm:block/valve_4",
+      "x": 90
+    }
+  }
+}

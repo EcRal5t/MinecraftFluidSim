@@ -16,6 +16,7 @@ repositories {
 dependencies {
 	api project(':solver')
 	testImplementation project(path: ':solver', configuration: 'testArtifacts')
+	implementation 'org.lwjgl:lwjgl:3.4.1'
 	implementation 'org.lwjgl:lwjgl:3.4.1:unsafe'
 	implementation('org.lwjgl:lwjgl-shaderc:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }
 	implementation('org.lwjgl:lwjgl-vma:3.4.1') { exclude group: 'org.lwjgl', module: 'lwjgl' }

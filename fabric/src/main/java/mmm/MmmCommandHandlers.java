@@ -107,6 +107,7 @@ final class MmmCommandHandlers {
 		} else {
 			String materialId = switch (requested) {
 				case "fine_sand", "sand", BuiltinGranularDefinitions.FINE_SAND -> BuiltinGranularDefinitions.FINE_SAND;
+				case "fine_silt", BuiltinGranularDefinitions.FINE_SILT -> BuiltinGranularDefinitions.FINE_SILT;
 				case "light_beads", "beads", BuiltinGranularDefinitions.LIGHT_BEADS -> BuiltinGranularDefinitions.LIGHT_BEADS;
 				default -> null;
 			};
@@ -344,9 +345,6 @@ final class MmmCommandHandlers {
 	}
 	static int processStatus(CommandSourceStack source) throws CommandSyntaxException {
 		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().status(source.getPlayerOrException()));
-	}
-	static int processFeed(CommandSourceStack source,int interval) throws CommandSyntaxException {
-		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().startFeed(source.getPlayerOrException(), interval));
 	}
 	static int processDrive(CommandSourceStack source,int seconds) throws CommandSyntaxException {
 		return processReply(source, MmmRuntimeRegistry.require(source.getServer()).processes().startDrive(source.getPlayerOrException(), seconds));

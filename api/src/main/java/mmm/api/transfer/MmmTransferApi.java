@@ -22,6 +22,6 @@ public interface MmmTransferApi {
 	@FunctionalInterface
 	interface ActorProvider {
 		/** Return null when unavailable. Resolution must not load chunks or mutate inventories. */
-		DispenserAddress resolve(String objectId);
+		BlockInventoryAddress resolve(String objectId);
 	}
 }

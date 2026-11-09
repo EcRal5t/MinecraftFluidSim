@@ -25,6 +25,7 @@
   "item.mmm.material_bucket.chemical": "Chemical contents: %s groups, %s",
   "item.mmm.material_bucket.species": "    Species %s: %s",
   "item.mmm.granular_container": "Dry Granular Container",
+  "item.mmm.gas_container": "Gas Container",
   "item.mmm.granular_container.contents": "Dry solids: %s groups, %s full",
   "item.mmm.granular_container.group": "  %s — %s; mass %s kg",
   "item.mmm.granular_container.reactive": "    Reactive composition: %s species",
@@ -270,5 +271,12 @@
   "screen.mmm.demos.paused": "Paused",
   "screen.mmm.demos.running": "Running",
   "block.mmm.mechanical_driver": "Mechanical Driver",
-  "block.mmm.mechanical_driver.tooltip": "Install in the region shell; use an empty hand to start, sneak-use to stop."
+  "block.mmm.mechanical_driver.tooltip": "Install in the region shell; use an empty hand to start, sneak-use to stop.",
+  "block.mmm.material_box": "Material Box",
+  "block.mmm.process_sensor": "Process Sensor",
+  "block.mmm.valve": "Valve",
+  "block.mmm.screen": "Screen",
+  "item.mmm.co2_adsorbent": "CO₂ Adsorbent",
+  "item.mmm.hydration_catalyst": "Hydration Catalyst",
+  "item.mmm.creative_source.source.granular.fine_silt": "Fine Silt Source Template"
 }

@@ -5,6 +5,10 @@
     "mmm:fluid_port",
     "mmm:fluid_controller",
     "mmm:thermal_reservoir",
-    "mmm:mechanical_driver"
+    "mmm:mechanical_driver",
+    "mmm:material_box",
+    "mmm:valve",
+    "mmm:process_sensor",
+    "mmm:screen"
   ]
 }

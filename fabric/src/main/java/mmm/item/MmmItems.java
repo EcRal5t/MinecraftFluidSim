@@ -21,6 +21,12 @@ public final class MmmItems {
 			properties -> new MaterialBucketItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item GRANULAR_CONTAINER = register("granular_container",
 			properties -> new GranularContainerItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item GAS_CONTAINER = register("gas_container",
+			properties -> new GasContainerItem(properties.stacksTo(1).useItemDescriptionPrefix()));
+	public static final Item CO2_ADSORBENT = register("co2_adsorbent",
+			properties -> new SurfaceCoatingItem(properties.stacksTo(1).useItemDescriptionPrefix(), "mmm:co2_adsorbent"));
+	public static final Item HYDRATION_CATALYST = register("hydration_catalyst",
+			properties -> new SurfaceCoatingItem(properties.stacksTo(1).useItemDescriptionPrefix(), "mmm:hydration_catalyst"));
 	public static final Item CREATIVE_SOURCE = register("creative_source",
 			properties -> new CreativeSourceItem(properties.stacksTo(1).useItemDescriptionPrefix()));
 	public static final Item FIELD_PROBE = register("field_probe",

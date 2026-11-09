@@ -103,6 +103,8 @@ final class RegionRepositoryAdapter {
 		return new OwnershipTransactionCoordinator(this, files, ownershipStore);
 	}
 
+	mmm.thermal.FiniteThermalDeviceInventory readFiniteDevices(UUID id) throws IOException { return files.readFiniteDevices(id,thermalRegistry); }
+
 	List<String> loadMetadata(FluidRegionManager manager) {
 		List<String> issues = new ArrayList<>();
 		RegionGenerationStore.Discovery discovery;

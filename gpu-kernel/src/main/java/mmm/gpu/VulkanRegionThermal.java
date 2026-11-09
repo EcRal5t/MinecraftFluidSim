@@ -66,10 +66,17 @@ final class VulkanRegionThermal implements AutoCloseable {
     }
     static Layout currentGas(Layout layout,VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry,long alignment){
         var i=layout.input();var input=new VulkanThermalContacts.Inputs(i.liquid(),i.liquidThermal(),i.gas(),eos,geometry,i.granular(),i.granularThermal(),
-                i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.facesWord(),i.cellSize(),i.activityCellWord(),i.plicPlanesWord(),i.plicCellsWord());
+                i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.facesWord(),i.cellSize(),i.activityCellWord(),i.plicPlanesWord(),i.plicCellsWord(),i.screenFacesWord());
         var contacts=VulkanThermalContacts.layout(input,layout.contacts().materials,layout.conduction(),layout.contacts().header.offset(),alignment);
         contacts.wallGeometryWord=layout.contacts().wallGeometryWord;
         return new Layout(input,layout.conduction(),contacts,layout.reservoir(),layout.roundoff(),layout.endOffset());
+    }
+    static String describeError(int status) {
+        var causes=new ArrayList<String>();
+        if((status&128)!=0)causes.add("gas caloric");
+        if((status&256)!=0)causes.add("thermal conduction");
+        if((status&16384)!=0)causes.add("liquid or device caloric");
+        return causes.isEmpty()?"":" ("+String.join(", ",causes)+")";
     }
     private static VulkanEnergyLedger.Stream stream(VulkanThermalConduction.Layout l,VulkanThermalConduction.Field field,int sign){
         return new VulkanEnergyLedger.Stream(1,l.word(field),l.column(field).count(),2,sign);

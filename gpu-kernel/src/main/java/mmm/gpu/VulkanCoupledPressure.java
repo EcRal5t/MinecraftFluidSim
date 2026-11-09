@@ -30,6 +30,7 @@ final class VulkanCoupledPressure implements AutoCloseable {
         BLOCK_COUNT(4),
         LIQUID_COUNT(5),
         LARGE_COUNT(6),
+        FACE_COUNT(7),
         STARTS(8),
         COLUMNS(9),
         VALUES(10),
@@ -59,19 +60,19 @@ final class VulkanCoupledPressure implements AutoCloseable {
         final int width; Field(int width){this.width=width;}
     }
     static final class Layout {
-        private final int liquidCount, rows, velocities, terms, owners, blocks;
+        private final int liquidCount, rows, velocities, terms, owners, blocks, faces;
         private final PressureBuffers pressure;
         private final VulkanLiquidStateLayout.Column header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         private final long endOffset;
-        Layout(int liquidCount,int rows,int velocities,int terms,PressureBuffers pressure,
+        Layout(int liquidCount,int rows,int faces,int velocities,int terms,PressureBuffers pressure,
                long scratchBase,long alignment){
             if(liquidCount<0||rows<liquidCount||velocities<0||terms<0||scratchBase<0||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid coupled pressure dimensions");
             if(pressure.starts().count()<rows+1||pressure.rows().count()<rows||pressure.pressure().count()<rows
                     ||pressure.work().count()<5L*rows||pressure.problem().count()<2L*rows+1)
                 throw new IllegalArgumentException("Coupled pressure buffers have a different row stride");
-            this.liquidCount=liquidCount;this.rows=rows;this.velocities=velocities;this.terms=terms;this.pressure=pressure;
+            this.liquidCount=liquidCount;this.rows=rows;this.faces=faces;this.velocities=velocities;this.terms=terms;this.pressure=pressure;
             owners=Math.addExact(rows,velocities);blocks=Math.addExact(owners,Math.multiplyExact(2,terms)/128);
             header=new VulkanLiquidStateLayout.Column(align(scratchBase,alignment),64,4);long cursor=header.offset()+header.bytes();
             for(Field field:Field.values()){
@@ -103,7 +104,7 @@ final class VulkanCoupledPressure implements AutoCloseable {
         int termCapacity(){return terms;} long endOffset(){return endOffset;}
         ByteBuffer headerBytes(){
             var result=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);
-            result.putInt(4 * Header.ROW_COUNT.word,rows).putInt(4 * Header.VELOCITY_COUNT.word,velocities).putInt(4 * Header.TERM_COUNT.word,terms).putInt(4 * Header.OWNER_COUNT.word,owners).putInt(4 * Header.BLOCK_COUNT.word,blocks).putInt(4 * Header.LIQUID_COUNT.word,liquidCount);
+            result.putInt(4 * Header.FACE_COUNT.word,faces).putInt(4 * Header.ROW_COUNT.word,rows).putInt(4 * Header.VELOCITY_COUNT.word,velocities).putInt(4 * Header.TERM_COUNT.word,terms).putInt(4 * Header.OWNER_COUNT.word,owners).putInt(4 * Header.BLOCK_COUNT.word,blocks).putInt(4 * Header.LIQUID_COUNT.word,liquidCount);
             var buffers=List.of(pressure.starts(),pressure.columns(),pressure.values(),pressure.rows(),pressure.pressure(),
                     pressure.work(),pressure.problem(),pressure.control());
             for(int i=0;i<buffers.size();i++)result.putInt(4*(8+i),Math.toIntExact(buffers.get(i).offset()/4));

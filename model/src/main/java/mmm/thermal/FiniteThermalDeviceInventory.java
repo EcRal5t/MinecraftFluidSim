@@ -51,6 +51,38 @@ public record FiniteThermalDeviceInventory(
 		return exactInternalEnergy(devices);
 	}
 
+	/** Adsorbate totals join the region's gas, liquid and solid inventories during material accounting. */
+	public java.util.Map<String, Long> adsorbedSpeciesQuanta() {
+		var totals = new java.util.TreeMap<String, Long>();
+		for (var device : devices) for (var surface : device.surfaces())
+			for (var entry : surface.speciesQuanta().entrySet())
+				totals.merge(entry.getKey(), entry.getValue(), Math::addExact);
+		return java.util.Collections.unmodifiableMap(totals);
+	}
+
+	public long adsorbedMassUnits(mmm.chemistry.ChemicalRegistry chemistry) {
+		long mass = 0;
+		for (var entry : adsorbedSpeciesQuanta().entrySet())
+			mass = Math.addExact(mass, chemistry.speciesMassUnits(chemistry.speciesHandle(entry.getKey()), entry.getValue()));
+		return mass;
+	}
+
+	public long surfaceLoadingMassUnits() {
+		long mass = 0;
+		for (var device : devices) for (var surface : device.surfaces()) mass = Math.addExact(mass, surface.loadingMassUnits());
+		return mass;
+	}
+
+	public java.util.Map<String, Long> adsorbedElementQuanta(mmm.chemistry.ChemicalRegistry chemistry) {
+		var totals = new java.util.TreeMap<String, Long>();
+		for (var entry : adsorbedSpeciesQuanta().entrySet()) {
+			var species = chemistry.species(chemistry.speciesHandle(entry.getKey()));
+			for (var element : species.composition().entrySet())
+				totals.merge(element.getKey(), Math.multiplyExact(entry.getValue(), element.getValue().longValue()), Math::addExact);
+		}
+		return java.util.Collections.unmodifiableMap(totals);
+	}
+
 	public FiniteThermalDeviceInventory applyExchange(
 			String providerId, String objectId, FiniteThermalExchange.Plan plan
 	) {
@@ -70,7 +102,7 @@ public record FiniteThermalDeviceInventory(
 			throw new IllegalArgumentException("Finite thermal exchange plan is stale");
 		}
 		candidate.set(match, new FiniteThermalDeviceState(current.providerId(), current.objectId(),
-				current.deviceTypeId(), plan.after()));
+				current.deviceTypeId(), plan.after(), current.surfaces()));
 		SignedDyadic fluidDelta = SignedDyadic.ZERO;
 		for (FiniteThermalExchange.ContactDelta contact : plan.contacts()) {
 			fluidDelta = fluidDelta.add(SignedDyadic.of(contact.internalEnergyDeltaJ()));
@@ -107,7 +139,6 @@ public record FiniteThermalDeviceInventory(
 		if (registry == null || !thermalRegistryFingerprint.equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Finite thermal device registry changed");
 		}
-		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
 		for (FiniteThermalDeviceState device : devices) {
 			int materialHandle = registry.materialHandle(device.body().thermalMaterialId());
 			ThermalMaterialDefinition material = registry.material(materialHandle);
@@ -115,8 +146,19 @@ public record FiniteThermalDeviceInventory(
 					|| !material.carrierId().equals(device.deviceTypeId())) {
 				throw new IllegalArgumentException("Finite thermal device type/material binding changed");
 			}
-			stateFunction.stateForInternalEnergy(materialHandle,
-					device.body().massKilograms(), java.util.Map.of(), device.body().internalEnergyJ());
+			for (var surface : device.surfaces()) {
+				var definition = registry.surfaceMaterial(surface.materialId());
+				var allowed = definition.adsorbates().stream().map(SurfaceMaterialDefinition.Adsorbate::speciesId)
+						.collect(java.util.stream.Collectors.toSet());
+				if (!allowed.containsAll(surface.speciesQuanta().keySet()) || !allowed.containsAll(surface.residualQuanta().keySet()))
+					throw new IllegalArgumentException("Surface inventory contains an undeclared species");
+				long total = 0;
+				for (long amount : surface.speciesQuanta().values()) total = Math.addExact(total, amount);
+				if (total / (double) mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL
+						> mmm.units.Mass.kilograms(surface.loadingMassUnits()) * definition.siteCapacityMolesPerKg())
+					throw new IllegalArgumentException("Surface adsorbates exceed site capacity");
+			}
+			SurfaceThermalState.temperature(registry, device);
 		}
 	}
 

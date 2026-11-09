@@ -30,8 +30,11 @@ public final class ContainerTransferManifests {
 					species.entrySet().stream().map(value->new TransferManifest.Species(value.getKey(),value.getValue())).toList()));
 		}
 		OptionalDouble energy=journal.thermalTransfer()==null?OptionalDouble.empty():OptionalDouble.of(journal.thermalTransfer().internalEnergy());
-		TransferQuantity quantity=journal.resourceKind()==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ?
-				new TransferQuantity.Granular(journal.solidVolumeSvq()):new TransferQuantity.Liquid(journal.volumeNanos(),energy);
+		TransferQuantity quantity=switch(journal.resourceKind()) {
+			case GRANULAR_SVQ -> new TransferQuantity.Granular(journal.solidVolumeSvq());
+			case GAS_STANDARD_NANOS -> new TransferQuantity.Gas(journal.volumeNanos(),energy.orElseThrow());
+			case FLUID_NANOS -> new TransferQuantity.Liquid(journal.volumeNanos(),energy);
+		};
 		return new TransferManifest(quantity,components,first.chemical(),first.granular(),energy);
 	}
 	private static Inventory inventory(ContainerTransferJournal.ItemFingerprint item, double waterDensity) {
@@ -59,7 +62,11 @@ public final class ContainerTransferManifests {
 						value.solidVolumeSvq(),value.massUnits(),value.massResidualUnits(),value.composition().stream()
 						.map(entry->new TransferManifest.Species(entry.speciesId(),entry.amountQuanta())).toList()));
 			}
-			case BUCKET,EMPTY_MATERIAL_BUCKET,EMPTY_GRANULAR_CONTAINER -> { }
+			case GAS_CONTAINER -> {
+				var contents=GasContents.decode(item.contents()); chemical=contents.chemicalRegistryFingerprint().isEmpty()?null:contents.chemicalRegistryFingerprint();
+				for(var value:contents.inventory().components()) result.put(value.componentId(),new TransferManifest.Component(value.componentId(),value.standardVolumeNanos(),value.massUnits(),value.massResidualUnits(),value.species().stream().map(entry->new TransferManifest.Species(entry.speciesId(),entry.amountQuanta())).toList()));
+			}
+			case BUCKET,EMPTY_MATERIAL_BUCKET,EMPTY_GRANULAR_CONTAINER,EMPTY_GAS_CONTAINER -> { }
 			case CREATIVE_SOURCE -> throw new IllegalArgumentException("Public transfer requires a finite inventory actor");
 		}
 		return new Inventory(result,chemical,granular);

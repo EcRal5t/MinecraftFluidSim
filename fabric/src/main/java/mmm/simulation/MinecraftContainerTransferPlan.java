@@ -22,18 +22,21 @@ final class MinecraftContainerTransferPlan {
 	private final CommittedWorldRegistries world;
 	private final FluidRegion region;
 	private final int[] cell;
-	private final ItemStack sourceStack;
+	private ItemStack sourceStack;
 	private final MinecraftContainerTransferOperations.TransferKind kind;
 	private final ContainerTransferJournal.Operation operation;
 	private final ContainerTransferJournal.ResourceKind resourceKind;
 	private final long requestedAmount;
 	private final long baseAmount;
 	private final boolean externalSource;
-	private final int materialScoopRadius;
+	private final int transferRadius;
 	private final FluidMixture mixture;
 	private final ChemicalContents chemical;
 	private final GranularContents granular;
 	private final ThermalContents thermal;
+	private ItemStack collectionBase;
+	private long collectionSpace=Long.MAX_VALUE;
+	private boolean directed;
 
 	private MinecraftContainerTransferPlan(
 			MinecraftContainerTransactionAdapter transactions,
@@ -46,7 +49,7 @@ final class MinecraftContainerTransferPlan {
 			ContainerTransferJournal.ResourceKind resourceKind,
 			long requestedAmount,
 			long baseAmount,
-			boolean externalSource, int materialScoopRadius,
+			boolean externalSource, int transferRadius,
 			FluidMixture mixture,
 			ChemicalContents chemical,
 			GranularContents granular,
@@ -63,7 +66,7 @@ final class MinecraftContainerTransferPlan {
 		this.requestedAmount = requestedAmount;
 		this.baseAmount = baseAmount;
 		this.externalSource = externalSource;
-		this.materialScoopRadius = materialScoopRadius;
+		this.transferRadius = transferRadius;
 		this.mixture = mixture;
 		this.chemical = chemical;
 		this.granular = granular;
@@ -76,14 +79,14 @@ final class MinecraftContainerTransferPlan {
 			FluidRegion region,
 			int[] cell,
 			ItemStack sourceStack,
-			boolean externalSource, int materialScoopRadius
+			boolean externalSource, int transferRadius
 	) {
 		MinecraftContainerTransferOperations.TransferKind kind =
 				MinecraftContainerTransferOperations.classify(sourceStack);
 		if (kind == MinecraftContainerTransferOperations.TransferKind.NONE) {
 			return new Resolution(null, "该物品没有可转移的容器库存");
 		}
-		if ((kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
+		if ((kind == MinecraftContainerTransferOperations.TransferKind.GAS_POUR || kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR
 				|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR)
 				&& !world.acceptsActualContainerProfile(sourceStack)) {
 			return new Resolution(null, "FOREIGN_PROFILE：actual container 不属于当前世界；库存保持不变");
@@ -102,12 +105,13 @@ final class MinecraftContainerTransferPlan {
 		}
 
 		ContainerTransferJournal.Operation operation = switch (kind) {
-			case POUR, MATERIAL_POUR, GRANULAR_POUR -> ContainerTransferJournal.Operation.INSERT;
-			case SCOOP, MATERIAL_SCOOP, GRANULAR_SCOOP -> ContainerTransferJournal.Operation.EXTRACT;
+			case POUR, MATERIAL_POUR, GRANULAR_POUR, GAS_POUR -> ContainerTransferJournal.Operation.INSERT;
+			case SCOOP, MATERIAL_SCOOP, GRANULAR_SCOOP, GAS_SCOOP -> ContainerTransferJournal.Operation.EXTRACT;
 			case NONE -> throw new IllegalStateException("NONE handled above");
 		};
 		ContainerTransferJournal.ResourceKind resourceKind =
-				kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR
+				kind == MinecraftContainerTransferOperations.TransferKind.GAS_POUR || kind == MinecraftContainerTransferOperations.TransferKind.GAS_SCOOP
+						? ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS : kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR
 						|| kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP
 						? ContainerTransferJournal.ResourceKind.GRANULAR_SVQ
 						: ContainerTransferJournal.ResourceKind.FLUID_NANOS;
@@ -126,7 +130,7 @@ final class MinecraftContainerTransferPlan {
 				case SCOOP -> {
 					base = MinecraftContainerTransferOperations.heldBaseVolumeNanos(sourceStack);
 					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
-							MinecraftContainerTransferOperations.heldFreeNanos(sourceStack), 6, waterMaterial(region));
+							MinecraftContainerTransferOperations.heldFreeNanos(sourceStack), transferRadius, waterMaterial(region));
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的水体");
 				}
 				case MATERIAL_POUR -> {
@@ -154,7 +158,7 @@ final class MinecraftContainerTransferPlan {
 					}
 					if (!region.hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
 					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
-							ContainerFluidLedger.NANOS_PER_BLOCK, materialScoopRadius, -1);
+							ContainerFluidLedger.NANOS_PER_BLOCK, transferRadius, -1);
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的材料流体");
 				}
 				case GRANULAR_POUR -> {
@@ -178,6 +182,12 @@ final class MinecraftContainerTransferPlan {
 					}
 					requested = SolidVolume.SVQ_PER_CUBIC_METER;
 				}
+				case GAS_POUR -> {
+					var gas=mmm.item.GasContainerItem.contents(sourceStack);
+					if(gas==null || !gas.gasRegistryFingerprint().equals(world.gasRegistry().fingerprint())) return new Resolution(null,"气体容器材料定义不匹配");
+					requested=gas.inventory().standardVolumeNanos();
+				}
+				case GAS_SCOOP -> requested=mmm.item.GasContainerItem.CAPACITY_NANOS;
 				case NONE -> throw new IllegalStateException("NONE handled above");
 			}
 		} catch (RuntimeException invalidContents) {
@@ -186,33 +196,79 @@ final class MinecraftContainerTransferPlan {
 		if (requested <= 0L) return new Resolution(null, "容器转移请求没有正库存");
 		ThermalContents thermal = MinecraftContainerTransferOperations.thermalContents(sourceStack);
 		return new Resolution(new MinecraftContainerTransferPlan(transactions, world, region, cell, sourceStack, kind,
-				operation, resourceKind, requested, base, externalSource, materialScoopRadius,
+				operation, resourceKind, requested, base, externalSource, transferRadius,
 				mixture, chemical, granular, thermal), null);
 	}
 
-	MinecraftContainerTransferOperations.TransferOutcome executeExact(
+	static Resolution resolveDirected(MinecraftContainerTransactionAdapter transactions,CommittedWorldRegistries world,
+			FluidRegion region,int[] cell,ItemStack item,boolean extract) {
+		if(!extract) {
+			var result=resolve(transactions,world,region,cell,item,false,0);
+			if(result.resolved())result.plan().directed=true;
+			return result;
+		}
+		boolean solid=item.getItem() instanceof GranularContainerItem, gas=item.getItem() instanceof mmm.item.GasContainerItem;
+		var empty=new ItemStack(gas?mmm.item.MmmItems.GAS_CONTAINER:solid?mmm.item.MmmItems.GRANULAR_CONTAINER:mmm.item.MmmItems.MATERIAL_BUCKET);
+		var result=resolve(transactions,world,region,cell,empty,false,0);
+		if(result.resolved()){
+			var plan=result.plan();plan.directed=true;plan.collectionBase=item.copy();plan.sourceStack=item.copy();
+			long used=gas?(mmm.item.GasContainerItem.contents(item)==null?0:mmm.item.GasContainerItem.contents(item).inventory().standardVolumeNanos()):solid?(GranularContainerItem.unvalidatedContents(item)==null?0:GranularContainerItem.unvalidatedContents(item).totalSolidVolumeSvq()):Math.max(0,MaterialBucketItem.volume(item));
+			plan.collectionSpace=(gas?mmm.item.GasContainerItem.CAPACITY_NANOS:solid?SolidVolume.SVQ_PER_CUBIC_METER:ContainerFluidLedger.NANOS_PER_BLOCK)-used;
+			if(plan.collectionSpace<=0)return new Resolution(null,"批次已满");
+		}
+		return result;
+	}
+
+	MinecraftContainerTransferOperations.TransferOutcome executeExact(FluidRegion targetRegion,long requested,long base) {
+		if(directed && operation==ContainerTransferJournal.Operation.INSERT && resourceKind!=ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
+			var host=targetRegion.editableHost();double room=host.cellCondensedRoom(cell[0],cell[1],cell[2]);
+			long capacity=resourceKind==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ
+					?(long)Math.floor(room*SolidVolume.SVQ_PER_CELL)
+					:(long)Math.floor(host.unitScale().cubicMeters(room)*ContainerFluidLedger.NANOS_PER_BLOCK);
+			requested=Math.min(requested,capacity);
+			if(requested<=0)return null;
+		}
+		var outcome=executeTransfer(targetRegion,Math.min(requested,collectionSpace),base);
+		if(collectionBase==null||outcome==null||!outcome.transferred())return outcome;
+		var merged=ContainerItemStacks.merge(collectionBase,world.bindActualContainerProfile(outcome.stack()));
+        double coupled=outcome.thermalEnergy();
+        if(targetRegion.hasThermalState()){
+            coupled=mmm.units.SignedDyadic.of(batchEnergy(merged)).subtract(mmm.units.SignedDyadic.of(batchEnergy(collectionBase))).toDouble();
+            targetRegion.editableHost().settleExternalContainerExtraction(outcome.thermalEnergy(),coupled);
+        }
+        return new MinecraftContainerTransferOperations.TransferOutcome(true,false,merged,outcome.message(),outcome.resourceAmount(),coupled);
+	}
+
+    private static double batchEnergy(ItemStack item){
+        if(item.getItem() instanceof mmm.item.GasContainerItem){var contents=mmm.item.GasContainerItem.contents(item);return contents==null?0:contents.internalEnergy();}
+        var heat=ContainerItemStacks.thermalContents(item);return heat==null?0:heat.internalEnergy();
+    }
+
+	private MinecraftContainerTransferOperations.TransferOutcome executeTransfer(
 			FluidRegion targetRegion, long requested, long base
 	) {
 		return switch (kind) {
 			case POUR -> MinecraftContainerTransferOperations.pourIntoCell(
 					world, targetRegion, cell, MinecraftContainerTransferOperations.heldVolumeNanos(sourceStack),
-						requested, 6, waterMaterial(targetRegion), externalSource, thermal);
+						requested, transferRadius, waterMaterial(targetRegion), externalSource, thermal);
 			case SCOOP -> MinecraftContainerTransferOperations.scoopFromCell(
-					world, targetRegion, cell, requested, base, 6, waterMaterial(targetRegion), thermal);
+					world, targetRegion, cell, requested, base, transferRadius, waterMaterial(targetRegion), thermal);
 			case MATERIAL_POUR -> chemical == null
 					? MinecraftContainerTransferOperations.pourMaterialIntoCell(
-							world, targetRegion, cell, mixture, requested, 6, externalSource, thermal)
+							world, targetRegion, cell, mixture, requested, transferRadius, externalSource, thermal)
 					: MinecraftContainerTransferOperations.pourChemicalIntoCell(
-							world, targetRegion, cell, chemical, requested, 6, externalSource, thermal);
+							world, targetRegion, cell, chemical, requested, transferRadius, externalSource, thermal);
 			case MATERIAL_SCOOP -> chemistryEnabled()
 					? MinecraftContainerTransferOperations.scoopChemicalIntoCell(
-							world, targetRegion, cell, requested, materialScoopRadius, world.chemicalRegistry())
+							world, targetRegion, cell, requested, transferRadius, world.chemicalRegistry())
 					: MinecraftContainerTransferOperations.scoopMaterialIntoCell(
-							world, targetRegion, cell, requested, materialScoopRadius);
+							world, targetRegion, cell, requested, transferRadius);
 			case GRANULAR_POUR -> MinecraftContainerTransferOperations.pourGranularIntoCell(
-					world, targetRegion, cell, granular, requested, 6, externalSource, thermal);
+					world, targetRegion, cell, granular, requested, transferRadius, externalSource, thermal);
 			case GRANULAR_SCOOP -> MinecraftContainerTransferOperations.scoopGranularIntoCell(
-					world, targetRegion, cell, requested, 6);
+					world, targetRegion, cell, requested, transferRadius);
+			case GAS_POUR -> MinecraftContainerTransferOperations.pourGas(world,targetRegion,cell,mmm.item.GasContainerItem.contents(sourceStack),requested);
+			case GAS_SCOOP -> MinecraftContainerTransferOperations.scoopGas(world,targetRegion,cell,requested);
 			case NONE -> null;
 		};
 	}
@@ -257,7 +313,7 @@ final class MinecraftContainerTransferPlan {
 	private static int waterMaterial(FluidRegion region) {
 		return region.hasMaterialState() ? region.materialHandle("mmm:water") : 0;
 	}
-	long requestedAmount() { return requestedAmount; }
+	long requestedAmount() { return Math.min(requestedAmount,collectionSpace); }
 	long baseAmount() { return baseAmount; }
 	ItemStack sourceStack() { return sourceStack.copy(); }
 	ContainerTransferJournal.ResourceKind resourceKind() { return resourceKind; }

@@ -16,7 +16,7 @@ import static mmm.gpu.VulkanRegionStorage.barrier;
 final class VulkanLiquidGeometry implements AutoCloseable {
     enum Binding {
         OFFSETS, VOLUMES, MASSES, MASKS, SOLIDS, MOMENTUM_X, MOMENTUM_Y, MOMENTUM_Z,
-        CELLS, PLANES, MICRO, FACES, ERRORS, FLUX_PREFERENCES, WALL_GEOMETRY
+        CELLS, PLANES, MICRO, FACES, ERRORS, FLUX_PREFERENCES, WALL_GEOMETRY, SCREEN_FACES, BED_SOLID, COHERENT_SOLID
     }
 
     private final FlipKernelBindings bindings;
@@ -32,7 +32,7 @@ final class VulkanLiquidGeometry implements AutoCloseable {
     }
     static List<FlipKernelBindings.BufferRange> ranges(VulkanLiquidStateLayout liquid,
             Map<GeometryField, VulkanLiquidStateLayout.Column> geometry, GpuBuffer buffer, GpuBuffer errors,
-            VulkanLiquidStateLayout.Column faces, VulkanLiquidStateLayout.Column solid) {
+            VulkanLiquidStateLayout.Column faces, VulkanLiquidStateLayout.Column solid, VulkanLiquidStateLayout.Column bedSolid) {
         var ranges = new ArrayList<FlipKernelBindings.BufferRange>(Binding.values().length);
         for (var binding : Binding.values()) {
             var column = switch (binding) {
@@ -48,6 +48,9 @@ final class VulkanLiquidGeometry implements AutoCloseable {
                 case PLANES -> geometry.get(GeometryField.PLANES);
                 case MICRO -> geometry.get(GeometryField.LIQUID_MICRO);
                 case WALL_GEOMETRY -> geometry.get(GeometryField.WALL_GEOMETRY);
+                case SCREEN_FACES -> geometry.get(GeometryField.SCREEN_FACES);
+                case BED_SOLID -> bedSolid;
+                case COHERENT_SOLID -> geometry.get(GeometryField.OCCUPIED_SOLID);
                 case FACES -> faces;
                 case FLUX_PREFERENCES -> geometry.get(GeometryField.FLUXES);
                 case ERRORS -> null;

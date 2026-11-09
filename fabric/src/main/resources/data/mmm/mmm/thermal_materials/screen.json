@@ -1,0 +1,14 @@
+{
+  "carrier_kind": "DEVICE",
+  "carrier_id": "mmm:screen",
+  "reference_temperature_k": "293.15",
+  "reference_specific_energy_j_per_kg": "146575.0",
+  "conductivity_w_per_m_k": "50",
+  "caloric_segments": [
+    {
+      "minimum_temperature_k": "1.0",
+      "maximum_temperature_k": "5000.0",
+      "specific_heat_j_per_kg_k": "500"
+    }
+  ]
+}

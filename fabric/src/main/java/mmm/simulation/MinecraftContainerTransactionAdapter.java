@@ -171,7 +171,7 @@ final class MinecraftContainerTransactionAdapter {
 			return failed(operation, beforeStack,
 					"容器事务返回无法重建的 after item：" + invalidResult.getMessage(), result.transactionId());
 		}
-		return new Result(new MinecraftContainerTransferOperations.TransferOutcome(
+		return new Result(result.status(), new MinecraftContainerTransferOperations.TransferOutcome(
 				result.committed(), result.filled(), after, result.diagnostic(), result.actualAmount(),
 				result.thermalEnergy()), result.transactionId(), result.committedGeneration());
 	}
@@ -185,7 +185,7 @@ final class MinecraftContainerTransactionAdapter {
 	private ItemStack bindActualProfile(ItemStack stack) {
 		if (stack.get(MmmComponents.FLUID_VOLUME) != null
 				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
-				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
+				|| stack.get(MmmComponents.GRANULAR_CONTENTS) != null || stack.get(MmmComponents.GAS_CONTENTS) != null) {
 			ContainerItemStacks.bindProfile(stack, profileFingerprint);
 		}
 		return stack;
@@ -194,12 +194,13 @@ final class MinecraftContainerTransactionAdapter {
 	private static Result failed(
 			ContainerTransferJournal.Operation operation, ItemStack before, String diagnostic, UUID transactionId
 	) {
-		return new Result(new MinecraftContainerTransferOperations.TransferOutcome(
+		return new Result(ContainerTransferUseCase.Status.REJECTED, new MinecraftContainerTransferOperations.TransferOutcome(
 				false, operation == ContainerTransferJournal.Operation.INSERT, before, diagnostic),
 				transactionId, -1L);
 	}
 
 	record Result(
+			ContainerTransferUseCase.Status status,
 			MinecraftContainerTransferOperations.TransferOutcome outcome,
 			UUID transactionId,
 			long committedGeneration

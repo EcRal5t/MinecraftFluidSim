@@ -53,7 +53,7 @@ final class VulkanMixturePressure implements AutoCloseable {
             particles=geometry==null?0:geometry.state().particleCapacity();int cellCount=liquid.cellCount();
             faces=liquid.grid().faceCount();
             if(coupled.pressureSize()!=cellCount+3*particles||coupled.liquidCount()!=cellCount
-                    ||coupled.velocities()!=faces+3*particles||coupled.termCapacity()<2L*faces+75L*particles
+                    ||coupled.velocities()<faces+3*particles||coupled.termCapacity()<2L*faces+75L*particles
                     ||cells.count()<4L*cellCount||facesColumn.count()<4L*faces||mixture.count()<7L*cellCount
                     ||masks.count()!=cellCount||viscosity.count()!=cellCount
                     ||entityFaceArea!=null&&entityFaceArea.count()!=faces||scratchBase<coupled.endOffset()

@@ -26,7 +26,7 @@ import net.minecraft.world.level.block.entity.DispenserBlockEntity;
 /** Public bounded transfers through real dispenser inventories and the existing container coordinator. */
 final class FabricTransferApi implements MmmTransferApi {
 	private static final class StaleActor extends IllegalStateException { StaleActor(String detail) { super(detail); } }
-	private record Actor(Binding binding,ServerLevel level,DispenserBlockEntity inventory,ItemStack item,TransferActorState state) { }
+	private record Actor(Binding binding,ServerLevel level,net.minecraft.world.Container inventory,ItemStack item,TransferActorState state) { }
 	private record Prepared(TransferPlan view,Binding binding,ContainerTransferJournal settlement,
 			long solverGeneration,MinecraftContainerTransferPlan operations) { }
 	private final MinecraftServer server;
@@ -49,7 +49,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			PublicTransferReceiptStore store,FluidSnapshotPublisher snapshots) {
 		this.server=server;this.regions=regions;this.targets=new FluidWorldTargetResolver(regions);this.startup=startup;this.world=world;this.availability=availability;
 		this.phaseWork=phaseWork;this.transactions=transactions;this.recovery=recovery;this.store=store;this.snapshots=snapshots;
-		providers.put("mmm:dispenser",DispenserAddress::fromObjectId);
+		providers.put("mmm:block_inventory",BlockInventoryAddress::fromObjectId);
 		try {
 			reconcilePendingReceipts(store, recovery);
 		} catch(IOException failure) { mmm.MmmMod.LOGGER.error("Public transfer startup receipts unavailable",failure); }
@@ -76,7 +76,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			store.requireReady();
 			var address=resolve(ref);var level=level(address.dimensionId());var inventory=inventory(level,address);
 			if(inventory==null) return result(TransferStatus.UNAVAILABLE,"Dispenser actor is not loaded");
-			var unregistered=new ContainerTransferActor.Dispenser(address.dimensionId(),address.blockX(),address.blockY(),address.blockZ(),address.slot());
+			var unregistered=new ContainerTransferActor.BlockInventory(address.dimensionId(),address.blockX(),address.blockY(),address.blockZ(),address.slot());
 			if(recovery.hasPending(new UUID(0,0),unregistered)) return result(TransferStatus.PENDING,"Dispenser slot has an unresolved container WAL");
 			var item=inventory.getItem(address.slot());ContainerItemMapper.fingerprint(item);
 			var binding=store.binding(ref);
@@ -85,7 +85,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(binding!=null) {
 				if(!binding.address().equals(address) || encoded==null) return result(TransferStatus.STALE_ACTOR,"Persistent actor cannot be rebound to another slot or inventory");
 				state=TransferActorState.decode(encoded);
-				if(!binding.instanceId().equals(state.instanceId())) return result(TransferStatus.STALE_ACTOR,"Dispenser inventory incarnation changed");
+				if(!binding.instanceId().equals(state.instanceId())) return result(TransferStatus.STALE_ACTOR,"Block inventory incarnation changed");
 			} else {
 				state=encoded==null?new TransferActorState(UUID.randomUUID(),0):TransferActorState.decode(encoded);
 				item.set(MmmComponents.TRANSFER_ACTOR,state.encode());inventory.setChanged();
@@ -111,14 +111,15 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(!actor.binding().address().dimensionId().equals(request.dimensionId())) return result(TransferStatus.INVALID_REQUEST,"Actor and region dimensions differ");
 			var target=portTarget(actor,region,request);
 			if(target==null) return result(TransferStatus.INVALID_REQUEST,
-					"Dispenser must face the outward side of a fluid port and target its adjacent interior");
-			int[] cell=target.cell();
-			if(cell==null) return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
-			var resolution=MinecraftContainerTransferPlan.resolve(transactions,world,region,cell,actor.item().copy(),false,6);
+					"Block inventory must touch the outward side of a fluid port and target its adjacent interior");
+			int[] cell=target.cell(request.quantity(),request.direction()==TransferRequest.Direction.EXTRACT);
+			if(cell==null) return result(TransferStatus.NOT_TRANSFERRED,"接口接触面没有可用库存或空间");
+			var resolution=MinecraftContainerTransferPlan.resolveDirected(transactions,world,region,cell,actor.item().copy(),request.direction()==TransferRequest.Direction.EXTRACT);
 			if(!resolution.resolved()) return result(TransferStatus.NOT_TRANSFERRED,resolution.diagnostic());
 			var operation=resolution.plan();
 			boolean insert=request.direction()==TransferRequest.Direction.INSERT;
-			if(operation.filled()!=insert || (operation.resourceKind()==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ)!=(request.quantity() instanceof TransferQuantity.Granular))
+			if(operation.filled()!=insert || (operation.resourceKind()==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ)!=(request.quantity() instanceof TransferQuantity.Granular)
+					|| (operation.resourceKind()==ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS)!=(request.quantity() instanceof TransferQuantity.Gas))
 				return result(TransferStatus.INVALID_REQUEST,"Request direction or quantity does not match the actual container inventory");
 			long maximum=amount(request.quantity());
 			var candidate=region.lifecycleCandidate(region.beginHostEdit(),region.paused());
@@ -157,7 +158,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			var target=portTarget(actor,region,request);
 			if(target==null) return result(TransferStatus.STALE_PLAN,"Dispenser or directed fluid port changed after planning");
 			if(target.cell()==null) return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
-			var durableActor=(ContainerTransferActor.Dispenser)prepared.settlement().actor();
+			var durableActor=(ContainerTransferActor.BlockInventory)prepared.settlement().actor();
 			if(recovery.hasPending(region.id(),durableActor)) return result(TransferStatus.PENDING,"Region or actor has a pending transaction");
 			new MinecraftContainerActorAdapter().persistAfterItem(server,durableActor);
 			store.prepare(request,actor.binding(),prepared.settlement());
@@ -204,7 +205,7 @@ final class FabricTransferApi implements MmmTransferApi {
 		if(!entry.request().equals(request)) return result(TransferStatus.CONFLICT,"Operation UUID already identifies a different durable request");
 		return receipt(request.operationId());
 	}
-	private DispenserAddress resolve(ActorRef ref) {
+	private BlockInventoryAddress resolve(ActorRef ref) {
 		var provider=providers.get(ref.providerId());
 		if(provider==null) throw new IllegalStateException("Transfer actor provider is not registered");
 		var address=provider.resolve(ref.objectId());
@@ -214,11 +215,12 @@ final class FabricTransferApi implements MmmTransferApi {
 	private FluidWorldTargetResolver.TransferTarget portTarget(Actor actor,FluidRegion region,TransferRequest request) {
 		var address=actor.binding().address();
 		var source=new BlockPos(address.blockX(),address.blockY(),address.blockZ());
-		var state=actor.level().getBlockState(source);
-		if(!state.hasProperty(net.minecraft.world.level.block.DispenserBlock.FACING))return null;
-		var facing=state.getValue(net.minecraft.world.level.block.DispenserBlock.FACING);
-		var port=source.relative(facing);
+		var interior=BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres());
+		var port=BlockPos.containing((source.getX()+interior.getX())*.5,(source.getY()+interior.getY())*.5,(source.getZ()+interior.getZ())*.5);
 		if(!actor.level().hasChunkAt(port)||!actor.level().getBlockState(port).is(mmm.block.MmmBlocks.FLUID_PORT))return null;
+		var outward=actor.level().getBlockState(port).getValue(mmm.block.FluidPortBlock.FACING);
+		if(!port.relative(outward).equals(source))return null;
+		var facing=outward.getOpposite();
 		var target=targets.transferTargetAtBlock(actor.level(),port,facing);
 		return target!=null&&target.region()==region&&target.interiorBlock().equals(
 				BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres()))?target:null;
@@ -238,30 +240,30 @@ final class FabricTransferApi implements MmmTransferApi {
 		TransferActorState state;
 		try { state=TransferActorState.decode(item.get(MmmComponents.TRANSFER_ACTOR)); }
 		catch(RuntimeException changed) { throw new StaleActor("Dispenser inventory identity is missing or invalid"); }
-		if(!state.instanceId().equals(binding.instanceId())) throw new StaleActor("Dispenser inventory incarnation changed");
+		if(!state.instanceId().equals(binding.instanceId())) throw new StaleActor("Block inventory incarnation changed");
 		return new Actor(binding,level,inventory,item,state);
 	}
-	private static DispenserBlockEntity inventory(ServerLevel level,DispenserAddress address) {
+	private static net.minecraft.world.Container inventory(ServerLevel level,BlockInventoryAddress address) {
 		var position=new BlockPos(address.blockX(),address.blockY(),address.blockZ());
-		return level!=null && level.hasChunkAt(position) && level.getBlockEntity(position) instanceof DispenserBlockEntity inventory?inventory:null;
+		return level!=null && level.hasChunkAt(position) && level.getBlockEntity(position) instanceof net.minecraft.world.Container inventory?inventory:null;
 	}
 	private ServerLevel level(String dimension) {
 		for(var level:server.getAllLevels()) if(level.dimension().identifier().toString().equals(dimension)) return level;
 		return null;
 	}
 	private static long amount(TransferQuantity quantity) {
-		return quantity instanceof TransferQuantity.Liquid liquid?liquid.volumeNanos():((TransferQuantity.Granular)quantity).solidVolumeSvq();
+		return quantity instanceof TransferQuantity.Liquid liquid?liquid.volumeNanos():quantity instanceof TransferQuantity.Gas gas?gas.standardVolumeNanos():((TransferQuantity.Granular)quantity).solidVolumeSvq();
 	}
 	private ContainerTransferJournal journal(TransferRequest request,Actor actor,FluidRegion region,
 			ContainerTransferJournal.ItemFingerprint before,ContainerTransferJournal.ItemFingerprint after,
 			ContainerTransferJournal.ItemFingerprint source,
 			MinecraftContainerTransferOperations.TransferOutcome outcome) {
 		var address=actor.binding().address();var kind=request.quantity() instanceof TransferQuantity.Granular?
-				ContainerTransferJournal.ResourceKind.GRANULAR_SVQ:ContainerTransferJournal.ResourceKind.FLUID_NANOS;
-		var external=new ContainerTransferActor.Dispenser(address.dimensionId(),address.blockX(),address.blockY(),address.blockZ(),address.slot(),actor.state().instanceId(),actor.state().generation());
+				ContainerTransferJournal.ResourceKind.GRANULAR_SVQ:request.quantity() instanceof TransferQuantity.Gas?ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS:ContainerTransferJournal.ResourceKind.FLUID_NANOS;
+		var external=new ContainerTransferActor.BlockInventory(address.dimensionId(),address.blockX(),address.blockY(),address.blockZ(),address.slot(),actor.state().instanceId(),actor.state().generation());
 		return new ContainerTransferJournal(request.operationId(),region.id(),request.dimensionId(),region.checkpointGeneration(),Math.addExact(region.checkpointGeneration(),1),
 				request.direction()==TransferRequest.Direction.INSERT?ContainerTransferJournal.Operation.INSERT:ContainerTransferJournal.Operation.EXTRACT,
-				kind,kind==ContainerTransferJournal.ResourceKind.FLUID_NANOS?outcome.resourceAmount():-1,kind==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ?outcome.resourceAmount():-1,
+				kind,kind!=ContainerTransferJournal.ResourceKind.GRANULAR_SVQ?outcome.resourceAmount():-1,kind==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ?outcome.resourceAmount():-1,
 				outcome.thermalEnergy()==null?null:new ContainerTransferJournal.ThermalTransfer(world.thermalRegistryFingerprint(),outcome.thermalEnergy()),
 				external,before,after,0,ContainerTransferJournal.Phase.REGION_COMMITTED,source);
 	}

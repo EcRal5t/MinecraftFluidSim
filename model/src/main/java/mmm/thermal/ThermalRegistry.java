@@ -24,6 +24,7 @@ public final class ThermalRegistry {
 	private final List<ThermalPhaseTransition> transitions;
 	private final List<ThermalBoundaryDefinition> boundaries;
 	private final List<FiniteThermalDeviceDefinition> finiteDevices;
+	private final List<SurfaceMaterialDefinition> surfaceMaterials;
 	private final Map<String, Integer> materialHandles;
 	private final Map<String, Integer> transitionHandles;
 	private final Map<String, Integer> materialByCarrier;
@@ -48,12 +49,20 @@ public final class ThermalRegistry {
 			String granularRegistryFingerprint,
 			String gasRegistryFingerprint
 	) {
-		this(materials,speciesOffsets,transitions,boundaries,finiteDevices,chemicalRegistryFingerprint,granularRegistryFingerprint,gasRegistryFingerprint,null);
+		this(materials,speciesOffsets,transitions,boundaries,finiteDevices,List.of(),chemicalRegistryFingerprint,granularRegistryFingerprint,gasRegistryFingerprint,null);
+	}
+
+	public ThermalRegistry(List<ThermalMaterialDefinition> materials, List<ThermalSpeciesOffset> speciesOffsets,
+			List<ThermalPhaseTransition> transitions, List<ThermalBoundaryDefinition> boundaries,
+			List<FiniteThermalDeviceDefinition> finiteDevices, List<SurfaceMaterialDefinition> surfaceMaterials,
+			String chemicalRegistryFingerprint, String granularRegistryFingerprint, String gasRegistryFingerprint) {
+		this(materials, speciesOffsets, transitions, boundaries, finiteDevices, surfaceMaterials,
+				chemicalRegistryFingerprint, granularRegistryFingerprint, gasRegistryFingerprint, null);
 	}
 
 	private ThermalRegistry(List<ThermalMaterialDefinition> materials,List<ThermalSpeciesOffset> speciesOffsets,
 			List<ThermalPhaseTransition> transitions,List<ThermalBoundaryDefinition> boundaries,
-			List<FiniteThermalDeviceDefinition> finiteDevices,String chemicalRegistryFingerprint,
+			List<FiniteThermalDeviceDefinition> finiteDevices,List<SurfaceMaterialDefinition> surfaceMaterials,String chemicalRegistryFingerprint,
 			String granularRegistryFingerprint,String gasRegistryFingerprint,ChemicalRegistry chemistry) {
 		this.chemistry = chemistry;
 		this.materials = canonicalUnique(materials, ThermalLimits.MAX_MATERIALS,
@@ -66,6 +75,8 @@ public final class ThermalRegistry {
 				ThermalBoundaryDefinition::id, "thermal boundary");
 		this.finiteDevices = canonicalUniqueOptional(finiteDevices, ThermalLimits.MAX_FINITE_DEVICE_TYPES,
 				FiniteThermalDeviceDefinition::id, "finite thermal device");
+		this.surfaceMaterials = canonicalUniqueOptional(surfaceMaterials, ThermalLimits.MAX_MATERIALS,
+				SurfaceMaterialDefinition::id, "surface material");
 		this.chemicalRegistryFingerprint = requireFingerprint(chemicalRegistryFingerprint, "chemical");
 		this.granularRegistryFingerprint = requireFingerprint(granularRegistryFingerprint, "granular");
 		this.gasRegistryFingerprint = requireFingerprint(gasRegistryFingerprint, "gas");
@@ -124,7 +135,7 @@ public final class ThermalRegistry {
 	public ThermalRegistry withChemistry(ChemicalRegistry chemistry) {
 		if (chemistry == null || !chemicalRegistryFingerprint.equals(chemistry.fingerprint()))
 			throw new IllegalArgumentException("Thermal and chemical registry fingerprints differ");
-		return new ThermalRegistry(materials,speciesOffsets,transitions,boundaries,finiteDevices,
+		return new ThermalRegistry(materials,speciesOffsets,transitions,boundaries,finiteDevices,surfaceMaterials,
 				chemicalRegistryFingerprint,granularRegistryFingerprint,gasRegistryFingerprint,chemistry);
 	}
 	public ChemicalRegistry chemistry() { return chemistry; }
@@ -134,6 +145,11 @@ public final class ThermalRegistry {
 	public List<ThermalPhaseTransition> transitions() { return transitions; }
 	public List<ThermalBoundaryDefinition> boundaries() { return boundaries; }
 	public List<FiniteThermalDeviceDefinition> finiteDevices() { return finiteDevices; }
+	public List<SurfaceMaterialDefinition> surfaceMaterials() { return surfaceMaterials; }
+	public SurfaceMaterialDefinition surfaceMaterial(String id) {
+		return surfaceMaterials.stream().filter(value -> value.id().equals(id)).findFirst()
+				.orElseThrow(() -> new IllegalArgumentException("Unknown surface material " + id));
+	}
 	public ThermalMaterialDefinition material(int handle) { return materials.get(requireHandle(handle, materials.size(), "material")); }
 	public ThermalPhaseTransition transition(int handle) { return transitions.get(requireHandle(handle, transitions.size(), "transition")); }
 	public int materialHandle(String id) { return requireStableHandle(materialHandles, id, "thermal material"); }
@@ -324,6 +340,30 @@ public final class ThermalRegistry {
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n')
 				.append("granular-registry=").append(granularRegistryFingerprint).append('\n')
 				.append("gas-registry=").append(gasRegistryFingerprint).append('\n');
+		for (SurfaceMaterialDefinition surface : surfaceMaterials) {
+			out.append("S|").append(surface.id()).append('|');
+			appendDouble(out, surface.referenceTemperatureK()); out.append('|');
+			appendDouble(out, surface.referenceSpecificEnergyJPerKg()); out.append('|');
+			appendDouble(out, surface.specificHeatJPerKgK()); out.append('|');
+			appendDouble(out, surface.effectiveAreaFactor()); out.append('|');
+			appendDouble(out, surface.siteCapacityMolesPerKg()); out.append('|');
+			appendDouble(out, surface.exchangeMolesPerSquareMeterSecond()); out.append('|');
+			appendDouble(out, surface.minimumTemperatureK()); out.append('|');
+			appendDouble(out, surface.maximumTemperatureK()); out.append('|');
+			appendDouble(out, surface.maximumPressurePa()); out.append('\n');
+			for (var adsorbate : surface.adsorbates()) {
+				out.append("SA|").append(adsorbate.componentId()).append('|').append(adsorbate.speciesId()).append('|');
+				appendDouble(out, adsorbate.affinityPerPa()); out.append('|');
+				appendDouble(out, adsorbate.referenceTemperatureK()); out.append('|');
+				appendDouble(out, adsorbate.adsorptionHeatJPerMol()); out.append('|');
+				appendDouble(out, adsorbate.referenceEnergyJPerMol()); out.append('|');
+				appendDouble(out, adsorbate.heatCapacityJPerMolK()); out.append('\n');
+			}
+			for (var catalyst : surface.catalysis()) {
+				out.append("SC|").append(catalyst.reactionId()).append('|');
+				appendDouble(out, catalyst.multiplierPerSquareMeter()); out.append('\n');
+			}
+		}
 		for (ThermalMaterialDefinition material : materials) {
 			out.append("M|").append(material.id()).append('|').append(material.carrierKind()).append('|')
 					.append(material.carrierId()).append('|');

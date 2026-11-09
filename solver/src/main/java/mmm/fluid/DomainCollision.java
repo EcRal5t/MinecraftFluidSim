@@ -87,6 +87,44 @@ final class DomainCollision {
 		return volume;
 	}
 	public FlipChemicalParticleState exportChemicalParticleState() { return domain.carriers.exportChemicalParticleState(); }
+	/** Transfer unchanged solid occupation between fixed geometry and moving bodies. */
+	public void handoffCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies) {
+		java.util.Objects.requireNonNull(edits);
+		java.util.Objects.requireNonNull(bodies);
+		domain.domainFlowFields.preparePhysicalState();
+		var previousFixed = domain.geometry.cutCells.snapshot();
+		var previousBodies = domain.entityBodies;
+		var previousOccupied = domain.occupiedSolidSvq();
+		byte[] masks = previousFixed.copyMasks();
+		for (var edit : edits) {
+			int cell = domain.domainFlowFields.cellIndexChecked(edit.x(), edit.y(), edit.z());
+			masks[cell] = (byte) edit.mask();
+		}
+		var nextFixed = FixedGeometrySnapshot.fromMasks(domain.grid, masks, previousFixed.screens());
+		try {
+			domain.geometry.cutCells.restoreSnapshot(nextFixed);
+			domain.restoreEntityBodyState(bodies);
+			var nextOccupied = domain.occupiedSolidSvq();
+			for (int cell = 0; cell < domain.cellCount; cell++) {
+				long before = ((long) Integer.bitCount(previousFixed.mask(cell)) << 21) + previousOccupied[cell];
+				long after = ((long) Integer.bitCount(nextFixed.mask(cell)) << 21) + nextOccupied[cell];
+				if (before != after) throw new CollisionEditBlockedException(
+						"Moving-body handoff changes occupied volume at cell " + cell, null);
+			}
+		} catch (RuntimeException failure) {
+			domain.geometry.cutCells.restoreSnapshot(previousFixed);
+			domain.restoreEntityBodyState(previousBodies);
+			throw failure;
+		}
+		for (var edit : edits) {
+			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
+			domain.pressureSystem.clearLiquidPressure(cell);
+			if (domain.chemistry != null) domain.chemistry.markDirtyCell(cell);
+			if (domain.granularDepositDynamics != null) domain.granularDepositDynamics.disturbCell(cell);
+		}
+		domain.markCellInventoryChanged();
+	}
+
 	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) {
 		if (edits == null || edits.isEmpty()) throw new IllegalArgumentException("Collision edit batch is missing or empty");
 		domain.domainFlowFields.preparePhysicalState();

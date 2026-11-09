@@ -37,7 +37,14 @@ final class DomainGasInventory {
     if(nanos<0||!extract&&!(Double.isFinite(temperatureK)&&temperatureK>0))
       throw new IllegalArgumentException("Gas transfer requires a nonnegative amount and positive insertion temperature");
     domain.domainCapabilities.initializeSpatialGas();
-    return editSpatial(domain,node,componentId,nanos,temperatureK,extract);
+    return editSpatial(domain,node,componentId,nanos,temperatureK,extract,null,0);
+  }
+
+  static FluidDomainContracts.GasEdit insert(HostFluidState domain,int node,GasInventory inventory,double energy) {
+    if (inventory == null || inventory.isEmpty() || !Double.isFinite(energy))
+      throw new IllegalArgumentException("Gas inventory and finite internal energy are required");
+    domain.domainCapabilities.initializeSpatialGas();
+    return editSpatial(domain,node,null,inventory.standardVolumeNanos(),0,false,inventory,energy);
   }
 
   static MixtureVolumeModel.State mixture(HostFluidState domain,int cell,GasInventory gas,double energy){
@@ -87,7 +94,7 @@ final class DomainGasInventory {
     domain.gasState.pressureActive=true;domain.markCellInventoryChanged();domain.phaseOccupancyDirty=true;domain.pressureSystem.invalidateGeometry();
   }
 
-  private static FluidDomainContracts.GasEdit editSpatial(HostFluidState domain,int node,String componentId,long nanos,double temperatureK,boolean extract){
+  private static FluidDomainContracts.GasEdit editSpatial(HostFluidState domain,int node,String componentId,long nanos,double temperatureK,boolean extract,GasInventory supplied,double suppliedEnergy){
     int cell=node-1;var old=domain.gasState.spatial;
     if(cell<0||cell>=old.cellCount()||!domain.groupAvailable(cell))throw new IllegalArgumentException("Gas cell is unavailable");
     if(domain.activityGroups.pendingInGroups(List.of(new FluidDomainContracts.CellCandidate(cell,0))))throw new IllegalStateException("Gas transfer requires pending phase motion to be committed");
@@ -102,9 +109,23 @@ final class DomainGasInventory {
       if(moved.isEmpty())return new FluidDomainContracts.GasEdit(node,GasInventory.EMPTY,SignedDyadic.ZERO);
       double[] parts=model.partitionEnergy(before,old.energyAt(cell),List.of(moved,after));carriedEnergy=parts[0];finalEnergy=parts[1];
     }else{
-      moved=componentId==null?registry.createAmbient(nanos):registry.createMixture(nanos,List.of(new GasRegistry.AmbientFraction(componentId,ExactRational.ONE)));
+      moved=supplied != null ? supplied : componentId==null?registry.createAmbient(nanos):registry.createMixture(nanos,List.of(new GasRegistry.AmbientFraction(componentId,ExactRational.ONE)));
       if(moved.isEmpty())return new FluidDomainContracts.GasEdit(node,GasInventory.EMPTY,SignedDyadic.ZERO);
-      after=before.merge(moved);carriedEnergy=model.internalEnergyAtTemperature(moved,temperatureK);
+      if(supplied != null) {
+        registry.requireCompatible(moved);
+        for(var component:moved.components()) {
+          var definition=registry.component(component.componentId());long mass=component.massResidualUnits();
+          for(var species:component.species()) {
+            long unit;
+            if(domain.chemistry!=null) unit=domain.chemistry.registry().speciesMassUnits(domain.chemistry.registry().speciesHandle(species.speciesId()),1);
+            else unit=definition.defaultSpeciesConcentrations().stream().filter(value->value.speciesId().equals(species.speciesId())).findFirst().orElseThrow().massUnitsPerQuantum();
+            mass=Math.addExact(mass,Math.multiplyExact(unit,species.amountQuanta()));
+          }
+          if(mass!=component.massUnits())throw new IllegalArgumentException("Gas component mass differs from species and residual");
+        }
+        model.requireInventoryEnergy(moved,suppliedEnergy);
+      }
+      after=before.merge(moved);carriedEnergy=supplied != null ? suppliedEnergy : model.internalEnergyAtTemperature(moved,temperatureK);
       finalEnergy=SignedDyadic.of(old.energyAt(cell)).add(SignedDyadic.of(carriedEnergy)).toDouble();
     }
     model.requireInventoryEnergy(after,finalEnergy);mixture(domain,cell,after,finalEnergy);

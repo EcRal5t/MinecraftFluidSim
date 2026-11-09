@@ -17,6 +17,8 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 	private final java.util.function.IntPredicate availableCell;
 	private final java.util.function.IntUnaryOperator previousMask;
     private final mmm.spatial.SpatialGrid grid;
+    private final FluidRegion region;
+    private final MinecraftWorldUpdates worldUpdates;
 
 	MinecraftCollisionWorldPort(ServerLevel level) {
 		this(level, (mmm.fluid.HostFluidState)null);
@@ -26,11 +28,15 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 		this.level = java.util.Objects.requireNonNull(level, "level");
 		this.availableCell = previous==null?null:previous::groupAvailable;
         this.grid = previous == null ? null : previous.grid();
+        this.region = null; this.worldUpdates = null;
         this.previousMask = previous==null?null:cell->previous.solidMicroMask(grid.x(cell),grid.y(cell),grid.z(cell));
 	}
 
-	MinecraftCollisionWorldPort(ServerLevel level, FluidRegion region) {
+	MinecraftCollisionWorldPort(ServerLevel level, FluidRegion region) { this(level,region,null); }
+
+	MinecraftCollisionWorldPort(ServerLevel level, FluidRegion region, MinecraftWorldUpdates worldUpdates) {
 		this.level = java.util.Objects.requireNonNull(level);
+        this.region = region; this.worldUpdates = worldUpdates;
 		this.availableCell = region::groupAvailable;
         this.grid = region.grid();
         this.previousMask = cell->region.solidMicroMask(grid.x(cell),grid.y(cell),grid.z(cell));
@@ -59,7 +65,21 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
             byte[] block=blockMasks.get(position);
             if (block==null) {
                 BlockState state=level.getBlockState(position);
-                VoxelShape shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
+                if (worldUpdates != null
+                        && level.getBlockEntity(position) instanceof net.minecraft.world.level.block.piston.PistonMovingBlockEntity piston)
+                    worldUpdates.pistonTick(level,position,piston);
+                VoxelShape shape;
+                if (state.getBlock() instanceof net.minecraft.world.level.block.piston.PistonBaseBlock
+                        || state.getBlock() instanceof net.minecraft.world.level.block.piston.PistonHeadBlock) {
+                    shape = Shapes.block();
+                } else if (worldUpdates != null && worldUpdates.movingBlock(this.region, position)) {
+                    var moving = level.getBlockEntity(position);
+                    if (moving instanceof net.minecraft.world.level.block.piston.PistonMovingBlockEntity piston
+                            && piston.isSourcePiston() && !piston.isExtending()
+                            && piston.getMovedState().getBlock() instanceof net.minecraft.world.level.block.piston.PistonBaseBlock)
+                        shape = Shapes.block();
+                    else shape = Shapes.empty();
+                } else shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
                 block=shapeMasks.computeIfAbsent(shape,value->sampleBlockMasks(value,n));
                 blockMasks.put(position,block);
             }
@@ -76,6 +96,36 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 		}
 		return masks;
 	}
+
+    /** Decompose the same sampled block geometry into nonoverlapping moving boxes. */
+    static java.util.List<net.minecraft.world.phys.AABB> movingBoxes(VoxelShape shape, int cellsPerBlock) {
+        int n = 2 * cellsPerBlock;
+        boolean[] filled = new boolean[n*n*n];
+        byte[] masks = sampleBlockMasks(shape, cellsPerBlock);
+        for (int z=0;z<n;z++) for (int y=0;y<n;y++) for (int x=0;x<n;x++) {
+            int cell=((z/2)*cellsPerBlock+y/2)*cellsPerBlock+x/2;
+            int bit=(x&1)+2*((y&1)+2*(z&1));
+            filled[(z*n+y)*n+x]=(masks[cell] & (1 << bit)) != 0;
+        }
+        var boxes = new java.util.ArrayList<net.minecraft.world.phys.AABB>();
+        for (int z=0;z<n;z++) for (int y=0;y<n;y++) for (int x=0;x<n;x++) {
+            if (!filled[(z*n+y)*n+x]) continue;
+            int endX=x+1; while(endX<n && filled[(z*n+y)*n+endX]) endX++;
+            int endY=y+1;
+            while(endY<n) {
+                boolean full=true;for(int xx=x;xx<endX;xx++)full &= filled[(z*n+endY)*n+xx];
+                if(!full)break;endY++;
+            }
+            int endZ=z+1;
+            while(endZ<n) {
+                boolean full=true;for(int yy=y;yy<endY;yy++)for(int xx=x;xx<endX;xx++)full &= filled[(endZ*n+yy)*n+xx];
+                if(!full)break;endZ++;
+            }
+            for(int zz=z;zz<endZ;zz++)for(int yy=y;yy<endY;yy++)for(int xx=x;xx<endX;xx++)filled[(zz*n+yy)*n+xx]=false;
+            boxes.add(new net.minecraft.world.phys.AABB((double)x/n,(double)y/n,(double)z/n,(double)endX/n,(double)endY/n,(double)endZ/n));
+        }
+        return java.util.List.copyOf(boxes);
+    }
 
 	static int sampleCutCellMask(
 			VoxelShape shape, int localX, int localY, int localZ, int cellsPerBlock, double inset

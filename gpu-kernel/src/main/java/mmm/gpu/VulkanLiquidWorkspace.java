@@ -91,6 +91,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             int width = field == GeometryField.FIXED_MASKS ? 4 : 8;
             int count = switch (field) {
                 case FIXED_MASKS, OCCUPIED_SOLID -> cells;
+                case SCREEN_FACES -> Math.multiplyExact(2, faces);
                 case CELLS, PLANES -> Math.multiplyExact(4, cells);
                 case LIQUID_MICRO -> Math.multiplyExact(8, cells);
                 case WALL_GEOMETRY -> Math.multiplyExact(12, cells);
@@ -341,6 +342,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                             var started=candidate.continueBatch((command,input,output,errors,staging,stack)->{
                                 finishProjection.record(command,input,output,errors,staging,stack);
                                 region.kernels.contactKernel.recordBeginInterval(command,contacts);
+                                region.kernels.motionKernel.recordBeginInterval(command,motion,parameters.cellSize());
                                 region.kernels.motionKernel.recordSpeed(command,motion,parameters.cellSize());
                             },0,0);
                             if(started.error()!=0)return started.error();
@@ -479,7 +481,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         +", target="+parameters.tolerance()+", status="+error+", inner="+region.pressureProgress);
                 return failure;
             }
-            return new IllegalStateException("Resident liquid candidate failed during "+capacityStage+": status="+error);
+            return new IllegalStateException("Resident liquid candidate failed during "+capacityStage+": status="+error+VulkanRegionThermal.describeError(error));
         }
         int[] capacities(){return new int[]{liquid.stockCapacity(),liquid.speciesCapacity(),liquid.limbCapacity(),transport.definitions.scratchLimbsPerWindow(),
                 transport.gas==null?0:transport.gas.state.componentCapacity(),transport.gas==null?0:transport.gas.state.speciesCapacity()};}
@@ -519,7 +521,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                 var plan=new VulkanBufferCopyPlan.Builder();
                 for(var field:VulkanLiquidStateLayout.Field.values()){var c=liquid.column(field);plan.copy(c,c);}
                 plan.copy(hierarchyTopology(),hierarchyTopology());
-                for(var field:new GeometryField[]{GeometryField.FIXED_MASKS,GeometryField.OCCUPIED_SOLID}){var c=geometry.get(field);plan.copy(c,c);}
+                for(var field:new GeometryField[]{GeometryField.FIXED_MASKS,GeometryField.OCCUPIED_SOLID,GeometryField.SCREEN_FACES}){var c=geometry.get(field);plan.copy(c,c);}
                 var warm=pressureColumns.get(PressureField.PRESSURE);plan.copy(warm,warm);
                 if(transport==null){var c=mixture.header();plan.copy(c,c);}
                 if(transport!=null) {
@@ -559,7 +561,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                     VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
             liquid.copyColumns(command,source.liquid,input,output,stack);
             copyColumn(command,input,source.hierarchyTopology(),output,hierarchyTopology(),stack);
-            for(var field:new GeometryField[]{GeometryField.FIXED_MASKS,GeometryField.OCCUPIED_SOLID})
+            for(var field:new GeometryField[]{GeometryField.FIXED_MASKS,GeometryField.OCCUPIED_SOLID,GeometryField.SCREEN_FACES})
                 copyColumn(command,input,source.geometry.get(field),output,geometry.get(field),stack);
             copyColumn(command,input,source.pressureColumns.get(PressureField.PRESSURE),output,pressureColumns.get(PressureField.PRESSURE),stack);
             var from=source.transport;var to=transport;
@@ -600,7 +602,9 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
         return geometryRanges(buffer,errors,faces,occupied());
     }
     List<FlipKernelBindings.BufferRange> geometryRanges(GpuBuffer buffer,GpuBuffer errors,VulkanLiquidStateLayout.Column faces,VulkanLiquidStateLayout.Column solid) {
-        return VulkanLiquidGeometry.ranges(liquid,geometry,buffer,errors,faces,solid);
+        var bed = transport == null || transport.granular == null ? geometry.get(GeometryField.OCCUPIED_SOLID)
+                : transport.granular.geometry.column(VulkanGranularGeometry.Field.FIXED_SVQ);
+        return VulkanLiquidGeometry.ranges(liquid,geometry,buffer,errors,faces,solid,bed);
     }
 
     final class Transport {
@@ -667,7 +671,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             long mixtureEnd=gas==null?mixture.endOffset():gas.endOffset;
             sourceMixture=new VulkanLiquidStateLayout.Column(align(mixtureEnd),mixture.states().count(),8);
             long sourceMixtureEnd=align(sourceMixture.offset()+sourceMixture.bindingBytes());
-            pressure=sections.new PressureSection(granular,gas,mixture,viscosity.column(VulkanLiquidViscosity.Field.MU),entity==null?null:entity.column(VulkanEntityBodyCoupling.Field.FACE_AREA),
+            pressure=sections.new PressureSection(granular,gas,mixture,viscosity.column(VulkanLiquidViscosity.Field.MU),sourceEntity,entity,
                     entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ),sourceMixtureEnd);
             dynamics=granular==null?null:sections.new GranularDynamics(granular,pressure,viscosity.column(VulkanLiquidViscosity.Field.MU),pressure.endOffset);
             if(entity!=null){entity.bindPressure(mixture,pressure.coupled);entity.bindSourceOccupation(sourceEntity);}
@@ -700,7 +704,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         gas==null?null:gas.geometry,granular==null?null:granular.state,granular==null?null:granular.thermal,
                         coherent==null?null:coherent.state,coherent==null?null:coherent.thermal,devices==null?null:devices.state,devices==null?null:devices.thermal,
                         word(geometry.get(GeometryField.FIXED_MASKS)),bathTemperatures.count()==0?-1:word(bathTemperatures),word(geometry.get(GeometryField.FACES)),region.thermalConfiguration.cellSize(),word(activityCells),
-                        word(geometry.get(GeometryField.PLANES)),word(geometry.get(GeometryField.CELLS)));
+                        word(geometry.get(GeometryField.PLANES)),word(geometry.get(GeometryField.CELLS)),word(geometry.get(GeometryField.SCREEN_FACES)));
                 thermal=VulkanRegionThermal.layout(inputs,region.thermalConfiguration,thermalContactCapacity,thermalBathCapacity,tail[0],liquid.alignment());
                 thermal.contacts().wallGeometryWord=word(geometry.get(GeometryField.WALL_GEOMETRY));thermalBase=thermal.endOffset();}
             VulkanRegionReactions.SolidInputs solidReactions=null;
@@ -711,7 +715,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                 solidReactions=new VulkanRegionReactions.SolidInputs(phaseTransitions,granular.thermal,region.granularConfiguration.registry(),region.thermalConfiguration.cellSize(),word(geometry.get(GeometryField.FACES)));
                 thermalBase=phaseTransitions.endOffset();
             }
-            reactions=region.reactionConfiguration==null?null:VulkanRegionReactions.layout(region.reactionConfiguration,liquid,liquidThermal,solidReactions,gas==null?null:new VulkanGasLiquidMassTransfer.Inputs(gas.thermo,gas.geometry,liquidThermal,region.reactionConfiguration.gravity(),ambientMassUnits,devices==null?null:devices.state,devices==null?null:devices.thermal),coherent==null?null:new VulkanCondensedPhaseChange.Inputs(liquid,coherent.state,liquidThermal,coherent.thermal,null,null,mixture.statesWord()+2*VulkanMixtureState.Quantity.PRESSURE.ordinal(),VulkanMixtureState.Quantity.values().length,word(geometry.get(GeometryField.FIXED_MASKS)),word(entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ)),region.thermalConfiguration.cellSize(),region.reactionConfiguration.gravity()),thermalBase,liquid.alignment(),word(activityCells),word(activityFaces),word(geometry.get(GeometryField.FACES)),region.thermalConfiguration.cellSize());
+            reactions=region.reactionConfiguration==null?null:VulkanRegionReactions.layout(region.reactionConfiguration,liquid,liquidThermal,solidReactions,gas==null?null:new VulkanGasLiquidMassTransfer.Inputs(gas.thermo,gas.geometry,liquidThermal,region.reactionConfiguration.gravity(),ambientMassUnits,devices==null?null:devices.state,devices==null?null:devices.thermal,word(geometry.get(GeometryField.SCREEN_FACES))),coherent==null?null:new VulkanCondensedPhaseChange.Inputs(liquid,coherent.state,liquidThermal,coherent.thermal,null,null,mixture.statesWord()+2*VulkanMixtureState.Quantity.PRESSURE.ordinal(),VulkanMixtureState.Quantity.values().length,word(geometry.get(GeometryField.FIXED_MASKS)),word(entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ)),region.thermalConfiguration.cellSize(),region.reactionConfiguration.gravity()),thermalBase,liquid.alignment(),word(activityCells),word(activityFaces),word(geometry.get(GeometryField.FACES)),region.thermalConfiguration.cellSize(),devices==null?null:new VulkanLiquidReactions.SurfaceInputs(devices.state,word(geometry.get(GeometryField.PLANES)),word(geometry.get(GeometryField.CELLS)),word(geometry.get(GeometryField.FIXED_MASKS)),word(geometry.get(GeometryField.SCREEN_FACES)),region.thermalConfiguration.cellSize()));
             if(reactions!=null)thermalBase=reactions.endOffset();
             var thermalStreams=new ArrayList<VulkanEnergyLedger.Stream>();if(thermal!=null)thermalStreams.addAll(thermal.roundoffStreams());if(reactions!=null)thermalStreams.addAll(reactions.roundoffStreams());
             thermalOnlyRoundoff=VulkanEnergyLedger.layout(thermalStreams,thermalBase,liquid.alignment());thermalBase=thermalOnlyRoundoff.endOffset();
@@ -827,6 +831,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
         }
         void recordBodyContacts(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors){if(entity!=null){
             region.kernels.entityKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+            region.kernels.entityKernel.recordContacts(command,sourceEntity,region.requestCellSize);
             region.kernels.entityKernel.recordContacts(command,entity,region.requestCellSize);
         }}
         void recordBodyPressure(org.lwjgl.vulkan.VkCommandBuffer command,double duration){if(entity!=null)region.kernels.entityKernel.recordPressure(command,entity,region.requestCellSize,duration);}

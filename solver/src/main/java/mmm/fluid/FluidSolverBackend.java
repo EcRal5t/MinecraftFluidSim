@@ -35,6 +35,11 @@ public interface FluidSolverBackend extends AutoCloseable {
 		public CandidateEvaluationRejectedException(String message, RuntimeException cause) { super(message, cause); }
 	}
 
+	/** A moving solid has no reachable pore volume for the inventory it displaces. */
+	final class MotionBlockedException extends CandidateEvaluationRejectedException {
+		public MotionBlockedException(String message, RuntimeException cause) { super(message, cause); }
+	}
+
 	/**
 	 * A private candidate exhausted its mechanical work budget. This reports spent resources, not
 	 * damaged physics: no owner mutated, and the state that ran out of budget is left to pacing or

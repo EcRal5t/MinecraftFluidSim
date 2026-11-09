@@ -22,7 +22,7 @@ public final class TestFluidDefinitions {
     public static FluidDefinitions load() { return Holder.VALUE; }
     public static FluidDefinitions withThermal(ThermalRegistry thermal) {
         var world=load();
-        var rebound=new ThermalRegistry(thermal.materials(),thermal.speciesOffsets(),thermal.transitions(),thermal.boundaries(),thermal.finiteDevices(),
+        var rebound=new ThermalRegistry(thermal.materials(),thermal.speciesOffsets(),thermal.transitions(),thermal.boundaries(),thermal.finiteDevices(),thermal.surfaceMaterials(),
                 world.chemistry().fingerprint(),world.granular().fingerprint(),world.gas().fingerprint());
         return new FluidDefinitions(world.material(),world.chemistry(),world.gas(),world.granular(),rebound);
     }
@@ -35,7 +35,7 @@ public final class TestFluidDefinitions {
         granular=granular==null?world.granular():granular;
         thermal=thermal==null?world.thermal():thermal;
         granular=new GranularRegistry(granular.materials(),granular.carriers(),granular.reactions(),chemistry);
-        thermal=new ThermalRegistry(thermal.materials(),thermal.speciesOffsets(),thermal.transitions(),thermal.boundaries(),thermal.finiteDevices(),
+        thermal=new ThermalRegistry(thermal.materials(),thermal.speciesOffsets(),thermal.transitions(),thermal.boundaries(),thermal.finiteDevices(),thermal.surfaceMaterials(),
                 chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
         return new FluidDefinitions(material,chemistry,gas,granular,thermal);
     }
@@ -102,6 +102,7 @@ public final class TestFluidDefinitions {
                     category(base,"phase_transitions",ThermalDefinitionCodec::decodeTransition),
                     category(base,"thermal_boundaries",ThermalDefinitionCodec::decodeBoundary),
                     category(base,"finite_thermal_devices",ThermalDefinitionCodec::decodeFiniteDevice),
+                    category(base,"surface_materials",ThermalDefinitionCodec::decodeSurface),
                     chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
             return new FluidDefinitions(material,chemistry,gas,granular,thermal);
         } catch(IOException error) { throw new UncheckedIOException(error); }

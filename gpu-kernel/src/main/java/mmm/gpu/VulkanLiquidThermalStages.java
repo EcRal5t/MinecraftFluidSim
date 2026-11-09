@@ -54,7 +54,7 @@ final class VulkanLiquidThermalStages {
                                   org.lwjgl.system.MemoryStack stack){
         region.kernels.reactionKernel.recordFinalCaloric(command,transport.reactions,output,errors);
         if(transport.devices!=null && transport.reactions.massTransfer()!=null
-                && transport.reactions.massTransfer().dryProposals>0)
+                && (transport.reactions.massTransfer().dryProposals>0 || transport.reactions.massTransfer().surfaceRules>0))
             region.kernels.thermalKernel.recordCondensationSettlement(command,output,errors,
                     transport.devices.state,transport.devices.settlement,transport.devices.thermal);
         transport.recordSolidGeometry(command,output,errors,stack);

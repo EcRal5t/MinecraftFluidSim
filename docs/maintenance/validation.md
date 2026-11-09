@@ -13,9 +13,22 @@
 ./gradlew.bat :fabric:runGpuProductionDemoValidation -PgpuDemo=<场景> -PgpuDemoSteps=<步数> --console=plain
 ```
 
-物理与组合工艺的验证入口见[仿真能力验证](#simulation-capabilities)和[稀疏空间域验证](#spatial-domain)。普通墙、周期投料、规定运动、局部气体及统一相间交换沿同一生产候选推进；组合流程使用实际物料容器、取样、提取和 checkpoint 续算。
+物理与组合工艺的验证入口见[仿真能力验证](#simulation-capabilities)和[稀疏空间域验证](#spatial-domain)。普通墙、箱与端口转移、规定运动、局部气体及统一相间交换沿同一生产候选推进；组合流程使用实际物料容器、取样、提取和 checkpoint 续算。
 
-游戏内工艺入口为 `/mmm process feed <间隔tick>`、`/mmm process drive <秒数>`、`/mmm process sample`、`/mmm process stop`。机械驱动器方块安装在区域外壳，点击启动、潜行点击停止；区域状态使用 `/mmm regions checkpoint` 保存。
+游戏内使用 `/mmm plant <场景>` 建造工业装置，物料箱和端口完成持续进出料，探针配置阀门、筛与测点。规定运动沿 `/mmm process drive <秒数>` 和机械驱动器执行；`/mmm process sample` 读取局部库存，`/mmm process stop` 停止驱动。区域状态使用 `/mmm regions checkpoint` 保存。
+
+### 工业装置
+
+工业流程使用 `IndustrialLayout` 的方块布局和生产容器事务。箱、端口、筛、热墙及表面材料加载正式数据，逐步输出来自已提交库存。端口额度按在线 tick 计算，离线夹具与游戏入口共用配额和实际接触格选择。
+
+```powershell
+./gradlew.bat :fabric:runGpuProcessFlowsValidation '-PgpuProcessScenario=industrial,industrial_valve,industrial_screen,industrial_crystallization,industrial_heat,industrial_distillation,industrial_adsorption,industrial_catalysis' -PgpuProcessSteps=20 --console=plain --max-workers=1
+./gradlew.bat :fabric:runGameTest --console=plain --max-workers=1
+```
+
+`industrial` 负责有限批次进出料、气体载荷与恢复，`industrial_valve` 负责真实开口和接受面流量；筛分、结晶、隔墙换热、蒸馏、吸附再生和催化分别由对应场景连续推进。各流程自带所需运行时长，按本轮改动选择受影响场景。
+
+GameTest 在实际服务器中运行传感器红石控制、箱端口装取、方块实体设置恢复、筛的放置转向拆除、原版活塞运动与双阀泵送。测试世界位于 `fabric/build/gametest/world`，独立于玩家存档。GPU 场景与游戏服务器串行运行。
 
 ### 演示选择器与场景参数
 

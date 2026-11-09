@@ -15,7 +15,6 @@ public record TransferRequest(
 		if (operationId == null || actor == null || expectedActorGeneration < 0 || regionId == null
 				|| !Double.isFinite(worldXMetres) || !Double.isFinite(worldYMetres)
 				|| !Double.isFinite(worldZMetres) || direction == null || quantity == null
-				|| quantity instanceof TransferQuantity.Gas
 				|| quantity instanceof TransferQuantity.Liquid liquid && liquid.internalEnergyJoules().isPresent())
 			throw new IllegalArgumentException("Invalid transfer request");
 	}

@@ -102,6 +102,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			if (failure != null) region.setAvailabilityFailure(reason, failure);
 		}
 	}
+	mmm.thermal.FiniteThermalDeviceInventory readFiniteDevices(UUID id) throws IOException { return persistence.readFiniteDevices(id); }
 	long committedGeneration(UUID regionId) throws IOException { return persistence.committedGeneration(regionId); }
 	long committedManifestChecksum(UUID regionId) throws IOException { return persistence.committedManifestChecksum(regionId); }
 	void adoptCommittedContainerCheckpoint(FluidRegion region, long baseGeneration, long targetGeneration)

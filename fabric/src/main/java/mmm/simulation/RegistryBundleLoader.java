@@ -62,7 +62,24 @@ public final class RegistryBundleLoader {
 		validateSupportedGranularCarriers(material, granular);
 		validateSupportedGasComponents(gas, chemical);
 		validateSupportedThermalCarriers(material, thermal, chemical, granular, gas);
+		validateSurfaceMaterials(thermal, chemical, gas);
 		WorldCapabilityBundleStore.Definitions.validateMassTransferReferences(chemical, gas, thermal);
+	}
+
+	private static void validateSurfaceMaterials(ThermalRegistry thermal, ChemicalRegistry chemistry, GasRegistry gas) {
+		for (var surface : thermal.surfaceMaterials()) {
+			for (var adsorbate : surface.adsorbates()) {
+				chemistry.speciesHandle(adsorbate.speciesId());
+				if (!gas.component(adsorbate.componentId()).allowedSpecies().contains(adsorbate.speciesId()))
+					throw new IllegalArgumentException("Surface adsorbate does not belong to its gas component: " + surface.id());
+			}
+			for (var catalyst : surface.catalysis()) {
+				var reaction = chemistry.reactions().stream().filter(value -> value.id().equals(catalyst.reactionId()))
+						.findFirst().orElseThrow(() -> new IllegalArgumentException("Unknown catalytic reaction: " + catalyst.reactionId()));
+				if (reaction.kind() != mmm.chemistry.ChemicalReaction.Kind.FINITE_RATE)
+					throw new IllegalArgumentException("Catalytic reaction must have finite kinetics: " + catalyst.reactionId());
+			}
+		}
 	}
 
 

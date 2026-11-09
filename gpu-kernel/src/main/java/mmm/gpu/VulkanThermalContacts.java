@@ -94,7 +94,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         PORT_FILM_THICKNESS(146),
         PORT_CAPACITY(147),
         PLIC_PLANES(148),
-        PLIC_CELLS(149),
+        PLIC_CELLS(149), SCREEN_FACES(150),
         CONDUCTION_HEADER(151),
         ACTIVITY_CELLS(152), LIQUID_SPECIES_OFFSETS(153), LIQUID_SPECIES_HANDLES(154),
         LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158), LIQUID_CALORIC(LIQUID_CALORIC_WORD);
@@ -121,7 +121,17 @@ final class VulkanThermalContacts implements AutoCloseable {
                   VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
                   VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceThermal,
                   int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize,int activityCellWord,
-                  int plicPlanesWord,int plicCellsWord){
+                  int plicPlanesWord,int plicCellsWord,int screenFacesWord){
+        Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,
+               VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,
+               VulkanGranularStateLayout granular,VulkanLiquidThermodynamics.Layout granularThermal,
+               VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
+               VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceThermal,
+               int fixedMasksWord,int bathTemperaturesWord,int facesWord,double cellSize,int activityCellWord,
+               int plicPlanesWord,int plicCellsWord){
+            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,coherent,coherentThermal,
+                    device,deviceThermal,fixedMasksWord,bathTemperaturesWord,facesWord,cellSize,activityCellWord,plicPlanesWord,plicCellsWord,-1);
+        }
         Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,
                VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,
                VulkanGranularStateLayout granular,VulkanLiquidThermodynamics.Layout granularThermal,
@@ -213,6 +223,7 @@ final class VulkanThermalContacts implements AutoCloseable {
                 var more=new VulkanThermalDeviceLayout.Field[]{VulkanThermalDeviceLayout.Field.GENERATION,VulkanThermalDeviceLayout.Field.REQUEST_GENERATION,VulkanThermalDeviceLayout.Field.DEVICE_ENERGY_CHANGE,VulkanThermalDeviceLayout.Field.PORT_DEVICE,VulkanThermalDeviceLayout.Field.PORT_CELL,VulkanThermalDeviceLayout.Field.PORT_DIRECTION,VulkanThermalDeviceLayout.Field.PORT_WALL_THICKNESS,VulkanThermalDeviceLayout.Field.PORT_WALL_K,VulkanThermalDeviceLayout.Field.PORT_FILM_THICKNESS};
                 for(int i=0;i<more.length;i++)d[138+i]=v.word(more[i]);d[Header.PORT_CAPACITY.word]=v.portCapacity();}
             d[Header.PLIC_PLANES.word]=input.plicPlanesWord();d[Header.PLIC_CELLS.word]=input.plicCellsWord();
+            d[Header.SCREEN_FACES.word]=input.screenFacesWord();
             d[Header.CONDUCTION_HEADER.word]=conduction.headerWordOffset();
             d[Header.ACTIVITY_CELLS.word]=input.activityCellWord();
             d[Header.LIQUID_SPECIES_OFFSETS.word]=lw(l,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS);

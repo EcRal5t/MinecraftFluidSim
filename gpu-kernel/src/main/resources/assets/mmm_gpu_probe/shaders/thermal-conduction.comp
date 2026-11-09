@@ -7,7 +7,7 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header;int stage;int count;int step;double dt;double fraction; } p;
 // HOST_LAYOUT
-const uint ERROR_INVALID_CONDUCTION = 16384u;
+const uint ERROR_INVALID_CONDUCTION = 256u;
 const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
 shared dvec4 scratch[128];
 int headerWord(int i){return int(words[p.header+i]);}int fieldAddress(int field){return headerWord(WORK_FIELDS+field);}

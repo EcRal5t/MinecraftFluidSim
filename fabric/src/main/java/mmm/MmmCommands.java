@@ -22,6 +22,8 @@ public final class MmmCommands {
 	public static void register() {
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("mmm")
+						.then(IndustrialCommands.node())
+						.then(mmm.simulation.IndustrialWorkbench.node())
 						.then(Commands.literal("demos")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> openDemos(context.getSource()))))
@@ -58,7 +60,7 @@ public final class MmmCommands {
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.then(Commands.argument("material", StringArgumentType.word())
 										.suggests((context, builder) -> {
-											builder.suggest("empty"); builder.suggest("fine_sand"); builder.suggest("light_beads");
+											builder.suggest("empty"); builder.suggest("fine_sand"); builder.suggest("fine_silt"); builder.suggest("light_beads");
 											return builder.buildFuture();
 										})
 										.executes(context -> audit(context, () -> giveGranularContainer(
@@ -95,8 +97,6 @@ public final class MmmCommands {
 						.then(Commands.literal("process")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> processStatus(context.getSource())))
-								.then(Commands.literal("feed").then(Commands.argument("interval", IntegerArgumentType.integer(1, 1200))
-										.executes(context -> audit(context, () -> processFeed(context.getSource(), IntegerArgumentType.getInteger(context, "interval"))))))
 								.then(Commands.literal("drive").then(Commands.argument("seconds", IntegerArgumentType.integer(1, 3600))
 										.executes(context -> audit(context, () -> processDrive(context.getSource(), IntegerArgumentType.getInteger(context, "seconds"))))))
 								.then(Commands.literal("stop").executes(context -> audit(context, () -> processStop(context.getSource()))))

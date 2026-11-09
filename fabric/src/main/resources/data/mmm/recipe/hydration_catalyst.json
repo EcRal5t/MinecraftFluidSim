@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:copper_ingot",
+    "minecraft:clay_ball"
+  ],
+  "result": {
+    "id": "mmm:hydration_catalyst",
+    "count": 1
+  }
+}

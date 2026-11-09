@@ -29,6 +29,8 @@ public final class MmmComponents {
 	public static final DataComponentType<String> CHEMICAL_CONTENTS = registerString("chemical_contents");
 	/** Canonical dry granular contents; mutually exclusive with every liquid component. */
 	public static final DataComponentType<String> GRANULAR_CONTENTS = registerString("granular_contents");
+	public static final DataComponentType<String> GAS_CONTENTS = registerString("gas_contents");
+	public static final DataComponentType<String> SURFACE_COATING = registerString("surface_coating");
 	/** Canonical thermal contents; coupled to, but independent from, the exact liquid contents. */
 	public static final DataComponentType<String> THERMAL_CONTENTS = registerString("thermal_contents");
 	/** Canonical creative source intent; never material inventory. */

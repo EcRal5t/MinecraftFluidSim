@@ -233,6 +233,8 @@ double deviceConductance(int point,int port){
    area+=physical*(fp*.125LF)/covered;
   }
  }
+ if(headerWord(H_SCREEN_FACES)>=0){int cell=int(words[headerWord(H_PORT_CELL)+port]),face=gridFace(cell,direction);
+  if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;if(readDouble(screen)>0.0LF)area*=1.0LF-clamp(readDouble(screen+2),0.0LF,1.0LF);}}
  double film=readDouble(headerWord(H_PORT_FILM_THICKNESS)+2*port);
  if(fam==0 && area>0.0LF){
   int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]),wall=headerWord(H_PLIC_WALL_GEOMETRY);

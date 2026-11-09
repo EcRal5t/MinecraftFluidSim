@@ -51,7 +51,7 @@ root.putLong("PlayerUuidMost", player.playerId().getMostSignificantBits());
 root.putLong("PlayerUuidLeast", player.playerId().getLeastSignificantBits());
 root.putString("Hand", player.hand().name());
 }
-case ContainerTransferActor.Dispenser dispenser -> {
+case ContainerTransferActor.BlockInventory dispenser -> {
 validateDimension(dispenser.dimensionId());
 root.putString("ActorDimension", dispenser.dimensionId());
 root.putInt("DispenserX", dispenser.blockX());
@@ -143,13 +143,13 @@ new UUID(root.getLongOr("PlayerUuidMost", 0L), root.getLongOr("PlayerUuidLeast",
 parseHand(root.getStringOr("Hand", ""))
 );
 }
-case DISPENSER -> {
+case BLOCK_INVENTORY -> {
 requireType(root, "ActorDimension", Tag.TAG_STRING);
 requireType(root, "DispenserX", Tag.TAG_INT);
 requireType(root, "DispenserY", Tag.TAG_INT);
 requireType(root, "DispenserZ", Tag.TAG_INT);
 requireType(root, "DispenserSlot", Tag.TAG_INT);
-actor = new ContainerTransferActor.Dispenser(
+actor = new ContainerTransferActor.BlockInventory(
 root.getStringOr("ActorDimension", ""),
 root.getIntOr("DispenserX", 0), root.getIntOr("DispenserY", 0), root.getIntOr("DispenserZ", 0),
 root.getIntOr("DispenserSlot", -1),
@@ -252,6 +252,11 @@ throw new IllegalArgumentException("granular totals disagree with fingerprint");
 } catch (RuntimeException invalidGranular) {
 throw new IOException(prefix + " granular container fingerprint is invalid", invalidGranular);
 }
+} else if (kind == ContainerTransferJournal.ItemKind.GAS_CONTAINER) {
+try {
+var contents=mmm.transfer.GasContents.decode(materialId);
+if(profileFingerprint==null || contents.inventory().standardVolumeNanos()!=nanos || contents.inventory().totalMassUnits()!=massUnits || solidVolumeSvq!=-1L)throw new IllegalArgumentException("gas totals");
+} catch(RuntimeException invalidGas) { throw new IOException(prefix+" gas container fingerprint is invalid",invalidGas); }
 } else if (kind == ContainerTransferJournal.ItemKind.CREATIVE_SOURCE) {
 try {
 mmm.transfer.CreativeSourceDescriptor.decode(materialId);
@@ -308,13 +313,13 @@ allowed.add("PlayerUuidMost");
 allowed.add("PlayerUuidLeast");
 allowed.add("Hand");
 }
-case DISPENSER -> {
+case BLOCK_INVENTORY -> {
 allowed.add("ActorDimension");
 allowed.add("DispenserX");
 allowed.add("DispenserY");
 allowed.add("DispenserZ");
 allowed.add("DispenserSlot");
-if (((ContainerTransferActor.Dispenser)journal.actor()).inventoryId()!=null) {
+if (((ContainerTransferActor.BlockInventory)journal.actor()).inventoryId()!=null) {
 allowed.add("InventoryId"); allowed.add("ActorGeneration");
 }
 }
@@ -356,7 +361,7 @@ if (journal.operation() != ContainerTransferJournal.Operation.INSERT
         || !java.util.Objects.equals(before.profileFingerprint(), source.profileFingerprint()))
 throw new IOException("Container transfer source does not match its actor inventory");
 }
-if (journal.actor() instanceof ContainerTransferActor.Dispenser dispenser
+if (journal.actor() instanceof ContainerTransferActor.BlockInventory dispenser
 && !journal.dimensionId().equals(dispenser.dimensionId())) {
 throw new IOException("Dispenser actor dimension differs from the target region dimension");
 }
@@ -372,6 +377,22 @@ throw new IOException("Committed container-transfer WAL must bind the staged man
 }
 
 if (journal.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
+if (journal.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE) {
+long before=gasVolume(journal.beforeItem()),after=gasVolume(journal.afterItem()),amount=journal.volumeNanos();
+boolean prepared=journal.phase()==ContainerTransferJournal.Phase.PREPARED;
+if(amount<=0 || journal.solidVolumeSvq()!=-1 || journal.thermalTransfer()==null || before<0
+|| journal.operation()==ContainerTransferJournal.Operation.INSERT && (before<amount || !prepared && after!=before-amount)
+|| journal.operation()==ContainerTransferJournal.Operation.EXTRACT && !prepared && after!=before+amount)
+throw new IOException("Gas container transfer amount differs from item delta");
+if(!prepared) {
+double beforeEnergy=journal.beforeItem().kind()==ContainerTransferJournal.ItemKind.GAS_CONTAINER?mmm.transfer.GasContents.decode(journal.beforeItem().contents()).internalEnergy():0;
+double afterEnergy=journal.afterItem().kind()==ContainerTransferJournal.ItemKind.GAS_CONTAINER?mmm.transfer.GasContents.decode(journal.afterItem().contents()).internalEnergy():0;
+double delta=(journal.operation()==ContainerTransferJournal.Operation.INSERT?mmm.units.SignedDyadic.of(beforeEnergy).subtract(mmm.units.SignedDyadic.of(afterEnergy)):mmm.units.SignedDyadic.of(afterEnergy).subtract(mmm.units.SignedDyadic.of(beforeEnergy))).toDouble();
+if(Double.doubleToRawLongBits(delta)!=journal.thermalTransfer().internalEnergyBits())throw new IOException("Gas container energy differs from transfer");
+try { mmm.transfer.ContainerTransferManifests.from(journal,1); } catch(RuntimeException invalid) { throw new IOException("Invalid gas component transfer",invalid); }
+}
+return;
+}
 try {
 if (journal.actor().kind() != ContainerTransferActor.Kind.PLAYER_HAND
 || journal.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE
@@ -519,7 +540,7 @@ case BUCKET -> 0L;
 case WATER_BUCKET -> mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK;
 case PARTIAL -> item.nanos();
 case EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET,
-EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, CREATIVE_SOURCE -> -1L;
+EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, EMPTY_GAS_CONTAINER, GAS_CONTAINER, CREATIVE_SOURCE -> -1L;
 };
 }
 
@@ -527,7 +548,7 @@ private static long materialVolume(ContainerTransferJournal.ItemFingerprint item
 return switch (item.kind()) {
 case EMPTY_MATERIAL_BUCKET -> 0L;
 case MATERIAL_BUCKET, CHEMICAL_BUCKET -> item.nanos();
-case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, CREATIVE_SOURCE -> -1L;
+case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, EMPTY_GAS_CONTAINER, GAS_CONTAINER, CREATIVE_SOURCE -> -1L;
 };
 }
 
@@ -535,8 +556,11 @@ private static long granularVolume(ContainerTransferJournal.ItemFingerprint item
 return switch (item.kind()) {
 case EMPTY_GRANULAR_CONTAINER -> 0L;
 case GRANULAR_CONTAINER -> item.solidVolumeSvq();
-case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET, CREATIVE_SOURCE -> -1L;
+case BUCKET, WATER_BUCKET, PARTIAL, EMPTY_MATERIAL_BUCKET, MATERIAL_BUCKET, CHEMICAL_BUCKET, EMPTY_GAS_CONTAINER, GAS_CONTAINER, CREATIVE_SOURCE -> -1L;
 };
+}
+private static long gasVolume(ContainerTransferJournal.ItemFingerprint item) {
+return switch(item.kind()) { case EMPTY_GAS_CONTAINER -> 0; case GAS_CONTAINER -> item.nanos(); default -> -1; };
 }
 
 private static String operationName(ContainerTransferJournal.Operation operation) {
@@ -569,13 +593,13 @@ default -> throw new IOException("Unknown container transfer resource kind: " + 
 }
 
 private static String actorTypeName(ContainerTransferActor.Kind type) {
-return type == ContainerTransferActor.Kind.PLAYER_HAND ? "PLAYER_HAND" : "DISPENSER";
+return type.name();
 }
 
 private static ContainerTransferActor.Kind parseActorType(String name) throws IOException {
 return switch (name) {
 case "PLAYER_HAND" -> ContainerTransferActor.Kind.PLAYER_HAND;
-case "DISPENSER" -> ContainerTransferActor.Kind.DISPENSER;
+case "BLOCK_INVENTORY" -> ContainerTransferActor.Kind.BLOCK_INVENTORY;
 default -> throw new IOException("Unknown container transfer actor type: " + name);
 };
 }
@@ -598,6 +622,8 @@ case MATERIAL_BUCKET -> "MATERIAL_BUCKET";
 case CHEMICAL_BUCKET -> "CHEMICAL_BUCKET";
 case EMPTY_GRANULAR_CONTAINER -> "EMPTY_GRANULAR_CONTAINER";
 case GRANULAR_CONTAINER -> "GRANULAR_CONTAINER";
+case EMPTY_GAS_CONTAINER -> "EMPTY_GAS_CONTAINER";
+case GAS_CONTAINER -> "GAS_CONTAINER";
 case CREATIVE_SOURCE -> "CREATIVE_SOURCE";
 };
 }
@@ -612,6 +638,8 @@ case "MATERIAL_BUCKET" -> ContainerTransferJournal.ItemKind.MATERIAL_BUCKET;
 case "CHEMICAL_BUCKET" -> ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET;
 case "EMPTY_GRANULAR_CONTAINER" -> ContainerTransferJournal.ItemKind.EMPTY_GRANULAR_CONTAINER;
 case "GRANULAR_CONTAINER" -> ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER;
+case "EMPTY_GAS_CONTAINER" -> ContainerTransferJournal.ItemKind.EMPTY_GAS_CONTAINER;
+case "GAS_CONTAINER" -> ContainerTransferJournal.ItemKind.GAS_CONTAINER;
 case "CREATIVE_SOURCE" -> ContainerTransferJournal.ItemKind.CREATIVE_SOURCE;
 default -> throw new IOException("Unknown container transfer item kind: " + name);
 };

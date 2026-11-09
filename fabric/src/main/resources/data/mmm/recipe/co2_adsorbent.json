@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:charcoal",
+    "minecraft:clay_ball"
+  ],
+  "result": {
+    "id": "mmm:co2_adsorbent",
+    "count": 1
+  }
+}

@@ -269,7 +269,22 @@ bool bedFits(int c, double b, int excluded) {
         }
     return true;
 }
-bool pathOpen(dvec3 a, dvec3 b, double radius) {
+bool pathOpen(dvec3 a, dvec3 b, double radius, int material) {
+    dvec3 travel=b-a;
+    if(headerValue(H_SCREEN_FACES)>=0)for(int axis=0;axis<3;axis++) {
+        if(travel[axis]==0.0)continue;
+        int first=int(floor(min(a[axis],b[axis])/p.cellSize))+1;
+        int last=int(floor(max(a[axis],b[axis])/p.cellSize));
+        for(int plane=first;plane<=last;plane++) {
+            double t=(double(plane)*p.cellSize-a[axis])/travel[axis];
+            ivec3 crossing=positionCell(a+t*travel);crossing[axis]=plane;
+            int face=gridFaceAt(crossing,axis);
+            if(face>=0) {
+                double pore=readDouble(headerValue(H_SCREEN_FACES)+4*face);
+                if(pore>0.0 && materialProperty(material,MATERIAL_GRAIN_DIAMETER)>pore)return false;
+            }
+        }
+    }
     // Walk the fixed microboxes intersected by the swept sphere's axis-aligned enclosure.
     ivec3 low = positionCell(min(a, b) - radius), high = positionCell(max(a, b) + radius);
     dvec3 delta = b - a;
@@ -316,6 +331,7 @@ void settleColumn(int column) {
         if (row >= headerValue(H_PARTICLE_CAPACITY) || !activeCell(sourceCell(row)))
             continue;
         dvec3 position = readVector(sourceFieldOffset(GRANULAR_POSITION), row), velocity = readVector(sourceFieldOffset(GRANULAR_VELOCITY), row);
+        bool screened = headerValue(H_SCREEN_CAPTURED) >= 0 && words[headerValue(H_SCREEN_CAPTURED) + row] != 0u;
         double radius = sphereRadius(solidVolume(row));
         double support = 0.0;
         int particleCellY = int(floor(position.y / p.cellSize));
@@ -339,23 +355,27 @@ void settleColumn(int column) {
         int age = supported ? min(2147483646, int(words[sourceFieldOffset(GRANULAR_CONTACT_AGE) + row])) + 1 : 0;
         words[sourceFieldOffset(GRANULAR_CONTACT_AGE) + row] = uint(age);
         words[sourceFieldOffset(GRANULAR_FLAGS) + row] = supported ? 1u : 0u;
-        if (!supported || age < 3)
+        if (!screened && (!supported || age < 3))
             continue;
         for (int y = 0; y <= min(particleCellY, headerValue(H_SIZE_Y) - 1); y++) {
             int c = cell(ivec3(x, y, z));
             if (!activeCell(c))
                 continue;
+            if (screened && c != sourceCell(row)) continue;
             double oldBulk = read(FIELD_CELL_BULK, c), newBulk = oldBulk + bulkPortion(row, solidVolume(row));
-            if (!bedFits(c, newBulk, row))
+            if (!bedFits(c, newBulk, row)) {
                 continue;
+            }
             double newCenter = bedCenter(c, newBulk), oldCenter = bedCenter(c, oldBulk), particleMassKg = particleMass(row),
                    oldMass = read(FIELD_CELL_MASS, c);
             double potential = p.gravity * (oldMass * (newCenter - oldCenter) + particleMassKg * (newCenter - position.y));
-            if (potential > 0.0)
+            if (potential > 0.0) {
                 continue;
+            }
             dvec3 destination = dvec3(position.x, max(newCenter + radius, double(y) * p.cellSize + radius), position.z);
-            if (!pathOpen(position, destination, radius))
+            if (!pathOpen(position, destination, radius, materialOf(row))) {
                 continue;
+            }
             writeFieldInt(FIELD_MODE, row, MODE_SETTLED);
             writeFieldInt(FIELD_TARGET, row, c);
             write(FIELD_HEAT, row, .5 * particleMassKg * dot(velocity, velocity) - potential);
@@ -415,7 +435,7 @@ void relaxSurface(int from, int to, int sourceCellIndex) {
             continue;
         dvec3 end = (dvec3(cellCoordinates(c)) + .5) * p.cellSize;
         end.y = bedHeight(c, newBulk) + radius;
-        if (!pathOpen(start, end, radius))
+        if (!pathOpen(start, end, radius, materialIndex))
             continue;
         targetCell = c;
         lowestHeight = height;
