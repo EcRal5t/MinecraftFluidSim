@@ -36,7 +36,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         for(int stage=0;stage<3;stage++) {
             int floor=3+3*stage,gasX=stage%2==0?2:5,downX=stage%2==0?5:2;
             var outward=stage==0?Direction.EAST:Direction.WEST;
-            var inlet=stage==0?min.offset(7,floor+1,3):min.offset(0,floor+1,stage==1?3:4);
+            var inlet=stage==0?min.offset(7,floor+2,3):min.offset(0,floor+2,stage==1?3:4);
             result.add(new Tray(min.offset(gasX,floor,2),min.offset(downX,floor,5),
                     min.offset(downX,stage==0?1:floor-2,5),min.offset(3,floor+1,4),inlet,outward));
         }
@@ -120,13 +120,15 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
             for(int z:new int[]{2,6})blocks.put(min.offset(x,y,z),Blocks.STONE.defaultBlockState());
         }
         var ports=new ArrayList<Port>();
-        addPort(blocks,ports,min.offset(0,1,3),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
+        addPort(blocks,ports,min.offset(0,3,3),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
         addPort(blocks,ports,min.offset(9,2,3),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
-        addPort(blocks,ports,min.offset(9,1,5),Direction.EAST,FluidPortBlockEntity.Mode.INPUT);
+        addPort(blocks,ports,min.offset(9,3,5),Direction.EAST,FluidPortBlockEntity.Mode.INPUT);
         addPort(blocks,ports,min.offset(0,2,5),Direction.WEST,FluidPortBlockEntity.Mode.OUTPUT);
+        addPort(blocks,ports,min.offset(0,1,3),Direction.WEST,FluidPortBlockEntity.Mode.OUTPUT);
         for(int z:new int[]{3,5})
             addPort(blocks,ports,min.offset(4,4,z),Direction.UP,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
         ports.replaceAll(p->new Port(p.position(),p.outward(),p.mode(),p.phase(),1_000_000_000L,p.redstone()));
+        var drain=ports.get(4);ports.set(4,new Port(drain.position(),drain.outward(),FluidPortBlockEntity.Mode.STOPPED,drain.phase(),drain.rate(),drain.redstone()));
         var thermal=new ArrayList<Wall>();
         for(int x=1;x<9;x++)for(int y=1;y<=2;y++)thermal.add(new Wall(min.offset(x,y,4),320));
         var controller=min.offset(2,1,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());

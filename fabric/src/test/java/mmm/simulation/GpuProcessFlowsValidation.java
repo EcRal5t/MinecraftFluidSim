@@ -350,8 +350,11 @@ public final class GpuProcessFlowsValidation {
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,stone?IndustrialLayout.Scenario.COUNTERFLOW_STONE:IndustrialLayout.Scenario.COUNTERFLOW);
         var region=fixture.region;
         var layout=IndustrialLayout.at(new BlockPos(14,64,20),stone?IndustrialLayout.Scenario.COUNTERFLOW_STONE:IndustrialLayout.Scenario.COUNTERFLOW);
-        int[] hotIn=fixture.portCell,coldIn={region.sizeX()-1,0,8};
-        int[] hotOut={region.sizeX()-1,2,4},coldOut={0,2,8};
+        var hotInputPort=layout.ports().get(0);var hotOutputPort=layout.ports().get(1);
+        var coldInputPort=layout.ports().get(2);var coldOutputPort=layout.ports().get(3);
+        var hotDrainPort=layout.ports().get(4);
+        int[] hotIn=industrialPortCell(region,hotInputPort),hotOut=industrialPortCell(region,hotOutputPort);
+        int[] coldIn=industrialPortCell(region,coldInputPort),coldOut=industrialPortCell(region,coldOutputPort);
         ItemStack hot=saltedWater(world,350),cold=pureWater(world,290);
         var hotProducts=new ArrayList<ItemStack>();var coldProducts=new ArrayList<ItemStack>();
         var vented=new ArrayList<ItemStack>();
@@ -373,29 +376,29 @@ public final class GpuProcessFlowsValidation {
                     {
                         if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(hot)){hot=saltedWater(world,350);supplied=Math.addExact(supplied,chemicalMass(hot,world));}
                         double before=liquidBatchEnergy(hot);
-                        hot=fixture.transferBox(hot,hotIn,false,IndustrialOperations.tickQuota(1_000_000_000L,step));
+                        hot=fixture.transferBox(hot,hotIn,hotInputPort.outward(),false,IndustrialOperations.tickQuota(hotInputPort.rate(),step));
                         hotInputEnergy+=before-liquidBatchEnergy(hot);
                     }
                     {
                         if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(cold)){cold=pureWater(world,290);supplied=Math.addExact(supplied,chemicalMass(cold,world));}
                         double before=liquidBatchEnergy(cold);
-                        cold=fixture.transferBox(cold,coldIn,false,IndustrialOperations.tickQuota(1_000_000_000L,step));
+                        cold=fixture.transferBox(cold,coldIn,coldInputPort.outward(),false,IndustrialOperations.tickQuota(coldInputPort.rate(),step));
                         coldInputEnergy+=before-liquidBatchEnergy(cold);
                     }
                     long quota=IndustrialOperations.tickQuota(1_000_000_000L,step);
                     var request=new mmm.api.transfer.TransferQuantity.Liquid(quota,OptionalDouble.empty());
                     var hotBlock=region.origin().offset(hotOut[0]/2,hotOut[1]/2,hotOut[2]/2);
                     var coldBlock=region.origin().offset(coldOut[0]/2,coldOut[1]/2,coldOut[2]/2);
-                    var h=FluidWorldTargetResolver.transferCell(region,hotBlock,Direction.EAST,request,true);
-                    var c=FluidWorldTargetResolver.transferCell(region,coldBlock,Direction.WEST,request,true);var snapshot=region.hostSnapshot();
+                    var h=FluidWorldTargetResolver.transferCell(region,hotBlock,hotOutputPort.outward(),request,true);
+                    var c=FluidWorldTargetResolver.transferCell(region,coldBlock,coldOutputPort.outward(),request,true);var snapshot=region.hostSnapshot();
                     if(h!=null && counterflowFilled(region,h))hotFlow=true;
                     if(c!=null && counterflowFilled(region,c))coldFlow=true;
                     if(hotFlow && h!=null && MinecraftContainerTransferOperations.extractableNanos(snapshot,h,quota,0,-1)>0) {
-                        var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),hotOut,true,quota);
+                        var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),hotOut,hotOutputPort.outward(),true,quota);
                         if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(batch))hotProducts.add(batch);
                     }
                     if(coldFlow && c!=null && MinecraftContainerTransferOperations.extractableNanos(snapshot,c,quota,0,-1)>0) {
-                        var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),coldOut,true,quota);
+                        var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),coldOut,coldOutputPort.outward(),true,quota);
                         if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(batch))coldProducts.add(batch);
                     }
                     available(region);transfers.add(transferAudit,region.hostSnapshot().thermalAudit());
@@ -424,6 +427,8 @@ public final class GpuProcessFlowsValidation {
             requireEnergyTotal(transfers.source.toDouble(),hotInputEnergy+coldInputEnergy,"Counterflow incoming batch energy");
             requireEnergyTotal(transfers.sink.toDouble(),productEnergy+gasEnergy,"Counterflow outgoing batch energy");
             double beforeStop=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().mapToDouble(value->value.body().internalEnergyJ()).sum();
+            var activeDrain=new IndustrialLayout.Port(hotDrainPort.position(),hotDrainPort.outward(),mmm.block.FluidPortBlockEntity.Mode.OUTPUT,
+                    hotDrainPort.phase(),hotDrainPort.rate(),hotDrainPort.redstone());
             for(int step=0;step<600;step++) {
                 progress("counterflow_after_stop",step,600);
                 motion.settlePendingPhaseWork(region);
@@ -433,14 +438,15 @@ public final class GpuProcessFlowsValidation {
                 if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(cold)){cold=pureWater(world,290);supplied=Math.addExact(supplied,chemicalMass(cold,world));}
                 var coldInput=region.origin().offset(coldIn[0]/2,coldIn[1]/2,coldIn[2]/2);
                 double before=liquidBatchEnergy(cold);
-                if(FluidWorldTargetResolver.transferCell(region,coldInput,Direction.EAST,request,false)!=null)
-                    cold=fixture.transferBox(cold,coldIn,false,quota);
+                if(FluidWorldTargetResolver.transferCell(region,coldInput,coldInputPort.outward(),request,false)!=null)
+                    cold=fixture.transferBox(cold,coldIn,coldInputPort.outward(),false,quota);
                 coldInputEnergy+=before-liquidBatchEnergy(cold);
-                for(var port:List.of(hotIn,hotOut,coldOut)) {
-                    var position=region.origin().offset(port[0]/2,port[1]/2,port[2]/2);
-                    var contact=FluidWorldTargetResolver.transferCell(region,position,port==hotOut?Direction.EAST:Direction.WEST,request,true);
+                for(var port:List.of(activeDrain,hotOutputPort,coldOutputPort)) {
+                    var cell=industrialPortCell(region,port);
+                    var position=region.origin().offset(cell[0]/2,cell[1]/2,cell[2]/2);
+                    var contact=FluidWorldTargetResolver.transferCell(region,position,port.outward(),request,true);
                     if(contact!=null && MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(),contact,quota,0,-1)>0) {
-                        var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),port,true,quota);
+                        var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),cell,port.outward(),true,quota);
                         productMass=Math.addExact(productMass,chemicalMass(batch,world));productEnergy+=liquidBatchEnergy(batch);
                     }
                 }
@@ -468,9 +474,8 @@ public final class GpuProcessFlowsValidation {
     }
     private static void counterflowVent(GpuControllerFixture fixture,FluidRegion region,IndustrialLayout layout,List<ItemStack> products,int tick,boolean hotOpen,boolean coldOpen) throws Exception {
         for(var port:layout.ports())if(port.phase()==mmm.block.FluidPortBlockEntity.Phase.GAS) {
-            if(port.position().getZ()==layout.minimum().getZ()+3?!hotOpen:!coldOpen)continue;
-            var interior=port.position().relative(port.outward().getOpposite());
-            int[] cell={(interior.getX()-region.origin().getX())*2,(interior.getY()-region.origin().getY())*2+1,(interior.getZ()-region.origin().getZ())*2};
+            if(port.position().getZ()==layout.ports().getFirst().position().getZ()?!hotOpen:!coldOpen)continue;
+            int[] cell=industrialPortCell(region,port);
             var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),cell,port.outward(),true,IndustrialOperations.tickQuota(port.rate(),tick));
             if(mmm.item.GasContainerItem.contents(batch)!=null)products.add(batch);
         }
