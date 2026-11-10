@@ -1160,7 +1160,6 @@ public final class GpuProcessFlowsValidation {
                 if(filling && startupStep>=steps)throw new AssertionError("Distillation charging did not finish");
                 int step=filling?startupStep++:operatingStep++;
                 progress(filling?scenario.name()+"_startup":scenario.name(),step,steps);
-                if(step%100==0)distillationState(region,world,layout,scenario,step,productCell);
                 {
                     motion.settlePendingPhaseWork(region);
                     if(tick%4==0)for(var sensor:sensors)IndustrialOperations.observeSensor(region,sensor,sensor.first(),sensor.second());
@@ -1251,7 +1250,6 @@ public final class GpuProcessFlowsValidation {
                 }
                 transfers.add(transferAudit,region.hostSnapshot().thermalAudit());
             }
-            distillationState(region,world,layout,scenario,steps,productCell);
             System.out.println("distillation_vented scenario="+scenario+" mass="+ventedMass+" ethanol_nanos="+ventedEthanol+" components="+ventedComponents+" energy="+ventedEnergy);
             if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(product))products.add(product);
             long productMass=0,productVolume=0,ethanol=0,water=0;var compositions=new ArrayList<ChemicalContents>();
