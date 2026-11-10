@@ -124,9 +124,9 @@ final class LiquidCarrierProperties {
 			if (!wet) {
 				liquid[cell] = false;
 				materialHandle[cell] = -1;
-				if (grid.stockCount[cell] == 0) density[cell] = EMPTY_LIQUID_DENSITY;
+				if (grid.stockCount[cell] == 0) density[cell] = 0;
 				temperatureK[cell] = Double.NaN;
-				viscosityPascalSeconds[cell] = EMPTY_LIQUID_VISCOSITY;
+				viscosityPascalSeconds[cell] = 0;
 				maximumReynolds[cell] = DEFAULT_MAXIMUM_REYNOLDS;
 				continue;
 			}
@@ -159,8 +159,5 @@ final class LiquidCarrierProperties {
 		built = new Revision(carrierMutation, thermal == null ? null : thermal.thermalRevision());
 	}
 
-	// Finite placeholders for absent liquid. Physical forces require hasLiquid or positive liquid mass.
-	static final double EMPTY_LIQUID_DENSITY = 1.225;
-	static final double EMPTY_LIQUID_VISCOSITY = 1.81e-5;
 	static final double DEFAULT_MAXIMUM_REYNOLDS = 100_000;
 }

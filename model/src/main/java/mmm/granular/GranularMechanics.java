@@ -63,8 +63,8 @@ public final class GranularMechanics {
 					&& Double.isFinite(coupledMassY) && coupledMassY >= 0.0
 					&& Double.isFinite(coupledMassZ) && coupledMassZ >= 0.0;
 			if (!(Double.isFinite(velocityX) && Double.isFinite(velocityY) && Double.isFinite(velocityZ)
-					&& Double.isFinite(density) && density > 0.0
-					&& Double.isFinite(dynamicViscosity) && dynamicViscosity > 0.0
+					&& Double.isFinite(density) && (hasLiquid ? density > 0.0 : density >= 0.0)
+					&& Double.isFinite(dynamicViscosity) && (hasLiquid ? dynamicViscosity > 0.0 : dynamicViscosity >= 0.0)
 					&& Double.isFinite(maximumReynolds) && maximumReynolds > 0.0
 					&& Double.isFinite(submergedFraction) && couplingValid)) {
 				throw new IllegalArgumentException("Invalid granular fluid sample");
