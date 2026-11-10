@@ -49,6 +49,7 @@ final class RegionRepositoryAdapter {
     private java.util.function.Predicate<UUID> worldCheckpointBarrier = id -> false;
     private final java.util.Map<UUID,mmm.thermal.EnvironmentThermalState> stagedEnvironment = new java.util.HashMap<>();
     private final java.util.Set<UUID> externalEnvironmentCandidates = new java.util.HashSet<>();
+    private final java.util.Map<UUID,List<RegionGenerationStore.PreparedRemoval>> mergeRemovals = new java.util.HashMap<>();
 	private final OwnershipStore ownershipStore;
 	private final WorldCapabilityProfile profile;
 	private final FluidDefinitions definitions;
@@ -153,9 +154,11 @@ final class RegionRepositoryAdapter {
         var regions = new java.util.HashMap<UUID,RegionState>();
         var removals = new java.util.HashMap<UUID,EnvironmentThermalStore.Removal>();
         if(worldSnapshot!=null){regions.putAll(worldSnapshot.regions()); removals.putAll(worldSnapshot.removals());}
+        var retiring=mergeRemovals.getOrDefault(targetId,List.of());
+        var retiredIds=retiring.stream().map(r->r.manifest().regionId()).collect(java.util.stream.Collectors.toSet());
         var live = new java.util.ArrayList<FluidRegion>();
         for(var region:manager.regions()) {
-            if(!region.hasSelectedVolume() || region.id().equals(targetId))continue;
+            if(!region.hasSelectedVolume() || region.id().equals(targetId) || retiredIds.contains(region.id()))continue;
             if(worldCheckpointBarrier.test(region.id()) || ownershipLockDescription(region)!=null)
                 throw new IOException("Another region has a pending world transaction: "+region.id());
             if(region.solverLoaded()) {
@@ -165,6 +168,10 @@ final class RegionRepositoryAdapter {
         }
         if(target!=null) { regions.put(targetId,target); removals.remove(targetId); }
         else if(removal!=null) { regions.remove(targetId); removals.put(targetId,new EnvironmentThermalStore.Removal(removal.targetGeneration(),removal.checksum())); }
+        for(var prepared:retiring) {
+            var retired=prepared.manifest(); regions.remove(retired.regionId());
+            removals.put(retired.regionId(),new EnvironmentThermalStore.Removal(retired.targetGeneration(),retired.checksum()));
+        }
         var environments=new java.util.HashMap<>(environment.capture());
         var override=stagedEnvironment.get(targetId);
         if(override!=null) {
@@ -197,6 +204,49 @@ final class RegionRepositoryAdapter {
         stagedEnvironment.remove(targetId); externalEnvironmentCandidates.remove(targetId);
     }
 
+    /** Prepares retirement records; the ownership commit publishes them with the replacement in one world HEAD. */
+    void prepareMerge(FluidRegion candidate,List<FluidRegion> sources,long maximumEntries,long maximumBytes) throws IOException {
+        if(environment==null)throw new IOException("Region joining requires the shared world checkpoint");
+        if(mergeRemovals.containsKey(candidate.id()))throw new IOException("Region joining is already pending");
+        var staged=new ArrayList<RegionGenerationStore.PreparedRemoval>();
+        try {
+            for(var source:sources) {
+                if(worldCheckpointBarrier.test(source.id()) || ownershipLockDescription(source)!=null)
+                    throw new IOException("Region has an unfinished transaction: "+source.id());
+                reconcileWorldMirror(source.id());
+                if(!source.id().equals(candidate.id()))staged.add(prepareRemoval(source,
+                        Math.addExact(source.networkGeneration(),1),UUID.randomUUID(),maximumEntries,maximumBytes));
+            }
+            mergeRemovals.put(candidate.id(),List.copyOf(staged));
+        } catch(IOException|RuntimeException failure) {
+            for(var prepared:staged)try{files.abortRemoval(prepared);}catch(IOException cleanup){failure.addSuppressed(cleanup);}
+            throw failure;
+        }
+    }
+
+    /** Completes or discards only unpublished staging; a published world HEAD remains authoritative. */
+    void finishMerge(UUID target) throws IOException {
+        var staged=mergeRemovals.remove(target);
+        if(staged==null)return;
+        IOException failure=null;
+        for(var prepared:staged)try {
+            var manifest=prepared.manifest();
+            var durable=worldSnapshot==null?null:worldSnapshot.removals().get(manifest.regionId());
+            if(durable!=null && durable.generation()==manifest.targetGeneration() && durable.checksum()==manifest.checksum()) {
+                reconcileWorldMirror(manifest.regionId());
+                files.convergeRemovalQuarantine(manifest.regionId());
+                deleteRetiredOwnership(manifest.regionId());
+            } else files.abortRemoval(prepared);
+        } catch(IOException issue) { if(failure==null)failure=issue;else failure.addSuppressed(issue); }
+        if(failure!=null)throw failure;
+    }
+
+    private void deleteRetiredOwnership(UUID id) throws IOException {
+        var ownership=ownershipStore.files(id);
+        ownership.assertUnlockedForTransition();
+        ownership.deleteStore();
+    }
+
 	OwnershipTransactionCoordinator newOwnershipTransactions() {
 		return new OwnershipTransactionCoordinator(this, files, ownershipStore);
 	}
@@ -212,8 +262,10 @@ final class RegionRepositoryAdapter {
 		RegionGenerationStore.Discovery discovery;
 		try {
             worldSnapshot = worldStore.read();
-            if (worldSnapshot != null) for (var entry : worldSnapshot.removals().entrySet())
+            if (worldSnapshot != null) for (var entry : worldSnapshot.removals().entrySet()) {
                 files.completeWorldRemoval(entry.getKey(),entry.getValue().generation(),entry.getValue().checksum());
+                deleteRetiredOwnership(entry.getKey());
+            }
             if (worldSnapshot != null) for (var state : worldSnapshot.regions().values()) {
                 long mirror = files.committedGeneration(state.manifest().regionId());
                 if (mirror < state.manifest().checkpointGeneration()) files.publish(state);

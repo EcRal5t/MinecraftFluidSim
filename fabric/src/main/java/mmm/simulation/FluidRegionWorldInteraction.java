@@ -56,7 +56,7 @@ final class FluidRegionWorldInteraction {
                         level.getBlockState(new BlockPos(block.x(),block.y(),block.z())).getBlock()).toString());
         return applyCapturedCollisions(region,field,cellsPerBlock,updates,screens,external,plan,environment,block->{
             var state=level.getBlockState(new BlockPos(block.x(),block.y(),block.z()));
-            return state.is(mmm.block.MmmBlocks.SCREEN)?state.getValue(mmm.block.ScreenBlock.FACING).getAxis().name():null;
+            return state.getBlock() instanceof mmm.block.ScreenBlock?state.getValue(mmm.block.ScreenBlock.FACING).getAxis().name():null;
         });
     }
 
@@ -183,7 +183,7 @@ final class FluidRegionWorldInteraction {
             if(!available)continue;
             screens.entrySet().removeIf(entry->screenBlock(grid,entry.getKey(),scale).equals(block));
             var state=level.getBlockState(position);
-            if(state.is(mmm.block.MmmBlocks.SCREEN) && level.getBlockEntity(position) instanceof mmm.block.ScreenBlockEntity screen)
+            if(state.getBlock() instanceof mmm.block.ScreenBlock && level.getBlockEntity(position) instanceof mmm.block.ScreenBlockEntity screen)
                 for(int face:IndustrialOperations.screenFaces(region,position,state))
                     screens.put(face,new mmm.fluid.ScreenFace(face,screen.poreDiameter(),screen.openFraction()));
         }

@@ -455,3 +455,7 @@ Q(t) = C_eff (T_water,0 − T_iron,0)
 ## 需要进入游戏时
 
 当问题依赖实际画面、Minecraft 方块形状或磁盘重启过程时，准备一个可重复场景，写明操作、预期现象和需要保留的日志。发布构建、产物校验和部署步骤见 [验收与发布](../roadmap/acceptance-and-release.md)。
+
+## 单方块物理管道
+
+[管道架构与验证入口](../architecture/physical-pipes.md)集中记录五种管件的几何、拓扑、库存合并与沉积验证。宿主选择 `shape,pipe-network,region-merge,ownership,environment,structure-handoff,protocol`；多源状态与目录分别使用 `:solver:runFluidDomainMergeValidation`、`:app:runApplicationValidation`。四个生产 GPU 场景为 `runGpuPipeFlowValidation`、`runGpuPipeThermalValidation`、`runGpuPipeCondensationValidation`、`runGpuPipeDepositValidation`，分别覆盖压差通流、管壁换热、零初始液体冷凝及沉积清理。

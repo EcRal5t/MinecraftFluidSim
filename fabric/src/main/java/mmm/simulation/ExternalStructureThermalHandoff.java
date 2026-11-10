@@ -34,23 +34,33 @@ final class ExternalStructureThermalHandoff {
                 if(!keys.add(block.key()) || !positions.add(fixed))throw new IllegalArgumentException("Duplicate thermal handoff block");
                 String blockPrefix=blockPrefix(entry.provider(),structure,block); expected.add(blockPrefix);
                 var matches=nodes.stream().filter(n->n.key().kind()==Kind.CARRIED && n.owner().startsWith(blockPrefix)).toList();
-                if(matches.size()>1)throw new IllegalArgumentException("Duplicate carried thermal inventory");
-                var solid=nodes.stream().filter(n->n.key().equals(fixed)).findFirst().orElse(null);
+                var solids=nodes.stream().filter(n->n.key().kind()==Kind.SOLID && n.key().x()==block.x()
+                        && n.key().y()==block.y() && n.key().z()==block.z()).toList();
                 if(handoff.kind()==HandoffKind.ASSEMBLE) {
-                    if(!matches.isEmpty()) { if(solid!=null)throw new IllegalArgumentException("Fixed and carried inventory overlap"); continue; }
-                    if(solid==null)continue;
-                    String axis=solid.owner().isEmpty()?axisAt.apply(block):solid.owner();
-                    String owner=blockPrefix+encode(block.blockId())+"|"+(axis==null?"-":axis);
-                    Key target=carriedKey(owner);
-                    if(nodes.stream().anyMatch(n->n.key().equals(target)))throw new IllegalArgumentException("Carried thermal identity collision");
-                    nodes.remove(solid); removed.add(fixed); nodes.add(move(solid,target,owner));
+                    if(!matches.isEmpty()) { if(!solids.isEmpty())throw new IllegalArgumentException("Fixed and carried inventory overlap"); continue; }
+                    for(var solid:solids) {
+                        int component=solid.key().component();
+                        if(component>1)throw new IllegalArgumentException("Unsupported solid thermal component");
+                        String axis=solid.owner().isEmpty()?null:solid.owner();
+                        String owner=blockPrefix+encode(block.blockId())+"|"+(axis==null?"-":axis)+(component==0?"":"|1");
+                        Key target=carriedKey(owner);
+                        if(nodes.stream().anyMatch(n->n.key().equals(target)))throw new IllegalArgumentException("Carried thermal identity collision");
+                        nodes.remove(solid); removed.add(solid.key()); nodes.add(move(solid,target,owner));
+                    }
                 } else {
-                    if(matches.isEmpty())continue;
-                    var carried=matches.getFirst(); String axis=axisAt.apply(block);
-                    String owner=blockPrefix+encode(block.blockId())+"|"+(axis==null?"-":axis);
-                    if(!carried.owner().equals(owner))throw new IllegalArgumentException("Carried thermal block identity or screen axis changed");
-                    if(solid!=null)throw new IllegalArgumentException("Target already has a fixed thermal inventory");
-                    nodes.remove(carried); nodes.add(move(carried,fixed,axis==null?"":axis));
+                    for(var carried:matches) {
+                        String base=blockPrefix+encode(block.blockId())+"|";
+                        if(!carried.owner().startsWith(base))throw new IllegalArgumentException("Carried thermal block identity changed");
+                        String tail=carried.owner().substring(base.length());
+                        boolean second=tail.endsWith("|1");
+                        String axis=second?tail.substring(0,tail.length()-2):tail;
+                        if(!List.of("-","X","Y","Z").contains(axis)
+                                || !axis.equals("-") && !axis.equals(axisAt.apply(block)))
+                            throw new IllegalArgumentException("Carried thermal screen axis changed");
+                        var target=new Key(block.x(),block.y(),block.z(),Kind.SOLID,second?1:0);
+                        if(nodes.stream().anyMatch(n->n.key().equals(target)))throw new IllegalArgumentException("Target already has a fixed thermal inventory");
+                        nodes.remove(carried); nodes.add(move(carried,target,axis.equals("-")?"":axis));
+                    }
                 }
             }
             if(handoff.kind()==HandoffKind.DISASSEMBLE)for(var node:nodes)

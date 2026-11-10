@@ -838,6 +838,10 @@ public final class FluidRegion {
 		committedObservationListener = () -> { };
 	}
 
+    FluidRegion mergedCandidate(HostFluidState host,FluidRegionFootprint footprint,FiniteThermalDeviceInventory devices) {
+        var candidate=resizedCandidate(host,footprint);candidate.finiteThermalDevices=devices;return candidate;
+    }
+
 	void adoptResizedDevice(mmm.fluid.FluidStateAccess state) {
 		if (!(state instanceof mmm.fluid.ResidentFluidState resident))
 			throw new IllegalStateException("Resized region did not receive resident device state");

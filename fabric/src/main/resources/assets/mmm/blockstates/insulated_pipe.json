@@ -1,0 +1,99 @@
+{
+  "multipart": [
+    {
+      "apply": {
+        "model": "mmm:block/insulated_pipe_frame"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "down": "none"
+          },
+          {
+            "down": "sealed"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_pipe_cap_down"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "up": "none"
+          },
+          {
+            "up": "sealed"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_pipe_cap_up"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "north": "none"
+          },
+          {
+            "north": "sealed"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_pipe_cap_north"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "south": "none"
+          },
+          {
+            "south": "sealed"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_pipe_cap_south"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "west": "none"
+          },
+          {
+            "west": "sealed"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_pipe_cap_west"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "east": "none"
+          },
+          {
+            "east": "sealed"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_pipe_cap_east"
+      }
+    }
+  ]
+}

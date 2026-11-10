@@ -65,6 +65,7 @@ public final class ClientSurfaceValidation {
         require(!FluidRenderBatch.sameFrames(List.of(initial), List.of(), List.of(), List.of()),
                 "Region removal invalidates the uploaded batch");
 		emission(initial, ph);
+        pipeBedDisplay(initial);
 		System.out.println("Client surface validation passed");
 	}
 
@@ -98,12 +99,30 @@ public final class ClientSurfaceValidation {
 		}
 	}
 
+    private static void pipeBedDisplay(ClientRegionSnapshotStore.MaterialFrame material) {
+        byte[] masks=new byte[8],bulk=new byte[8],porosity=new byte[8];short[] top=new short[8];
+        Arrays.fill(top,(short)-1);masks[0]=(byte)0xfa;bulk[0]=32;porosity[0]=80;top[0]=0;
+        var payload=new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR,material.payload(),"a".repeat(64),
+                List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:salt",0xffffffff)),masks,bulk,porosity,top,List.of(),null);
+        var frame=new ClientRegionSnapshotStore.GranularFrame(payload,material,bulk,porosity,top);
+        var vertices=new RecordingVertices();
+        GranularSurfaceGeometry.buildGeometry(Vec3.ZERO,vertices,frame,false,id->{throw new AssertionError("unexpected texture");},p->0);
+        require(vertices.count>0 && vertices.minX>=0 && vertices.maxX<=.25f && vertices.minZ>=0 && vertices.maxZ<=.25f
+                && vertices.maxY>.249f && vertices.maxY<.252f,"Pipe deposit surface escaped its open microboxes or had wrong height");
+        require(Math.abs(GranularSurfaceGeometry.bedHeight(0,.4f)-.4f)<1e-6,"Open-cell bed height changed");
+        byte[] different=masks.clone();different[0]=(byte)0xf5;
+        var other=new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR,material.payload(),"a".repeat(64),
+                payload.granularMaterials(),different,bulk,porosity,top,List.of(),null);
+        var changed=new ClientRegionSnapshotStore.GranularFrame(other,material,bulk,porosity,top);
+        require(!FluidRenderBatch.sameFrames(List.of(),List.of(),List.of(frame),List.of(changed)),"Changed fixed mask reused stale deposit mesh");
+    }
+
 	private static ClientRegionSnapshotStore.GranularFrame granular(ClientRegionSnapshotStore.MaterialFrame material, boolean filled) {
 		byte[] bulk = new byte[8], porosity = new byte[8];
 		short[] top = new short[8]; Arrays.fill(top, (short) -1);
 		if (filled) { bulk[0] = (byte) 128; porosity[0] = (byte) 80; top[0] = 0; }
 		var payload = new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material.payload(), "a".repeat(64),
-				List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:salt", 0xffffffff)), bulk, porosity, top,
+				List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:salt", 0xffffffff)), new byte[bulk.length], bulk, porosity, top,
 				filled ? List.of(new GranularDisplaySnapshot.ParcelSample(32768, 32768, 32768, 10, 0)) : List.of(), null);
 		return new ClientRegionSnapshotStore.GranularFrame(payload, material, bulk, porosity, top);
 	}
@@ -114,7 +133,8 @@ public final class ClientSurfaceValidation {
 
 	private static final class RecordingVertices implements VertexConsumer {
 		int count, textured;
-		public VertexConsumer addVertex(float x, float y, float z) { count++; return this; }
+        float minX=Float.POSITIVE_INFINITY,minZ=Float.POSITIVE_INFINITY,maxX=Float.NEGATIVE_INFINITY,maxY=Float.NEGATIVE_INFINITY,maxZ=Float.NEGATIVE_INFINITY;
+		public VertexConsumer addVertex(float x, float y, float z) { count++;minX=Math.min(minX,x);minZ=Math.min(minZ,z);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);maxZ=Math.max(maxZ,z);return this; }
 		public VertexConsumer setColor(int r, int g, int b, int a) { return this; }
 		public VertexConsumer setColor(int color) { return this; }
 		public VertexConsumer setUv(float u, float v) { textured++; return this; }

@@ -145,7 +145,7 @@ final class FluidSnapshotPublisher {
 	private FluidGranularSnapshotPayload createGranularLayer(
 			FluidRegion region, FluidMaterialSnapshotPayload base, mmm.fluid.ResidentFluidState.Display display
 	) {
-		return FluidGranularSnapshotPayload.snapshot(base, display.granular(),
+		return FluidGranularSnapshotPayload.snapshot(base, display.granular(), region.fixedGeometry().copyMasks(),
 				chemistry ? chemicalRegistry.fingerprint() : null,
 				chemistry ? display.chemical() : null);
 	}

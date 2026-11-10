@@ -57,3 +57,7 @@ MMM 在客户端通过 Fabric `ModelLoadingPlugin` 和 `QuadEmitter` 实现连�
 > Use case: stylized-concept. Asset type: ONE Minecraft industrial mod block face texture. a thermal reservoir face: broad sealed pale ceramic square core surrounded by dark steel casing, centered small split cyan and muted orange temperature indicator, copper heat transfer coils at two sides, tiny brass fasteners, no target bullseye. Flat orthographic square face fills entire canvas edge-to-edge, no margins, no perspective, no external shadow. Strict pixel art designed as a 32x32 pixel sprite enlarged with nearest-neighbor hard square pixels; very simple bold shapes readable at 32 pixels. Cohesive muted dark blue-gray steel, cyan instruments and aged brass palette. Opaque full square background. No text, no numbers, no logos, no smooth gradients, no extra panels or scenes.
 
 验证入口：`:fabric:runHostValidation -PhostValidation=protocol` 包含玻璃邻域、六面象限方向、同类面消隐、实体碰撞、天光与视觉形状检查；`:fabric:assemble verifyArchitecture` 检查客户端构建、资源打包和架构边界。
+
+## 物理管件
+
+金属管、绝热管、观察管、管阀和管筛沿用现有工业贴图，模型按四分之一方块网格构成真实中空壳体。普通管使用框体与六面端盖的 multipart 组合，64 种开口对应共享碰撞几何；阀门以独立闸板表现关闭、半开、全开，筛膜限于中央管口。观察管使用透明玻璃表面并保留内部视野。模型与碰撞一致性纳入 `shape` 验证。

@@ -42,14 +42,16 @@ public final class FluidDomainResize {
                 : map.cells(previousBoundary, sampledBoundaryTemperatures, 6);
         int[] dirty = source.copyChemicalDirtyCells();
         if (dirty != null) {
-            for (int i = 0; i < dirty.length; i++) dirty[i] = map.cell(dirty[i]);
+            dirty = java.util.Arrays.stream(dirty).filter(cell -> retainedCells == null || retainedCells[cell])
+                    .map(map::cell).toArray();
             java.util.Arrays.sort(dirty);
         }
         return new FluidDomainState(target, source.config(), source.definitions(), source.sealedDomainBoundary(),
                 map.liquid(source.liquid()), map.occupancy(source.phaseOccupancy()), map.momentum(source.momentum()),
                 map.geometry(source.fixedGeometry(), sampledMasks, sampledScreens), map.bodies(source.entityBodyState(), source.config().cellSize()),
                 source.materialPalette(), source.chemicalRegistry(), source.chemicalSource(), source.chemicalSink(), dirty,
-                source.chemicalRegistry() == null ? 0 : map.cell(source.chemicalReactionCursor()),
+                source.chemicalRegistry() == null || retainedCells != null && !retainedCells[source.chemicalReactionCursor()]
+                        ? 0 : map.cell(source.chemicalReactionCursor()),
                 map.chemicalPending(source.chemicalMassTransferPending()), source.granularRegistry(),
                 granular == null ? null : granular.state(), map.granularDynamics(source.granularDynamics()), source.precipitationEnabled(),
                 source.gasRegistry(), FluidDomainState.GasContinuation.spatial(gas), source.thermalRegistry(), thermal,

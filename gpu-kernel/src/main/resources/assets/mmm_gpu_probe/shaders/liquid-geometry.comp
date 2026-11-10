@@ -256,7 +256,8 @@ void faceGeometry(int face) {
     if (screenFaces[face].x > 0.0) {
         double deposited = double(max(int64_t(0), bedSolid[leftCell] - coherentSolid[leftCell])
                 + max(int64_t(0), bedSolid[rightCell] - coherentSolid[rightCell])) / SOLID_VOLUME_UNITS_PER_CELL;
-        double remaining = max(.01, 1.0 - deposited / .6);
+        double openCapacity = .5LF * double(bitCount((~masks[leftCell]) & 255u) + bitCount((~masks[rightCell]) & 255u)) / 8.0LF;
+        double remaining = openCapacity > 0.0LF ? max(.01, 1.0 - deposited / (.6LF * openCapacity)) : .01LF;
         double factor = screenFaces[face].y * remaining * remaining;
         openArea *= factor;
         wetArea *= factor;

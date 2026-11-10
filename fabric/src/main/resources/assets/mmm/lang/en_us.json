@@ -272,5 +272,19 @@
   "block.mmm.insulation": "Insulation Block",
   "block.mmm.insulation.tooltip": "Blocks heat transfer.",
   "block.mmm.insulating_glass": "Insulating Glass",
-  "block.mmm.insulating_glass.tooltip": "Transparent block that blocks heat transfer."
+  "block.mmm.insulating_glass.tooltip": "Transparent block that blocks heat transfer.",
+  "block.mmm.metal_pipe": "Metal Pipe",
+  "block.mmm.insulated_pipe": "Insulated Pipe",
+  "block.mmm.glass_pipe": "Glass Pipe",
+  "block.mmm.pipe_valve": "Pipe Valve",
+  "block.mmm.pipe_screen": "Pipe Screen",
+  "block.mmm.metal_pipe.tooltip": "A metal pipe with a 0.5 m bore. Sneak and use an end to cycle automatic, open and sealed.",
+  "block.mmm.insulated_pipe.tooltip": "An insulated pipe with a 0.5 m bore. Sneak and use an end to cycle automatic, open and sealed.",
+  "block.mmm.glass_pipe.tooltip": "A glass pipe with a 0.5 m bore. Sneak and use an end to cycle automatic, open and sealed.",
+  "block.mmm.pipe_valve.tooltip": "An axial pipe valve with closed, half-open and fully open positions. Right-click or use redstone.",
+  "block.mmm.pipe_screen.tooltip": "An axial pipe screen. Use the field probe to configure its mesh.",
+  "screen.mmm.quick_start.step.9": "9. Place metal, insulated or glass pipes to build a route. The square bore is 0.5 m wide; the selected physical region must include the route and both vessels.",
+  "screen.mmm.quick_start.step.10": "10. Compatible pipe ends connect automatically. Sneak-use a pipe face to cycle automatic, open and sealed. An open end connects to liquid or air in the same region.",
+  "screen.mmm.quick_start.step.11": "11. The pipe valve has closed, half-open and fully open settings. Right-click to change its opening or control it with redstone. A pipe screen accepts the same probe configuration as a screen.",
+  "screen.mmm.quick_start.step.12": "12. Metal conducts heat, insulated pipe blocks heat transfer, and glass pipe lets you inspect the contents. Open the Demos menu for ready-made examples."
 }

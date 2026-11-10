@@ -22,6 +22,11 @@ import java.util.function.Function;
 public final class MmmBlocks {
 	public static final Block INSULATION = register("insulation", Block::new);
 	public static final Block INSULATING_GLASS = register("insulating_glass", TransparentBlock::new);
+	public static final Block METAL_PIPE = register("metal_pipe", PipeBlock::new);
+	public static final Block INSULATED_PIPE = register("insulated_pipe", PipeBlock::new);
+	public static final Block GLASS_PIPE = register("glass_pipe", PipeBlock::new);
+	public static final Block PIPE_VALVE = register("pipe_valve", PipeValveBlock::new);
+	public static final Block PIPE_SCREEN = register("pipe_screen", PipeScreenBlock::new);
 	public static final Block FLUID_PORT = register("fluid_port", FluidPortBlock::new);
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
 	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
@@ -31,7 +36,7 @@ public final class MmmBlocks {
 	public static final Block PROCESS_SENSOR = register("process_sensor", ProcessSensorBlock::new);
 	public static final Block SCREEN = register("screen", ScreenBlock::new);
 	public static final BlockEntityType<ScreenBlockEntity> SCREEN_ENTITY = Registry.register(
-			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("screen"),new BlockEntityType<>(ScreenBlockEntity::new,Set.of(SCREEN)));
+			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("screen"),new BlockEntityType<>(ScreenBlockEntity::new,Set.of(SCREEN,PIPE_SCREEN)));
 	public static final BlockEntityType<ProcessSensorBlockEntity> PROCESS_SENSOR_ENTITY = Registry.register(
 			BuiltInRegistries.BLOCK_ENTITY_TYPE,MmmMod.id("process_sensor"),new BlockEntityType<>(ProcessSensorBlockEntity::new,Set.of(PROCESS_SENSOR)));
 	public static final BlockEntityType<MaterialBoxBlockEntity> MATERIAL_BOX_ENTITY = Registry.register(

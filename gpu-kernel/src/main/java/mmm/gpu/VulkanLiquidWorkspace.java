@@ -643,9 +643,12 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             long sourceMixtureEnd=align(sourceMixture.offset()+sourceMixture.bindingBytes());
             pressure=sections.new PressureSection(granular,gas,mixture,viscosity.column(VulkanLiquidViscosity.Field.MU),sourceEntity,entity,
                     entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ),sourceMixtureEnd);
+            pressure.assembly.bindBedConductance(viscosity.column(VulkanLiquidViscosity.Field.BED_CONDUCTANCE),
+                    viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_HEAT));
             if(gas!=null)gas.transport.bindRoutes(word(pressure.constraint.outTarget),word(pressure.constraint.inOffsets),
                     word(pressure.constraint.inSource),word(pressure.constraint.inSide));
             dynamics=granular==null?null:sections.new GranularDynamics(granular,pressure,viscosity.column(VulkanLiquidViscosity.Field.MU),pressure.endOffset);
+            if(granular!=null)viscosity.bindBeds(granular.geometry,dynamics.transitions,geometry.get(GeometryField.FIXED_MASKS));
             if(entity!=null){entity.bindPressure(mixture,pressure.coupled);entity.bindSourceOccupation(sourceEntity);}
             capacityInputs=VulkanLiquidCapacityInputs.layout(volumes,word(geometry.get(GeometryField.FIXED_MASKS)),
                     word(entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ)),word(geometry.get(GeometryField.FACES)),word(geometry.get(GeometryField.FLUXES)),

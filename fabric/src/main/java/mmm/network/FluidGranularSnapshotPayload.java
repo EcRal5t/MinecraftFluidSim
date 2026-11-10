@@ -19,6 +19,7 @@ public record FluidGranularSnapshotPayload(
 		FluidMaterialSnapshotPayload material,
 		String registryFingerprint,
 		List<GranularDisplaySnapshot.MaterialEntry> granularMaterials,
+		byte[] fixedMasks,
 		byte[] depositBulkFill,
 		byte[] depositPorosity,
 		short[] depositTopMaterial,
@@ -36,6 +37,7 @@ public record FluidGranularSnapshotPayload(
 		material = Objects.requireNonNull(material, "material");
 		registryFingerprint = Objects.requireNonNull(registryFingerprint, "registryFingerprint");
 		granularMaterials = List.copyOf(Objects.requireNonNull(granularMaterials, "granularMaterials"));
+		fixedMasks = Objects.requireNonNull(fixedMasks, "fixedMasks").clone();
 		depositBulkFill = Objects.requireNonNull(depositBulkFill, "depositBulkFill").clone();
 		depositPorosity = Objects.requireNonNull(depositPorosity, "depositPorosity").clone();
 		depositTopMaterial = Objects.requireNonNull(depositTopMaterial, "depositTopMaterial").clone();
@@ -44,28 +46,30 @@ public record FluidGranularSnapshotPayload(
 			throw new IllegalArgumentException("Granular snapshot must retain material geometry");
 		}
 		if (material.isSnapshot()) {
+			if (fixedMasks.length != material.geometry().grid().cellCount()) throw new IllegalArgumentException("Granular fixed geometry size differs");
 			new GranularDisplaySnapshot(material.geometry().grid(), material.cellSize(),
 					registryFingerprint, granularMaterials, depositBulkFill, depositPorosity,
 					depositTopMaterial, activeParcels);
 			if (chemical != null) chemical.validate(material);
-		} else if (!registryFingerprint.isEmpty() || !granularMaterials.isEmpty()
+		} else if (fixedMasks.length != 0 || !registryFingerprint.isEmpty() || !granularMaterials.isEmpty()
 				|| depositBulkFill.length != 0 || depositPorosity.length != 0 || depositTopMaterial.length != 0
 				|| !activeParcels.isEmpty() || chemical != null) {
 			throw new IllegalArgumentException("Granular removal payloads cannot carry display state");
 		}
 	}
 
+	@Override public byte[] fixedMasks() { return fixedMasks.clone(); }
 	@Override public byte[] depositBulkFill() { return depositBulkFill.clone(); }
 	@Override public byte[] depositPorosity() { return depositPorosity.clone(); }
 	@Override public short[] depositTopMaterial() { return depositTopMaterial.clone(); }
 
 	public static FluidGranularSnapshotPayload snapshot(
-			FluidMaterialSnapshotPayload material, GranularDisplaySnapshot granular,
+			FluidMaterialSnapshotPayload material, GranularDisplaySnapshot granular, byte[] fixedMasks,
 			String chemicalFingerprint, ChemicalDisplaySnapshot chemical
 	) {
 		ChemicalLayer layer = chemical == null ? null : ChemicalLayer.from(chemicalFingerprint, chemical);
 		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material,
-				granular.registryFingerprint(), granular.materials(),
+				granular.registryFingerprint(), granular.materials(), fixedMasks,
 				granular.depositBulkFill(), granular.depositPorosity(), granular.depositTopMaterial(),
 				granular.activeParcels(), layer);
 	}
@@ -74,7 +78,7 @@ public record FluidGranularSnapshotPayload(
 	public static FluidGranularSnapshotPayload clearAll() { return empty(FluidMaterialSnapshotPayload.clearAll()); }
 	private static FluidGranularSnapshotPayload empty(FluidMaterialSnapshotPayload material) {
 		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material, "",
-				List.of(), new byte[0], new byte[0], new short[0], List.of(), null);
+				List.of(), new byte[0], new byte[0], new byte[0], new short[0], List.of(), null);
 	}
 
 	public boolean isSnapshot() { return material.isSnapshot(); }
@@ -102,6 +106,7 @@ public record FluidGranularSnapshotPayload(
 		for (GranularDisplaySnapshot.MaterialEntry entry : payload.granularMaterials) {
 			buffer.writeUtf(entry.id(), MAX_KEY_LENGTH); buffer.writeInt(entry.argb());
 		}
+		buffer.writeByteArray(payload.fixedMasks);
 		buffer.writeByteArray(payload.depositBulkFill);
 		buffer.writeByteArray(payload.depositPorosity);
 		buffer.writeVarInt(payload.depositTopMaterial.length);
@@ -129,7 +134,7 @@ public record FluidGranularSnapshotPayload(
 		for (int index = 0; index < materialCount; index++) {
 			materials.add(new GranularDisplaySnapshot.MaterialEntry(buffer.readUtf(MAX_KEY_LENGTH), buffer.readInt()));
 		}
-		byte[] bulk = buffer.readByteArray(MAX_CELLS), porosity = buffer.readByteArray(MAX_CELLS);
+		byte[] fixedMasks = buffer.readByteArray(MAX_CELLS), bulk = buffer.readByteArray(MAX_CELLS), porosity = buffer.readByteArray(MAX_CELLS);
 		int topCount = bounded(buffer.readVarInt(), MAX_CELLS, "deposit top-material field");
 		short[] top = new short[topCount]; for (int index = 0; index < top.length; index++) top[index] = buffer.readShort();
 		int parcelCount = bounded(buffer.readVarInt(), GranularLimits.MAX_DISPLAY_PARCELS_PER_REGION, "parcel samples");
@@ -139,7 +144,7 @@ public record FluidGranularSnapshotPayload(
 				buffer.readUnsignedByte(), buffer.readUnsignedShort()));
 		ChemicalLayer chemical = buffer.readBoolean() ? ChemicalLayer.decode(buffer) : null;
 		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material, fingerprint, materials,
-				bulk, porosity, top, parcels, chemical);
+				fixedMasks, bulk, porosity, top, parcels, chemical);
 	}
 
 	private static int bounded(int count, int maximum, String label) {

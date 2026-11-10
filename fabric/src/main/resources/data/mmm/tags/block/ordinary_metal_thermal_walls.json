@@ -1,1 +1,9 @@
-{"replace":false,"values":["minecraft:iron_block"]}
+{
+  "replace": false,
+  "values": [
+    "minecraft:iron_block",
+    "mmm:metal_pipe",
+    "mmm:pipe_valve",
+    "mmm:pipe_screen"
+  ]
+}

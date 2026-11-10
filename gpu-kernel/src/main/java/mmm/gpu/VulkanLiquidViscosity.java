@@ -44,6 +44,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         definitions.append("#define STOCK_FIELDS ").append(STOCK_FIELDS).append('\n');
         definitions.append("#define WORK_FIELDS ").append(WORK_FIELDS).append('\n');
         definitions.append("#define H_ETHANOL_SPECIES 111\n#define H_ETHANOL_VISCOSITY 112\n#define H_ETHANOL_MOLAR_MASS 114\n#define H_WATER_MOLAR_MASS 116\n#define H_SALT_A 118\n#define H_SALT_B 120\n#define H_SALT_MAX_MOLALITY 122\n#define H_SALT_REFERENCE_TEMPERATURE 124\n#define H_SALT_TEMPERATURE_TOLERANCE 126\n");
+        definitions.append("#define H_BED_OFFSETS 90\n#define H_BED_ENTRIES 91\n#define H_BED_PARTICLES 92\n#define H_BED_VOLUME 93\n#define H_BED_POROSITY 94\n#define H_BED_MATERIAL 95\n#define H_BED_PROPERTIES 96\n#define H_BED_MASKS 97\n");
         for (var field : VulkanLiquidStateLayout.Field.values())
             definitions.append("#define STOCK_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
         for (var field : Field.values())
@@ -93,7 +94,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         CONTACT_FACE_WORK(8), SOURCE_CELL_HEAT(8), SOURCE_CELL_WORK(8), SOURCE_FACE_VELOCITY(8), SOURCE_FACE_K(8),
         FINAL_FACE_K(8), CELL_FIXED_IMPULSE(8), WALL_FACE_IMPULSE(8), CONTACT_IMPULSE(8), CONTACT_WORK(8),
         MATERIAL_OFFSETS(4), VISCOSITY_SEGMENTS(8), STRAIN_CONDUCTANCE(8), FACE_INVERSE_MASS(8),
-        FACE_SCALE(8), STRAIN_CLASS(4);
+        FACE_SCALE(8), STRAIN_CLASS(4), BED_CONDUCTANCE(8);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -103,6 +104,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         private final Tables tables;private final PrescribedContacts contacts;
         private final int cellsWord,facesWord,wallsWord,temperatureWord,activityWord,activityCellsWord,faces;
         private final boolean noSlip;private final long endOffset;
+        private int[] beds;
         Layout(VulkanLiquidStateLayout source,VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column faces,
                VulkanLiquidStateLayout.Column walls,int carrierTemperatureWord,int faceActivityWord,Tables tables,
                PrescribedContacts contacts,boolean noSlip,long scratchBase,long alignment) {
@@ -119,7 +121,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             long[] cursor={scratchBase};header=VulkanLiquidViscosity.column(cursor,HEADER_WORDS,4,alignment);int n=source.cellCount();
             for(Field field:Field.values()) {
                 int count=switch(field){
-                    case WALL_CONDUCTANCE,CELL_FIXED_IMPULSE->3*n;case STRESS_HEAT->6*n;
+                    case WALL_CONDUCTANCE,CELL_FIXED_IMPULSE,BED_CONDUCTANCE->3*n;case STRESS_HEAT->6*n;
                     case WALL_HEAT,CONTACT_FACE_HEAT,CONTACT_FACE_WORK,SOURCE_FACE_VELOCITY,SOURCE_FACE_K,FINAL_FACE_K,WALL_FACE_IMPULSE,FACE_INVERSE_MASS,FACE_SCALE->this.faces;
                     case CONTACT_IMPULSE,CONTACT_WORK->contacts==null?0:contacts.capacity();
                     case STRAIN_CONDUCTANCE,STRAIN_CLASS->6*n;
@@ -133,6 +135,13 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         VulkanLiquidStateLayout.Column header(){return header;}
         VulkanLiquidStateLayout.Column column(Field field){return columns.get(field);}
         int faces(){return faces;}long endOffset(){return endOffset;}
+        void bindBeds(VulkanGranularGeometry.Layout geometry,VulkanGranularTransitions.Layout transitions,VulkanLiquidStateLayout.Column masks) {
+            var state=geometry.state();
+            beds=new int[]{geometry.word(VulkanGranularGeometry.Field.OFFSETS),geometry.word(VulkanGranularGeometry.Field.ENTRIES),
+                    state.particleCapacity(),state.word(VulkanGranularStateLayout.Field.SOLID_VOLUME_SVQ),
+                    state.word(VulkanGranularStateLayout.Field.DEPOSIT_POROSITY),state.word(VulkanGranularStateLayout.Field.MATERIAL),
+                    transitions.word(VulkanGranularTransitions.Field.MATERIALS),word(masks)};
+        }
         List<VulkanEnergyLedger.Stream> externalWorkRoundoffStreams(){
             return List.of(new VulkanEnergyLedger.Stream(1,word(column(Field.SOURCE_CELL_WORK)),source.cellCount(),2,1),
                     new VulkanEnergyLedger.Stream(1,word(column(Field.CONTACT_WORK)),contacts==null?0:contacts.capacity(),2,-1));
@@ -143,6 +152,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             data[Header.SIZE_X.ordinal()]=source.sizeX();data[Header.SIZE_Y.ordinal()]=source.sizeY();data[Header.SIZE_Z.ordinal()]=source.sizeZ();data[Header.CELL_COUNT.ordinal()]=source.cellCount();data[Header.FACE_COUNT.ordinal()]=faces;
             data[Header.CELLS.ordinal()]=cellsWord;data[Header.FACES.ordinal()]=facesWord;data[Header.WALL_GEOMETRY.ordinal()]=wallsWord;data[Header.TEMPERATURE.ordinal()]=temperatureWord;data[Header.ACTIVITY.ordinal()]=activityWord;data[Header.NO_SLIP.ordinal()]=noSlip?1:0;
             data[Header.ACTIVITY_CELLS.ordinal()]=activityCellsWord;
+            data[90]=-1;if(beds!=null)System.arraycopy(beds,0,data,90,beds.length);
             data[Header.AQUEOUS_MATERIAL.ordinal()]=tables.aqueousMaterial();data[Header.WATER_SPECIES.ordinal()]=tables.waterSpecies();
             data[Header.SODIUM_SPECIES.ordinal()]=tables.sodiumSpecies();data[Header.CHLORIDE_SPECIES.ordinal()]=tables.chlorideSpecies();data[Header.SALT_SPECIES.ordinal()]=tables.saltSpecies();
             data[111]=tables.ethanolSpecies();data[Header.MATERIAL_COUNT.ordinal()]=tables.offsets().length-1;

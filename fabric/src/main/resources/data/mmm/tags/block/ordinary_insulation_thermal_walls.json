@@ -2,6 +2,7 @@
   "replace": false,
   "values": [
     "mmm:insulation",
-    "mmm:insulating_glass"
+    "mmm:insulating_glass",
+    "mmm:insulated_pipe"
   ]
 }

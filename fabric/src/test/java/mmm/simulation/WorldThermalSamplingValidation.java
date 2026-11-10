@@ -26,11 +26,14 @@ public final class WorldThermalSamplingValidation {
         registry.getTags().forEach(tag->tags.put(tag.key(),tag.stream().toList()));
         tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_wood_thermal_walls")),List.of(Blocks.OAK_TRAPDOOR.builtInRegistryHolder()));
         tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_insulation_thermal_walls")),List.of(mmm.block.MmmBlocks.INSULATING_GLASS.builtInRegistryHolder()));
+        tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_metal_thermal_walls")),List.of(mmm.block.MmmBlocks.PIPE_SCREEN.builtInRegistryHolder()));
         registry.prepareTagReload(new net.minecraft.tags.TagLoader.LoadResult<>(Registries.BLOCK,tags)).apply();
         var d=ProductionRegistries.load();
         var startup=WorldStartupCoordinator.start(Files.createTempDirectory("mmm-world-sampling-"),()->new mmm.simulation.persistence.WorldCapabilityBundleStore.Definitions(
                 EnumSet.allOf(WorldCapability.class),d.material(),d.chemical(),d.granular(),d.gas(),d.thermal()));
         var world=new CommittedWorldRegistries(startup);
+        pipeScreenTopology(world);
+        pipeMovingPartsRetainHeat(world);
         var manager=new FluidRegionManager(startup.config().limits());
         var environments=new HashMap<String,EnvironmentThermalState>();
         var backend=(FluidSolverBackend)Proxy.newProxyInstance(FluidSolverBackend.class.getClassLoader(),new Class<?>[]{FluidSolverBackend.class},(proxy,method,argv)->switch(method.getName()) {
@@ -80,6 +83,17 @@ public final class WorldThermalSamplingValidation {
             throw new AssertionError("Insulating glass conducts heat");
         var wall=region.finiteThermalDevices(world.thermalRegistry().fingerprint()).devices().stream().filter(device->device.objectId().startsWith(origin.asLong()+"@")).findFirst().orElseThrow();
         if(env.portsFor(region,wall,world.thermalRegistry()).stream().noneMatch(FluidDomainContracts.ThermalPortRequest::internalFace))throw new AssertionError("Partial wall lost internal microface");
+        manager.observeGeometry(env::regionGeometryChanged);
+        var replacement=region.mergedCandidate(HostFluidState.restoreAuthoritativeState(region.hostSnapshot().captureAuthoritativeState()),
+                footprint,FiniteThermalDeviceInventory.empty(world.thermalRegistryFingerprint()));
+        if(replacement.environmentBinding()!=null || !replacement.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().isEmpty())
+            throw new AssertionError("Replacement fixture retained its old projection");
+        if(!manager.adoptResize(region,replacement).accepted())throw new AssertionError("Same-id replacement was rejected");
+        if(!env.refresh(replacement,2,blocks) || replacement.environmentBinding()==null
+                || replacement.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().noneMatch(device->
+                        device.providerId().equals(WorldThermalEnvironment.PROVIDER) && device.objectId().startsWith(origin.asLong()+"@")))
+            throw new AssertionError("Same-id replacement did not restore shared wall projection");
+        region=replacement;
         if(!env.canReturnAir(region))throw new AssertionError("Standard ambient air cannot return");
         int occupied=0; while(gas.cells().get(occupied).isEmpty())occupied++;
         var oxygen=world.gasRegistry().createMixture(100_000_000L,List.of(
@@ -112,4 +126,64 @@ public final class WorldThermalSamplingValidation {
         if(!preserved.equals(source) || Math.abs(preservedEnergy-Arrays.stream(gas.internalEnergy()).sum())>1e-8)
             throw new AssertionError("Region-free refresh changed returned air");
     }
+    private static void pipeScreenTopology(CommittedWorldRegistries world) {
+        var pos=BlockPos.ZERO;var state=mmm.block.MmmBlocks.PIPE_SCREEN.defaultBlockState();
+        var masks=MinecraftCollisionWorldPort.sampleBlockMasks(state.getCollisionShape(EmptyBlockGetter.INSTANCE,pos),2);
+        var topology=new WorldThermalTopology(world,EmptyBlockGetter.INSTANCE,new HashMap<>());
+        topology.add(pos,state,masks,false);topology.connect();
+        var shell=topology.nodes.stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.SOLID && n.key().component()==0).findFirst().orElseThrow();
+        var membrane=topology.nodes.stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.SOLID && n.key().component()==1).findFirst().orElseThrow();
+        var definition=world.thermalRegistry().finiteDevice("mmm:screen");
+        if(!shell.materialId().equals("mmm:ordinary_metal_wall") || !shell.owner().isEmpty()
+                || !membrane.materialId().equals("mmm:screen") || membrane.owner().isEmpty()
+                || membrane.massUnits()!=mmm.units.Mass.fromKilograms(definition.bodyMassKilograms()*.25)
+                || membrane.volumeCubicMetres()!=.03125)
+            throw new AssertionError("Pipe screen shell or quarter-area membrane inventory differs");
+        var savedShell=shell.withEnergy(shell.internalEnergyJ()+123);
+        var savedMembrane=membrane.withEnergy(membrane.internalEnergyJ()+45);
+        var old=new HashMap<EnvironmentThermalState.Key,EnvironmentThermalState.Node>();
+        old.put(savedShell.key(),savedShell);old.put(savedMembrane.key(),savedMembrane);
+        var refreshed=new WorldThermalTopology(world,EmptyBlockGetter.INSTANCE,old);
+        refreshed.add(pos,state,masks,false);
+        if(refreshed.nodes.stream().noneMatch(n->n.equals(savedShell)) || refreshed.nodes.stream().noneMatch(n->n.equals(savedMembrane)))
+            throw new AssertionError("Pipe screen refresh reset thermal inventory");
+        var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-4f,.002f);
+        var host=new HostFluidState(2,2,2,config,world.definitions());
+        for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++)host.setSolidMicroMask(x,y,z,Byte.toUnsignedInt(masks[(z*2+y)*2+x]));
+        var footprint=mmm.simulation.controller.FluidRegionFootprint.box(pos,pos);
+        var region=new FluidRegion(UUID.randomUUID(),Level.OVERWORLD,pos,host,footprint);
+        var device=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+"@mmm:screen@"+membrane.owner(),"mmm:screen",
+                new FiniteThermalBodyState(0,world.thermalRegistryFingerprint(),membrane.materialId(),membrane.massUnits(),membrane.internalEnergyJ()));
+        var ports=WorldThermalEnvironment.ports(region,device,world.thermalRegistry());
+        int area=0;
+        for(var port:ports) {
+            int solid=region.solidMicroMask(port.cellX(),port.cellY(),port.cellZ());
+            int axis=port.direction()/2,side=port.direction()%2;
+            for(int micro=0;micro<8;micro++)if((solid&(1<<micro))==0 && ((micro>>axis)&1)==side)area++;
+        }
+        if(area!=8)throw new AssertionError("Pipe screen contact area differs from two quarter-block faces: "+area);
+    }
+
+    private static void pipeMovingPartsRetainHeat(CommittedWorldRegistries world) {
+        var pos=BlockPos.ZERO;
+        var pipe=mmm.block.MmmBlocks.METAL_PIPE.defaultBlockState();
+        var valve=mmm.block.MmmBlocks.PIPE_VALVE.defaultBlockState();
+        for(var states:List.of(List.of(pipe,pipe.setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.EAST),mmm.block.PipeBlock.Port.OPEN),pipe),
+                List.of(valve,valve.setValue(mmm.block.PipeValveBlock.OPENING,0),valve.setValue(mmm.block.PipeValveBlock.OPENING,1),valve))) {
+            var old=new HashMap<EnvironmentThermalState.Key,EnvironmentThermalState.Node>();
+            EnvironmentThermalState.Node heated=null;
+            for(var state:states) {
+                var masks=MinecraftCollisionWorldPort.sampleBlockMasks(state.getCollisionShape(EmptyBlockGetter.INSTANCE,pos),2);
+                var topology=new WorldThermalTopology(world,EmptyBlockGetter.INSTANCE,old);
+                topology.add(pos,state,masks,true);
+                var solid=topology.nodes.stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.SOLID).findFirst().orElseThrow();
+                if(heated==null)heated=solid.withEnergy(solid.internalEnergyJ()+12345);
+                else if(solid.massUnits()!=heated.massUnits() || solid.volumeCubicMetres()!=.875
+                        || solid.internalEnergyJ()!=heated.internalEnergyJ())
+                    throw new AssertionError("Moving pipe parts changed thermal inventory");
+                old=new HashMap<>();old.put(heated.key(),heated);
+            }
+        }
+    }
+
 }

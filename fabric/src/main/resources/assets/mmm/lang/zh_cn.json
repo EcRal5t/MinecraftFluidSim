@@ -272,5 +272,19 @@
   "block.mmm.insulation": "绝热方块",
   "block.mmm.insulation.tooltip": "阻隔热量传递。",
   "block.mmm.insulating_glass": "绝热玻璃",
-  "block.mmm.insulating_glass.tooltip": "透明方块，阻隔热量传递。"
+  "block.mmm.insulating_glass.tooltip": "透明方块，阻隔热量传递。",
+  "block.mmm.metal_pipe": "金属管道",
+  "block.mmm.insulated_pipe": "绝热管道",
+  "block.mmm.glass_pipe": "观察管道",
+  "block.mmm.pipe_valve": "管道阀门",
+  "block.mmm.pipe_screen": "管道筛网",
+  "block.mmm.metal_pipe.tooltip": "内径 0.5 米的金属管。潜行点击管口，切换自动、开放和封闭。",
+  "block.mmm.insulated_pipe.tooltip": "内径 0.5 米的绝热管。潜行点击管口，切换自动、开放和封闭。",
+  "block.mmm.glass_pipe.tooltip": "内径 0.5 米的观察管。潜行点击管口，切换自动、开放和封闭。",
+  "block.mmm.pipe_valve.tooltip": "轴向管道阀门，支持关闭、半开和全开；右键或红石控制。",
+  "block.mmm.pipe_screen.tooltip": "轴向管道筛网，可用探针设置筛孔。",
+  "screen.mmm.quick_start.step.9": "9. 用金属管、绝热管或观察管搭建管路。方形内腔宽 0.5 米；物理选区应包含管路和两端容器。",
+  "screen.mmm.quick_start.step.10": "10. 兼容管口自动连接。潜行点击管面，在自动、开放和封闭之间切换；开放端与同一区域的液体或空气相通。",
+  "screen.mmm.quick_start.step.11": "11. 管道阀门分关闭、半开和全开，可右键或用红石控制。管道筛网与普通筛网一样使用探针配置。",
+  "screen.mmm.quick_start.step.12": "12. 金属管导热，绝热管阻隔传热，观察管可查看内容物。打开演示菜单可以体验现成场景。"
 }

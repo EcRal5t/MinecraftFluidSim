@@ -20,10 +20,13 @@ final class RegionExpansion {
     private final CommittedWorldRegistries world;
     private final java.util.function.BooleanSupplier worldBridgeEnabled;
     private final int maximumThermalSubsteps;
+    private final RegionMerge pipeMerge;
+    private final java.util.Map<java.util.UUID,Long> pipeScans=new java.util.HashMap<>();
 
     RegionExpansion(FluidRegionManager regions, FluidRegionOperations operations,
                     WorldThermalEnvironment environment, FluidSnapshotPublisher snapshots, CommittedWorldRegistries world,
-                    java.util.function.BooleanSupplier worldBridgeEnabled, int maximumThermalSubsteps) {
+                    java.util.function.BooleanSupplier worldBridgeEnabled, int maximumThermalSubsteps,
+                    long quarantineEntries,long quarantineBytes) {
         this.regions = regions;
         this.operations = operations;
         this.environment = environment;
@@ -31,11 +34,28 @@ final class RegionExpansion {
         this.world = java.util.Objects.requireNonNull(world);
         this.worldBridgeEnabled = java.util.Objects.requireNonNull(worldBridgeEnabled);
         this.maximumThermalSubsteps = maximumThermalSubsteps;
+        this.pipeMerge=new RegionMerge(regions,operations,environment,snapshots,world,worldBridgeEnabled,quarantineEntries,quarantineBytes);
     }
 
     /** Returns true when this tick must stop because a resize was attempted. */
     boolean handle(ServerLevel level, FluidRegion region) {
         if (!region.hasSelectedVolume()) return false;
+        pipeScans.keySet().removeIf(id->regions.region(id)==null);
+        if(pipeScans.getOrDefault(region.id(),-1L)!=regions.topologyRevision()) {
+            try {
+                var plan=PipeNetworkPlan.discover(level,region,regions);
+                if(plan!=null) {
+                    if(pipeMerge.apply(level,plan))return true;
+                } else pipeScans.put(region.id(),regions.topologyRevision());
+            } catch(PipeNetworkPlan.UnloadedChunk waiting) {
+                // A later chunk event causes discovery to retry while this region keeps running.
+            } catch(RuntimeException failure) {
+                var reason=failure instanceof mmm.simulation.controller.FluidRegionFootprint.ExpansionBudgetExceededException?RegionAvailabilityReason.BUDGET
+                        :RegionAvailabilityReason.NUMERICAL_PAUSE;
+                region.blockExpansion(reason,"管路检查受阻："+failure.getMessage());
+                return true;
+            }
+        }
         int directions = region.expansionDirections();
         if (directions == 0) return false;
         boolean published = false;

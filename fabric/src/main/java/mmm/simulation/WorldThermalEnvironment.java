@@ -85,6 +85,10 @@ public final class WorldThermalEnvironment {
             project(region,dimension,(int)Math.round(1/region.solverConfig().cellSize()));
     }
     public void markDirty(String dimension) { dirty.add(dimension); }
+    void regionGeometryChanged(FluidRegion region) {
+        bindings.remove(region.id());
+        markDirty(region.dimension().identifier().toString());
+    }
     public void markDirty(String dimension, BlockPos position) {
         var cache=samples.get(dimension);
         if(cache!=null) { cache.remove(position); for(var direction:Direction.values()) cache.remove(position.relative(direction)); }
@@ -499,7 +503,7 @@ public final class WorldThermalEnvironment {
                     var targetKey = new EnvironmentThermalState.Key(destination.getX(), destination.getY(), destination.getZ(), key.kind(), key.component());
                     var node = entry.getValue();
                     var targetState = stateAt.apply(destination);
-                    var targetDefinition = targetState.is(mmm.block.MmmBlocks.SCREEN) ? definitions.thermalRegistry().finiteDevice("mmm:screen") : BlockThermalMaterials.resolve(targetState, definitions.thermalRegistry());
+                    var targetDefinition = targetState.is(mmm.block.MmmBlocks.SCREEN) || targetState.is(mmm.block.MmmBlocks.PIPE_SCREEN) && key.component()==1 ? definitions.thermalRegistry().finiteDevice("mmm:screen") : BlockThermalMaterials.resolve(targetState, definitions.thermalRegistry());
                     if (targetDefinition.thermalMaterialId().equals(node.materialId()) && !old.containsKey(targetKey)) {
                         old.remove(key);
                         movedTargets.add(destination);
@@ -573,7 +577,7 @@ public final class WorldThermalEnvironment {
             var pos = new BlockPos(node.key().x(), node.key().y(), node.key().z());
             var material = definitions.thermalRegistry().material(definitions.thermalRegistry().materialHandle(node.materialId()));
             String type = material.carrierId();
-            Direction.Axis axis = screenAxes.getOrDefault(dimension, Map.of()).get(pos);
+            Direction.Axis axis = type.equals("mmm:screen") ? screenAxes.getOrDefault(dimension, Map.of()).get(pos) : null;
             if (type.equals("mmm:screen") && axis == null) continue;
             if (ports(region, pos, type, definitions.thermalRegistry(), cellsPerBlock, axis).isEmpty()) continue;
             String id = pos.asLong() + "@" + type + (axis == null ? "" : "@" + axis.name());

@@ -125,9 +125,11 @@ final class GranularBedShear {
 	private static double shieldsPrepared(HostFluidState domain,int cell,ParticulateMaterial material,Flow flow){
 		int x = domain.grid.x(cell), y = domain.grid.y(cell), z = domain.grid.z(cell);
 		double h = domain.config.cellSize();
-		double bed = (y + domain.granularState.deposits.cellBulkVolumeSvq(cell)
-				/ (double) SolidVolume.SVQ_PER_CELL) * h;
-		float px = (float) ((x + .5) * h), pz = (float) ((z + .5) * h);
+		double bed = domain.granularCollision.bedTop(cell,domain.granularState.deposits.cellBulkVolumeSvq(cell));
+		int sample=surfaceMicro(domain.geometry.cutCells,cell,bed/h-y);
+		if(sample<0)return 0;
+		int sampleX=sample&1,sampleZ=sample>>1;
+		float px = (float) ((x + (sampleX+.5)*.5) * h), pz = (float) ((z + (sampleZ+.5)*.5) * h);
 		// The deposit cell carries Darcy pore flow. Sample the first free-flow cell above it.
 		if (y + 1 >= domain.sizeY) return 0;
 		float py = (float) ((y + 1.5) * h);
@@ -151,6 +153,12 @@ final class GranularBedShear {
 		double weight = Math.max(0, material.referenceDensity() - liquid.density())
 				* domain.config.gravity() * material.primaryGrainDiameterMeters();
 		return weight > 0 ? Math.min(Double.MAX_VALUE, stress / weight) : Double.MAX_VALUE;
+	}
+	static int surfaceMicro(FlipCutCellGeometry geometry,int cell,double height) {
+		int layer=Math.clamp((int)Math.floor(Math.nextDown(height)*2),0,1);
+		for(int z=0;z<2;z++)for(int x=0;x<2;x++)
+			if(geometry.microCellOpen(cell,x,layer,z))return x+2*z;
+		return -1;
 	}
 
 	/** Spalding law: y+ = u+ + (exp(k*u+)-1-k*u+-(k*u+)²/2-(k*u+)³/6)/E.

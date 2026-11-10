@@ -14,8 +14,11 @@ public final class MinecraftWorldUpdates {
     }
 
     FluidRegionManager regions() { return regions; }
+    public void chunksChanged() { regions.topologyChanged(); }
 
     public void changed(ServerLevel level, BlockPos position) {
+        if(PipeNetworkPlan.pipe(level.getBlockState(position)) || java.util.Arrays.stream(net.minecraft.core.Direction.values())
+                .anyMatch(face->level.hasChunkAt(position.relative(face))&&PipeNetworkPlan.pipe(level.getBlockState(position.relative(face)))))regions.topologyChanged();
         if (environment != null) environment.markDirty(level.dimension().identifier().toString(), position);
         for (var region : regions.regions()) {
             if (!region.dimension().equals(level.dimension())) continue;

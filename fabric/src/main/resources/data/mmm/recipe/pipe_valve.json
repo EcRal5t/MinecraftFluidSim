@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    " R ",
+    "PVP",
+    "   "
+  ],
+  "key": {
+    "R": "minecraft:redstone",
+    "P": "mmm:metal_pipe",
+    "V": "mmm:valve"
+  },
+  "result": {
+    "id": "mmm:pipe_valve",
+    "count": 1
+  }
+}

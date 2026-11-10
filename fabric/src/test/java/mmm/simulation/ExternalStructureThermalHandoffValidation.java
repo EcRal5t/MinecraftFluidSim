@@ -27,6 +27,16 @@ public final class ExternalStructureThermalHandoffValidation {
         check(!ExternalStructureThermalHandoff.hasCarried(restored,PROVIDER,ID),"restored wall remained carried");
         check(restored.nodes().getFirst().key().equals(new Key(4,2,3,Kind.SOLID,0)) && restored.nodes().getFirst().owner().equals("X") && restored.exactEnergy().equals(before.exactEnergy())
                 && restored.audit().equals(before.audit()),"disassembly changed inventory");
+        var shell=new Node(key,"mmm:ordinary_metal_wall",4000,.75,GasInventory.EMPTY,250,List.of());
+        var membrane=new Node(new Key(1,2,3,Kind.SOLID,1),"mmm:screen",300,.03125,GasInventory.EMPTY,35,List.of(),"X");
+        var composite=EnvironmentThermalState.initialized("test:world","a".repeat(64),List.of(shell,membrane),List.of());
+        var carried=ExternalStructureThermalHandoff.plan(composite,List.of(item(HandoffKind.ASSEMBLE,source)),b->"X");
+        check(carried.nodes().size()==2 && carried.nodes().stream().allMatch(n->n.key().kind()==Kind.CARRIED)
+                && carried.exactEnergy().equals(composite.exactEnergy()),"pipe screen lost shell or membrane in assembly");
+        var placed=ExternalStructureThermalHandoff.plan(carried,List.of(item(HandoffKind.DISASSEMBLE,target)),b->"X");
+        check(placed.nodes().stream().anyMatch(n->n.key().equals(new Key(4,2,3,Kind.SOLID,0)) && n.internalEnergyJ()==250 && n.owner().isEmpty())
+                && placed.nodes().stream().anyMatch(n->n.key().equals(new Key(4,2,3,Kind.SOLID,1)) && n.internalEnergyJ()==35 && n.owner().equals("X"))
+                && placed.exactEnergy().equals(composite.exactEnergy()),"pipe screen disassembly lost its inventories");
         System.out.println("ExternalStructureThermalHandoffValidation passed");
     }
     private static ExternalMovingStructures.CompletedHandoff item(HandoffKind kind,BlockPos pos) {

@@ -10,11 +10,13 @@ import net.minecraft.world.level.block.entity.*;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.*;
 
-public final class ScreenBlock extends Block implements EntityBlock {
+public class ScreenBlock extends Block implements EntityBlock {
     public static final net.minecraft.world.level.block.state.properties.EnumProperty<Direction> FACING=net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING;
     ScreenBlock(Properties properties){super(properties);registerDefaultState(stateDefinition.any().setValue(FACING,Direction.NORTH));}
     @Override protected void createBlockStateDefinition(net.minecraft.world.level.block.state.StateDefinition.Builder<Block,BlockState> builder){builder.add(FACING);}
     @Override public BlockState getStateForPlacement(net.minecraft.world.item.context.BlockPlaceContext context){return defaultBlockState().setValue(FACING,context.getNearestLookingDirection().getOpposite());}
+    @Override protected BlockState rotate(BlockState state,net.minecraft.world.level.block.Rotation rotation){return state.setValue(FACING,rotation.rotate(state.getValue(FACING)));}
+    @Override protected BlockState mirror(BlockState state,net.minecraft.world.level.block.Mirror mirror){return state.setValue(FACING,mirror.mirror(state.getValue(FACING)));}
     @Override public BlockEntity newBlockEntity(BlockPos pos,BlockState state){return new ScreenBlockEntity(pos,state);}
     @Override protected VoxelShape getCollisionShape(BlockState state,BlockGetter world,BlockPos pos,CollisionContext context){return Shapes.empty();}
     @Override protected VoxelShape getShape(BlockState state,BlockGetter world,BlockPos pos,CollisionContext context){return switch(state.getValue(FACING).getAxis()){

@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    " P ",
+    "PSP",
+    " P "
+  ],
+  "key": {
+    "P": "mmm:metal_pipe",
+    "S": "mmm:screen"
+  },
+  "result": {
+    "id": "mmm:pipe_screen",
+    "count": 1
+  }
+}

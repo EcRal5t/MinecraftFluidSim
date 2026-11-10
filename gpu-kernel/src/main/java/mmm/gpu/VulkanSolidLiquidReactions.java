@@ -35,7 +35,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         LIQUID_SPECIES_CAPACITY(12),
         SOLID_SPECIES_CAPACITY(13),
         LIQUID_LIMB_CAPACITY(14),
-        PROPOSAL_CAPACITY(15), PENDING_CAPACITY(180),
+        PROPOSAL_CAPACITY(15), PENDING_CAPACITY(180), FIXED_MASKS(181),
         VOLUME_SIGNIFICAND(160),
         VOLUME_EXPONENT(162),
         FACE_GEOMETRY(163),
@@ -119,7 +119,8 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         }
     }
     static final class Layout {
-        int activityCellsWord = -1, activityFacesWord = -1;
+        int activityCellsWord = -1, activityFacesWord = -1, fixedMasksWord = -1;
+        void bindFixedMasks(int word) { fixedMasksWord = word; }
         VulkanGasStateLayout gas; long ambientMassUnits;
         void configureGas(VulkanGasStateLayout gas, long ambientMassUnits) { this.gas = gas; this.ambientMassUnits = ambientMassUnits; }
         final VulkanLiquidStateLayout liquid;
@@ -278,6 +279,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             h[Header.FACE_COUNT.word] = faces;
             h[Header.ACTIVITY_CELLS.word] = activityCellsWord;
             h[Header.ACTIVITY_FACES.word] = activityFacesWord;
+            h[Header.FIXED_MASKS.word] = fixedMasksWord;
             h[Header.GAS_MASS.word] = gas == null ? -1 : Math.toIntExact(gas.column(VulkanGasStateLayout.Field.MASS_UNITS).offset() / 4);
             h[Header.GAS_COMPONENTS.word] = gas == null ? 0 : gas.definitions().componentIds().size();
             for (int i = 0; i < h.length; i++)

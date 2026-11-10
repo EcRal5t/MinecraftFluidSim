@@ -385,9 +385,15 @@ dvec2 bed(int c) {
     return dvec2(m, bulk);
 }
 double bedY(int c, double bulk) {
-    return (double(gridPosition(c).y) +
-            .5LF * bulk * ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT))) *
-           readDouble(p.header + H_CELL_SIZE);
+    double volume = bulk * ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT));
+    uint open = headerWord(H_FIXED_MASKS) < 0 ? 255u : (~words[headerWord(H_FIXED_MASKS) + c]) & 255u;
+    double lowerArea = double(bitCount(open & 0x33u)) * .25LF;
+    double upperArea = double(bitCount(open & 0xccu)) * .25LF;
+    double lowerVolume = min(volume, lowerArea * .5LF), upperVolume = max(0.0LF, volume - lowerVolume);
+    double lowerDepth = lowerArea > 0.0LF ? lowerVolume / lowerArea : 0.0LF;
+    double upperDepth = upperArea > 0.0LF ? upperVolume / upperArea : 0.0LF;
+    double moment = .5LF * lowerVolume * lowerDepth + upperVolume * (.5LF + .5LF * upperDepth);
+    return (double(gridPosition(c).y) + (volume > 0.0LF ? moment / volume : 0.0LF)) * readDouble(p.header + H_CELL_SIZE);
 }
 double potential(int c, double liquidMass) {
     dvec2 b = bed(c);

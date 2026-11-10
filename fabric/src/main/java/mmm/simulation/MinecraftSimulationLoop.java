@@ -58,6 +58,7 @@ final class MinecraftSimulationLoop {
 			}
 		}
 		for (FluidRegion region : regions.regions()) {
+            if(regions.region(region.id())!=region)continue;
 			runWithDeviceLossGuard(region, () -> tickRegion(server, region), failure -> {
 				regionTick.discardEntityResponse(region);
 				if (failure == null) MmmMod.LOGGER.warn(

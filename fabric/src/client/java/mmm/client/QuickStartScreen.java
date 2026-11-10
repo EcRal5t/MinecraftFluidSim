@@ -10,7 +10,7 @@ import java.util.List;
 
 /** Fixed localized guide; it owns no world, region, or inventory state. */
 final class QuickStartScreen extends Screen {
-	private static final int STEP_COUNT = 8;
+	private static final int STEP_COUNT = 12;
 	private static final int STEPS_PER_PAGE = 4;
 	private int page;
 	private int scroll;

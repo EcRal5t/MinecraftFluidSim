@@ -25,6 +25,7 @@ final class WorldThermalTopology {
     final Map<BlockPos, Direction.Axis> screenAxes = new HashMap<>();
     final Map<BlockPos, Integer> screenNodes = new HashMap<>();
     final Map<BlockPos, Double> screenOpen = new HashMap<>();
+    final Set<BlockPos> pipeScreens = new HashSet<>();
     final Map<Integer, mmm.fluid.air.GasInventory> defaultAir = new HashMap<>();
     final Map<Integer, Double> defaultAirEnergy = new HashMap<>();
     SignedDyadic added = SignedDyadic.ZERO, removed = SignedDyadic.ZERO;
@@ -49,21 +50,27 @@ final class WorldThermalTopology {
             if (solid[index(x,y,z)]) solidCount++;
         }
         int[] ids = new int[64]; Arrays.fill(ids,-1);
-        boolean isScreen=state.is(mmm.block.MmmBlocks.SCREEN);
+        boolean pipeScreen=state.is(mmm.block.MmmBlocks.PIPE_SCREEN);
+        boolean isScreen=state.is(mmm.block.MmmBlocks.SCREEN) || pipeScreen;
+        if(pipeScreen)pipeScreens.add(pos);
         if (isScreen) {
             var axis=state.getValue(mmm.block.ScreenBlock.FACING).getAxis(); screenAxes.put(pos,axis);
             double open = worldScreenOpen(pos);
             screenOpen.put(pos,open);
             var def=definitions.thermalRegistry().finiteDevice("mmm:screen");
+            double mass=def.bodyMassKilograms()*(pipeScreen?.25:1);
             double energy=new ThermalStateFunction(definitions.thermalRegistry()).internalEnergyAtTemperature(
-                    definitions.thermalRegistry().materialHandle(def.thermalMaterialId()),def.bodyMassKilograms(),Map.of(),TEMPERATURE);
-            var key=new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.SOLID,0);
-            screenNodes.put(pos,addNode(new EnvironmentThermalState.Node(key,def.thermalMaterialId(),def.bodyMassUnits(),0.125,
+                    definitions.thermalRegistry().materialHandle(def.thermalMaterialId()),mass,Map.of(),TEMPERATURE);
+            var key=new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.SOLID,pipeScreen?1:0);
+            screenNodes.put(pos,addNode(new EnvironmentThermalState.Node(key,def.thermalMaterialId(),Mass.fromKilograms(mass),pipeScreen?.03125:.125,
                     mmm.fluid.air.GasInventory.EMPTY,energy,List.of(),axis.name())));
         }
-        if (solidCount > 0 && !isScreen) {
+        if (solidCount > 0 && (!isScreen || pipeScreen)) {
             var def = BlockThermalMaterials.resolve(state, definitions.thermalRegistry());
-            double volume = solidCount / 64.0; long mass = Mass.fromKilograms(def.bodyMassKilograms() * volume);
+            // Port covers and the valve shutter remain part of the same body as their shape moves.
+            boolean movingPipeParts=state.getBlock() instanceof mmm.block.PipeBlock || state.getBlock() instanceof mmm.block.PipeValveBlock;
+            double volume = movingPipeParts ? .875 : solidCount / 64.0;
+            long mass = Mass.fromKilograms(def.bodyMassKilograms() * volume);
             double energy = new ThermalStateFunction(definitions.thermalRegistry()).internalEnergyAtTemperature(definitions.thermalRegistry().materialHandle(def.thermalMaterialId()), Mass.kilograms(mass), Map.of(), TEMPERATURE);
             var key = new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.SOLID,0);
             int id = addNode(new EnvironmentThermalState.Node(key,def.thermalMaterialId(),mass,volume,mmm.fluid.air.GasInventory.EMPTY,energy,List.of()));
@@ -77,7 +84,7 @@ final class WorldThermalTopology {
                     for (var dir:Direction.values()) { int xx=x+dir.getStepX(),yy=y+dir.getStepY(),zz=z+dir.getStepZ();
                         if(xx<0||yy<0||zz<0||xx>=N||yy>=N||zz>=N)continue; int next=index(xx,yy,zz);
                         var axis=screenAxes.get(pos);
-                        if(axis!=null && screenCrosses(axis,x,y,z,xx,yy,zz))continue;
+                        if(axis!=null && screenCrossesAt(pos,axis,x,y,z,xx,yy,zz))continue;
                         if(!solid[next]&&ids[next]==-1){ids[next]=-2;queue.add(next);}
                     }
                 }
@@ -117,7 +124,7 @@ final class WorldThermalTopology {
                         xx=Math.floorMod(xx,N);yy=Math.floorMod(yy,N);zz=Math.floorMod(zz,N); }
                     int b=other[index(xx,yy,zz)];
                     var axis=screenAxes.get(pos);
-                    boolean screenFace=!outside && axis!=null && screenCrosses(axis,x,y,z,xx,yy,zz);
+                    boolean screenFace=!outside && axis!=null && screenCrossesAt(pos,axis,x,y,z,xx,yy,zz);
                     if(b>=0&&a!=b)addEdge(a,b,conductance(a,b)/16.0*(screenFace?screenOpen.get(pos):1),TEMPERATURE);
                     if(screenFace) {
                         int screen=screenNodes.get(pos); double area=(1-screenOpen.get(pos))/16.0;
@@ -135,6 +142,12 @@ final class WorldThermalTopology {
         double lk=la?0:conductivity(left), rk=ra?0:conductivity(right);
         if(!la&&lk==0 || !ra&&rk==0)return 0;
         return 1.0/((la?1/FILM:thickness(left)/lk)+(ra?1/FILM:thickness(right)/rk));
+    }
+    boolean screenCrossesAt(BlockPos pos,Direction.Axis axis,int x,int y,int z,int xx,int yy,int zz) {
+        if(!screenCrosses(axis,x,y,z,xx,yy,zz))return false;
+        if(!pipeScreens.contains(pos))return true;
+        int[] p={x,y,z}; int normal=axis==Direction.Axis.X?0:axis==Direction.Axis.Y?1:2;
+        return p[(normal+1)%3]>=1 && p[(normal+1)%3]<=2 && p[(normal+2)%3]>=1 && p[(normal+2)%3]<=2;
     }
     boolean screenCrosses(Direction.Axis axis,int x,int y,int z,int xx,int yy,int zz) {
         int a=axis==Direction.Axis.X?x:axis==Direction.Axis.Y?y:z;

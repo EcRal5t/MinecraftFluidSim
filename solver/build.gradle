@@ -42,6 +42,14 @@ tasks.register('runSolverValidation', JavaExec) {
     enableAssertions = true
 }
 
+tasks.register('runFluidDomainMergeValidation', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.fluid.SpatialGridRemapValidation'
+    enableAssertions = true
+}
+
 tasks.register('testJar', Jar) {
 	archiveClassifier = 'tests'
 	from sourceSets.test.output

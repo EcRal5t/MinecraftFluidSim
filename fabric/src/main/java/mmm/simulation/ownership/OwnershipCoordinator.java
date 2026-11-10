@@ -34,8 +34,15 @@ public final class OwnershipCoordinator {
 			WorldAccess world,
 			FailureInjector failures
 	) throws IOException {
+        return acquire(regionFiles,ownershipFiles,target,candidates,List.of(),warning,world,failures);
+    }
+
+    /** Carries already-owned preimages from retired regions in the same recovery WAL. */
+    public static AcquireResult acquire(RegionGenerationStore regionFiles,OwnershipFiles ownershipFiles,
+            RegionState target,List<OwnershipJournal.BlockEntry> candidates,
+            List<OwnershipJournal.BlockEntry> transferred,String warning,WorldAccess world,FailureInjector failures) throws IOException {
 		Objects.requireNonNull(target, "target");
-		if (candidates.isEmpty()) throw new IOException("No pure water positions to acquire");
+		if (candidates.isEmpty() && transferred.isEmpty()) throw new IOException("No water positions to acquire or transfer");
 		ownershipFiles.assertUnlockedForTransition();
 		UUID regionId = target.manifest().regionId();
 		String dimensionId = target.manifest().dimensionId();
@@ -51,9 +58,10 @@ public final class OwnershipCoordinator {
 			var retained = ownershipFiles.hasCommitted() ? ownershipFiles.readCommitted() : null;
 			if (retained != null && (!retained.regionId().equals(regionId) || !retained.dimensionId().equals(dimensionId)
 					|| retained.generation() > baseGeneration)) throw new IOException("Existing ownership identity differs");
-			var existing = retained == null ? List.<OwnershipJournal.BlockEntry>of() : retained.ownedBlocks();
+			var existing = new ArrayList<>(retained == null ? List.<OwnershipJournal.BlockEntry>of() : retained.ownedBlocks());
+            existing.addAll(transferred);
 			var positions = new java.util.HashSet<Long>();
-			for (var entry : existing) positions.add(entry.packedPosition());
+			for (var entry : existing) if(!positions.add(entry.packedPosition()))throw new IOException("Transferred ownership overlaps an existing position");
 			for (var entry : candidates) if (!positions.add(entry.packedPosition()))
 				throw new IOException("New ownership overlaps an existing position");
 			OwnershipJournal wal = new OwnershipJournal(regionId, dimensionId, baseGeneration,

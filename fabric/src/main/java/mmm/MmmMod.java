@@ -77,10 +77,12 @@ public final class MmmMod implements ModInitializer {
 		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) -> {
             var runtime = MmmRuntimeRegistry.require(level.getServer());
             runtime.retryUnavailableContainerTransfers(level, chunk.getPos());
+            runtime.worldUpdates().chunksChanged();
             if (runtime.environment() != null) runtime.environment().markDirty(level.dimension().identifier().toString());
         });
         ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> {
             var runtime = MmmRuntimeRegistry.find(level.getServer());
+            if(runtime!=null)runtime.worldUpdates().chunksChanged();
             if (runtime != null && runtime.environment() != null)
                 runtime.environment().markDirty(level.dimension().identifier().toString());
         });

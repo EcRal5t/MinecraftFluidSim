@@ -41,7 +41,10 @@ final class IndustrialDialogs {
             command(sensor.getBlockPos())+"sensor $(measure) $(low) $(high) $(below) $(analog) $(first) $(second)");
     }
     static void valve(ServerPlayer player,BlockPos position,int opening){
-        show(player,"阀门",List.of(option("opening","开度",Integer.toString(opening),new String[]{"0","1","2","3","4"},new String[]{"关闭","¼","½","¾","全开"})),command(position)+"valve $(opening)");
+        boolean pipe=player.level().getBlockState(position).is(MmmBlocks.PIPE_VALVE);
+        var values=pipe?new String[]{"0","1","2"}:new String[]{"0","1","2","3","4"};
+        var labels=pipe?new String[]{"关闭","半开","全开"}:new String[]{"关闭","¼","½","¾","全开"};
+        show(player,pipe?"管道阀门":"阀门",List.of(option("opening","开度",Integer.toString(opening),values,labels)),command(position)+"valve $(opening)");
     }
     static void screen(ServerPlayer player,ScreenBlockEntity screen,double depositMass){
         show(player,"筛 · 滤渣 "+String.format(java.util.Locale.ROOT,"%.3g kg",depositMass),List.of(text("pore","孔径 · mm",Double.toString(screen.poreDiameter()*1000)),text("open","开放率 · 0—1",Double.toString(screen.openFraction()))),command(screen.getBlockPos())+"screen $(pore) $(open)");

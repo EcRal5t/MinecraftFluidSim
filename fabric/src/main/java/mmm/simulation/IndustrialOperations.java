@@ -72,7 +72,7 @@ public final class IndustrialOperations {
     }
     public boolean probe(ServerPlayer player,BlockPos position){
         var state=player.level().getBlockState(position);
-        if(state.is(MmmBlocks.VALVE)){IndustrialDialogs.valve(player,position,state.getValue(ValveBlock.OPENING));return true;}
+        if(state.is(MmmBlocks.VALVE)||state.is(MmmBlocks.PIPE_VALVE)){IndustrialDialogs.valve(player,position,state.getValue(state.is(MmmBlocks.PIPE_VALVE)?PipeValveBlock.OPENING:ValveBlock.OPENING));return true;}
         var entity=player.level().getBlockEntity(position);
         if(entity instanceof MaterialBoxBlockEntity box){IndustrialDialogs.box(player,box);return true;}
         if(entity instanceof FluidPortBlockEntity port){IndustrialDialogs.port(player,port);return true;}
@@ -122,22 +122,44 @@ public final class IndustrialOperations {
         return faces.stream().mapToInt(Integer::intValue).toArray();
     }
     public String setValve(ServerLevel level,BlockPos position,int opening){
-        var state=level.getBlockState(position);if(!state.is(MmmBlocks.VALVE))return "请选择阀门";
-        if(state.getValue(ValveBlock.OPENING)==opening)return "开度 "+opening+" / 4";
-        var next=state.setValue(ValveBlock.OPENING,opening);var region=targets.regionAtBlock(level,position);
+        var state=level.getBlockState(position);
+        boolean pipe=state.is(MmmBlocks.PIPE_VALVE);
+        if(!pipe&&!state.is(MmmBlocks.VALVE))return "请选择阀门";
+        int maximum=pipe?2:4;
+        if(opening<0||opening>maximum)return "开度应在 0—"+maximum+" 之间";
+        var property=pipe?PipeValveBlock.OPENING:ValveBlock.OPENING;
+        var next=state.setValue(property,opening);
+        if(next!=state){
+            String failure=changeGeometry(level,position,next,pipe?PipeValveBlock.collision(next):ValveBlock.shutter(next));
+            if(failure!=null)return failure;
+        }
+        return "开度 "+opening+" / "+maximum;
+    }
+    public String setPipePort(ServerLevel level,BlockPos position,net.minecraft.world.level.block.state.BlockState next){
+        var previous=level.getBlockState(position);
+        if(!(previous.getBlock() instanceof PipeBlock)||next.getBlock()!=previous.getBlock())return "管道已变化";
+        if(next==previous)return "管口未变化";
+        String failure=changeGeometry(level,position,next,PipeBlock.collision(next));
+        return failure==null?"管口已更新":failure;
+    }
+    private String changeGeometry(ServerLevel level,BlockPos position,net.minecraft.world.level.block.state.BlockState next,
+                                  net.minecraft.world.phys.shapes.VoxelShape shape){
+        var region=targets.regionAtBlock(level,position);
         if(region!=null){
             if(!region.solverLoaded()||!availability.ensure(level,region)||!phaseWork.settle(level,region))return "等待区域恢复";
             var edits=new java.util.ArrayList<mmm.fluid.FluidDomainContracts.CollisionEdit>();
             int scale=FluidRegionFactory.CELLS_PER_BLOCK;var origin=region.origin();
             for(int z=0;z<scale;z++)for(int y=0;y<scale;y++)for(int x=0;x<scale;x++){
                 int cx=(position.getX()-origin.getX())*scale+x,cy=(position.getY()-origin.getY())*scale+y,cz=(position.getZ()-origin.getZ())*scale+z;
-                if(region.grid().cell(cx,cy,cz)>=0)edits.add(new mmm.fluid.FluidDomainContracts.CollisionEdit(cx,cy,cz,FluidRegionWorldInteraction.sampleCutCellMask(ValveBlock.shutter(next),x,y,z,scale,1e-7)));
+                if(region.grid().cell(cx,cy,cz)>=0)edits.add(new mmm.fluid.FluidDomainContracts.CollisionEdit(cx,cy,cz,
+                        FluidRegionWorldInteraction.sampleCutCellMask(shape,x,y,z,scale,1e-7)));
             }
             try { var generation=region.solverGeneration();var candidate=region.beginHostEdit();candidate.applyCollisionEdits(edits);region.adoptCollisionCandidate(generation,candidate); }
-            catch(mmm.fluid.FluidDomainContracts.CollisionEditBlockedException|mmm.fluid.GasTopologyBlockedException blocked){return "阀门受阻："+blocked.getMessage();}
+            catch(mmm.fluid.FluidDomainContracts.CollisionEditBlockedException|mmm.fluid.GasTopologyBlockedException blocked){return "管路调整受阻："+blocked.getMessage();}
             region.wakeForActivity();
         }
-        level.setBlock(position,next,net.minecraft.world.level.block.Block.UPDATE_ALL);return "开度 "+opening+" / 4";
+        level.setBlock(position,next,net.minecraft.world.level.block.Block.UPDATE_ALL);
+        return null;
     }
     public void tickSensor(ServerLevel level,ProcessSensorBlockEntity sensor){
         if(level.getGameTime()%4!=0)return;

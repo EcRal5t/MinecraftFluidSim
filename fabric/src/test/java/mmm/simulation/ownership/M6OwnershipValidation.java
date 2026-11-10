@@ -55,6 +55,7 @@ public final class M6OwnershipValidation {
 		run("wal and committed codec strictness", M6OwnershipValidation::testCodecs);
 		run("normal acquire commits the joint state", M6OwnershipValidation::testNormalAcquire);
 		run("additional acquire recovers prior and new ownership", M6OwnershipValidation::testAdditionalAcquireRecovery);
+		run("merged ownership survives HEAD interruptions", M6OwnershipValidation::testMergedAcquireRecovery);
 		run("acquire rejects a non-adjacent target generation", M6OwnershipValidation::testGenerationGuard);
 		run("crash after region prepare aborts private staging", M6OwnershipValidation::testCrashAfterPrepare);
 		run("boot removes only fully known first-publication staging", M6OwnershipValidation::testBootCleansFirstPublicationStaging);
@@ -177,6 +178,32 @@ public final class M6OwnershipValidation {
 							+ " positions=" + owned.ownedBlocks().stream().map(OwnershipJournal.BlockEntry::packedPosition).toList());
 			check(fixture.world().airCount() == 2, "Additional acquire did not remove the new water");
 		});
+	}
+
+	private static void testMergedAcquireRecovery() throws Exception {
+		for (var point : List.of(FailurePoint.BEFORE_HEAD_PUBLISH, FailurePoint.AFTER_HEAD_PUBLISH)) {
+			withTemporaryWorld(root -> {
+				var fixture=new Fixture(root,4); var blocks=fixture.world().originalEntries();
+				var first=RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()),1L);
+				OwnershipCoordinator.acquire(fixture.regionFiles(),fixture.ownershipFiles(),first,
+						blocks.subList(0,1),"initial",fixture.world(),FailureInjector.NONE);
+				for(var block:blocks.subList(1,3))
+					check(fixture.world().removeWater(DIMENSION_ID,block)==OwnershipCoordinator.RemoveOutcome.REMOVED,"source ownership setup");
+				var next=RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()),2L);
+				expectIOException(() -> OwnershipCoordinator.acquire(fixture.regionFiles(),fixture.ownershipFiles(),next,
+						blocks.subList(3,4),blocks.subList(1,3),"merge",fixture.world(),failAt(point,0)));
+				var reopenedFiles=new RegionGenerationStore(root);
+				var reopenedOwnership=new OwnershipFiles(root,fixture.regionId());
+				OwnershipCoordinator.recover(reopenedFiles,reopenedOwnership,fixture.world(),FailureInjector.NONE);
+				boolean published=point==FailurePoint.AFTER_HEAD_PUBLISH;
+				var actual=reopenedOwnership.readCommitted().ownedBlocks().stream().map(OwnershipJournal.BlockEntry::packedPosition).collect(java.util.stream.Collectors.toSet());
+				var expected=(published?blocks:blocks.subList(0,1)).stream().map(OwnershipJournal.BlockEntry::packedPosition).collect(java.util.stream.Collectors.toSet());
+				check(actual.equals(expected),"merged ownership preimages changed after "+point);
+				check(fixture.world().airCount()==(published?4:3),"recovery restored source-owned water after "+point);
+				check(!reopenedOwnership.isLocked() && reopenedFiles.committedGeneration(fixture.regionId())==(published?2:1),
+						"merged ownership recovery retained WAL or wrong HEAD");
+			});
+		}
 	}
 
 	private static void testGenerationGuard() throws Exception {

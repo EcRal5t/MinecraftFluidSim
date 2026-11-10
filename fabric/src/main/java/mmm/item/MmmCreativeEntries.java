@@ -27,6 +27,11 @@ public final class MmmCreativeEntries {
 		entries.accept(MmmItems.QUICK_START_GUIDE);
 		entries.accept(MmmBlocks.INSULATION);
 		entries.accept(MmmBlocks.INSULATING_GLASS);
+		entries.accept(MmmBlocks.METAL_PIPE);
+		entries.accept(MmmBlocks.INSULATED_PIPE);
+		entries.accept(MmmBlocks.GLASS_PIPE);
+		entries.accept(MmmBlocks.PIPE_VALVE);
+		entries.accept(MmmBlocks.PIPE_SCREEN);
 		entries.accept(MmmBlocks.FLUID_PORT);
 		entries.accept(MmmBlocks.MATERIAL_BOX);
 		entries.accept(MmmBlocks.VALVE);

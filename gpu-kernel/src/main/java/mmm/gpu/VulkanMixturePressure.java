@@ -26,6 +26,7 @@ final class VulkanMixturePressure implements AutoCloseable {
         for (var field : Header.values()) result.append("#define H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define WORK_FIELDS ").append(WORK_FIELDS).append('\n');
         result.append("#define STATE_FIELDS ").append(STATE_FIELDS).append('\n');
+        result.append("#define H_BED_CONDUCTANCE 80\n#define H_BED_HEAT 81\n");
         for (var field : VulkanCoupledPressure.Header.values()) result.append("#define COUPLED_H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define COUPLED_FIELDS ").append(VulkanCoupledPressure.WORK_FIELDS).append('\n');
         return result + VulkanShaderLayout.fields("FIELD_", Field.values()) + VulkanShaderLayout.fields("GRANULAR_", VulkanGranularStateLayout.Field.values()) + VulkanShaderLayout.fields("Q_", VulkanMixtureState.Quantity.values()) + VulkanShaderLayout.fields("COUPLED_", VulkanCoupledPressure.Field.values());
@@ -43,7 +44,7 @@ final class VulkanMixturePressure implements AutoCloseable {
         private final VulkanLiquidStateLayout.Column cells,facesColumn,mixture,masks,viscosity,entityFaceArea,header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         private final int faces,particles;private final long endOffset;
-        private int activityCellWord=-1,activityFaceWord=-1;
+        private int activityCellWord=-1,activityFaceWord=-1,bedConductanceWord=-1,bedHeatWord=-1;
         Layout(VulkanLiquidStateLayout liquid,VulkanGranularGeometry.Layout geometry,VulkanLiquidStateLayout.Column fixedSolid,VulkanCoupledPressure.Layout coupled,
                VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column facesColumn,VulkanLiquidStateLayout.Column mixture,
                VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column viscosity,
@@ -72,6 +73,7 @@ final class VulkanMixturePressure implements AutoCloseable {
         int word(Field field){return Math.toIntExact(column(field).offset()/4);}int headerWordOffset(){return Math.toIntExact(header.offset()/4);}
         long endOffset(){return endOffset;}VulkanCoupledPressure.Layout coupled(){return coupled;}
         void bindActivity(int cells,int faces){activityCellWord=cells;activityFaceWord=faces;}
+        void bindBedConductance(VulkanLiquidStateLayout.Column column,VulkanLiquidStateLayout.Column heat){bedConductanceWord=word(column);bedHeatWord=word(heat);}
         ByteBuffer headerBytes(){
             var result=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);
             result.putInt(4 * Header.SIZE_X.word,liquid.sizeX()).putInt(4 * Header.SIZE_Y.word,liquid.sizeY()).putInt(4 * Header.SIZE_Z.word,liquid.sizeZ()).putInt(4 * Header.PARTICLE_CAPACITY.word,particles)
@@ -80,6 +82,7 @@ final class VulkanMixturePressure implements AutoCloseable {
                     .putInt(4 * Header.COUPLED_HEADER.word,coupled.headerWordOffset()).putInt(4 * Header.MASKS.word,word(masks)).putInt(4 * Header.VISCOSITY.word,word(viscosity))
                     .putInt(4 * Header.FIXED_SVQ.word,word(fixedSolid)).putInt(4 * Header.ENTITY_FACE_AREA.word,entityFaceArea==null?-1:word(entityFaceArea));
             result.putInt(4 * Header.ACTIVITY_CELLS.word,activityCellWord).putInt(4 * Header.ACTIVITY_FACES.word,activityFaceWord);
+            result.putInt(4*80,bedConductanceWord).putInt(4*81,bedHeatWord);
             if(geometry!=null)for(var field:VulkanGranularStateLayout.Field.values())result.putInt(4*(STATE_FIELDS+field.ordinal()),geometry.state().word(field));
             for(var field:Field.values())result.putInt(4*(WORK_FIELDS+field.ordinal()),word(field));return result;
         }
@@ -114,6 +117,7 @@ final class VulkanMixturePressure implements AutoCloseable {
     /** Publishes trial projected velocities; position/occupancy and all energy posting await joint capacity acceptance. */
     void recordProjectedVelocities(VkCommandBuffer command,Layout l,double h,double dt,double gravity){
         stage(command,l,9,l.faces,h,dt,gravity);stage(command,l,10,l.particles,h,dt,gravity);
+        stage(command,l,13,l.liquid.cellCount(),h,dt,gravity);
     }
     /** Apply the mixture EOS pressure range before coupled velocity projection. */
     void recordClampPressure(VkCommandBuffer command,Layout l,double h,double dt,double gravity){

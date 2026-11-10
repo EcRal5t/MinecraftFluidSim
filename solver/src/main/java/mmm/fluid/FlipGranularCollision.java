@@ -199,6 +199,7 @@ final class FlipGranularCollision {
 	}
 
 	boolean bedGeometryFits(int cell, long bulk) { return geometry.bedGeometryFits(cell, bulk); }
+	double bedTop(int cell, long bulk) { return geometry.bedTop(cell, bulk); }
 
 	boolean spherePathTouchesSolid(float x, float y, float z, float toX, float toY, float toZ, long solidVolumeSvq) {
 		return geometry.spherePathTouchesSolid(x, y, z, toX, toY, toZ, collisionRadius(solidVolumeSvq));

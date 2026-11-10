@@ -11,6 +11,9 @@ public final class FluidRegionManager {
 	private final RegionCatalog.Limits limits;
 	private final RegionCatalog<FluidRegion> catalog;
 	private mmm.fluid.FluidSolverBackend solverBackend;
+    private long topologyRevision;
+    long topologyRevision() { return topologyRevision; }
+    void topologyChanged() { topologyRevision=Math.incrementExact(topologyRevision); }
 	private java.util.function.BiConsumer<FluidRegion, Boolean> committedObserver = (region, present) -> { };
 	private java.util.function.Consumer<FluidRegion> removalObserver = region -> { };
 	private java.util.function.Consumer<FluidRegion> geometryObserver = region -> { };
@@ -70,6 +73,7 @@ public final class FluidRegionManager {
 	RegionCatalog.AdmissionResult adoptResize(FluidRegion previous, FluidRegion candidate) {
 		var result = catalog.update(previous, candidate, descriptor(candidate));
 		if (result.accepted()) {
+            topologyChanged();
 			bind(candidate);
 			geometryObserver.accept(candidate);
 			try { previous.releaseAfterReplacement(); }
@@ -86,6 +90,27 @@ public final class FluidRegionManager {
 		if (result.accepted() && previous != null && previous != candidate) removed(previous);
 		return admitted(candidate, result);
 	}
+
+    RegionCatalog.AdmissionResult previewMerge(List<FluidRegion> sources,FluidRegion candidate) {
+        return catalog.previewMerge(sources,descriptor(candidate));
+    }
+
+    RegionCatalog.AdmissionResult adoptMerge(List<FluidRegion> sources,FluidRegion candidate) {
+        var result=catalog.merge(sources,candidate,descriptor(candidate));
+        if(result.accepted()) {
+            topologyChanged();
+            for(var source:sources) {
+                if(!source.id().equals(candidate.id()))removed(source);
+                try { source.releaseAfterReplacement(); }
+                catch (RuntimeException failure) {
+                    mmm.MmmMod.LOGGER.error("Failed to release merged region {}", source.id(), failure);
+                }
+            }
+            bind(candidate);
+            geometryObserver.accept(candidate);
+        }
+        return result;
+    }
 
 	public RegionCatalog.AdmissionResult previewReplacement(long requiredCells) {
 		return catalog.previewReplacement(requiredCells);
@@ -115,7 +140,7 @@ public final class FluidRegionManager {
 	}
 
 	private RegionCatalog.AdmissionResult admitted(FluidRegion region, RegionCatalog.AdmissionResult result) {
-		if (result.accepted()) { bind(region); geometryObserver.accept(region); }
+		if (result.accepted()) { topologyChanged(); bind(region); geometryObserver.accept(region); }
 		return result;
 	}
 
@@ -137,6 +162,7 @@ public final class FluidRegionManager {
 	}
 
 	private void removed(FluidRegion region) {
+        topologyChanged();
 		geometryObserver.accept(region);
 		removalObserver.accept(region);
 		region.committedObservationListener(() -> { });

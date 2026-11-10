@@ -87,7 +87,7 @@ public final class MmmRuntimeFactory {
             catch (java.io.IOException failure) { throw new IllegalStateException("Cannot restore world thermal checkpoint",failure); }
 			worldUpdates.environment(environment);
 			environment.worldUpdates(worldUpdates);
-			regionManager.observeGeometry(region -> environment.markDirty(region.dimension().identifier().toString()));
+			regionManager.observeGeometry(environment::regionGeometryChanged);
 		}
 		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(
 				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK,
@@ -98,7 +98,8 @@ public final class MmmRuntimeFactory {
 		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
 				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep(),
 				new RegionExpansion(regionManager, regionOperations, environment, snapshots, worldRegistries,
-						policy::liveWorldBridgeEnabled, policy.maximumThermalSubstepsPerStep()));
+						policy::liveWorldBridgeEnabled, policy.maximumThermalSubstepsPerStep(),
+                        startup.config().maximumQuarantineEntries(),startup.config().maximumQuarantineBytes()));
 		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
 				new MinecraftPendingPhaseWorkBarrier(motion, regionTick);
 		MinecraftRegionAvailability availability = new MinecraftRegionAvailability(

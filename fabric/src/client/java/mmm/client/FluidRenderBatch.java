@@ -113,7 +113,8 @@ final class FluidRenderBatch implements AutoCloseable {
         for (int i = 0; i < ga.size(); i++) {
             var x = ga.get(i); var y = gb.get(i);
             if (x == y) continue;
-            if (!sameMaterial(x.material(), y.material()) || !Arrays.equals(x.bulkFill(), y.bulkFill())
+            if (!sameMaterial(x.material(), y.material()) || !Arrays.equals(x.payload().fixedMasks(), y.payload().fixedMasks())
+                    || !Arrays.equals(x.bulkFill(), y.bulkFill())
                     || !Arrays.equals(x.porosity(), y.porosity()) || !Arrays.equals(x.topMaterial(), y.topMaterial())
                     || !x.payload().granularMaterials().equals(y.payload().granularMaterials())
                     || !x.payload().activeParcels().equals(y.payload().activeParcels())) return false;

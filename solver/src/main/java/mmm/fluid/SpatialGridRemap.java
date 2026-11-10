@@ -29,7 +29,7 @@ public final class SpatialGridRemap {
         for (int cell = 0; cell < cells.length; cell++) {
             int mapped = target.cell(Math.addExact(source.x(cell), offsetX),
                     Math.addExact(source.y(cell), offsetY), Math.addExact(source.z(cell), offsetZ));
-            if (mapped < 0) throw new IllegalArgumentException("Target grid omits an existing cell");
+            if (mapped < 0 && retained[cell]) throw new IllegalArgumentException("Target grid omits an existing cell");
             cells[cell] = mapped;
         }
         faces = new int[source.faceCount()];
@@ -37,7 +37,9 @@ public final class SpatialGridRemap {
             int mapped = target.faceAt(Math.addExact(source.faceCoordinate(face, 0), offsetX),
                     Math.addExact(source.faceCoordinate(face, 1), offsetY),
                     Math.addExact(source.faceCoordinate(face, 2), offsetZ), source.faceAxis(face));
-            if (mapped < 0) throw new IllegalArgumentException("Target grid omits an existing face");
+            int left = source.faceLeft(face), right = source.faceRight(face);
+            if (mapped < 0 && (left >= 0 && retained[left] || right >= 0 && retained[right]))
+                throw new IllegalArgumentException("Target grid omits an existing face");
             faces[face] = mapped;
         }
     }
@@ -82,6 +84,13 @@ public final class SpatialGridRemap {
         if (value == null) return null;
         if (!source.equals(value.grid()) || !(Float.isFinite(cellSize) && cellSize > 0))
             throw new IllegalArgumentException("Granular grid differs");
+        for (var p : value.activeParcels()) {
+            int cell = source.cell((int) Math.floor(p.x() / cellSize), (int) Math.floor(p.y() / cellSize),
+                    (int) Math.floor(p.z() / cellSize));
+            if (cell < 0 || !retained[cell]) throw new IllegalArgumentException("Former padding contains granular inventory");
+        }
+        for (var p : value.depositGroups()) if (!retained[p.cell()])
+            throw new IllegalArgumentException("Former padding contains granular inventory");
         var active = value.activeParcels().stream().map(p -> new mmm.granular.GranularStateSnapshot.ActiveParcel(
                 p.x() + offsetX * cellSize, p.y() + offsetY * cellSize, p.z() + offsetZ * cellSize,
                 p.velocityX(), p.velocityY(), p.velocityZ(), p.solidVolumeSvq(), p.massUnits(),
@@ -105,6 +114,7 @@ public final class SpatialGridRemap {
     public java.util.List<mmm.chemistry.RegionChemistry.MassTransferPending> chemicalPending(
             java.util.List<mmm.chemistry.RegionChemistry.MassTransferPending> pending) {
         if (pending == null) return null;
+        for (var p : pending) if (!retained[p.cell()]) throw new IllegalArgumentException("Former padding contains pending chemistry");
         return pending.stream().map(p -> new mmm.chemistry.RegionChemistry.MassTransferPending(cells[p.cell()],
                 p.material(), p.supportMask(), p.definitionId(), p.pendingSeconds(), p.residualMoles())).sorted().toList();
     }
@@ -112,6 +122,8 @@ public final class SpatialGridRemap {
     public mmm.thermal.ThermalOwnerSnapshot thermal(mmm.thermal.ThermalOwnerSnapshot value,
             GranularResult granular, double[] gasEnergy, mmm.thermal.ThermalAuditLedger audit) {
         if (value == null) return null;
+        for (var p : value.coherentGroups()) if (!retained[p.cell()])
+            throw new IllegalArgumentException("Former padding contains coherent inventory");
         double[] oldDeposits = value.copyDepositEnergy();
         int[] order = granular == null ? new int[0] : granular.depositSourceOrder();
         if (oldDeposits.length != order.length) throw new IllegalArgumentException("Thermal deposits differ");
@@ -132,12 +144,12 @@ public final class SpatialGridRemap {
         int[] ages = new int[target.columnCount()], columns = new int[old.length];
         for (int column = 0; column < old.length; column++) {
             int mapped = target.column(source.columnX(column) + offsetX, source.columnZ(column) + offsetZ);
-            if (mapped < 0) throw new IllegalArgumentException("Target grid omits a granular column");
+            if (mapped < 0) { columns[column] = -1; continue; }
             columns[column] = mapped;
             ages[mapped] = old[column];
         }
         int[] queued = value.queuedColumns();
-        for (int index = 0; index < queued.length; index++) queued[index] = columns[queued[index]];
+        queued = java.util.Arrays.stream(queued).map(column -> columns[column]).filter(column -> column >= 0).toArray();
         return new mmm.granular.GranularDepositDynamics.State(value.logicalStep(), ages, queued);
     }
 
@@ -183,6 +195,8 @@ public final class SpatialGridRemap {
     public PendingPhaseMotionState pending(PendingPhaseMotionState value) {
         if (value == null) return null;
         if (value.cellCount() != source.cellCount()) throw new IllegalArgumentException("Pending phase grid differs");
+        for (var entry : value.entries()) if (!retained[entry.cell()])
+            throw new IllegalArgumentException("Former padding contains pending phase motion");
         var entries = value.entries().stream().map(entry -> new PendingPhaseMotionState.Entry(cells[entry.cell()]))
                 .sorted(java.util.Comparator.comparingInt(PendingPhaseMotionState.Entry::cell)).toList();
         return new PendingPhaseMotionState(target.cellCount(), entries);
@@ -198,7 +212,10 @@ public final class SpatialGridRemap {
         var screens = new java.util.TreeMap<Integer, ScreenFace>();
         for (var screen : sampledScreens) screens.put(screen.face(), screen);
         for (var screen : value.screens()) {
+            int left = source.faceLeft(screen.face()), right = source.faceRight(screen.face());
+            if (!(left >= 0 && retained[left] || right >= 0 && retained[right])) continue;
             int mapped = faces[screen.face()];
+            if (mapped < 0) continue;
             screens.put(mapped, new ScreenFace(mapped, screen.poreDiameter(), screen.openFraction()));
         }
         return FixedGeometrySnapshot.fromMasks(target, masks, java.util.List.copyOf(screens.values()));
@@ -208,7 +225,7 @@ public final class SpatialGridRemap {
         if (value == null) return null;
         if (value.cellCount() != source.cellCount()) throw new IllegalArgumentException("Pressure grid differs");
         float[] previous = value.copyRelativeGaugePressurePa(), next = new float[target.cellCount()];
-        for (int cell = 0; cell < cells.length; cell++) next[cells[cell]] = previous[cell];
+        for (int cell = 0; cell < cells.length; cell++) if (retained[cell]) next[cells[cell]] = previous[cell];
         return new CondensedPhasePressureField(value.pressureReferencePa(), next);
     }
 
@@ -235,7 +252,7 @@ public final class SpatialGridRemap {
         if (values.length != source.cellCount()) throw new IllegalArgumentException("Cell array does not match source grid");
         byte[] result = new byte[target.cellCount()];
         Arrays.fill(result, newValue);
-        for (int cell = 0; cell < cells.length; cell++) result[cells[cell]] = values[cell];
+        for (int cell = 0; cell < cells.length; cell++) if (retained[cell]) result[cells[cell]] = values[cell];
         return result;
     }
 
@@ -245,8 +262,14 @@ public final class SpatialGridRemap {
         double[][] next = {new double[target.faceCount(0)], new double[target.faceCount(1)], new double[target.faceCount(2)]};
         for (int axis = 0; axis < 3; axis++) {
             for (int i = 0; i < old[axis].length; i++) {
-                int mapped = faces[source.faceOffset(axis) + i] - target.faceOffset(axis);
-                next[axis][mapped] = old[axis][i];
+                int sourceFace = source.faceOffset(axis) + i;
+                int left = source.faceLeft(sourceFace), right = source.faceRight(sourceFace);
+                int face = faces[sourceFace];
+                if (!(left >= 0 && retained[left] || right >= 0 && retained[right])) {
+                    if (old[axis][i] != 0) throw new IllegalArgumentException("Former padding contains momentum");
+                    continue;
+                }
+                next[axis][face - target.faceOffset(axis)] = old[axis][i];
             }
         }
         return new MacMomentumState(target, next[0], next[1], next[2]);

@@ -20,9 +20,10 @@ public final class FluidProtocol {
 	public static final long CAP_INTERACTION_RESPONSES = 1L << 10;
 	public static final long CAP_DEMO_WORKBENCH = 1L << 11;
 	public static final long CAP_CONTROLLER_FAILURES = 1L << 12;
+	public static final long CAP_GRANULAR_FIXED_MASKS = 1L << 13;
 	public static final long SUPPORTED_CAPABILITIES = CAP_REGION_IDENTITY
 			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER
-			| CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT | CAP_THERMAL_SNAPSHOT | CAP_SNAPSHOT_PARTS | CAP_COMPACT_SURFACE | CAP_INTERACTION_RESPONSES | CAP_DEMO_WORKBENCH | CAP_CONTROLLER_FAILURES;
+			| CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT | CAP_THERMAL_SNAPSHOT | CAP_SNAPSHOT_PARTS | CAP_COMPACT_SURFACE | CAP_INTERACTION_RESPONSES | CAP_DEMO_WORKBENCH | CAP_CONTROLLER_FAILURES | CAP_GRANULAR_FIXED_MASKS;
 	public static final long REQUIRED_CAPABILITIES = CAP_REGION_IDENTITY
 			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER | CAP_SNAPSHOT_PARTS | CAP_COMPACT_SURFACE | CAP_INTERACTION_RESPONSES | CAP_DEMO_WORKBENCH | CAP_CONTROLLER_FAILURES;
 
@@ -48,7 +49,7 @@ public final class FluidProtocol {
 		long capabilities = REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT;
 		if (profile.hasCapability(WorldCapability.MATERIALS)) capabilities |= CAP_MATERIAL_SNAPSHOT;
 		if (profile.hasCapability(WorldCapability.CHEMISTRY)) capabilities |= CAP_CHEMICAL_SNAPSHOT;
-		if (profile.hasCapability(WorldCapability.GRANULAR)) capabilities |= CAP_GRANULAR_SNAPSHOT;
+		if (profile.hasCapability(WorldCapability.GRANULAR)) capabilities |= CAP_GRANULAR_SNAPSHOT | CAP_GRANULAR_FIXED_MASKS;
 		if (profile.hasCapability(WorldCapability.THERMAL)) capabilities |= CAP_THERMAL_SNAPSHOT;
 		return new Offer(layout, capabilities, 0L);
 	}
@@ -63,7 +64,7 @@ public final class FluidProtocol {
 	}
 
 	public static Offer granularServerOffer(boolean chemistryEnabled) {
-		long capabilities = REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT;
+		long capabilities = REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT | CAP_GRANULAR_FIXED_MASKS;
 		if (chemistryEnabled) capabilities |= CAP_CHEMICAL_SNAPSHOT;
 		return new Offer(Layout.GRANULAR, capabilities, 0L);
 	}
@@ -71,7 +72,7 @@ public final class FluidProtocol {
 	public static Offer thermalServerOffer(boolean chemistryEnabled, boolean granularEnabled) {
 		long capabilities = REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT | CAP_THERMAL_SNAPSHOT;
 		if (chemistryEnabled) capabilities |= CAP_CHEMICAL_SNAPSHOT;
-		if (granularEnabled) capabilities |= CAP_GRANULAR_SNAPSHOT;
+		if (granularEnabled) capabilities |= CAP_GRANULAR_SNAPSHOT | CAP_GRANULAR_FIXED_MASKS;
 		return new Offer(Layout.THERMAL, capabilities, 0L);
 	}
 

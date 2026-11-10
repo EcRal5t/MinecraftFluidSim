@@ -170,6 +170,14 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	) throws IOException {
 		return ownershipTransactions.scanPreimage(level, footprint);
 	}
+    void acquireMergedOwnership(ServerLevel level,FluidRegion candidate,
+            List<OwnershipJournal.BlockEntry> water,List<FluidRegion> sources,
+            long maximumEntries,long maximumBytes) throws IOException {
+        persistence.prepareMerge(candidate,sources,maximumEntries,maximumBytes);
+        try { ownershipTransactions.acquireMerged(level,candidate,water,sources); }
+        finally { persistence.finishMerge(candidate.id()); }
+    }
+
 	void acquireOwnership(ServerLevel level, FluidRegion region,
 			List<OwnershipJournal.BlockEntry> candidates) throws IOException {
 		ownershipTransactions.acquire(level, region, candidates);

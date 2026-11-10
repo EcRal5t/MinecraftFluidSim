@@ -13,6 +13,8 @@ public final class HostValidationSuite {
         checks.put("lifecycle", () -> mmm.simulation.FluidRegionLifecycleValidation.main(new String[0]));
         checks.put("mixture-edits", () -> mmm.fluid.MarkerVelocityTransferValidation.main(new String[0]));
         checks.put("region-manager", () -> mmm.simulation.FluidRegionManagerValidation.main(new String[0]));
+        checks.put("region-merge", () -> mmm.simulation.RegionMergePersistenceValidation.main(new String[0]));
+        checks.put("pipe-network", () -> mmm.simulation.PipeNetworkPlanValidation.main(new String[0]));
         checks.put("shape", () -> mmm.simulation.FluidCutCellShapeValidation.main(new String[0]));
         checks.put("environment", () -> {
             mmm.simulation.WorldThermalProjectionValidation.main(new String[0]);
