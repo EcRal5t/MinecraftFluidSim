@@ -56,21 +56,18 @@ final class VulkanRegionThermal implements AutoCloseable {
         List<VulkanEnergyLedger.Stream> roundoffStreams(){return List.of(stream(conduction,VulkanThermalConduction.Field.ENERGY_CHANGE,1),
                 stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,-1));}
     }
-    static Layout layout(VulkanThermalContacts.Inputs input,Configuration config,int contacts,int baths,long base,long alignment){
+    static Layout layout(VulkanThermalContacts.Inputs input,Configuration config,int contacts,int baths,long base,long alignment,VulkanScratchPool pool){
         int sampleCapacity=Math.addExact(input.samples(),input.device()==null?0:input.device().portCapacity());
-        var conduction=VulkanThermalConduction.spatialLayout(input.owners(),input.terms(),contacts,sampleCapacity,config.tables(),base,alignment,baths);
-        var sampling=VulkanThermalContacts.layout(input,config.materials(),conduction,conduction.endOffset(),alignment);
+        var conduction=VulkanThermalConduction.spatialLayout(input.owners(),input.terms(),contacts,sampleCapacity,config.tables(),base,alignment,baths,pool);
+        var sampling=VulkanThermalContacts.layout(input,config.materials(),conduction,conduction.endOffset(),alignment,pool);
         var reservoir=VulkanEnergyLedger.layout(List.of(stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,1)),sampling.endOffset(),alignment);
         var roundoff=VulkanEnergyLedger.layout(List.of(stream(conduction,VulkanThermalConduction.Field.ENERGY_CHANGE,1),stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,-1)),reservoir.endOffset(),alignment);
         return new Layout(input,conduction,sampling,reservoir,roundoff,roundoff.endOffset());
     }
-    static Layout currentGas(Layout layout,VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry,long alignment){
+    static Layout currentGas(Layout layout,VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry){
         var i=layout.input();var input=new VulkanThermalContacts.Inputs(i.liquid(),i.liquidThermal(),i.gas(),eos,geometry,i.granular(),i.granularThermal(),
                 i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.facesWord(),i.cellSize(),i.activityCellWord(),i.plicPlanesWord(),i.plicCellsWord(),i.screenFacesWord());
-        var contacts=VulkanThermalContacts.layout(input,layout.contacts().materials,layout.conduction(),layout.contacts().header.offset(),alignment);
-        contacts.wallGeometryWord=layout.contacts().wallGeometryWord;
-        contacts.bindConvection(layout.contacts().viscosityWord,layout.contacts().expansionWord,
-                layout.contacts().expansionReferenceWord,layout.contacts().gravity,layout.contacts().viscosityHeaderWord);
+        var contacts=new VulkanThermalContacts.Layout(layout.contacts(),input);
         return new Layout(input,layout.conduction(),contacts,layout.reservoir(),layout.roundoff(),layout.endOffset());
     }
     static String describeError(int status) {

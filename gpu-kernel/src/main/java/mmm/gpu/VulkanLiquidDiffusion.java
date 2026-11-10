@@ -39,6 +39,10 @@ final class VulkanLiquidDiffusion implements AutoCloseable {
         final long endOffset;
         Layout(VulkanRegionReactions.Configuration config,VulkanLiquidPhaseRows.Layout rows,VulkanLiquidThermodynamics.Layout caloric,
                VulkanReactionProgressLayout progress,int geometryWord,double cellSize,int activeCells,int activeFaces,long base,long alignment){
+            this(config,rows,caloric,progress,geometryWord,cellSize,activeCells,activeFaces,base,alignment,null);
+        }
+        Layout(VulkanRegionReactions.Configuration config,VulkanLiquidPhaseRows.Layout rows,VulkanLiquidThermodynamics.Layout caloric,
+               VulkanReactionProgressLayout progress,int geometryWord,double cellSize,int activeCells,int activeFaces,long base,long alignment,VulkanScratchPool pool){
             this.rows=rows;this.caloric=caloric;this.progress=progress;this.geometryWord=geometryWord;this.cellSize=cellSize;
             this.gravity=config.gravity();this.activeCells=activeCells;this.activeFaces=activeFaces;
             var liquid=rows.source;cells=liquid.cellCount();faces=liquid.column(VulkanLiquidStateLayout.Field.MOMENTUM_X).count()
@@ -58,7 +62,10 @@ final class VulkanLiquidDiffusion implements AutoCloseable {
             for(var f:Field.values()){
                 int n=switch(f){case HEADER->96;case RULES->20*rules;case PENDING_INDEX->Math.multiplyExact(cells,rules);
                     case MOMENTUM_CHANGE->Math.multiplyExact(3,cells);case OLD_K,NEW_K,FACE_P->faces;case FACE_HEAT->2*faces;default->cells;};
-                var col=new VulkanLiquidStateLayout.Column(align(cursor,alignment),n,f.width);columns.put(f,col);cursor=col.offset()+col.bindingBytes();
+                boolean scratch=switch(f){case HEADER,RULES,OLD_K,NEW_K,PE_CHANGE->false;default->true;};
+                var col=pool!=null && scratch?pool.allocate(n,f.width,VulkanScratchPool.DIFFUSION,cursor,alignment)
+                    :new VulkanLiquidStateLayout.Column(align(cursor,alignment),n,f.width);
+                columns.put(f,col);cursor=Math.max(cursor,col.offset()+col.bindingBytes());
             }endOffset=align(cursor,alignment);
         }
         private static long mass(VulkanRegionReactions.Configuration c,int species){var molar=c.chemistry().species(species).molarMassKgPerMol().divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL);return Mass.exactUnits(molar.numerator(),molar.denominator());}

@@ -213,6 +213,13 @@ final class VulkanRegionReactions implements AutoCloseable {
         VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasLiquidMassTransfer.Inputs gas,
         VulkanCondensedPhaseChange.Inputs condensed, long base, long alignment, int activityCellsWord,
         int activityFacesWord, int faceGeometryWord, double cellSize,VulkanLiquidReactions.SurfaceInputs surfaces) {
+        return layout(configuration,liquid,caloric,solid,gas,condensed,base,alignment,activityCellsWord,activityFacesWord,faceGeometryWord,cellSize,surfaces,new VulkanScratchPool(List.of()));
+    }
+    static Layout layout(Configuration configuration, VulkanLiquidStateLayout liquid,
+        VulkanLiquidThermodynamics.Layout caloric, SolidInputs solid, VulkanGasLiquidMassTransfer.Inputs gas,
+        VulkanCondensedPhaseChange.Inputs condensed, long base, long alignment, int activityCellsWord,
+        int activityFacesWord, int faceGeometryWord, double cellSize,VulkanLiquidReactions.SurfaceInputs surfaces,
+        VulkanScratchPool pool) {
         var definitions = configuration.definitions().layout(base, alignment);
         int rules = 0;
         int[] words = configuration.definitions().words();
@@ -236,15 +243,16 @@ final class VulkanRegionReactions implements AutoCloseable {
         boolean hasRows = rules > 0 || condensed != null || gas != null && configuration.thermal() != null
                 && (!configuration.chemistry().gasLiquidMassTransfers().isEmpty() || vaporRules > 0 || hasSurface)
                 || faceGeometryWord >= 0 && diffusionRules > 0;
-        var sharedRows = hasRows ? new VulkanLiquidPhaseRows.Layout(liquid, definitions, cellSize, progress.endOffset(), alignment) : null;
+        var sharedRows = hasRows ? new VulkanLiquidPhaseRows.Layout(liquid, definitions, cellSize, progress.endOffset(), alignment,pool) : null;
         var reaction = VulkanLiquidReactions.layout(liquid, definitions, caloric, progress, configuration.fluids(),
-            configuration.chemistry(), hasRows ? sharedRows.endOffset : progress.endOffset(), alignment, activityCellsWord,surfaces);
+            configuration.chemistry(), hasRows ? sharedRows.endOffset : progress.endOffset(), alignment, activityCellsWord,surfaces,
+            hasRows ? sharedRows.column(VulkanLiquidPhaseRows.Field.SPECIES) : null,pool);
         var exchange = rules == 0
             ? null
             : new VulkanSolidLiquidReactions.Layout(sharedRows, liquid, solid.transitions().source, definitions, caloric,
                   solid.solidCaloric(), progress, configuration.fluids(), configuration.chemistry(), solid.registry(),
                   solid.cellSize(), configuration.gravity(), solid.faceGeometryWord(),
-                  configuration.precipitationEnabled(), reaction.endOffset(), alignment);
+                  configuration.precipitationEnabled(), reaction.endOffset(), alignment,pool);
         long end = exchange == null ? reaction.endOffset() : exchange.endOffset;
         VulkanCondensedPhaseChange.Layout condensedPhase = null;
         if (condensed != null) {
@@ -252,7 +260,7 @@ final class VulkanRegionReactions implements AutoCloseable {
                 condensed.coherentCaloric(), definitions, progress, condensed.pressureWord(), condensed.pressureStride(),
                 condensed.fixedMasksWord(), condensed.occupiedAllSvqWord(), condensed.cellSize(), condensed.gravity());
             condensedPhase = new VulkanCondensedPhaseChange.Layout(
-                sharedRows, input, configuration.fluids(), configuration.chemistry(), configuration.thermal(), end, alignment);
+                sharedRows, input, configuration.fluids(), configuration.chemistry(), configuration.thermal(), end, alignment,pool);
             end = condensedPhase.endOffset();
         }
         VulkanGasLiquidMassTransfer.Layout massTransfer = null;
@@ -260,14 +268,15 @@ final class VulkanRegionReactions implements AutoCloseable {
             && (!configuration.chemistry().gasLiquidMassTransfers().isEmpty() || vaporRules > 0 || hasSurface)) {
             var rows = new VulkanLiquidPhaseRows.Layout(sharedRows, end, alignment);
             var candidateTransfer =
-                new VulkanGasLiquidMassTransfer.Layout(configuration, rows, gas, progress, rows.endOffset, alignment);
-            if(candidateTransfer.rules > 0 || candidateTransfer.surfaceRules>0) { massTransfer=candidateTransfer; end=massTransfer.endOffset; }
+                new VulkanGasLiquidMassTransfer.Layout(configuration, rows, gas, progress, rows.endOffset, alignment,pool);
+            end=candidateTransfer.endOffset;
+            if(candidateTransfer.rules > 0 || candidateTransfer.surfaceRules>0) massTransfer=candidateTransfer;
         }
         VulkanLiquidDiffusion.Layout diffusion = null;
         if (faceGeometryWord >= 0 && diffusionRules > 0) {
             var rows = new VulkanLiquidPhaseRows.Layout(sharedRows, end, alignment);
             diffusion = new VulkanLiquidDiffusion.Layout(configuration,rows,caloric,progress,faceGeometryWord,
-                    cellSize,activityCellsWord,activityFacesWord,rows.endOffset,alignment);
+                    cellSize,activityCellsWord,activityFacesWord,rows.endOffset,alignment,pool);
             end = diffusion.endOffset;
         }
         if (exchange != null) {

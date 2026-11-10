@@ -207,7 +207,7 @@ bool volumeFits(int row, int64_t delta) {
     return m.status == DYADIC_POSITIVE || m.status == DYADIC_ZERO;
 }
 void initialize(int id) {
-    if(id<headerWord(H_CELL_COUNT)*headerWord(H_MATERIAL_COUNT)*definitionWord(4))words[workField(FIELD_PENDING_SLOTS)+id]=uint(-1);
+    if(id<headerWord(H_CELL_COUNT)*headerWord(H_MATERIAL_COUNT)*headerWord(H_SOLID_RULE_COUNT))words[workField(FIELD_PENDING_SLOTS)+id]=uint(-1);
     if (id < headerWord(H_CELL_COUNT)) {
         words[workField(FIELD_HEAD) + id] = uint(-1);
         words[workField(FIELD_PROPOSAL_HEAD) + id] = uint(-1);
@@ -237,11 +237,12 @@ void importPending(int id){
     if(id>=int(words[progress(PROGRESS_PENDING_COUNT)]))return;
     int cell=int(words[progress(PROGRESS_PENDING_CELL)+id]),rule=int(words[progress(PROGRESS_PENDING_RULE)+id]),material=int(words[progress(PROGRESS_PENDING_MATERIAL)+id]);
     if(cell<0||cell>=headerWord(H_CELL_COUNT)||material<0||material>=headerWord(H_MATERIAL_COUNT)||rule<0||rule>=definitionWord(4))return;
-    if(definitionWord(definitionWord(5)+2*rule)!=1)return;
-    words[workField(FIELD_PENDING_SLOTS)+(cell*headerWord(H_MATERIAL_COUNT)+material)*definitionWord(4)+rule]=uint(id);
+    int localRule=rule-headerWord(H_SOLID_RULE_FIRST);
+    if(localRule<0 || localRule>=headerWord(H_SOLID_RULE_COUNT))return;
+    words[workField(FIELD_PENDING_SLOTS)+(cell*headerWord(H_MATERIAL_COUNT)+material)*headerWord(H_SOLID_RULE_COUNT)+localRule]=uint(id);
 }
 int pendingSlot(int cell,int rule,int material,int support){
-    int at=workField(FIELD_PENDING_SLOTS)+(cell*headerWord(H_MATERIAL_COUNT)+material)*definitionWord(4)+rule,slot=int(words[at]);
+    int at=workField(FIELD_PENDING_SLOTS)+(cell*headerWord(H_MATERIAL_COUNT)+material)*headerWord(H_SOLID_RULE_COUNT)+rule-headerWord(H_SOLID_RULE_FIRST),slot=int(words[at]);
     if(slot>=0){words[progress(PROGRESS_PENDING_MATERIAL)+slot]=uint(material);words[progress(PROGRESS_PENDING_SUPPORT)+slot]=uint(support);return slot;}
     uint next=atomicAdd(words[progress(PROGRESS_PENDING_COUNT)],1u);
     if(next>=uint(headerWord(H_PENDING_CAPACITY))){reportInvalid();return -1;}

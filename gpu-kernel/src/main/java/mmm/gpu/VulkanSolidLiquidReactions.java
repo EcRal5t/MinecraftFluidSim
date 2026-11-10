@@ -35,7 +35,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         LIQUID_SPECIES_CAPACITY(12),
         SOLID_SPECIES_CAPACITY(13),
         LIQUID_LIMB_CAPACITY(14),
-        PROPOSAL_CAPACITY(15), PENDING_CAPACITY(180),
+        PROPOSAL_CAPACITY(15), PENDING_CAPACITY(180), SOLID_RULE_FIRST(181), SOLID_RULE_COUNT(182),
         VOLUME_SIGNIFICAND(160),
         VOLUME_EXPONENT(162),
         FACE_GEOMETRY(163),
@@ -128,7 +128,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         final VulkanLiquidThermodynamics.Layout liquidCaloric, solidCaloric;
         final VulkanReactionProgressLayout progress;
         final VulkanLiquidPhaseRows.Layout phaseRows;
-        final int species, faces, faceGeometryWord;
+        final int species, faces, faceGeometryWord, solidRuleFirst, solidRuleCount;
         final int[] phases, porosities;
         final double[] diameters;
         final double cellSize, gravity;
@@ -141,6 +141,13 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             VulkanLiquidThermodynamics.Layout solidCaloric, VulkanReactionProgressLayout progress,
             FluidMaterialRegistry fluid, ChemicalRegistry chemical, GranularRegistry granular, double cellSize,
             double gravity, int faceGeometryWord, boolean precipitationEnabled, long base, long alignment) {
+            this(sharedRows,liquid,solid,definitions,liquidCaloric,solidCaloric,progress,fluid,chemical,granular,cellSize,gravity,faceGeometryWord,precipitationEnabled,base,alignment,null);
+        }
+        Layout(VulkanLiquidPhaseRows.Layout sharedRows, VulkanLiquidStateLayout liquid, VulkanGranularStateLayout solid,
+            VulkanReactionDefinitions.Layout definitions, VulkanLiquidThermodynamics.Layout liquidCaloric,
+            VulkanLiquidThermodynamics.Layout solidCaloric, VulkanReactionProgressLayout progress,
+            FluidMaterialRegistry fluid, ChemicalRegistry chemical, GranularRegistry granular, double cellSize,
+            double gravity, int faceGeometryWord, boolean precipitationEnabled, long base, long alignment, VulkanScratchPool pool) {
             if (base < Math.max(progress.endOffset(), Math.max(liquidCaloric.endOffset(), solidCaloric.endOffset()))
                 || cellSize <= 0 || !Double.isFinite(cellSize) || alignment < 8 || (alignment & (alignment - 1)) != 0
                 || definitions.speciesCount() > 256
@@ -150,6 +157,8 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                 || !solid.definitions().materialIds().equals(definitions.identity().granularMaterials())
                 || !Double.isFinite(gravity) || gravity < 0 || faceGeometryWord < -1)
                 throw new IllegalArgumentException("Invalid solid/liquid reaction layout");
+            solidRuleFirst = chemical.reactions().size();
+            solidRuleCount = granular.reactions().size();
             this.liquid = liquid;
             this.solid = solid;
             this.definitions = definitions;
@@ -205,7 +214,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                     case PHASES -> phases.length;
                     case POROSITIES -> porosities.length;
                     case MATERIAL_DIAMETER -> diameters.length;
-                    case PENDING_SLOTS -> Math.multiplyExact(Math.multiplyExact(liquid.cellCount(),liquid.materialCount()),definitions.identity().rules().size());
+                    case PENDING_SLOTS -> Math.multiplyExact(Math.multiplyExact(liquid.cellCount(),liquid.materialCount()),solidRuleCount);
                     case HEAD, CELL_OLD_MASS, CELL_NEW_MASS, POTENTIAL_WORK, PROPOSAL_HEAD, CELL_OLD_PE, CELL_NEW_PE ->
                         liquid.cellCount();
                     case NEXT, CELL, SOLID_OLD_ENERGY, SOLID_NEW_ENERGY, SOLID_COUNTS, SOLID_OLD_K, SOLID_NEW_K,
@@ -226,10 +235,15 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                     case CONTROL -> 12;
                     default -> liquid.slotCount();
                 };
-                long start = align(cursor, alignment);
-                var c = new VulkanLiquidStateLayout.Column(start, count, f.width);
+                boolean scratch=switch(f){
+                    case HEADER,PHASES,POROSITIES,MATERIAL_DIAMETER,CONTROL,SOLID_OLD_ENERGY,SOLID_NEW_ENERGY,
+                         FACE_OLD_K,FACE_NEW_K,SOLID_OLD_K,SOLID_NEW_K,CELL_OLD_PE,CELL_NEW_PE -> false;
+                    default -> true;
+                };
+                var c=pool!=null && scratch?pool.allocate(count,f.width,VulkanScratchPool.SOLID,cursor,alignment)
+                    :new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,f.width);
                 columns.put(f, c);
-                cursor = start + c.bindingBytes();
+                cursor = Math.max(cursor,c.offset() + c.bindingBytes());
             }
             endOffset = align(cursor, alignment);
         }
@@ -262,6 +276,8 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
             h[Header.LIQUID_LIMB_CAPACITY.word] = liquid.limbCapacity();
             h[Header.PROPOSAL_CAPACITY.word] = progress.solidProposalCapacity();
             h[Header.PENDING_CAPACITY.word] = progress.pendingCapacity();
+            h[Header.SOLID_RULE_FIRST.word] = solidRuleFirst;
+            h[Header.SOLID_RULE_COUNT.word] = solidRuleCount;
             for (var f : Field.values())
                 h[WORK_FIELDS + f.ordinal()] = word(f);
             for (var f : VulkanLiquidStateLayout.Field.values())

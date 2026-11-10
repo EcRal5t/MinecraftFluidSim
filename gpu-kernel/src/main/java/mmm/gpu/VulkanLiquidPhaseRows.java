@@ -51,15 +51,20 @@ final class VulkanLiquidPhaseRows implements AutoCloseable {
         final VulkanLiquidStateLayout source;final VulkanReactionDefinitions.Layout definitions;final int rows,species;final SignedDyadic svqVolume;
         final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
         Layout(VulkanLiquidStateLayout source,VulkanReactionDefinitions.Layout definitions,double cellSize,long base,long alignment){
+            this(source,definitions,cellSize,base,alignment,null);
+        }
+        Layout(VulkanLiquidStateLayout source,VulkanReactionDefinitions.Layout definitions,double cellSize,long base,long alignment,VulkanScratchPool pool){
             if(base<Math.max(source.bytes(),definitions.endOffset())||alignment<8||(alignment&(alignment-1))!=0||!(Double.isFinite(cellSize)&&cellSize>0))throw new IllegalArgumentException("Invalid phase row workspace");
             this.source=source;this.definitions=definitions;rows=source.slotCount();species=definitions.speciesCount();
             svqVolume=SignedDyadic.of(Math.scalb(1.0,-27)/(cellSize*cellSize*cellSize));if(svqVolume.signum()<=0||svqVolume.significand().bitLength()>63)throw new IllegalArgumentException("Phase volume multiplier exceeds int64");
             long cursor=base;for(var f:Field.values()){int n=switch(f){case HEADER->80;case CONTROL->8;
-                case SPECIES->Math.multiplyExact(rows,species);case SPECIES_COUNTS,VOLUME_COUNTS,OLD_ENERGY,NEW_ENERGY->source.slotCount();
+                case SPECIES->Math.multiplyExact(Math.max(rows,source.stockCapacity()),species);case SPECIES_COUNTS,VOLUME_COUNTS,OLD_ENERGY,NEW_ENERGY->source.slotCount();
                 case SPECIES_OFFSETS,VOLUME_OFFSETS->source.slotCount()+1;case SPECIES_HANDLES,SPECIES_AMOUNTS->source.speciesCapacity();case VOLUME_LIMBS->source.limbCapacity();
                 case VOLUME_RESULTS->Math.multiplyExact(8,rows);case DELTA_LIMBS->Math.multiplyExact(4,rows);
                 case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(source.cellCount(),source.slotCount()))/4);default->rows;};
-                var c=new VulkanLiquidStateLayout.Column(align(cursor,alignment),n,f.width);columns.put(f,c);cursor=c.offset()+c.bindingBytes();}endOffset=align(cursor,alignment);
+                boolean scratch=f!=Field.HEADER && f!=Field.OLD_ENERGY && f!=Field.NEW_ENERGY;
+                var c=pool!=null && scratch?pool.allocate(n,f.width,VulkanScratchPool.PHASE_ROWS,cursor,alignment):new VulkanLiquidStateLayout.Column(align(cursor,alignment),n,f.width);
+                columns.put(f,c);cursor=Math.max(cursor,c.offset()+c.bindingBytes());}endOffset=align(cursor,alignment);
         }
         /** Sequential operators share transient rows while retaining separate energy audit columns. */
         Layout(Layout shared,long base,long alignment){

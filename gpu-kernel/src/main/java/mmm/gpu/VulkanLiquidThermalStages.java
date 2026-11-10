@@ -106,7 +106,7 @@ final class VulkanLiquidThermalStages {
                        VulkanRegionStorage.Candidate candidate, double duration) {
         var thermal = transport.gas == null ? transport.thermal
                 : VulkanRegionThermal.currentGas(transport.thermal, transport.gas.thermo,
-                        transport.gas.geometry, liquid.alignment());
+                        transport.gas.geometry);
         boolean reuseGeometry=source==workspace&&sourceGeometryValid&&transport.entity==null;
         var headers = new ArrayList<HeaderWrite>(source == workspace ? List.<HeaderWrite>of() : transport.headers(liquid));
         var contactHeader = new HeaderWrite(thermal.contacts().header.offset(), thermal.contacts().headerBytes());

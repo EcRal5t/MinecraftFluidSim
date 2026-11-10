@@ -140,7 +140,6 @@ void split(int cell){
             }
             int at=componentPart(cell,component,side);
             putQuantity(field(F_NANOS)+2*at,partN);putQuantity(field(F_MASS)+2*at,uint64_t(partMass));
-            putQuantity(field(F_RESIDUAL)+2*at,uint64_t(partResidual));
             remainingN-=partN;remainingM-=uint64_t(partMass);remainingResidual-=partResidual;
             moved[side]=plus(moved[side],partN);
         }
@@ -166,6 +165,19 @@ void split(int cell){
     }
 }
 uint64_t incoming(int fieldId,int cell,int component,int side){return quantity(field(fieldId)+2*componentPart(cell,component,side));}
+// The route mass and its species determine the mass residual exactly.
+int64_t routeResidual(int cell,int component,int side){
+    int original=cell*headerWord(1)+component;
+    int first=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+original]);
+    int last=int(words[gasField(G_COMPONENT_SPECIES_OFFSETS)+original+1]);
+    int64_t residual=int64_t(incoming(F_MASS,cell,component,side));
+    for(int entry=first;entry<last;entry++){
+        int handle=int(words[gasField(G_SPECIES_HANDLES)+entry]);
+        uint64_t amount=quantity(field(F_SPECIES)+2*speciesPart(cell,entry-cell*headerWord(2),side));
+        residual=signedPlus(residual,-int64_t(amount*quantity(field(F_SPECIES_MASS)+2*handle)));
+    }
+    return residual;
+}
 void gather(int cell){
     int components=headerWord(1),stride=headerWord(2);ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));uint64_t targetMass=uint64_t(0),outMass=uint64_t(0);
     double externalIn=0.0LF,externalOut=0.0LF,ambientTemperature=readDouble(p.header+10);
@@ -175,7 +187,7 @@ void gather(int cell){
         for(int side=0;side<6;side++){
             uint64_t outN=incoming(F_NANOS,cell,component,side),outM=incoming(F_MASS,cell,component,side);
             if(outN>n||outM>m){reportInvalid();return;}n-=outN;m-=outM;outMass=plus(outMass,outM);
-            residual=signedPlus(residual,-signedQuantity(field(F_RESIDUAL)+2*componentPart(cell,component,side)));
+            residual=signedPlus(residual,-routeResidual(cell,component,side));
             if(externalRoute(cell,side,size)){
                 uint64_t added=ambientComponent(quantity(field(F_INFLOW_NANOS)+2*routePart(cell,side)),component),mass=ambientMass(added,component);
                 if(mass==uint64_t(0))added=uint64_t(0);
@@ -188,7 +200,7 @@ void gather(int cell){
                 }
                 if(outN>uint64_t(0)){
                     atomicAdd(longs[(gasField(G_STANDARD_VOLUME_NANOS)+2*sink)/2],int64_t(outN));atomicAdd(longs[(gasField(G_MASS_UNITS)+2*sink)/2],int64_t(outM));
-                    int64_t removed=signedQuantity(field(F_RESIDUAL)+2*componentPart(cell,component,side));
+                    int64_t removed=routeResidual(cell,component,side);
                     if(removed!=int64_t(0))atomicAdd(longs[(gasField(G_MASS_RESIDUAL_UNITS)+2*sink)/2],removed);
                 }
                 if(mass>uint64_t(0)){double specific,capacity;material(component,ambientTemperature,specific,capacity);externalIn+=double(mass)*1e-10LF*specific;}
@@ -197,7 +209,7 @@ void gather(int cell){
         for(int index=0;index<inboundCount(cell);index++){
             int source=inboundSource(cell,index,size);if(source<0)continue;int side=inboundSide(cell,index);
             n=plus(n,incoming(F_NANOS,source,component,side));m=plus(m,incoming(F_MASS,source,component,side));
-            residual=signedPlus(residual,signedQuantity(field(F_RESIDUAL)+2*componentPart(source,component,side)));
+            residual=signedPlus(residual,routeResidual(source,component,side));
         }
         if((n==uint64_t(0))!=(m==uint64_t(0))){reportInvalid();return;}
         targetMass=plus(targetMass,m);putQuantity(gasField(G_STANDARD_VOLUME_NANOS)+2*i,n);putQuantity(gasField(G_MASS_UNITS)+2*i,m);putQuantity(gasField(G_MASS_RESIDUAL_UNITS)+2*i,uint64_t(residual));

@@ -128,7 +128,6 @@ void prepareSample(int id){
  if(id==0)words[workField(FIELD_REQUIREMENTS)+2]=uint(liveSamples());if(words[workField(FIELD_SAMPLE_FLAGS)+id]==0u)return;int outAt=int(words[workField(FIELD_SAMPLE_PREFIX)+id]),owner,cell,mask;double volume;sampleAddress(id,owner,cell,mask,volume);
  words[workField(FIELD_SAMPLE_OWNER)+outAt]=uint(owner);words[workField(FIELD_SAMPLE_CELL)+outAt]=uint(cell);words[workField(FIELD_SAMPLE_MASK)+outAt]=uint(mask);writeDouble(workField(FIELD_SAMPLE_FRACTION)+2*outAt,volume/(.125LF*double(bitCount(uint(mask)))));atomicAdd(words[workField(FIELD_CELL_COUNTS)+cell],1u);
  words[workField(FIELD_MF_POW)+outAt]=floatBitsToUint(pow(float(volume/(.125LF*double(bitCount(uint(mask))))),2.0/3.0));
- if(conductionHeaderWord(7)==2)reserveIncident(conductionField(CONDUCTION_DEGREE_COUNTS)+owner);
 }
 void scatterSample(int id){if(id>=liveSamples())return;int cell=int(words[workField(FIELD_SAMPLE_CELL)+id]),slot=int(atomicAdd(words[workField(FIELD_CELL_CURSORS)+cell],1u)),at=int(words[workField(FIELD_CELL_OFFSETS)+cell])+slot;words[workField(FIELD_CELL_SAMPLES)+at]=uint(id);}
 double fraction(int point){return readDouble(workField(FIELD_SAMPLE_FRACTION)+2*point);}
@@ -358,7 +357,7 @@ void deviceEdges(int point,bool writing,inout int count){
   if(writing){int outAt=int(words[workField(FIELD_CONTACT_OFFSETS)+point])+count;if(outAt>=headerWord(H_CONDUCTION_CONTACT_CAPACITY)){atomicOr(errors,64u);return;}writeContact(outAt,min(a,b),max(a,b),conductance,0.0);}count++;
  }
 }
-void portCount(int id){if(id>=livePorts())return;int cell=int(words[headerWord(H_PORT_CELL)+id]),device=int(words[headerWord(H_PORT_DEVICE)+id]),dir=int(words[headerWord(H_PORT_DIRECTION)+id]);if(cell<0||cell>=headerWord(H_CELL_COUNT)||device<0||device>=liveDevice()||dir<0||dir>5){reportInvalid();return;}if(!activeCell(cell))return;atomicAdd(words[workField(FIELD_PORT_COUNTS)+cell],1u);if(conductionHeaderWord(7)==2){int owner=ownerFor(deviceBase()+device);if(owner>=0)reserveIncident(conductionField(CONDUCTION_DEGREE_COUNTS)+owner);}}
+void portCount(int id){if(id>=livePorts())return;int cell=int(words[headerWord(H_PORT_CELL)+id]),device=int(words[headerWord(H_PORT_DEVICE)+id]),dir=int(words[headerWord(H_PORT_DIRECTION)+id]);if(cell<0||cell>=headerWord(H_CELL_COUNT)||device<0||device>=liveDevice()||dir<0||dir>5){reportInvalid();return;}if(!activeCell(cell))return;atomicAdd(words[workField(FIELD_PORT_COUNTS)+cell],1u);}
 void portScatter(int id){if(id>=livePorts())return;int cell=int(words[headerWord(H_PORT_CELL)+id]);if(!activeCell(cell))return;words[workField(FIELD_PORT_ROWS)+words[workField(FIELD_PORT_OFFSETS)+cell]+atomicAdd(words[workField(FIELD_PORT_CURSORS)+cell],1u)]=uint(id);}
 void edge(int point,int other,double g,double bath,bool writing,inout int count){
  if(!(isFinite(g)&&g>=0.0)){reportInvalid();return;}if(g==0.0)return;int a=int(words[workField(FIELD_SAMPLE_OWNER)+point]),b=other<0?-1:int(words[workField(FIELD_SAMPLE_OWNER)+other]);if(a==b)return;

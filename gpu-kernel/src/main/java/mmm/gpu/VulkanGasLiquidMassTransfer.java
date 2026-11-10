@@ -89,7 +89,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_SLOT(4),
         ORPHAN_ENERGY(8),
         ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4), SURFACE_TEMPERATURE(8), SURFACE_CHANGED(4), SURFACE_REMOVED_MASS(8), SURFACE_RECEIVER(4),
-        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8), LIQUID_SPECIES_ENERGY(8);
+        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8), LIQUID_SPECIES_ENERGY(8), MOMENTUM_TRANSFER(8), GAS_CALORIC(8), AUDIT_QUANTA(8), AUDIT_NANOS(8);
         final int width;
         Field(int width) {
             this.width = width;
@@ -112,7 +112,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
         final long endOffset;
         Layout(VulkanRegionReactions.Configuration config, VulkanLiquidPhaseRows.Layout rows,
-            Inputs inputs, VulkanReactionProgressLayout progress, long base, long alignment) {
+            Inputs inputs, VulkanReactionProgressLayout progress, long base, long alignment, VulkanScratchPool pool) {
             this.rows = rows;
             this.inputs = inputs;
             this.progress = progress;
@@ -200,10 +200,13 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case CONTROL -> 8;
                     case HEAD -> groups;
                     case GAS_TO_LIQUID_MASS, LIQUID_TO_GAS_MASS -> Math.multiplyExact(cells, 7);
+                    case MOMENTUM_TRANSFER -> Math.multiplyExact(cells, 5);
                     case OLD_GAS_U, NEW_GAS_U -> inputs.gas().gas().nodeCapacity();
+                    case GAS_CALORIC -> Math.multiplyExact(inputs.gas().gas().nodeCapacity(), 4);
                     case OLD_K, NEW_K, FACE_P -> faces;
                     case FACE_HEAT -> 2 * faces;
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
+                    case AUDIT_QUANTA, AUDIT_NANOS -> Math.multiplyExact(Math.multiplyExact(cells, rules), 2);
                     case LIQUID_QUANTA, LIQUID_SPECIES_ENERGY -> rows.rows;
                     case NEXT, AREA -> scratchProposals;
                     case WALL_RESERVATION, SURFACE_TEMPERATURE, SURFACE_CHANGED -> wallDevices;
@@ -211,9 +214,14 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case WALL_PENDING -> dryProposals==0?0:Math.multiplyExact(cells,rules);
                     default -> cells;
                 };
-                var col = new VulkanLiquidStateLayout.Column(align(cursor, alignment), count, f.width);
+                boolean scratch=switch(f){
+                    case HEADER,RULES,SURFACE_RULES,CONTROL,OLD_GAS_U,NEW_GAS_U,OLD_K,NEW_K,PE_WORK,WALL_DELTA -> false;
+                    default -> true;
+                };
+                var col=pool!=null && scratch?pool.allocate(count,f.width,VulkanScratchPool.GAS,cursor,alignment)
+                    :new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,f.width);
                 columns.put(f, col);
-                cursor = col.offset() + col.bindingBytes();
+                cursor = Math.max(cursor,col.offset() + col.bindingBytes());
             }
             endOffset = align(cursor, alignment);
         }
@@ -222,9 +230,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         }
         int word(Field f) {
             return Math.toIntExact(column(f).offset() / 4);
-        }
-        long feedbackOffset() {
-            return column(Field.CONTROL).offset();
         }
         ByteBuffer headerBytes() {
             var b = ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);
@@ -393,9 +398,9 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             vkCmdUpdateBuffer(command, output.handle(), l.column(Field.HEADER).offset(), h);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, stack);
-            if(timings!=null)recordPrepare(command,l);
+            if(timings!=null){recordPrepare(command,l);recordPublish(command,l);}
             else templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,0,0,l),
-                    secondary->recordPrepare(secondary,l));
+                    secondary->{recordPrepare(secondary,l);recordPublish(secondary,l);});
         }, l.rows.feedbackOffset(), 16);
         if (prepared.error() != 0)
             return prepared.error();
@@ -404,9 +409,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 prepared.feedback().getInt(8), prepared.feedback().getInt(12), 0, 0, 0);
         if (prepared.feedback().getInt(0) != 2)
             throw new IllegalStateException("Film liquid successor is incomplete");
-        var result = candidate
-            .continueBatch(
-                (command, input, output, errors, staging, stack) -> recordPublish(command, l), l.feedbackOffset(), 28);
         if(timings!=null){
             double contact=0;
             for(var sample:timings.read()){
@@ -415,12 +417,12 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             }
             System.out.printf("mechanical_kernel=gas-transfer-contact gpu_ms=%.3f%n",contact);
         }
-        return result.error();
+        return 0;
     }
     void recordPrepare(VkCommandBuffer c, Layout l) {
         timed(c,"gas-transfer-import",()->rows.recordImport(c,l.rows));
         timed(c,"gas-transfer-clear-pending",()->{
-            stage(c,l,0,Math.max(Math.multiplyExact(7,l.cells),Math.max(Math.multiplyExact(l.cells,l.rules),Math.max(l.wallDevices,Math.max(l.groups,l.inputs.gas().gas().nodeCapacity())))));
+            stage(c,l,0,Math.max(Math.multiplyExact(7,l.cells),Math.max(Math.multiplyExact(Math.multiplyExact(l.cells,l.rules),2),Math.max(l.wallDevices,Math.max(l.groups,l.inputs.gas().gas().nodeCapacity())))));
             stage(c,l,9,l.progress.pendingCapacity());
         });
         for(int pass=0;pass<7;pass++){
@@ -436,8 +438,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 stage(c,l,4,l.groups,7);
             });
         }
+        if(l.rules>0)stage(c,l,20,Math.multiplyExact(Math.multiplyExact((l.cells+127)/128,Math.multiplyExact(l.rules,2)),128));
         if(l.surfaceRules>0)stage(c,l,16,1);
         timed(c,"gas-transfer-momentum-heat",()->{
+            stage(c,l,19,l.cells);
             stage(c,l,5,l.faces);
             stage(c,l,6,l.cells);
             stage(c,l,7,l.inputs.gas().gas().nodeCapacity());

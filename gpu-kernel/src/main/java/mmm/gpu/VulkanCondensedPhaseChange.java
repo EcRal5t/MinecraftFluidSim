@@ -129,7 +129,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
         final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
         final long endOffset;
         Layout(VulkanLiquidPhaseRows.Layout sharedRows, Inputs input, FluidMaterialRegistry fluids, ChemicalRegistry chemistry, ThermalRegistry thermal,
-            long base, long alignment) {
+            long base, long alignment, VulkanScratchPool pool) {
             this.input = input;
             var liquid = input.liquid();
             var coherent = input.coherent();
@@ -198,9 +198,14 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
                     case CONTROL -> 12;
                     default -> rows;
                 };
-                var column = new VulkanLiquidStateLayout.Column(align(cursor, alignment), n, field.width);
+                boolean scratch=switch(field){
+                    case HEADER,RULES,CARRIERS,CONTROL,OLD_ENERGY,NEW_ENERGY,FACE_OLD_K,FACE_NEW_K -> false;
+                    default -> true;
+                };
+                var column=pool!=null && scratch?pool.allocate(n,field.width,VulkanScratchPool.CONDENSED,cursor,alignment)
+                    :new VulkanLiquidStateLayout.Column(align(cursor,alignment),n,field.width);
                 columns.put(field, column);
-                cursor = column.offset() + column.bindingBytes();
+                cursor = Math.max(cursor,column.offset() + column.bindingBytes());
             }
             endOffset = align(cursor, alignment);
             Math.toIntExact(endOffset / 4);

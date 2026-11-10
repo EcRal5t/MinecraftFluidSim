@@ -194,7 +194,7 @@ final class VulkanThermalContacts implements AutoCloseable {
             this.viscosityWord=viscosityWord;this.expansionWord=expansionWord;this.expansionReferenceWord=referenceTemperatureWord;this.gravity=gravity;this.viscosityHeaderWord=viscosityHeaderWord;
         }
         final int owners,samples,cells;final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
-        Layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long a){
+        Layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long a,VulkanScratchPool pool){
             this.input=input;this.materials=materials;this.conduction=conduction;owners=input.owners();samples=input.samples();cells=input.liquid().cellCount();
             if(base<Math.max(input.endOffset(),conduction.endOffset())||a<8||(a&(a-1))!=0||materials.conductivity().length!=conduction.tables.materials())throw new IllegalArgumentException("Invalid thermal contacts layout");
             long[] cursor={base};header=allocate(cursor,166,4,a);
@@ -207,8 +207,18 @@ final class VulkanThermalContacts implements AutoCloseable {
                     case SAMPLE_PREFIX,CONTACT_OFFSETS->samples+1;case PORT_COUNTS,PORT_CURSORS,CELL_COUNTS,CELL_CURSORS->cells;case PORT_OFFSETS->cells+1;case PORT_ROWS->input.device()==null?0:input.device().portCapacity();case CELL_OFFSETS->cells+1;case COVERAGE->Math.addExact(8*cells,input.device()==null?0:24*input.device().portCapacity());
                     case LIQUID_MATERIAL->materials.liquid().length;case GAS_MATERIAL->materials.gas().length;case GRANULAR_MATERIAL->materials.granular().length;case COHERENT_MATERIAL->materials.coherent().length;case DEVICE_MATERIAL->materials.device().length;case CONDUCTIVITY->materials.conductivity().length;
                     case REQUIREMENTS->5;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.addExact(Math.multiplyExact(4,cells),input.device()==null?0:input.device().portCapacity()),Math.max(Math.addExact(samples,input.device()==null?0:input.device().portCapacity()),Math.max(owners,Math.max(cells,conduction.owners)))))/4);};
-                columns.put(f,allocate(cursor,n,f.width,a));
+                boolean scratch=switch(f){case LIQUID_MATERIAL,GAS_MATERIAL,GRANULAR_MATERIAL,COHERENT_MATERIAL,DEVICE_MATERIAL,CONDUCTIVITY->false;default->true;};
+                var column=pool!=null && scratch?pool.allocate(n,f.width,VulkanScratchPool.THERMAL,cursor[0],a)
+                    :allocate(cursor,n,f.width,a);
+                columns.put(f,column);cursor[0]=Math.max(cursor[0],column.offset()+column.bindingBytes());
             }endOffset=align(cursor[0],a);Math.toIntExact(endOffset/4);
+        }
+        Layout(Layout source,Inputs input){
+            this.input=input;materials=source.materials;conduction=source.conduction;
+            owners=source.owners;samples=source.samples;cells=source.cells;header=source.header;endOffset=source.endOffset;
+            columns.putAll(source.columns);wallGeometryWord=source.wallGeometryWord;viscosityWord=source.viscosityWord;
+            expansionWord=source.expansionWord;expansionReferenceWord=source.expansionReferenceWord;
+            viscosityHeaderWord=source.viscosityHeaderWord;gravity=source.gravity;
         }
         VulkanLiquidStateLayout.Column column(Field f){return columns.get(f);}int word(Field f){return Math.toIntExact(column(f).offset()/4);}
         int headerWord(){return Math.toIntExact(header.offset()/4);}long endOffset(){return endOffset;}
@@ -254,7 +264,8 @@ final class VulkanThermalContacts implements AutoCloseable {
         }
         private void ints(List<VulkanGasThermodynamics.TableChunk> out,Field f,int[] values){if(values.length==0)return;var b=ByteBuffer.allocateDirect(4*values.length).order(ByteOrder.LITTLE_ENDIAN);for(int x:values)b.putInt(x);b.flip();out.add(new VulkanGasThermodynamics.TableChunk(column(f).offset(),b));}
     }
-    static Layout layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long alignment){return new Layout(input,materials,conduction,base,alignment);}
+    static Layout layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long alignment){return new Layout(input,materials,conduction,base,alignment,null);}
+    static Layout layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long alignment,VulkanScratchPool pool){return new Layout(input,materials,conduction,base,alignment,pool);}
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanThermalContacts(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),32);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}

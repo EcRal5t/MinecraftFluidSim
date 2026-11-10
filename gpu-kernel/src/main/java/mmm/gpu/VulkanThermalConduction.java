@@ -107,6 +107,9 @@ final class VulkanThermalConduction implements AutoCloseable {
         final long endOffset;
         Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths){this(owners,terms,contacts,tables,base,alignment,baths,0);}
         Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths,int spatialSamples){
+            this(owners,terms,contacts,tables,base,alignment,baths,spatialSamples,null);
+        }
+        Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths,int spatialSamples,VulkanScratchPool pool){
             if(owners<1||terms<1||contacts<0||baths<0||tables.materials()<1||base<0||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid thermal conduction layout");
             this.owners=owners;this.terms=terms;this.contacts=contacts;this.tables=tables;this.baths=baths;
@@ -130,7 +133,11 @@ final class VulkanThermalConduction implements AutoCloseable {
                     case MODE->2;
                     case BATH_EDGES->baths;case DISPATCH->18;case TILE_OWNERS->tiles;case TILE_PARTIALS->2*tiles;case SCAN->spatial?0:Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
                     default->owners;
-                };columns.put(field,allocate(cursor,n,field.width,alignment));
+                };
+                boolean scratch=switch(field){case KNOTS,MATERIAL_CP,MATERIAL_MIN_CP,ENERGY_CHANGE,RESERVOIR_CHANGE->false;default->true;};
+                var column=pool!=null && scratch?pool.allocate(n,field.width,VulkanScratchPool.THERMAL,cursor[0],alignment)
+                    :allocate(cursor,n,field.width,alignment);
+                columns.put(field,column);cursor[0]=Math.max(cursor[0],column.offset()+column.bindingBytes());
             }
             endOffset=align(cursor[0],alignment);Math.toIntExact(endOffset/4);
         }
@@ -159,8 +166,8 @@ final class VulkanThermalConduction implements AutoCloseable {
     static Layout layout(int ownerCapacity,int termCapacity,int contactCapacity,Tables tables,long scratchBase,long alignment,int bathCapacity){
         return new Layout(ownerCapacity,termCapacity,contactCapacity,tables,scratchBase,alignment,bathCapacity);
     }
-    static Layout spatialLayout(int owners,int terms,int contacts,int samples,Tables tables,long base,long alignment,int baths){
-        return new Layout(owners,terms,contacts,tables,base,alignment,baths,samples);
+    static Layout spatialLayout(int owners,int terms,int contacts,int samples,Tables tables,long base,long alignment,int baths,VulkanScratchPool pool){
+        return new Layout(owners,terms,contacts,tables,base,alignment,baths,samples,pool);
     }
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanThermalConduction(VulkanDeviceContext context){

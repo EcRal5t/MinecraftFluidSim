@@ -137,6 +137,12 @@ final class VulkanLiquidReactions implements AutoCloseable {
     static Layout layout(VulkanLiquidStateLayout liquid, VulkanReactionDefinitions.Layout definitions,
         VulkanLiquidThermodynamics.Layout caloric, VulkanReactionProgressLayout progress, FluidMaterialRegistry fluid,
         ChemicalRegistry chemical, long base, long alignment, int activityCellsWord,SurfaceInputs surface) {
+        return layout(liquid,definitions,caloric,progress,fluid,chemical,base,alignment,activityCellsWord,surface,null,null);
+    }
+    static Layout layout(VulkanLiquidStateLayout liquid, VulkanReactionDefinitions.Layout definitions,
+        VulkanLiquidThermodynamics.Layout caloric, VulkanReactionProgressLayout progress, FluidMaterialRegistry fluid,
+        ChemicalRegistry chemical, long base, long alignment, int activityCellsWord,SurfaceInputs surface,
+        VulkanLiquidStateLayout.Column sharedDense,VulkanScratchPool pool) {
         if (base < Math.max(progress.endOffset(), caloric.endOffset()) || alignment < 8
             || (alignment & (alignment - 1)) != 0 || definitions.speciesCount() > 256
             || caloric.speciesStride() < definitions.speciesCount()
@@ -151,18 +157,19 @@ final class VulkanLiquidReactions implements AutoCloseable {
         long[] c = {base};
         var header = column(c, 64, 4, alignment);
         var phase = column(c, phases.length, 4, alignment);
-        var dense = column(c, Math.multiplyExact(liquid.stockCapacity(), definitions.speciesCount()), 8, alignment);
-        var counts = column(c, liquid.stockCapacity(), 4, alignment);
-        var offsets = column(c, liquid.stockCapacity() + 1, 4, alignment);
-        var handles = column(c, liquid.speciesCapacity(), 4, alignment);
-        var amounts = column(c, liquid.speciesCapacity(), 8, alignment);
-        var residual = column(c, liquid.stockCapacity(), 8, alignment);
+        var dense = sharedDense != null ? sharedDense
+            : column(c, Math.multiplyExact(liquid.stockCapacity(), definitions.speciesCount()), 8, alignment);
+        var counts = scratch(pool,c,liquid.stockCapacity(),4,alignment);
+        var offsets = scratch(pool,c,liquid.stockCapacity() + 1,4,alignment);
+        var handles = scratch(pool,c,liquid.speciesCapacity(),4,alignment);
+        var amounts = scratch(pool,c,liquid.speciesCapacity(),8,alignment);
+        var residual = scratch(pool,c,liquid.stockCapacity(),8,alignment);
         var energy = column(c, liquid.stockCapacity(), 8, alignment);
         var initialEnergy = column(c, liquid.stockCapacity(), 8, alignment);
-        var total = column(c, 1, 8, alignment);
+        var total = scratch(pool,c,1,8,alignment);
         int finiteRuleCount=Math.toIntExact(chemical.reactions().stream()
             .filter(rule->rule.kind()==mmm.chemistry.ChemicalReaction.Kind.FINITE_RATE).count());
-        var pendingIndex=column(c,Math.multiplyExact(liquid.stockCapacity(),finiteRuleCount),4,alignment);
+        var pendingIndex=scratch(pool,c,Math.multiplyExact(liquid.stockCapacity(),finiteRuleCount),4,alignment);
         var entries=new java.util.ArrayList<Object[]>();
         if(surface!=null)for(var slot:surface.devices().definitions().surfaces())for(var catalyst:slot.catalysts()){
             int rule=definitions.identity().rules().indexOf(catalyst.reactionId());
@@ -174,10 +181,15 @@ final class VulkanLiquidReactions implements AutoCloseable {
         var catalystData=ByteBuffer.allocateDirect(Math.multiplyExact(entries.size(),24)).order(ByteOrder.LITTLE_ENDIAN);
         for(var entry:entries){catalystData.putInt((int)entry[0]).putInt((int)entry[1]).putInt((int)entry[2]).putInt(0).putDouble((double)entry[3]);}catalystData.flip();
         var scan =
-            column(c, Math.toIntExact(VulkanPrefixScan.workspaceBytes(liquid.stockCapacity()) / 4), 4, alignment);
+            scratch(pool,c,Math.toIntExact(VulkanPrefixScan.workspaceBytes(liquid.stockCapacity()) / 4),4,alignment);
         return new Layout(liquid, definitions, caloric, progress, phases, header, phase, dense, counts, offsets,
             handles, amounts, residual, energy, initialEnergy, total, scan, pendingIndex, finiteRuleCount,
             align(c[0], alignment), activityCellsWord,surface,catalysts,catalystData);
+    }
+    private static VulkanLiquidStateLayout.Column scratch(VulkanScratchPool pool,long[] cursor,int count,int width,long alignment){
+        if(pool==null)return column(cursor,count,width,alignment);
+        var result=pool.allocate(count,width,VulkanScratchPool.LIQUID,cursor[0],alignment);
+        cursor[0]=Math.max(cursor[0],result.offset()+result.bindingBytes());return result;
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;

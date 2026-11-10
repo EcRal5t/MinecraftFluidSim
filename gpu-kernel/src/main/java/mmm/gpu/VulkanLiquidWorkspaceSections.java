@@ -29,6 +29,28 @@ final class VulkanLiquidWorkspaceSections {
 
     private long align(long value) { return Math.addExact(value, liquid.alignment() - 1) & -liquid.alignment(); }
 
+    /** Flow temporaries are dead before thermochemistry; ledger terms and reusable geometry stay separate. */
+    List<VulkanLiquidStateLayout.Column> flowScratch(VulkanLiquidWorkspace.Transport transport) {
+        var free=new ArrayList<VulkanLiquidStateLayout.Column>();
+        for(var field:List.of(VulkanLiquidRouteLayout.Field.VOLUME_DESCRIPTORS,
+                VulkanLiquidRouteLayout.Field.MASS_UNITS,VulkanLiquidRouteLayout.Field.INTEGER_VOLUMES,
+                VulkanLiquidRouteLayout.Field.SPECIES_AMOUNTS,VulkanLiquidRouteLayout.Field.SOURCE_MASKS,
+                VulkanLiquidRouteLayout.Field.SLOTS))free.add(transport.routes.column(field));
+        var material=transport.materials;
+        free.addAll(List.of(material.reserveCounts(),material.reserveOffsets(),material.scratchLimbs(),
+                material.weights(),material.remainingQuanta(),material.densities(),material.densityExponents(),
+                material.activeCounts(),material.scanWorkspace()));
+        var accepted=transport.accepted;
+        free.addAll(List.of(accepted.descriptors(),accepted.volumeOffsets(),accepted.volumeSigns(),
+                accepted.volumeExponents(),accepted.volumeLimbs(),accepted.counts(),accepted.measurements(),accepted.scanWorkspace()));
+        free.add(pressureColumns.get(PressureField.WORK));
+        free.add(pressureColumns.get(PressureField.PARTIALS));
+        if(transport.gas!=null)for(var field:List.of(VulkanLocalGasTransport.Field.NANOS,
+                VulkanLocalGasTransport.Field.MASS,VulkanLocalGasTransport.Field.SPECIES))
+            free.add(transport.gas.transport.column(field));
+        return free;
+    }
+
     final class CoherentSection {
         final VulkanCoherentStateLayout state;
         final VulkanCoherentGeometry.Layout geometry;
