@@ -12,11 +12,10 @@ layout(binding = 1, std430) buffer Errors {
 layout(binding = 2, std430) buffer WideArena { int64_t longs[]; };
 layout(push_constant) uniform Params {
     int header;
-    int stage;
     int count;
-    int reserved;
 }
 p;
+layout(constant_id = 0) const int pipelineStage = -1;
 bool activeCell(int cell);
 bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
@@ -35,6 +34,7 @@ const int STAGE_FINISH_CAPACITY = 7;
 const int STAGE_WRITE_SPECIES = 8;
 const int STAGE_PUBLISH = 9;
 const int STAGE_ACTIVITY = 10;
+const int STAGE_ROWS_ACTIVITY = 11;
 shared uint activityFlags[128];
 
 const int64_t LIMIT = 0x7fffffffffffffffl;
@@ -438,17 +438,6 @@ void phaseCell(int ordinal) {
             return;
     }
     double total = phaseRowEnergy(phaseRowsHeader(), liquid) + getDouble(FIELD_ENERGY, solid);
-    int64_t lo = 0l, hi = high;
-    while (lo < hi) {
-        int64_t mid = lo + (hi - lo + 1l) / 2l;
-        if (fits(liquid, solid, mid, payload, freezing, divisor, total))
-            lo = mid;
-        else
-            hi = mid - 1l;
-    }
-    high = lo;
-    if (high == 0l)
-        return;
     dvec2 initial = pairEnergy(liquid, solid, chosenEquilibrium, freezing, 0l, 1l),
           unit = pairEnergy(liquid, solid, chosenEquilibrium, freezing,
                             moveMass(liquid, solid, 1l, payload, freezing, divisor), divisor);
@@ -462,6 +451,17 @@ void phaseCell(int ordinal) {
     int64_t batches = min(high, int64_t(max(0.0LF, desired)));
     if (batches == 0)
         return;
+    // The equilibrium demand bounds the accepted search before volume and cold-energy checks.
+    if (!fits(liquid, solid, batches, payload, freezing, divisor, total)) {
+        int64_t lo = 0l, hi = batches - 1l;
+        while (lo < hi) {
+            int64_t mid = lo + (hi - lo + 1l) / 2l;
+            if (fits(liquid, solid, mid, payload, freezing, divisor, total)) lo = mid;
+            else hi = mid - 1l;
+        }
+        batches = lo;
+        if (batches == 0l) return;
+    }
     int64_t b = int64_t(batches), moved = moveMass(liquid, solid, b, payload, freezing, divisor);
     setDouble(FIELD_PAIR_ENERGY, cell, total);
     words[workField(FIELD_PAIR_LIQUID) + cell] = uint(liquid);
@@ -582,6 +582,7 @@ void finishCapacity() {
         words[lp] == 1u || groups > uint(headerWord(H_COHERENT_CAPACITY)) || species > uint(headerWord(H_COHERENT_SPECIES_CAPACITY)) ? 1u
         : words[lp] == 2u                                                                                          ? 2u
                                                                                                                    : 0u;
+    words[lp] = words[workField(FIELD_CONTROL)];
 }
 void writeSpecies(int row) {
     if (words[workField(FIELD_CONTROL)] != 2u || words[workField(FIELD_LIVE) + row] == 0u)
@@ -649,10 +650,23 @@ bool activeFace(int face) {
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
-    if(p.stage==STAGE_ACTIVITY){
+    if(pipelineStage==STAGE_ACTIVITY || pipelineStage==STAGE_ROWS_ACTIVITY){
         uint lane=gl_LocalInvocationID.x, found=0u;
         if(id==0 && words[coherentField(COHERENT_COUNTS)]!=0u)found=1u;
-        if(id<p.count && id<int(words[liquidField(LIQUID_COUNTS)]) &&
+        if(pipelineStage==STAGE_ROWS_ACTIVITY && id<p.count && mass(0,id)>0l){
+            int m=id%liquidMaterialCount(),cell=id/liquidMaterialCount();
+            if(activeCell(cell))for(int rule=0;rule<headerWord(H_RULE_COUNT);rule++){
+                if(int(words[workField(FIELD_RULES)+3*rule+1])!=m)continue;
+                double eq=equilibrium(int(words[workField(FIELD_RULES)+3*rule+2]),cell);
+                double energy=double(mass(0,id))*1e-10LF*specific(0,id,eq);
+                for(int s=0;s<speciesCount();s++){
+                    int64_t quantity=readQuantity(0,id,s);
+                    if(quantity!=0l)energy+=double(quantity)*reference(0,id,s);
+                }
+                if(phaseRowEnergy(phaseRowsHeader(),id)<=energy){found=1u;break;}
+            }
+        }
+        if(pipelineStage==STAGE_ACTIVITY && id<p.count && id<int(words[liquidField(LIQUID_COUNTS)]) &&
                 words[liquidField(LIQUID_VOLUME_COUNTS)+id]!=0u &&
                 readInt64(liquidField(LIQUID_MASS_UNITS)+2*id)>0l) {
             int m=int(words[liquidField(LIQUID_MATERIALS)+id]),cell=id/liquidMaterialCount();
@@ -670,28 +684,28 @@ void main() {
     }
     if (id >= p.count)
         return;
-    if (p.stage == STAGE_INITIALIZE) {
+    if (pipelineStage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == STAGE_IMPORT_SOLID)
+    if (pipelineStage == STAGE_IMPORT_SOLID)
         importSolid(id);
-    else if (p.stage == STAGE_CAPTURE_CELL)
+    else if (pipelineStage == STAGE_CAPTURE_CELL)
         captureCell(id);
-    else if (p.stage == STAGE_PHASE_CELL)
+    else if (pipelineStage == STAGE_PHASE_CELL)
         phaseCell(id);
-    else if (p.stage == STAGE_SETTLE_FACE)
+    else if (pipelineStage == STAGE_SETTLE_FACE)
         settleFace(id);
-    else if (p.stage == STAGE_SETTLE_CELL)
+    else if (pipelineStage == STAGE_SETTLE_CELL)
         settleCell(id);
-    else if (p.stage == STAGE_COUNT_ROWS)
+    else if (pipelineStage == STAGE_COUNT_ROWS)
         countRow(id);
-    else if (p.stage == STAGE_FINISH_CAPACITY)
+    else if (pipelineStage == STAGE_FINISH_CAPACITY)
         finishCapacity();
-    else if (p.stage == STAGE_WRITE_SPECIES)
+    else if (pipelineStage == STAGE_WRITE_SPECIES)
         writeSpecies(id);
-    else if (p.stage == STAGE_PUBLISH)
+    else if (pipelineStage == STAGE_PUBLISH)
         publish(id);
 }

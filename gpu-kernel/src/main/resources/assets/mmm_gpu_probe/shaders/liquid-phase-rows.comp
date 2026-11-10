@@ -10,14 +10,15 @@ layout(binding = 1, std430) buffer Errors {
 };
 layout(push_constant) uniform Params {
     int header;
-    int stage;
     int count;
 }
 p;
+layout(constant_id = 0) const int pipelineStage = -1;
 // PHASE_ROWS_LIBRARY
 const int STAGE_INITIALIZE = 0;
 const int STAGE_IMPORT_CELL = 1;
 const int STAGE_MEASURE = 2;
+const int STAGE_SNAPSHOT = 3;
 const int STAGE_COUNT_CAPACITY = 4;
 const int STAGE_ROW_COUNTS = 6;
 const int STAGE_STORAGE_CAPACITY = 7;
@@ -115,6 +116,10 @@ void importCell(int cell) {
             writePhaseRowSpecies(p.header, row, int(words[stockField(LP_STOCK_SPECIES_HANDLES) + at]),
                         readPhaseRowInteger(stockField(LP_STOCK_SPECIES_AMOUNTS) + 2 * at));
     }
+}
+void snapshot(int row) {
+    if (row < headerWord(LP_H_SLOT_COUNT))
+        writePhaseRowDouble(workField(LP_FIELD_NEW_ENERGY) + 2 * row, phaseRowEnergy(p.header, row));
 }
 void measure(int row) {
     int64_t mass = phaseRowMass(p.header, row);
@@ -333,24 +338,26 @@ void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (id >= p.count)
         return;
-    if (p.stage == STAGE_INITIALIZE) {
+    if (pipelineStage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == STAGE_IMPORT_CELL)
+    if (pipelineStage == STAGE_IMPORT_CELL)
         importCell(id);
-    else if (p.stage == STAGE_MEASURE)
+    else if (pipelineStage == STAGE_SNAPSHOT)
+        snapshot(id);
+    else if (pipelineStage == STAGE_MEASURE)
         measure(id);
-    else if (p.stage == STAGE_COUNT_CAPACITY)
+    else if (pipelineStage == STAGE_COUNT_CAPACITY)
         countCapacity();
-    else if (p.stage == STAGE_ROW_COUNTS)
+    else if (pipelineStage == STAGE_ROW_COUNTS)
         rowCounts(id);
-    else if (p.stage == STAGE_STORAGE_CAPACITY)
+    else if (pipelineStage == STAGE_STORAGE_CAPACITY)
         storageCapacity();
-    else if (p.stage == STAGE_WRITE_ROW)
+    else if (pipelineStage == STAGE_WRITE_ROW)
         writeRow(id);
-    else if (p.stage == STAGE_PUBLISH)
+    else if (pipelineStage == STAGE_PUBLISH)
         publish(id);
 }

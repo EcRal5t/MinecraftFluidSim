@@ -82,7 +82,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         OLD_K(8),
         NEW_K(8),
         FACE_HEAT(8),
-        FACE_P(8), FACE_P_NEXT(8),
+        FACE_P(8), DONOR_BUDGET(8), MOMENTUM_TRANSFER(8),
         PE_WORK(8), PE_STEP(8),
         PENDING_TIME(8),
         PENDING_RESIDUAL(8),
@@ -202,7 +202,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case GAS_TO_LIQUID_MASS, LIQUID_TO_GAS_MASS -> cells;
                     case OLD_GAS_U, NEW_GAS_U -> inputs.gas().gas().nodeCapacity();
                     case GAS_CALORIC -> Math.multiplyExact(inputs.gas().gas().nodeCapacity(), 4);
-                    case OLD_K, NEW_K, FACE_P, FACE_P_NEXT -> faces;
+                    case OLD_K, NEW_K, FACE_P -> faces;
+                    case MOMENTUM_TRANSFER -> Math.multiplyExact(cells, 7);
                     case FACE_HEAT -> 2 * faces;
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
                     case AUDIT_QUANTA, AUDIT_NANOS -> Math.multiplyExact(Math.multiplyExact(cells, rules), 2);
@@ -333,7 +334,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 .replace("// GAS_CALORIC_STATE", VulkanGasThermodynamics.caloricShader())
                 .replace("// PLIC_FACE_LIBRARY", VulkanLiquidPhaseRows.resource("plic-face.glsl"));
         try {
-            for (int stage : new int[]{0,1,4,5,6,7,8,9,11,13,14,15,16,17,18,20})
+            for (int stage : new int[]{0,4,5,6,7,8,9,11,13,14,15,16,17,18,20})
                 bindings.put(stage, own(new FlipKernelBindings(c, 3, shader, 12, stage)));
             rows = own(new VulkanLiquidPhaseRows(c));
             if(Boolean.getBoolean("mmm.gpuMechanicalStages") && c.hasTimestampQueries())timings=own(new VulkanStageTimings(c,32));
@@ -348,41 +349,34 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         for (var pipeline : bindings.values()) pipeline.rebindRanges(ranges);
         rows.rebindRanges(arena, errors);
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout l, double duration, boolean phaseEnabled,VulkanGasThermodynamics.Layout eos,
-        VulkanGasGeometry.Layout geometry) {
+    void recordTransfer(VkCommandBuffer command, Layout l, GpuBuffer output, GpuBuffer errors,
+        double duration, boolean phaseEnabled, VulkanGasThermodynamics.Layout eos, VulkanGasGeometry.Layout geometry) {
         if (!(Double.isFinite(duration) && duration >= 0))
             throw new IllegalArgumentException("Invalid film duration");
-        var prepared = candidate.continueBatch((command, input, output, errors, staging, stack) -> {
-            rebindRanges(new FlipKernelBindings.BufferRange(output), new FlipKernelBindings.BufferRange(errors));
-            if(timings!=null)timings.reset(command);
-            var h = l.headerBytes();
-            h.putInt(4 * Header.GAS_HEADER.word, eos.headerWordOffset())
-                .putInt(4 * Header.GEOMETRY_HEADER.word, geometry.headerWordOffset())
-                .putInt(4 * Header.PHASE_ENABLED.word,phaseEnabled?1:0)
-                .putDouble(4 * Header.DURATION.word, duration);
-            vkCmdUpdateBuffer(command, output.handle(), l.column(Field.HEADER).offset(), h);
-            VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, stack);
-            if(timings!=null){recordPrepare(command,l);recordPublish(command,l);}
-            else templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,0,0,l),
-                    secondary->{recordPrepare(secondary,l);recordPublish(secondary,l);});
-        }, l.rows.feedbackOffset(), 16);
-        if (prepared.error() != 0)
-            return prepared.error();
-        if (prepared.feedback().getInt(0) == 1)
-            throw new VulkanRegionReactions.CapacityGrowth(
-                prepared.feedback().getInt(8), prepared.feedback().getInt(12), 0, 0, 0);
-        if (prepared.feedback().getInt(0) != 2)
-            throw new IllegalStateException("Film liquid successor is incomplete");
-        if(timings!=null){
-            double contact=0;
-            for(var sample:timings.read()){
-                if(sample.stage().equals("gas-transfer-contact"))contact+=sample.milliseconds();
-                else System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
-            }
-            System.out.printf("mechanical_kernel=gas-transfer-contact gpu_ms=%.3f%n",contact);
+        rebindRanges(new FlipKernelBindings.BufferRange(output), new FlipKernelBindings.BufferRange(errors));
+        if(timings!=null)timings.reset(command);
+        var h=l.headerBytes();
+        h.putInt(4*Header.GAS_HEADER.word,eos.headerWordOffset())
+            .putInt(4*Header.GEOMETRY_HEADER.word,geometry.headerWordOffset())
+            .putInt(4*Header.PHASE_ENABLED.word,phaseEnabled?1:0)
+            .putDouble(4*Header.DURATION.word,duration);
+        try(var stack=stackPush()){
+            vkCmdUpdateBuffer(command,output.handle(),l.column(Field.HEADER).offset(),h);
+            VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT,stack);
         }
-        return 0;
+        if(timings!=null){recordPrepare(command,l);recordTransferPublish(command,l);}
+        else templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,0,0,l),
+            secondary->{recordPrepare(secondary,l);recordTransferPublish(secondary,l);});
+    }
+    void reportTimings() {
+        if(timings==null)return;
+        double contact=0;
+        for(var sample:timings.read()){
+            if(sample.stage().equals("gas-transfer-contact"))contact+=sample.milliseconds();
+            else System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
+        }
+        System.out.printf("mechanical_kernel=gas-transfer-contact gpu_ms=%.3f%n",contact);
     }
     void recordPrepare(VkCommandBuffer c, Layout l) {
         timed(c,"gas-transfer-import",()->rows.recordImport(c,l.rows));
@@ -393,10 +387,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         for(int pass=0;pass<7;pass++){
             final int current=pass;
             if(pass==6)stage(c,l,15,l.cells,pass);
-            timed(c,"gas-transfer-geometry",()->stage(c,l,1,l.cells,current));
             timed(c,"gas-transfer-contact",()->stage(c,l,17,l.cells,current));
-            if(pass>0)recordMomentumHeat(c,l,pass);
-            else { stage(c,l,7,l.inputs.gas().gas().nodeCapacity(),pass);stage(c,l,11,l.cells,pass); }
+            if(pass==3 || pass==4)stage(c,l,6,l.cells,pass);
+            stage(c,l,7,l.inputs.gas().gas().nodeCapacity(),pass);
+            stage(c,l,11,l.cells,pass);
         }
         if(l.dryProposals>0){
             timed(c,"gas-transfer-dry-wall",()->{
@@ -407,9 +401,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         }
         if(l.rules>0)stage(c,l,20,Math.multiplyExact(Math.multiplyExact((l.cells+127)/128,Math.multiplyExact(l.rules,2)),128));
         if(l.surfaceRules>0)stage(c,l,16,1);
+        stage(c,l,7,l.inputs.gas().gas().nodeCapacity(),7);
+        stage(c,l,11,l.cells,7);
         recordMomentumHeat(c,l,7);
         if(l.dryProposals>0 || l.surfaceRules>0)stage(c,l,14,l.wallDevices);
-        timed(c,"gas-transfer-assemble",()->rows.recordAssemble(c,l.rows));
     }
     private void recordMomentumHeat(VkCommandBuffer c,Layout l,int pass) {
         timed(c,"gas-transfer-momentum-heat",()->{
@@ -419,11 +414,13 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             stage(c,l,11,l.cells,pass);
         });
     }
-    void recordPublish(VkCommandBuffer c, Layout l) {
-        timed(c,"gas-transfer-publish",()->{
-            rows.recordPublish(c,l.rows);
-            stage(c,l,8,Math.max(l.faces,Math.multiplyExact(l.cells,l.rules)));
-        });
+    private void recordTransferPublish(VkCommandBuffer c, Layout l) {
+        rows.recordSnapshot(c,l.rows);
+        stage(c,l,8,Math.max(l.faces,Math.multiplyExact(l.cells,l.rules)));
+    }
+    void recordRowsFinish(VkCommandBuffer c, Layout l) {
+        timed(c,"gas-transfer-assemble",()->rows.recordAssemble(c,l.rows));
+        timed(c,"gas-transfer-publish",()->rows.recordPublish(c,l.rows));
     }
     private void timed(VkCommandBuffer c,String label,Runnable commands){
         if(timings==null)commands.run();else timings.record(c,label,commands);

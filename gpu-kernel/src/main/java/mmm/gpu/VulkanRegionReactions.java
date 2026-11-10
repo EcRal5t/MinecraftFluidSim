@@ -3,6 +3,7 @@ package mmm.gpu;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import mmm.chemistry.ChemicalRegistry;
@@ -462,61 +463,70 @@ final class VulkanRegionReactions implements AutoCloseable {
         if (error != 0)
             return error;
         boolean condensedActive=false;
+        boolean inspectCondensed=phaseEnabled && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
         if (layout.massTransfer() != null) {
-            error = massTransferKernel.execute(candidate, layout.massTransfer(), duration, phaseEnabled, eos, geometry);
+            var gas=layout.massTransfer();
+            var result=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                massTransferKernel.recordTransfer(command,gas,output,errors,duration,phaseEnabled,eos,geometry);
+                if(inspectCondensed){
+                    condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors,true);
+                } else massTransferKernel.recordRowsFinish(command,gas);
+            },inspectCondensed?layout.condensedPhase().feedbackOffset():gas.rows.feedbackOffset(),inspectCondensed?4:16);
             stage=stageTime("gas-liquid",stage);
-            if (error != 0)
-                return error;
-            boolean inspectCondensed=phaseEnabled && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
-            if (inspectCondensed) {
-            var refreshed = candidate
-                        .continueBatch(
-                            (command, input, output, errors, staging, stack)
-                                -> {
-                                caloric.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                                caloric.record(command, layout.liquid().caloric());
-                                condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors);
-                            },
-                            layout.condensedPhase().feedbackOffset(), 4);
-            error=refreshed.error();
-            condensedActive=refreshed.feedback().getInt(0)!=0;
-            stage=stageTime("gas-liquid-caloric",stage);
-            if (error != 0)
-                return error;
-            }
+            if(result.error()!=0)return result.error();
+            if(inspectCondensed)condensedActive=result.feedback().getInt(0)!=0;
+            else checkGasRows(result.feedback());
         }
-        if (!phaseEnabled)
+        if (!phaseEnabled){
+            if(layout.massTransfer()!=null)massTransferKernel.reportTimings();
             return 0;
-        if(layout.massTransfer()==null && layout.condensedPhase()!=null && layout.condensedPhase().enabled()) {
+        }
+        if(layout.massTransfer()==null && inspectCondensed) {
             var condensedActivity=candidate.continueBatch((command,input,output,errors,staging,stack)->
-                    condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors),layout.condensedPhase().feedbackOffset(),4);
+                    condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors,false),layout.condensedPhase().feedbackOffset(),4);
             if(condensedActivity.error()!=0)return condensedActivity.error();
             condensedActive=condensedActivity.feedback().getInt(0)!=0;
         }
         if (condensedActive) {
-            error = candidate
-                        .continueBatch(
-                            (command, input, output, errors, staging, stack)
-                                -> {
-                                caloric.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                                caloric.record(command, layout.condensedPhase().input.coherentCaloric());
-                            },
-                            0, 0)
-                        .error();
-            stage=stageTime("condensed-caloric",stage);
-            if (error != 0)
-                return error;
-            try {
-                error = condensedKernel.execute(candidate, layout.condensedPhase());
-            } catch (VulkanCondensedPhaseChange.CapacityGrowth growth) {
-                throw new CapacityGrowth(
-                    growth.liquidSpecies, growth.liquidLimbs, 0, 0, 0, growth.coherentGroups, growth.coherentSpecies);
-            }
+            var condensed=layout.condensedPhase();
+            var settled=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                if(layout.massTransfer()!=null){
+                    var source=layout.massTransfer().rows.column(VulkanLiquidPhaseRows.Field.NEW_ENERGY);
+                    var old=condensed.phaseRows.column(VulkanLiquidPhaseRows.Field.OLD_ENERGY);
+                    VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+                    VulkanRegionStorage.copy(command,output,source.offset(),output,old.offset(),source.bytes(),stack);
+                    VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
+                }
+                var arena=new FlipKernelBindings.BufferRange(output);
+                var errorBuffer=new FlipKernelBindings.BufferRange(errors);
+                condensedKernel.rebindRanges(arena,errorBuffer);
+                condensedKernel.recordPrepare(command,condensed,layout.massTransfer()!=null);
+                condensedKernel.recordPublish(command,condensed);
+            },condensed.feedbackOffset(),20);
             stage=stageTime("condensed-phase",stage);
-            if (error != 0)
-                return error;
+            if(settled.error()!=0)return settled.error();
+            checkCondensedRows(settled.feedback());
+        } else if(layout.massTransfer()!=null && inspectCondensed) {
+            var gas=layout.massTransfer();
+            var published=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                massTransferKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                massTransferKernel.recordRowsFinish(command,gas);
+            },gas.rows.feedbackOffset(),16);
+            if(published.error()!=0)return published.error();
+            checkGasRows(published.feedback());
         }
+        if(layout.massTransfer()!=null)massTransferKernel.reportTimings();
         return 0;
+    }
+    private static void checkCondensedRows(ByteBuffer feedback) {
+        if(feedback.getInt(0)==1)throw new CapacityGrowth(feedback.getInt(4),feedback.getInt(8),0,0,0,feedback.getInt(12),feedback.getInt(16));
+        if(feedback.getInt(0)!=2)throw new IllegalStateException("Condensed phase successor is incomplete");
+    }
+    private static void checkGasRows(ByteBuffer feedback) {
+        if(feedback.getInt(0)==1)throw new CapacityGrowth(feedback.getInt(8),feedback.getInt(12),0,0,0);
+        if(feedback.getInt(0)!=2)throw new IllegalStateException("Film liquid successor is incomplete");
     }
     void recordFinalCaloric(VkCommandBuffer command, Layout layout, GpuBuffer output, GpuBuffer errors) {
         boolean condensed = layout.condensedPhase() != null && layout.condensedPhase().enabled();

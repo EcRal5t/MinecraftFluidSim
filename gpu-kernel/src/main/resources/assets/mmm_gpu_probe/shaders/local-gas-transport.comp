@@ -6,7 +6,8 @@ layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=0,std430) buffer LongArena { int64_t longs[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Push { int header; int stage; int count; uint valueLow; uint valueHigh; } p;
+layout(constant_id=0) const int STAGE=0;
+layout(push_constant) uniform Push { int header; int count; uint valueLow; uint valueHigh; } p;
 // HOST_LAYOUT
 // LOCAL_GAS_GRID
 const uint ERROR_LOCAL_GAS_TRANSPORT=8388608u;
@@ -27,6 +28,19 @@ uint64_t plus(uint64_t a,uint64_t b){if(b>LIMIT-a){reportInvalid();return a;}ret
 int64_t signedPlus(int64_t a,int64_t b){int64_t maxValue=int64_t(LIMIT),minValue=-maxValue-int64_t(1);if((b>int64_t(0)&&a>maxValue-b)||(b<int64_t(0)&&a<minValue-b)){reportInvalid();return a;}return a+b;}
 // GAS_INTEGER_QUANTITIES
 // GAS_CALORIC_MATERIAL
+int gasCaloricHeader(){return headerWord(H_SOURCE_EOS);}
+int64_t gasCaloricReadInt64(int at){return signedQuantity(at);}
+void writeDouble(int at,double value){putDouble(at,value);}
+int gasStateHeaderWord(int index){return sourceEosWord(index);}
+int gasStateField(int index){return gasField(index);}
+void reportGasStateInvalid(){atomicOr(errors,128u);}
+// GAS_CALORIC_LIBRARY
+// GAS_THERMODYNAMIC_STATE
+const uint ERROR_MIXTURE_STATE=16777216u;
+const uint ERROR_ZERO_PORE=4096u;
+int mixtureHeader(){return headerWord(50);}
+// MIXTURE_PRESSURE_EOS
+// MIXTURE_STATE
 void exactAdd(double a,double b,out double sum,out double remainder){
     precise double next=a+b,virtualValue=next-a;
     precise double error=(a-(next-virtualValue))+(b-virtualValue);
@@ -384,4 +398,23 @@ void applyPressureWork(int cell){
     }
     if(!isFinite(energy)||!isFinite(work)){reportInvalid();return;}putDouble(target,energy);putDouble(field(F_WORK)+2*cell,work);
 }
-void main(){int id=int(gl_GlobalInvocationID.y*gl_NumWorkGroups.x*128u+gl_GlobalInvocationID.x);if(id>=p.count||errors!=0u)return;if(p.stage==0)split(id);else if(p.stage==1)gather(id);else if(p.stage==2)primalMass(id);else if(p.stage==6)applyPressureWork(id);}
+void finishPressureState(int cell){
+    applyPressureWork(cell);
+    if(errors!=0u)return;
+    deriveGasState(cell,6,p.count);
+    if(errors!=0u)return;
+    double volume=0.0LF;int64_t mass=0l;
+    int first=int(words[headerWord(88)+cell]),last=int(words[headerWord(88)+cell+1]);
+    for(int row=first;row<last;row++){
+        volume+=readDouble(headerWord(89)+2*row);
+        int64_t amount=signedQuantity(headerWord(90)+2*row);
+        if(amount<0l || mass>0x7fffffffffffffffl-amount)atomicOr(errors,1u);
+        else mass+=amount;
+    }
+    if(volume<0.0LF)atomicOr(errors,1u);
+    if(errors!=0u)return;
+    putDouble(mixtureHeaderWord(1)+2*mixtureHeaderWord(2)*cell,volume);
+    putDouble(mixtureHeaderWord(3)+2*mixtureHeaderWord(4)*cell,double(mass)*1e-10LF);
+    evaluateMixture(cell,readDouble(p.header+12));
+}
+void main(){int id=int(gl_GlobalInvocationID.y*gl_NumWorkGroups.x*128u+gl_GlobalInvocationID.x);if(id>=p.count||errors!=0u)return;if(STAGE==0)split(id);else if(STAGE==1)gather(id);else if(STAGE==2)primalMass(id);else if(STAGE==6)finishPressureState(id);}

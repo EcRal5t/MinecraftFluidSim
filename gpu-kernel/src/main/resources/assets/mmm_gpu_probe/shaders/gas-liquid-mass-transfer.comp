@@ -31,7 +31,6 @@ bool activeFace(int face);
 // LIQUID_CALORIC_STATE
 const uint ERROR_INVALID_STATE = 67108864u;
 const int STAGE_INITIALIZE = 0;
-const int STAGE_PROPOSE = 1;
 const int STAGE_EXCHANGE = 4;
 const int STAGE_CONTACT = 17;
 const int STAGE_MOMENTUM = 5;
@@ -202,9 +201,10 @@ double specificGas(int m, double t) {
     return specificEnergy + (t >= anchor ? integral : -integral);
 }
 double liquidCold(int lr, int material) {
-    double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
     double kg=double(phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr))*massUnit();
-    return kg*specificLiquid(material,minimum)+readDouble(workField(FIELD_LIQUID_SPECIES_ENERGY)+2*lr);
+    double specific=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*material)
+            +readDouble(liquidCaloricWord(CAL_COLD_SENSIBLE)+2*material);
+    return kg*specific+readDouble(workField(FIELD_LIQUID_SPECIES_ENERGY)+2*lr);
 }
 
 ivec3 shape() { return gridShape(); }
@@ -220,7 +220,7 @@ int contactNode(int c, int pass) {
 bool hasOpenPore(int c) {
     return readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*c+2))>0.0LF;
 }
-double contactArea(int c, int node, int pass, int lr) {
+double contactArea(int c, int node, int pass, int lr, bool needArea) {
     if(!hasOpenPore(c)||!hasOpenPore(node))return 0.0LF;
     if(pass==0)return internalArea(c,lr);
     int gc=geometryHeaderWord(GEO_H_CELLS);
@@ -242,6 +242,7 @@ double contactArea(int c, int node, int pass, int lr) {
         if(cf<1.0LF && !plicContactRect(dvec4(cn,ct),axis,positive?1.0LF:0.0LF,true,lo,hi))continue;
         if(nf>0.0LF && !plicContactRect(dvec4(nn,nt),axis,positive?0.0LF:1.0LF,false,lo,hi))continue;
         area+=max(0.0LF,hi.x-lo.x)*max(0.0LF,hi.y-lo.y);
+        if(!needArea && area>0.0LF)return area;
     }
     return area;
 }
@@ -312,6 +313,8 @@ void initialize(int i) {
         writeQuantity(workField(FIELD_GAS_NANOS)+2*i,nanos);
         writeQuantity(workField(FIELD_OLD_MASS) + 2 * i, mass);
         writeQuantity(workField(FIELD_NEW_MASS) + 2 * i, mass);
+        writeQuantity(workField(FIELD_DONOR_BUDGET) + 2 * i, mass);
+        for(int k=0;k<7;k++)writeDouble(workField(FIELD_MOMENTUM_TRANSFER)+14*i+2*k,0.0LF);
     }
     if (i < gasHeaderWord(GAS_H_NODE_CAPACITY)) {
         double gasEnergy = i < int(words[gasField(GAS_COUNTS)]) ? readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * i) : 0.0LF;
@@ -403,17 +406,18 @@ double liquidRowTemperature(int lr,int material,out double capacity){
     if(!isFinite(temperature)||temperature<minimum-1e-7LF||capacity<=0.0LF){reportInvalid();return temperature;}
     return temperature;
 }
-int propose(int c) {
-    if(!activeCell(c))return -1;
+bool propose(int c) {
+    if(!activeCell(c))return false;
     int node=contactNode(c,p.maximum);
-    if(node<0 || !activeCell(node) || !hasOpenPore(c) || !hasOpenPore(node))return -1;
+    if(node<0 || !activeCell(node) || !hasOpenPore(c) || !hasOpenPore(node))return false;
     int geometry=geometryHeaderWord(GEO_H_CELLS);
     double fill=readDouble(geometry+2*(4*c+3));
-    if(fill<=0.0LF || (p.maximum>0 && readDouble(geometry+2*(4*node+3))>=1.0LF))return -1;
-    int head=-1,rules=headerWord(H_RULE_COUNT);
+    if(fill<=0.0LF || (p.maximum>0 && readDouble(geometry+2*(4*node+3))>=1.0LF))return false;
+    int rules=headerWord(H_RULE_COUNT);bool any=false;
+    for(int k=0;k<rules;k++)writeDouble(workField(FIELD_AREA)+2*(c*rules+k),-1.0LF);
     for(int m=0;m<headerWord(H_MATERIAL_COUNT);m++){
         int lr=row(c,m);int64_t mass=phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr);
-        double area=-1.0LF;
+        double area=-1.0LF;bool fullArea=false;
         for(int k=0;k<rules;k++){
             int r=workField(FIELD_RULES)+32*k;if(int(words[r])!=m)continue;
             int sp=int(words[r+2]),at=c*rules+k;bool vapor=words[r+22]!=0u;
@@ -421,20 +425,33 @@ int propose(int c) {
             int gs=gasSpecies(component(node,int(words[r+1])),sp);
             if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)==0l &&
                     (gs<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)==0l))continue;
-            if(area<0.0LF)area=contactArea(c,node,p.maximum,lr);
+            if(area<0.0LF || (!vapor && !fullArea)){
+                area=contactArea(c,node,p.maximum,lr,!vapor);
+                fullArea=!vapor;
+            }
             if(area<=0.0LF && !(p.maximum==0 && vapor && readDouble(geometryHeaderWord(GEO_H_DRY_VOLUMES)+2*c)==0.0LF))continue;
             if(!vapor && (mass<=0l || words[phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_MIXTURE)+lr]==0u))continue;
             if(!vapor)writeDouble(workField(FIELD_PENDING_TIME)+2*at,readDouble(workField(FIELD_PENDING_TIME)+2*at)+readDouble(p.header+H_DURATION));
             writeDouble(workField(FIELD_AREA)+2*at,area);
-            words[workField(FIELD_NEXT)+at]=uint(head);head=at;
+            any=true;
         }
     }
-    return head;
+    return any;
 }
 int64_t coldLimit(int64_t wanted, double margin, double cost) {
     if (cost > 0.0)
         wanted = min(wanted, int64_t(max(0.0LF, floor(max(0.0LF, margin) / cost))));
     return wanted;
+}
+int64_t reserveDonor(int cell,int64_t q,int64_t unit,int64_t quantum){
+    int at=(workField(FIELD_DONOR_BUDGET)+2*cell)/2;
+    int64_t available=atomicAdd(longs[at],0l);
+    for(;;){
+        int64_t accepted=min(q,available/unit);accepted=(accepted/quantum)*quantum;
+        int64_t previous=atomicCompSwap(longs[at],available,available-accepted*unit);
+        if(previous==available)return accepted;
+        available=previous;
+    }
 }
 double gasCold(int node) {
     double coldEnergy = 0.0;
@@ -455,9 +472,7 @@ int faceBase(int axis);
 void faceCells(int id,out int axis,out int a,out int b);
 double cmass(int c,int field);
 double phaseFaceMomentum(int face,int axis){
-    if(p.maximum==1)return readDouble(stockField(16+axis)+2*(face-faceBase(axis)));
-    int field=(p.maximum%2==0)?FIELD_FACE_P:FIELD_FACE_P_NEXT;
-    return readDouble(workField(field)+2*face);
+    return readDouble(stockField(16+axis)+2*(face-faceBase(axis)));
 }
 double faceVelocity(int face,int axis){
     int fa,a,b;faceCells(face,fa,a,b);
@@ -696,6 +711,7 @@ void exchangeSurfaces(){
                 q=coldLimit(q,sensible,cost);
                 if(adsorb)q=coldLimit(q,readDouble(gasField(GAS_INTERNAL_ENERGY)+2*node)-gasCold(node),
                         carried-double(unit)*massUnit()*specificGas(gm,minimum)-reference);
+                if(adsorb)q=min(q,readQuantity(workField(FIELD_DONOR_BUDGET)+2*node)/unit);
                 int64_t gasMass=readQuantity(gasField(GAS_MASS_UNITS)+2*comp),movedMass=q*unit;
                 int64_t componentNanos=readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp);
                 int64_t movedNanos=q>0l?max(1l,int64_t(floor(double(q)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF)+.5LF))):0l;
@@ -703,6 +719,7 @@ void exchangeSurfaces(){
                     if(movedNanos==0l)q=0l;}
                 if(q<=0l)continue;
                 movedMass=q*unit;
+                if(adsorb)atomicAdd(longs[(workField(FIELD_DONOR_BUDGET)+2*node)/2],-movedMass);
                 double moved=double(q)*carried;
                 bool complete=adsorb&&movedMass==gasMass&&readQuantity(gasField(GAS_MASS_RESIDUAL_UNITS)+2*comp)==0l;
                 if(complete){for(int m=0;m<gasHeaderWord(GAS_H_COMPONENT_COUNT);m++)if(m!=gm&&readQuantity(gasField(GAS_MASS_UNITS)+2*component(node,m))>0l)complete=false;
@@ -763,12 +780,16 @@ uvec4 exchange(int node, int first) {
     int cachedLiquidRow=-1;
     bool pressureValid=false;
     int receiver = int(words[workField(FIELD_ORPHAN_RECEIVER)+node]);
-    for (int at = first; at >= 0; at = int(words[workField(FIELD_NEXT) + at])) {
-        const bool wall=pipelineStage==STAGE_EXCHANGE;
+    const bool wall=pipelineStage==STAGE_EXCHANGE;
+    int rules=headerWord(H_RULE_COUNT);
+    for (int position=wall?first:headerWord(H_MATERIAL_COUNT)*rules-1; position>=0;
+         position=wall?int(words[workField(FIELD_NEXT)+position]):position-1) {
+        int at=wall?position:first*rules+position%rules;
         int port=wall?at/headerWord(H_RULE_COUNT):-1;
         int c=wall?int(words[headerWord(H_WALL_PORT_CELL)+port]):at/headerWord(H_RULE_COUNT);
         int pending=c*headerWord(H_RULE_COUNT)+(at%headerWord(H_RULE_COUNT));
         int r=workField(FIELD_RULES)+32*(at%headerWord(H_RULE_COUNT)),m=int(words[r]),gm=int(words[r+1]),sp=int(words[r+2]),lr=row(c,m);
+        if(!wall && (m!=position/rules || readDouble(workField(FIELD_AREA)+2*at)<0.0LF))continue;
         if(!exchangeGasState(node,energy,gasTemperature,gasCapacity))return counts;
         double liquidCapacity=0.0LF,liquidTemperature=0.0LF;
         if(!wall){
@@ -891,7 +912,7 @@ uvec4 exchange(int node, int first) {
                reference = readDouble(gasHeaderWord(GAS_H_SPECIES_REFERENCE) + 2 * (gm * gasHeaderWord(GAS_H_SPECIES_STRIDE) + sp)),
                carried = double(unit) * massUnit() * specificGas(gm, transferTemperature) + reference;
         double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
-        double liquidSpecificCold=specificLiquid(m,minimum);
+        double liquidSpecificCold=readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*m)+readDouble(liquidCaloricWord(CAL_COLD_SENSIBLE)+2*m);
 
         double lcold=double(unit)*massUnit()*liquidSpecificCold+
                      readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(m*liquidCaloricWord(CAL_SPECIES_STRIDE)+sp));
@@ -911,6 +932,8 @@ uvec4 exchange(int node, int first) {
             q=(q/quantum)*quantum;
 
         }
+        int donor=node!=c?(dissolve?node:c):-1;
+        if(donor>=0)q=reserveDonor(donor,q,unit,vapor?quantum:1l);
         int64_t mass = q * unit,
                 nanos = q > 0l
                             ? max(1l, int64_t(floor(
@@ -923,6 +946,7 @@ uvec4 exchange(int node, int first) {
             else {
                 nanos = min(nanos, max(0l, readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * comp) - 1l));
                 if (nanos == 0l) {
+                    if(donor>=0)atomicAdd(longs[(workField(FIELD_DONOR_BUDGET)+2*donor)/2],mass);
                     q = 0l;
                     mass = 0l;
                 }
@@ -1028,75 +1052,66 @@ int cellFace(int c, int axis, int side) { return gridFace(c,2*axis+side); }
 double cmass(int c, int field) {
     return double(readQuantity(c < 0 ? p.header + H_AMBIENT_MASS_UNITS : workField(field) + 2 * c)) * massUnit();
 }
-// Each pass connects one cell pair; surface exchange contributes only at pass 7.
-dvec2 phaseMasses(int c){
-    if(c<0)return dvec2(0.0LF);
-    double outgoing=double(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*c))*massUnit();
-    double incoming=0.0LF;
-    if(p.maximum<7){
-        int other=contactNode(c,p.maximum);
-        if(other>=0){
-            int route=2*c,reverse=2*other;
-            incoming=(double(readQuantity(workField(FIELD_GAS_TO_LIQUID_MASS)+route))
-                     +double(readQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+reverse)))*massUnit();
-            outgoing+=(double(readQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+route))
-                      +double(readQuantity(workField(FIELD_GAS_TO_LIQUID_MASS)+reverse)))*massUnit();
-        }
+// Accumulate the accepted pair transfer using the batch's initial face velocities.
+void accumulateMotion(int c){
+    if(p.maximum<=0 || p.maximum>=7)return;
+    int other=contactNode(c,p.maximum);if(other<0)return;
+    int route=2*c,reverse=2*other;
+    double incoming=(double(readQuantity(workField(FIELD_GAS_TO_LIQUID_MASS)+route))
+                   +double(readQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+reverse)))*massUnit();
+    double outgoing=(double(readQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+route))
+                   +double(readQuantity(workField(FIELD_GAS_TO_LIQUID_MASS)+reverse)))*massUnit();
+    if(incoming==0.0LF && outgoing==0.0LF)return;
+    int base=workField(FIELD_MOMENTUM_TRANSFER)+14*c;
+    writeDouble(base+6,readDouble(base+6)+outgoing);
+    if(incoming>0.0LF)for(int axis=0;axis<3;axis++){
+        double low=faceVelocity(cellFace(other,axis,0),axis),high=faceVelocity(cellFace(other,axis,1),axis);
+        writeDouble(base+2*axis,readDouble(base+2*axis)+incoming*.5LF*(low+high));
+        writeDouble(base+8+2*axis,readDouble(base+8+2*axis)+incoming*.25LF*(low*low+high*high));
     }
-    return dvec2(outgoing,incoming);
 }
-bool noMomentumTransfer(int c,dvec2 masses){
-    return c<0 || (masses.x==0.0LF && masses.y==0.0LF &&
-        readQuantity(workField(FIELD_OLD_MASS)+2*c)==readQuantity(workField(FIELD_NEW_MASS)+2*c));
+double phaseTransfer(int c,int axis,double velocity){
+    if(c<0)return 0.0LF;
+    int base=workField(FIELD_MOMENTUM_TRANSFER)+14*c;
+    double outgoing=readDouble(base+6)+double(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*c))*massUnit();
+    return readDouble(base+2*axis)-outgoing*velocity;
 }
-dvec2 incomingMotion(int c,int axis,double received){
-    if(c<0 || received<=0.0LF)return dvec2(0.0LF);
-    int other=contactNode(c,p.maximum);
-    double low=faceVelocity(cellFace(other,axis,0),axis),high=faceVelocity(cellFace(other,axis,1),axis);
-    return dvec2(received*.5LF*(low+high),received*.25LF*(low*low+high*high));
+double incomingKinetic(int c,int axis){
+    return c<0?0.0LF:readDouble(workField(FIELD_MOMENTUM_TRANSFER)+14*c+8+2*axis);
 }
-double outgoingMass(int c,dvec2 masses){
-    return c<0?0.0LF:masses.x-double(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*c))*massUnit();
+double outgoingMass(int c){
+    return c<0?0.0LF:readDouble(workField(FIELD_MOMENTUM_TRANSFER)+14*c+6);
 }
 void momentum(int id) {
     int axis,a,b;faceCells(id,axis,a,b);
     double before=phaseFaceMomentum(id,axis);
-    int outputField=(p.maximum%2==1)?FIELD_FACE_P:FIELD_FACE_P_NEXT;
     if(!activeFace(id)){
-        writeDouble(workField(outputField)+2*id,before);
-        if(p.maximum==1)writeDouble(workField(FIELD_OLD_K)+2*id,0.0LF);
+        writeDouble(workField(FIELD_FACE_P)+2*id,before);
+        writeDouble(workField(FIELD_OLD_K)+2*id,0.0LF);
         writeDouble(workField(FIELD_NEW_K)+2*id,0.0LF);
         writeDouble(workField(FIELD_FACE_HEAT)+4*id,0.0LF);
         writeDouble(workField(FIELD_FACE_HEAT)+4*id+2,0.0LF);return;
     }
     double old=.5LF*(cmass(a,FIELD_OLD_MASS)+cmass(b,FIELD_OLD_MASS));
-    dvec2 massA=phaseMasses(a),massB=phaseMasses(b);
-    if(noMomentumTransfer(a,massA) && noMomentumTransfer(b,massB)){
-        writeDouble(workField(outputField)+2*id,before);
-        if(p.maximum==1 || p.maximum==7){
-            double velocity=old>0.0LF?before/old:0.0LF;
-            double kinetic=.5LF*old*velocity*velocity;
-            if(p.maximum==1)writeDouble(workField(FIELD_OLD_K)+2*id,kinetic);
-            if(p.maximum==7)writeDouble(workField(FIELD_NEW_K)+2*id,kinetic);
-        }
-        writeDouble(workField(FIELD_FACE_HEAT)+4*id,0.0LF);
-        writeDouble(workField(FIELD_FACE_HEAT)+4*id+2,0.0LF);return;
-    }
     double now=.5LF*(cmass(a,FIELD_NEW_MASS)+cmass(b,FIELD_NEW_MASS));
     double v=old>0.0LF?before/old:0.0LF;
-    dvec2 incomingA=incomingMotion(a,axis,massA.y),incomingB=incomingMotion(b,axis,massB.y);
-    double after=now>0.0LF?before+.5LF*((incomingA.x-massA.x*v)+(incomingB.x-massB.x*v)):0.0LF;
+    double after=now>0.0LF?before+.5LF*(phaseTransfer(a,axis,v)+phaseTransfer(b,axis,v)):0.0LF;
     double w=now>0.0LF?after/now:0.0LF;
     double oldK=.5LF*old*v*v,newK=.5LF*now*w*w;
-    writeDouble(workField(outputField)+2*id,after);
-    if(p.maximum==1)writeDouble(workField(FIELD_OLD_K)+2*id,oldK);
+    writeDouble(workField(FIELD_FACE_P)+2*id,after);
+    writeDouble(workField(FIELD_OLD_K)+2*id,oldK);
     writeDouble(workField(FIELD_NEW_K)+2*id,newK);
-    double heat=oldK-.25LF*(outgoingMass(a,massA)+outgoingMass(b,massB))*v*v
-               +.5LF*(incomingA.y+incomingB.y)-newK;
-    double cellMassA=a<0?0.0LF:cmass(a,FIELD_NEW_MASS),cellMassB=b<0?0.0LF:cmass(b,FIELD_NEW_MASS),totalMass=cellMassA+cellMassB;
-    if(totalMass<=0.0LF){cellMassA=a<0?0.0LF:cmass(a,FIELD_OLD_MASS);cellMassB=b<0?0.0LF:cmass(b,FIELD_OLD_MASS);totalMass=cellMassA+cellMassB;}
-    double heatA=cellMassA<=0.0LF?0.0LF:cellMassB<=0.0LF?heat:heat*cellMassA/totalMass;
-    double heatB=cellMassB<=0.0LF?0.0LF:cellMassA<=0.0LF?heat:heat-heatA;
+    double heat=oldK-.25LF*(outgoingMass(a)+outgoingMass(b))*v*v
+               +.5LF*(incomingKinetic(a,axis)+incomingKinetic(b,axis))-newK;
+    double massA=a<0?0.0LF:cmass(a,FIELD_NEW_MASS),massB=b<0?0.0LF:cmass(b,FIELD_NEW_MASS),totalMass=massA+massB;
+    if(totalMass<=0.0LF){
+        massA=a<0?0.0LF:double(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*a))*massUnit();
+        massB=b<0?0.0LF:double(readQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*b))*massUnit();
+        totalMass=massA+massB;
+        if(totalMass<=0.0LF)heat=0.0LF;
+    }
+    double heatA=massA<=0.0LF?0.0LF:massB<=0.0LF?heat:heat*massA/totalMass;
+    double heatB=massB<=0.0LF?0.0LF:massA<=0.0LF?heat:heat-heatA;
     writeDouble(workField(FIELD_FACE_HEAT)+4*id,heatA);
     writeDouble(workField(FIELD_FACE_HEAT)+4*id+2,heatB);
 }
@@ -1112,7 +1127,7 @@ double gasHeatCapacity(int c) {
 void cellHeat(int c) {
     if(!activeCell(c))return;
     double heat=readDouble(workField(FIELD_PE_STEP)+2*c);
-    for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++)
+    if(p.maximum==7)for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++)
         heat+=readDouble(workField(FIELD_FACE_HEAT)+4*cellFace(c,axis,side)+2*(side==0?1:0));
     if(heat==0.0LF)return;
     if(!isFinite(heat)){reportInvalid();return;}
@@ -1193,6 +1208,7 @@ void finishGas(int node) {
     writeDouble(workField(FIELD_NEW_GAS_U) + 2 * node, gasEnergy);
 }
 void gatherOrphan(int c) {
+    accumulateMotion(c);
     int count=p.maximum==7?7:p.maximum>0?2:1;
     for(int j=0;j<count;j++){
         int node=j==0?c:contactNode(c,p.maximum==7?j:p.maximum);if(node<0)continue;
@@ -1201,14 +1217,11 @@ void gatherOrphan(int c) {
         int energy=phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_ENERGY)+2*receiver;
         writeDouble(energy,readDouble(energy)+readDouble(workField(FIELD_ORPHAN_ENERGY)+2*node));
     }
-    writeQuantity(workField(FIELD_OLD_MASS)+2*c,readQuantity(workField(FIELD_NEW_MASS)+2*c));
     writeDouble(workField(FIELD_PE_STEP)+2*c,0.0LF);
     writeDouble(workField(FIELD_GAS_TRANSFER)+2*c,0.0LF);
     words[workField(FIELD_GAS_TRANSFER_TARGET)+c]=uint(-1);
-    writeQuantity(workField(FIELD_SURFACE_REMOVED_MASS)+2*c,0l);
 }
 void publish(int i) {
-    if(words[phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_CONTROL)]!=2u)return;
     if (i < headerWord(H_FACE_COUNT)) {
         int axis = i < faceBase(1) ? 0 : i < faceBase(2) ? 1 : 2;
         writeDouble(stockField(16 + axis) + 2 * (i - faceBase(axis)), readDouble(workField(FIELD_FACE_P) + 2 * i));
@@ -1290,20 +1303,13 @@ void main() {
         int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x);
         if(block<p.count/128)reduceAudit(block,int(gl_LocalInvocationID.x));return;
     }
-    if(pipelineStage==STAGE_PROPOSE){
+    if(pipelineStage==STAGE_CONTACT){
+        uvec4 counts=uvec4(0u);
         if(i<p.count && errors==0u){
             writeQuantity(workField(FIELD_GAS_TO_LIQUID_MASS)+2*i,0l);
             writeQuantity(workField(FIELD_LIQUID_TO_GAS_MASS)+2*i,0l);
             writeDouble(referenceOutput()+2*i,readDouble(referenceInput()+2*i));
-            words[workField(FIELD_HEAD)+i]=uint(propose(i));
-        }
-        return;
-    }
-    if(pipelineStage==STAGE_CONTACT){
-        uvec4 counts=uvec4(0u);
-        if(i<p.count && errors==0u){
-            int first=int(words[workField(FIELD_HEAD)+i]);
-            if(first>=0)counts=exchange(contactNode(i,p.maximum),first);
+            if(propose(i))counts=exchange(contactNode(i,p.maximum),i);
         }
         reduceActivity(counts,int(gl_LocalInvocationID.x));
         return;

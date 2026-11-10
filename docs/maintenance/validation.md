@@ -388,16 +388,16 @@ Q(t) = C_eff (T_water,0 − T_iron,0)
 ./gradlew.bat :gpu-kernel:runGpuEnvironmentMechanicalBenchmark -PgpuProbeDevice=0 -PgpuEnvironmentWarmup=10 -PgpuEnvironmentSamples=60 --offline --console=plain --max-workers=1
 ```
 
-2026-11-10，RTX 5070 Ti：单个常驻区域先从同一已提交状态计算无共享环境的基线候选并丢弃，再计算和提交环境耦合候选。每 10 步合入一次 0.5 s 环境扩散。预热 10 对后采样 60 对，避免同时保留两个 64³ 区域的显存成本。
+2026-11-11，独占 RTX 5070 Ti：单个常驻区域先从同一已提交状态计算无共享环境的基线候选并丢弃，再计算和提交环境耦合候选。每 10 步合入一次 0.5 s 环境扩散。预热 10 对后采样 60 对。
 
 | 事件 | 样本数 | 基线均值／p95 ms | 耦合均值／p95 ms | 配对增量均值／p95 ms |
 |---|---:|---:|---:|---:|
-| 普通完整步 | 54 | 54.0107／58.9131 | 53.7501／59.2112 | −0.2606／3.0117 |
-| 合并环境扩散 | 6 | 54.7681／56.0488 | 54.8975／57.0274 | 0.1294／1.5812 |
+| 普通完整步 | 54 | 37.6876／40.0068 | 37.7141／40.2814 | 0.0265／1.7265 |
+| 合并环境扩散 | 6 | 38.0431／39.8755 | 38.7908／40.5204 | 0.7478／1.4855 |
 
-普通步 CPU 命令录制平均增加 0.1145 ms，新增提交次数为 0。完整步和 GPU 计时存在配对波动，负增量按噪声记录。当前完整步 50 ms 目标、普通步与低频扩散新增 p95 ≤1 ms 目标均未达到；6 个扩散事件是短样本。世界和区域能量账在测量后闭合。以上计时包含正式设备候选、热账和提交，世界采样、冷初始化、扩容导入、存档及绘制另计。
+普通步 CPU 命令录制平均增加 0.0456 ms，新增提交次数为 0。普通完整步和扩散步的 P95 均低于 50 ms；配对新增成本的 P95 仍超过 1 ms，扩散事件为 6 个短样本。世界和区域能量账闭合。计时包含正式设备候选、热账和提交，世界采样、冷初始化、扩容导入、存档及绘制另计。输出为 `build/optimization-final-environment-benchmark.log`。
 
-本次联合回归通过 `region-state,containers,ownership,lifecycle,protocol,environment`、`runGpuRegionExpansionValidation`、`verifyArchitecture` 和 `:fabric:build`。GPU 扩容覆盖边缘库存观察、不同布局候选的丢弃与采用、新空气交接，以及旧液体、气体和面动量保持。生产热场检查覆盖共享墙与表面、外部库存编辑、气流携能及拒绝候选；理论任务覆盖热流数值、稳态、面积、绝热和时间步收敛。
+生产热场连续接受 11 步，覆盖共享墙与表面、外部库存编辑、气流携能、拒绝候选和一次环境扩散；墙体获得 711.017760 J，开放气流向环境交接 4694.96531 J。输出为 `build/optimization-final-environment.log`。区域扩容、协议、生命周期和热传导理论检查沿用已通过且未受本轮变更影响的结果。
 
 ### 完整生产步预算
 
@@ -409,11 +409,11 @@ Q(t) = C_eff (T_water,0 − T_iron,0)
 
 记录完整步墙钟中位数、P95、最大值、GPU 时间、提交次数、显存和实际推进时长。设备以日志中的 `Device` 为准，名称参数按本机显卡调整。该输入的颗粒布局启用、实际颗粒与床层为空；32³／256 颗粒输入单独评价。Minecraft 世界操作、展示与冷初始化分列，长流程使用上方生产演示和组合工艺入口。
 
-当前气液交接采用逐轮接受量直接结算和两遍热量分配，几何路由在设备生成。64³／0.5 m 输入已完成预热 5 步及连续 50 步的相变热分配续算，每步完整推进 0.05 s，均为一个机械子步。最终版本的 50 ms 预算、中位数、P95、最大值及设备内存等待独占 RTX 5070 Ti 复测；预算测量期间关闭同卡游戏和渲染任务。并行客户端运行期间的墙钟样本用于流程观察。
+2026-11-11，独占 RTX 5070 Ti，预热 5 步后连续采样 50 步：完整步墙钟中位数 45.328 ms、P95 49.108 ms、最大值 60.878 ms，GPU 平均 42.283 ms。每步完整推进 0.05 s，均为一个机械子步；48 个样本在 50 ms 内。两个墙钟尖峰为 60.878 ms 和 50.287 ms，对应 GPU 时间为 41.331 ms 和 42.286 ms。中位数和 P95 达到预算，宿主等待与调度尾延迟继续单独观察。每步上传 0 B、平均回读 198.6 B，设备内存 4306.7 MiB，工作区 2,240,788,112 B。输出为 `build/optimization-state-batch-benchmark.log`。
 
-32³／256 颗粒完整生产输入使用 `dam` 场景，预热 5 步后连续推进 10 步，每步 0.05 s。设备路由实现每步上传 0 B、平均回读 340.8 B，样本提交次数为 16—36 次，实际颗粒持续运动并进入沉积与相变交接。该运行与 Minecraft 客户端共用显卡，独占耗时另行采样。运行入口沿用上方命令，将网格改为 32、场景改为 `dam`，并设置 `-PgpuMechanicalGranular=256`；分项诊断增加 `-PgpuMechanicalStages=true`。
+32³／256 颗粒完整生产输入使用 `dam` 场景，预热 5 步后连续推进 10 步，每步 0.05 s。独占测量的墙钟中位数 44.264 ms、最大值 71.653 ms，GPU 平均 36.604 ms，设备内存 546.9 MiB。每步上传 0 B、平均回读 315.2 B，样本提交次数为 13—30 次；实际颗粒持续运动并进入沉积与相变交接，结束时有 263 个活动颗粒和 2 条沉积记录。运行入口沿用上方命令，将网格改为 32、场景改为 `dam`，并设置 `-PgpuMechanicalGranular=256`；分项诊断增加 `-PgpuMechanicalStages=true`。输出为 `build/optimization-final-particles.log`。
 
-当前实现通过 12 项相变与表面场景、连续生产推进、驻留状态和完整活塞泵 GameTest。相变场景核对精确质量、能量账、机械续算及 checkpoint；驻留场景覆盖冷导入、失败候选隔离、移动实体、开放排气和机械／热学续算；活塞泵覆盖双阀泵送、checkpoint 恢复、满腔受阻与回退解堵。构建及测试源码编译通过。对应入口输出为 `build/optimization-heat-validation.log`、`build/optimization-routes-resident.log`、`build/optimization-routes-pump.log` 和 `build/optimization-routes-particles.log`。
+当前实现通过 12 项相变与表面场景、连续生产推进、驻留状态流程和完整活塞泵 GameTest。相变场景核对精确质量、能量账、机械续算及 checkpoint；驻留场景覆盖冷导入、失败候选隔离、移动实体、开放排气和机械／热学续算。有限热墙检查覆盖热导、实际换热量及热浴容量增长。双阀活塞泵完成 4 个循环，实际送出 0.0228420 m³，并通过 checkpoint 恢复、满腔受阻与回退解堵；Fabric 成品构建及测试源码编译通过。对应输出为 `build/optimization-paired-phase-validation.log`、`build/optimization-final-resident.log`、`build/optimization-conduction-graph.log`、`build/optimization-thermal-contact.log` 和 `build/optimization-final-pump.log`。
 
 <a id="architecture"></a>
 ## 架构与编译检查

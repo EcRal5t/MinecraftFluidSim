@@ -72,15 +72,6 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
         VulkanLiquidThermodynamics.Layout liquidCaloric, VulkanLiquidThermodynamics.Layout coherentCaloric,
         VulkanReactionDefinitions.Layout definitions, VulkanReactionProgressLayout progress, int pressureWord, int pressureStride,
         int fixedMasksWord, int occupiedAllSvqWord, double cellSize, double gravity) {}
-    static final class CapacityGrowth extends IllegalStateException {
-        final int liquidSpecies, liquidLimbs, coherentGroups, coherentSpecies;
-        CapacityGrowth(int a, int b, int c, int d) {
-            liquidSpecies = a;
-            liquidLimbs = b;
-            coherentGroups = c;
-            coherentSpecies = d;
-        }
-    }
     enum Field {
         HEADER(4),
         RULES(4),
@@ -298,25 +289,33 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             return new VulkanEnergyLedger.Stream(1, word(field), column(field).count(), 2, sign);
         }
     }
-    private final FlipKernelBindings bindings;
+    private final FlipKernelBindings[] bindings = new FlipKernelBindings[12];
     private final VulkanLiquidPhaseRows liquidRows;
     private final VulkanPrefixScan scan;
     VulkanCondensedPhaseChange(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, 3,
-            VulkanLiquidPhaseRows.resource("condensed-phase-change.comp")
+        var shader = VulkanLiquidPhaseRows.resource("condensed-phase-change.comp")
                 .replace("// HOST_LAYOUT", shaderLayout())
                 .replace("// PHASE_ROWS_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-phase-rows.glsl"))
-                .replace("// DYADIC_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-dyadic.glsl")),
-            16);
-        liquidRows = new VulkanLiquidPhaseRows(context);
-        scan = new VulkanPrefixScan(context);
+                .replace("// DYADIC_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-dyadic.glsl"));
+        VulkanLiquidPhaseRows rows = null;
+        try {
+            for (int stage = 0; stage < bindings.length; stage++)
+                bindings[stage] = new FlipKernelBindings(context, 3, shader, 8, stage);
+            rows = new VulkanLiquidPhaseRows(context);
+            scan = new VulkanPrefixScan(context);
+            liquidRows = rows;
+        } catch (RuntimeException | Error e) {
+            if (rows != null) rows.close();
+            for (var binding : bindings) if (binding != null) binding.close();
+            throw e;
+        }
     }
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(arena, errors, arena));
+        for (var binding : bindings) binding.rebindRanges(List.of(arena, errors, arena));
         liquidRows.rebindRanges(arena, errors);
         scan.rebindRanges(arena, arena, arena, errors);
     }
-    void recordActivity(VkCommandBuffer command,Layout l,GpuBuffer output,GpuBuffer errors) {
+    void recordActivity(VkCommandBuffer command,Layout l,GpuBuffer output,GpuBuffer errors,boolean rowsReady) {
         rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
         try(var stack=stackPush()) {
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -325,10 +324,10 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
-        stage(command,l,10,l.input.liquid().stockCapacity());
+        stage(command,l,rowsReady?11:10,rowsReady?l.phaseRows.rows:l.input.liquid().stockCapacity());
     }
-    void recordPrepare(VkCommandBuffer command, Layout l) {
-        liquidRows.recordImport(command, l.phaseRows);
+    void recordPrepare(VkCommandBuffer command, Layout l, boolean previousRowsReady) {
+        if (!previousRowsReady) liquidRows.recordImport(command, l.phaseRows);
         stage(command, l, 0, Math.max(l.faces, Math.max(l.rows, l.input.coherent().groupCapacity())));
         stage(command, l, 1, l.input.coherent().groupCapacity());
         stage(command, l, 2, l.input.liquid().cellCount());
@@ -348,30 +347,14 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             Math.max(l.input.coherent().speciesCapacity(),
                 Math.max(l.faces, Math.max(l.rows, l.input.liquid().cellCount()))));
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout l) {
-        var result = candidate.continueBatch((command, input, output, errors, staging, stack) -> {
-            rebindRanges(new FlipKernelBindings.BufferRange(output), new FlipKernelBindings.BufferRange(errors));
-            recordPrepare(command, l);
-        }, l.feedbackOffset(), 20);
-        if (result.error() != 0)
-            return result.error();
-        var feedback = result.feedback().order(ByteOrder.LITTLE_ENDIAN);
-        if (feedback.getInt(0) == 1)
-            throw new CapacityGrowth(feedback.getInt(4), feedback.getInt(8), feedback.getInt(12), feedback.getInt(16));
-        if (feedback.getInt(0) != 2)
-            throw new IllegalStateException("Condensed phase successor is incomplete");
-
-        return candidate
-            .continueBatch((command, input, output, errors, staging, stack) -> recordPublish(command, l), 0, 0)
-            .error();
-    }
     private void stage(VkCommandBuffer command, Layout l, int stage, int count) {
         if (count == 0)
             return;
         try (var stack = stackPush()) {
-            bindings.bind(command, stack);
-            vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                stack.ints(l.word(Field.HEADER), stage, count, 0));
+            var binding = bindings[stage];
+            binding.bind(command, stack);
+            vkCmdPushConstants(command, binding.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                stack.ints(l.word(Field.HEADER), count));
             int groups = (count + 127) / 128;
             vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
@@ -389,7 +372,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             try {
                 liquidRows.close();
             } finally {
-                bindings.close();
+                for (var binding : bindings) binding.close();
             }
         }
     }

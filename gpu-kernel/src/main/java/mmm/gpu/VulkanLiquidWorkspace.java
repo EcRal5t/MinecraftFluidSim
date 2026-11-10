@@ -887,8 +887,9 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             if(gas!=null){
                 gas.recordThermodynamics(command,output,errors,parameters.duration(),false);
                 gas.recordPressureWork(command,output,errors);
-                region.kernels.timed(command,"future-liquid-totals",()->region.kernels.futureGeometry.recordTotals(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
-                gas.recordSource(command,output,errors,parameters.duration(),region.kernels.futureGeometry,true);
+                region.kernels.timed(command,"future-liquid-shapes",()->region.kernels.futureGeometry.recordShapes(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ()));
+                region.kernels.gasGeometry.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                region.kernels.timed(command,"future-gas-geometry",()->region.kernels.gasGeometry.recordLocalGeometry(command,gas.geometry));
             }else{
                 region.mixtureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                 region.mixtureKernel.record(command,mixture,region.requestCellSize);

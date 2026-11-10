@@ -37,6 +37,7 @@ int64_t phaseRowSpecies(int header, int row, int species) {
 }
 void writePhaseRowSpecies(int header, int row, int species, int64_t amount) {
     writePhaseRowInteger(phaseRowField(header, LP_FIELD_SPECIES) + 2 * (row * phaseRowHeader(header, LP_H_SPECIES_COUNT) + species), amount);
+    if (amount != 0l) words[phaseRowField(header, LP_FIELD_MIXTURE) + row] = 1u;
 }
 double phaseRowVolume(int header, int row) {
     return readPhaseRowDouble(phaseRowField(header, LP_FIELD_BASE_VOLUME) + 2 * row) +

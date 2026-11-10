@@ -179,12 +179,15 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             for(int i=0;i<tables.segments().length;i++)arena.putDouble(Math.toIntExact(column(Field.VISCOSITY_SEGMENTS).offset()+8L*i),tables.segments()[i]);
         }
     }
-    private final FlipKernelBindings bindings;
-    VulkanLiquidViscosity(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),32);}
-    void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(source,candidate,errors));}
-    private void bind(VkCommandBuffer command){try(var stack=stackPush()){bindings.bind(command,stack);}}
+    private final FlipKernelBindings[] bindings=new FlipKernelBindings[Stage.values().length];
+    VulkanLiquidViscosity(VulkanDeviceContext context){
+        try{String source=shader();for(var stage:Stage.values())bindings[stage.ordinal()]=new FlipKernelBindings(context,3,source,32,stage.ordinal());}
+        catch(RuntimeException|Error failure){close();throw failure;}
+    }
+    void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){var ranges=List.of(source,candidate,errors);for(var pipeline:bindings)pipeline.rebindRanges(ranges);}
+
     void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize,int temperatureWord){
-        bind(command);stage(command,layout,Stage.REFRESH_MATERIAL.ordinal(),layout.source.cellCount(),cellSize,0,temperatureWord);
+        stage(command,layout,Stage.REFRESH_MATERIAL.ordinal(),layout.source.cellCount(),cellSize,0,temperatureWord);
     }
     /** Apply all viscous stresses with shared, finite face impulses. */
     void record(VkCommandBuffer command,Layout layout,double cellSize,double duration){
@@ -197,7 +200,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     }
     private void prepareFields(VkCommandBuffer command,Layout layout,double cellSize,double duration){
         if(!(cellSize>0&&Double.isFinite(cellSize)&&duration>0&&Double.isFinite(duration)))throw new IllegalArgumentException("Invalid viscous step");
-        bind(command);
+
         stage(command,layout,Stage.PREPARE_CELLS.ordinal(),layout.source.cellCount(),cellSize,duration);
         stage(command,layout,Stage.PREPARE_FACES.ordinal(),layout.faces,cellSize,duration);
         if(layout.contacts!=null)stage(command,layout,Stage.CLEAR_CONTACTS.ordinal(),layout.contacts.capacity(),cellSize,duration);
@@ -209,8 +212,9 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double h,double dt,int temperatureWord){
         if(count==0)return;int groups=(count+127)/128;
         try(var stack=stackPush()){
-            var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(temperatureWord).putInt(count).putDouble(h).putDouble(dt).flip();
-            vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
+            var push=stack.malloc(32).putInt(word(layout.header)).putInt(0).putInt(temperatureWord).putInt(count).putDouble(h).putDouble(dt).flip();
+            var pipeline=bindings[stage];pipeline.bind(command,stack);
+            vkCmdPushConstants(command,pipeline.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
             vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
@@ -221,5 +225,5 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private static String shader(){try(var input=VulkanLiquidViscosity.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/liquid-viscosity.comp")){
         if(input==null)throw new IllegalStateException("Viscosity shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout()).replace("// SERIES_CONDUCTANCE_LIBRARY", VulkanLiquidPhaseRows.resource("series-conductance.glsl"));
     }catch(IOException failure){throw new IllegalStateException("Viscosity shader unavailable",failure);}}
-    @Override public void close(){bindings.close();}
+    @Override public void close(){for(var pipeline:bindings)if(pipeline!=null)pipeline.close();}
 }

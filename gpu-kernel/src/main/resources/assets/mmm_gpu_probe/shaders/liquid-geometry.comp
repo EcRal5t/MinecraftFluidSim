@@ -240,26 +240,37 @@ void faceGeometry(int face) {
         return;
     }
     int firstTangent = (axis + 1) % 3, secondTangent = (axis + 2) % 3;
-    double openArea = 0, wetArea = 0;
-    double leftFill = cells[leftCell][CELL_FILL], rightFill = cells[rightCell][CELL_FILL];
-    dvec4 leftPlane = planes[leftCell], rightPlane = planes[rightCell];
-    if (cells[leftCell][CELL_LIQUID_VOLUME] < cells[leftCell][CELL_PORE_VOLUME])
-        leftFill = min(leftFill, .9999999999999999LF);
-    if (cells[rightCell][CELL_LIQUID_VOLUME] < cells[rightCell][CELL_PORE_VOLUME])
-        rightFill = min(rightFill, .9999999999999999LF);
-    for (int a = 0; a < 2; a++)
-        for (int b = 0; b < 2; b++) {
-            int bit = (a << firstTangent) | (b << secondTangent);
-            if (!plicOpenPort((~masks[leftCell]) & 255u, (~masks[rightCell]) & 255u, bit | (1 << axis), bit))
-                continue;
-            openArea += .25;
-            dvec2 lo, hi; plicPortBounds(axis, bit, lo, hi);
-            bool dry = leftFill < 1.0 && rightFill < 1.0;
-            if (dry && leftFill > 0.0) dry = plicPortRect(leftPlane, axis, 1.0LF, bit, false, lo, hi);
-            if (dry && rightFill > 0.0) dry = plicPortRect(rightPlane, axis, 0.0LF, bit, false, lo, hi);
-            double dryArea = dry ? (hi.x - lo.x) * (hi.y - lo.y) : 0.0;
-            wetArea += .25LF - dryArea;
+    uint leftMask=masks[leftCell]&255u,rightMask=masks[rightCell]&255u,ports=0u;
+    if(leftMask==0u && rightMask==0u)ports=15u;
+    else if(leftMask!=255u && rightMask!=255u){
+        for(int a=0;a<2;a++)for(int b=0;b<2;b++){
+            int bit=(a<<firstTangent)|(b<<secondTangent);
+            if(plicOpenPort((~leftMask)&255u,(~rightMask)&255u,bit|(1<<axis),bit))
+                ports|=1u<<uint(a+2*b);
         }
+    }
+    double openArea=.25LF*double(bitCount(ports)),wetArea=0.0LF;
+    if(ports!=0u){
+        double leftFill=cells[leftCell][CELL_FILL],rightFill=cells[rightCell][CELL_FILL];
+        if(cells[leftCell][CELL_LIQUID_VOLUME]<cells[leftCell][CELL_PORE_VOLUME])
+            leftFill=min(leftFill,.9999999999999999LF);
+        if(cells[rightCell][CELL_LIQUID_VOLUME]<cells[rightCell][CELL_PORE_VOLUME])
+            rightFill=min(rightFill,.9999999999999999LF);
+        dvec2 lo=dvec2(0.0LF),hi=dvec2(1.0LF);
+        bool dry=leftFill<1.0LF && rightFill<1.0LF;
+        if(dry && leftFill>0.0LF)dry=plicPortRect(planes[leftCell],axis,1.0LF,0,false,lo,hi);
+        if(dry && rightFill>0.0LF)dry=plicPortRect(planes[rightCell],axis,0.0LF,0,false,lo,hi);
+        double dryArea=0.0LF;
+        if(dry){
+            if(ports==15u)dryArea=(hi.x-lo.x)*(hi.y-lo.y);
+            else for(int a=0;a<2;a++)for(int b=0;b<2;b++)if((ports&(1u<<uint(a+2*b)))!=0u){
+                dvec2 lower=.5LF*dvec2(a,b),upper=lower+dvec2(.5LF);
+                dvec2 size=max(dvec2(0.0LF),min(hi,upper)-max(lo,lower));
+                dryArea+=size.x*size.y;
+            }
+        }
+        wetArea=openArea-dryArea;
+    }
     if (screenFaces[face].x > 0.0) {
         double deposited = double(max(int64_t(0), bedSolid[leftCell] - coherentSolid[leftCell])
                 + max(int64_t(0), bedSolid[rightCell] - coherentSolid[rightCell])) / SOLID_VOLUME_UNITS_PER_CELL;

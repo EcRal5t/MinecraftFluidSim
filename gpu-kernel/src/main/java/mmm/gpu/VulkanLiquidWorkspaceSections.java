@@ -176,7 +176,7 @@ final class VulkanLiquidWorkspaceSections {
             geometry=VulkanGasGeometry.layout(totals,word(workspace.geometry.get(GeometryField.FIXED_MASKS)),occupiedWord,
                     cellWord,word(workspace.geometry.get(GeometryField.PLANES)),word(workspace.geometry.get(GeometryField.LIQUID_MICRO)),
                     config.sealedExterior(),config.cellSize(),mixture.endOffset(),a).withMixture(mixture);
-            transport=new VulkanLocalGasTransport.ProductionLayout(state,thermo,mixture,word(workspace.geometry.get(GeometryField.FLUXES)),
+            transport=new VulkanLocalGasTransport.ProductionLayout(state,thermo,mixture,liquid,word(workspace.geometry.get(GeometryField.FLUXES)),
                     word(workspace.geometry.get(GeometryField.FACES))+2,4,word(pressureColumns.get(PressureField.PRESSURE)),
                     word(workspace.activityCells),word(workspace.activityFaces),config.sealedExterior(),config.ambient(),config.speciesMasses(),geometry.endOffset(),a);
             endOffset=transport.endOffset;

@@ -91,11 +91,15 @@ final class VulkanLiquidPhaseRows implements AutoCloseable {
         void initializeHeader(ByteBuffer arena){arena.duplicate().position(Math.toIntExact(column(Field.HEADER).offset())).put(headerBytes());}
         List<VulkanEnergyLedger.Stream> energyChangeStreams(){return List.of(new VulkanEnergyLedger.Stream(1,word(Field.NEW_ENERGY),source.slotCount(),2,1),new VulkanEnergyLedger.Stream(1,word(Field.OLD_ENERGY),source.slotCount(),2,-1));}
     }
-    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;
-    VulkanLiquidPhaseRows(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,resource("liquid-phase-rows.comp").replace("// PHASE_ROWS_LIBRARY",resource("liquid-phase-rows.glsl")).replace("// DYADIC_LIBRARY",resource("liquid-dyadic.glsl")),12);
-        try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError e){bindings.close();throw e;}}
-    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
+    private final FlipKernelBindings[] bindings=new FlipKernelBindings[10];private final VulkanPrefixScan scan;
+    VulkanLiquidPhaseRows(VulkanDeviceContext context){
+        var shader=resource("liquid-phase-rows.comp").replace("// PHASE_ROWS_LIBRARY",resource("liquid-phase-rows.glsl")).replace("// DYADIC_LIBRARY",resource("liquid-dyadic.glsl"));
+        try{for(int stage:new int[]{0,1,2,3,4,6,7,8,9})bindings[stage]=new FlipKernelBindings(context,2,shader,8,stage);
+            scan=new VulkanPrefixScan(context);
+        }catch(RuntimeException|Error e){for(var binding:bindings)if(binding!=null)binding.close();throw e;}}
+    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){for(var binding:bindings)if(binding!=null)binding.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
     void recordImport(VkCommandBuffer command,Layout l){stage(command,l,0,Math.max(1,Math.max(l.rows,l.source.cellCount())));stage(command,l,1,l.source.cellCount());}
+    void recordSnapshot(VkCommandBuffer command,Layout l){stage(command,l,3,l.source.slotCount());}
     /** Call after all cell-owned edits, including mechanical heat, have finished.
      * CONTROL: status (1=capacity, 2=ready), fixed rows, required species, required volume limbs. */
     void recordAssemble(VkCommandBuffer command,Layout l){stage(command,l,2,l.rows);stage(command,l,4,1);stage(command,l,6,l.source.slotCount());
@@ -103,10 +107,10 @@ final class VulkanLiquidPhaseRows implements AutoCloseable {
         stage(command,l,7,1);stage(command,l,8,l.source.slotCount());}
     void recordPublish(VkCommandBuffer command,Layout l){stage(command,l,9,Math.max(l.source.cellCount()+1,Math.max(l.source.stockCapacity()+1,Math.max(l.source.speciesCapacity(),l.source.limbCapacity()))));}
     private void stage(VkCommandBuffer command,Layout l,int stage,int n){if(n==0)return;try(var stack=stackPush()){
-        bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.headerWord(),stage,n));int groups=(n+127)/128;vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
+        var binding=bindings[stage];binding.bind(command,stack);vkCmdPushConstants(command,binding.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.headerWord(),n));int groups=(n+127)/128;vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
         VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);}}
     static String resource(String n){try(var in=VulkanLiquidPhaseRows.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/"+n)){if(in==null)throw new IllegalStateException("Missing phase resource "+n);var text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         return n.equals("liquid-phase-rows.glsl") ? text.replace("// HOST_LAYOUT", shaderLayout()) : text;}catch(IOException e){throw new IllegalStateException(e);}}
     private static long align(long x,long a){return Math.addExact(x,a-1)&-a;}
-    @Override public void close(){scan.close();bindings.close();}
+    @Override public void close(){try{scan.close();}finally{for(var binding:bindings)if(binding!=null)binding.close();}}
 }

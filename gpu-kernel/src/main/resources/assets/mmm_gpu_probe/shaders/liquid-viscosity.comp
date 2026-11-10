@@ -11,9 +11,10 @@ layout(binding = 1, std430) buffer Candidate {
 layout(binding = 2, std430) buffer Errors {
     uint errors;
 };
+layout(constant_id=0) const int pipelineStage=0;
 layout(push_constant) uniform Params {
     int header;
-    int stage;
+    int alignment;
     int reserved;
     int count;
     double h;
@@ -549,25 +550,25 @@ void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (id >= p.count || errors != 0u)
         return;
-    if (p.stage == STAGE_PREPARE_CELLS)
+    if (pipelineStage == STAGE_PREPARE_CELLS)
         prepareCell(id, false);
-    else if (p.stage == STAGE_REFRESH_MATERIAL)
+    else if (pipelineStage == STAGE_REFRESH_MATERIAL)
         prepareCell(id, true);
-    else if (p.stage == STAGE_PREPARE_FACES)
+    else if (pipelineStage == STAGE_PREPARE_FACES)
         prepareFace(id);
-    else if (p.stage == STAGE_GATHER_HEAT)
+    else if (pipelineStage == STAGE_GATHER_HEAT)
         gather(id);
-    else if (p.stage == STAGE_CLEAR_CONTACTS) {
+    else if (pipelineStage == STAGE_CLEAR_CONTACTS) {
         writeDoubleField(FIELD_CONTACT_IMPULSE, id, 0.0);
         writeDoubleField(FIELD_CONTACT_WORK, id, 0.0);
-    } else if (p.stage == STAGE_COMPILE_CELL_STRAIN)
+    } else if (pipelineStage == STAGE_COMPILE_CELL_STRAIN)
         compileCellStrain(id);
-    else if (p.stage == STAGE_PREPARE_FACE_SCALE)
+    else if (pipelineStage == STAGE_PREPARE_FACE_SCALE)
         prepareFaceScale(id);
-    else if (p.stage == STAGE_SCALE_STRAINS)
+    else if (pipelineStage == STAGE_SCALE_STRAINS)
         scaleStrain(id);
-    else if (p.stage == STAGE_APPLY_FACES)
+    else if (pipelineStage == STAGE_APPLY_FACES)
         applyFace(id);
-    else if (p.stage == STAGE_APPLY_STRAIN_HEAT)
+    else if (pipelineStage == STAGE_APPLY_STRAIN_HEAT)
         applyStrainHeat(id);
 }

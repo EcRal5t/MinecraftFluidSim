@@ -14,15 +14,15 @@ final class VulkanLocalGasTransport implements AutoCloseable {
     /** Production storage uses the resident cell inventory, mixture, and shared MAC fields. */
     static final class ProductionLayout {
         final VulkanGasStateLayout source; final VulkanGasThermodynamics.Layout eos;
-        final VulkanMixtureState.Layout mixture; final int cells,faces,faceFlux,projectedVelocity,velocityStride,pressureWord,activityCells,activityFaces;
+        final VulkanMixtureState.Layout mixture; final VulkanLiquidStateLayout liquid; final int cells,faces,faceFlux,projectedVelocity,velocityStride,pressureWord,activityCells,activityFaces;
         final boolean sealedExterior; final VulkanGasAmbient.AmbientTables ambient; final long[] speciesMasses;
         int targetMasks=-1,targetSolid=-1;
         int routeTargets=-1,inOffsets=-1,inSources=-1,inSides=-1;
         final EnumMap<Field,VulkanLiquidStateLayout.Column> fields=new EnumMap<>(Field.class); final long endOffset;
-        ProductionLayout(VulkanGasStateLayout source,VulkanGasThermodynamics.Layout eos,VulkanMixtureState.Layout mixture,
+        ProductionLayout(VulkanGasStateLayout source,VulkanGasThermodynamics.Layout eos,VulkanMixtureState.Layout mixture,VulkanLiquidStateLayout liquid,
                          int faceFlux,int projectedVelocity,int velocityStride,int pressureWord,int activityCells,int activityFaces,
                          boolean sealedExterior,VulkanGasAmbient.AmbientTables ambient,long[] speciesMasses,long base,long alignment) {
-            this.source=source;this.eos=eos;this.mixture=mixture;this.faceFlux=faceFlux;this.projectedVelocity=projectedVelocity;this.velocityStride=velocityStride;
+            this.source=source;this.eos=eos;this.mixture=mixture;this.liquid=liquid;this.faceFlux=faceFlux;this.projectedVelocity=projectedVelocity;this.velocityStride=velocityStride;
             this.pressureWord=pressureWord;this.activityCells=activityCells;this.activityFaces=activityFaces;
             this.sealedExterior=sealedExterior;this.ambient=java.util.Objects.requireNonNull(ambient);this.speciesMasses=speciesMasses.clone();
             if(speciesMasses.length!=source.definitions().speciesIds().size())throw new IllegalArgumentException("Gas species mass table differs");
@@ -44,9 +44,12 @@ final class VulkanLocalGasTransport implements AutoCloseable {
             int[] h=new int[96];h[0]=cells;h[1]=source.definitions().componentIds().size();h[2]=source.definitions().speciesStride();h[3]=eos.headerWordOffset();
             for(Field f:Field.values())h[64+f.ordinal()]=word(f);
             for(var f:VulkanGasStateLayout.Field.values())h[16+f.ordinal()]=Math.toIntExact(source.column(f).offset()/4);
-            h[48]=mixture.statesWord();h[51]=projectedVelocity;h[52]=projectedVelocity-2;h[53]=pressureWord;h[54]=activityCells;h[55]=activityFaces;h[56]=faceFlux;h[59]=velocityStride;
+            h[48]=mixture.statesWord();h[50]=mixture.headerWord();h[51]=projectedVelocity;h[52]=projectedVelocity-2;h[53]=pressureWord;h[54]=activityCells;h[55]=activityFaces;h[56]=faceFlux;h[59]=velocityStride;
             h[4]=routeTargets;h[14]=inOffsets;h[15]=inSources;h[49]=inSides;h[57]=targetMasks;h[58]=targetSolid;
             h[60]=source.sizeX();h[61]=source.sizeY();h[62]=source.sizeZ();h[63]=1;
+            h[88]=Math.toIntExact(liquid.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS).offset()/4);
+            h[89]=Math.toIntExact(liquid.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES).offset()/4);
+            h[90]=Math.toIntExact(liquid.column(VulkanLiquidStateLayout.Field.MASS_UNITS).offset()/4);
             h[5]=sealedExterior?1:0;h[6]=ambient.handles().length;h[7]=ambient.speciesHandles().length;
             var target=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<h.length;i++)target.putInt(4*i,h[i]);
             target.putDouble(4*12,mixture.inputs().cellSize());target.putLong(4*8,ambient.totalWeight());target.putDouble(4*10,ambient.temperature());return target;
@@ -62,9 +65,17 @@ final class VulkanLocalGasTransport implements AutoCloseable {
         ByteBuffer speciesMassBytes(){var b=ByteBuffer.allocateDirect(Math.toIntExact(column(Field.SPECIES_MASS).bindingBytes())).order(ByteOrder.LITTLE_ENDIAN);for(long mass:speciesMasses)b.putLong(mass);b.position(0);return b;}
         void initialize(ByteBuffer target){target.duplicate().position(Math.toIntExact(column(Field.HEADER).offset())).put(headerBytes());}
     }
-    private final FlipKernelBindings bindings;
-    VulkanLocalGasTransport(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),20);}
-    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors));}
+    private final FlipKernelBindings[] bindings=new FlipKernelBindings[7];
+    VulkanLocalGasTransport(VulkanDeviceContext context){
+        try {
+            String source=shader();
+            for(int stage:new int[]{0,1,2,6})bindings[stage]=new FlipKernelBindings(context,2,source,16,stage);
+        }catch(RuntimeException|Error failure){close();throw failure;}
+    }
+    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){
+        var ranges=List.of(arena,errors);
+        for(var pipeline:bindings)if(pipeline!=null)pipeline.rebindRanges(ranges);
+    }
     void record(VkCommandBuffer command,ProductionLayout l,org.lwjgl.system.MemoryStack stack,double duration,VulkanStageTimings timings){
         if(!(Double.isFinite(duration)&&duration>0))throw new IllegalArgumentException("Invalid gas transport duration");
         VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -82,17 +93,21 @@ final class VulkanLocalGasTransport implements AutoCloseable {
         productionStage(command,l,6,l.cells,Double.longBitsToDouble(Integer.toUnsignedLong(futureMixtureWord)));
     }
     private void productionStage(VkCommandBuffer command,ProductionLayout l,int stage,int count,double value){try(var stack=stackPush()){
-        long bits=Double.doubleToRawLongBits(value);bindings.bind(command,stack);
-        vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.word(Field.HEADER),stage,count,(int)bits,(int)(bits>>>32)));
+        long bits=Double.doubleToRawLongBits(value);var pipeline=bindings[stage];pipeline.bind(command,stack);
+        vkCmdPushConstants(command,pipeline.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.word(Field.HEADER),count,(int)bits,(int)(bits>>>32)));
         int groups=(count+127)/128;vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
         VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
     }}
     private static String shader(){
         String source=VulkanLiquidPhaseRows.resource("local-gas-transport.comp");
-        return source.replace("// HOST_LAYOUT",VulkanShaderLayout.fields("F_",Field.values())+VulkanShaderLayout.fields("G_",VulkanGasStateLayout.Field.values())+VulkanGasThermodynamics.shaderLayout()+"\n#define MIXTURE_BULK "+mmm.thermal.MixtureVolumeModel.LIQUID_BULK_PA+"LF\n#define MIXTURE_PRESSURE_LIMIT "+mmm.thermal.MixtureVolumeModel.PRESSURE_LIMIT_PA+"LF\n")
+        return source.replace("// HOST_LAYOUT",VulkanShaderLayout.fields("F_",Field.values())+VulkanShaderLayout.fields("G_",VulkanGasStateLayout.Field.values())+VulkanShaderLayout.fields("Q_",VulkanMixtureState.Quantity.values())+VulkanGasThermodynamics.shaderLayout()+"\n#define MIXTURE_BULK "+mmm.thermal.MixtureVolumeModel.LIQUID_BULK_PA+"LF\n#define MIXTURE_PRESSURE_LIMIT "+mmm.thermal.MixtureVolumeModel.PRESSURE_LIMIT_PA+"LF\n")
                 .replace("// LOCAL_GAS_GRID",VulkanLiquidPhaseRows.resource("local-gas-grid.glsl"))
                 .replace("// GAS_INTEGER_QUANTITIES",VulkanLiquidPhaseRows.resource("gas-integer-quantities.glsl"))
-                .replace("// GAS_CALORIC_MATERIAL",VulkanLiquidPhaseRows.resource("gas-caloric-material.glsl"));
+                .replace("// GAS_CALORIC_MATERIAL",VulkanLiquidPhaseRows.resource("gas-caloric-material.glsl"))
+                .replace("// GAS_CALORIC_LIBRARY",VulkanGasThermodynamics.caloricShader().replace("reportInvalid()","reportGasStateInvalid()"))
+                .replace("// GAS_THERMODYNAMIC_STATE",VulkanLiquidPhaseRows.resource("gas-thermodynamic-state.glsl"))
+                .replace("// MIXTURE_PRESSURE_EOS",VulkanLiquidPhaseRows.resource("mixture-pressure-eos.glsl"))
+                .replace("// MIXTURE_STATE",VulkanLiquidPhaseRows.resource("mixture-state.glsl"));
     }
-    @Override public void close(){bindings.close();}
+    @Override public void close(){for(var pipeline:bindings)if(pipeline!=null)pipeline.close();}
 }
