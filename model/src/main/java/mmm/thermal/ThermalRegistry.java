@@ -243,9 +243,6 @@ public final class ThermalRegistry {
 				throw new IllegalArgumentException("Finite thermal device " + device.id()
 						+ " is not the carrier of its device material");
 			}
-			if (material.conductivityWPerMeterK() <= 0.0) {
-				throw new IllegalArgumentException("Finite thermal device material must conduct heat " + material.id());
-			}
 			material.specificHeatAt(device.initialTemperatureK());
 		}
 	}

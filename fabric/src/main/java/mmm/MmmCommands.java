@@ -3,7 +3,6 @@ package mmm;
 import mmm.logging.MmmCommandLog;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -23,6 +22,14 @@ public final class MmmCommands {
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("mmm")
 						.then(IndustrialCommands.node())
+                        .then(Commands.literal("regionname").then(Commands.argument("name", StringArgumentType.greedyString())
+                                .executes(context -> {
+                                    var player = context.getSource().getPlayerOrException();
+                                    String result = mmm.simulation.MmmRuntimeRegistry.require(player.level().getServer())
+                                            .regionActivation().renameSelected(player, StringArgumentType.getString(context, "name"));
+                                    player.sendSystemMessage(net.minecraft.network.chat.Component.literal(result));
+                                    return 1;
+                                })))
 						.then(mmm.simulation.IndustrialWorkbench.node())
 						.then(Commands.literal("demos")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
@@ -34,7 +41,7 @@ public final class MmmCommands {
 								.executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
 						.then(Commands.literal("chemistrydemo").requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> createChemistryDemo(context.getSource()))))
-						.then(Commands.literal("controllerdemo")
+						.then(Commands.literal("tankdemo")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> createControllerDemo(context.getSource()))))
 						.then(Commands.literal("materialbucket")
@@ -116,7 +123,7 @@ public final class MmmCommands {
 								.executes(context -> audit(context, () -> entityPhysicsStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setEntityPhysics(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
-						.then(Commands.literal("controllers")
+						.then(Commands.literal("regions-enabled")
 								.executes(context -> audit(context, () -> controllerFeatureStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())
 										.executes(context -> audit(context, () -> setControllerFeature(context.getSource(), BoolArgumentType.getBool(context, "enabled"))))))
@@ -148,12 +155,8 @@ public final class MmmCommands {
 								.then(Commands.literal("select")
 										.then(Commands.argument("uuid", StringArgumentType.word())
 												.executes(context -> audit(context, () -> selectRegion(context.getSource(), StringArgumentType.getString(context, "uuid"))))))
-								.then(Commands.literal("checkpoint").executes(context -> audit(context, () -> checkpointRegion(context.getSource()))))
-								.then(Commands.literal("recoverprevious")
-										.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
-										.then(Commands.argument("expectedCheckpoint", LongArgumentType.longArg(1L))
-												.executes(context -> audit(context, () -> recoverPreviousRegion(
-														context.getSource(), LongArgumentType.getLong(context, "expectedCheckpoint")))))))
+								.then(Commands.literal("checkpoint").executes(context -> audit(context, () -> checkpointRegion(context.getSource())))))
+
 						.then(Commands.literal("debug")
 								.executes(context -> audit(context, () -> debugStatus(context.getSource())))
 								.then(Commands.argument("enabled", BoolArgumentType.bool())

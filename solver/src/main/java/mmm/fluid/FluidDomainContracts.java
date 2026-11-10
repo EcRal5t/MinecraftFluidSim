@@ -296,11 +296,17 @@ public final class FluidDomainContracts {
 	public record MaterialPortion(int materialHandle, double volume, long massUnits) { }
 	/** A full cell face; direction is -X,+X,-Y,+Y,-Z,+Z. Contacts merge by linear cell index. */
 	public record ThermalPortRequest(int cellX, int cellY, int cellZ, int direction,
-			double wallThicknessMetres, double wallConductivityWPerMetreK, double filmThicknessMetres) {
+			double wallThicknessMetres, double wallConductivityWPerMetreK, double filmThicknessMetres, int openMicroMask, boolean internalFace) {
+		public ThermalPortRequest(int cellX,int cellY,int cellZ,int direction,double wallThicknessMetres,double wallConductivityWPerMetreK,double filmThicknessMetres) {
+			this(cellX,cellY,cellZ,direction,wallThicknessMetres,wallConductivityWPerMetreK,filmThicknessMetres,0,false);
+		}
+		public ThermalPortRequest(int cellX,int cellY,int cellZ,int direction,double wallThicknessMetres,double wallConductivityWPerMetreK,double filmThicknessMetres,int openMicroMask) {
+			this(cellX,cellY,cellZ,direction,wallThicknessMetres,wallConductivityWPerMetreK,filmThicknessMetres,openMicroMask,true);
+		}
 		public ThermalPortRequest {
 			if (direction < 0 || direction > 5 || !Double.isFinite(wallThicknessMetres) || wallThicknessMetres < 0
-					|| !Double.isFinite(wallConductivityWPerMetreK) || wallConductivityWPerMetreK <= 0
-					|| !Double.isFinite(filmThicknessMetres) || filmThicknessMetres <= 0)
+					|| !Double.isFinite(wallConductivityWPerMetreK) || wallConductivityWPerMetreK < 0
+					|| !Double.isFinite(filmThicknessMetres) || filmThicknessMetres <= 0 || openMicroMask < 0 || openMicroMask > 255 || internalFace && openMicroMask == 0)
 				throw new IllegalArgumentException("Invalid finite device port geometry or resistance");
 		}
 	}

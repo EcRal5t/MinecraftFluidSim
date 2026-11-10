@@ -1,0 +1,44 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int stage; int count; double dt; int fields[24]; int segments; double maximumRate; } p;
+const int ENERGY=0, INTERCEPT=1, CAPACITY=2, TEMPERATURE=3, RATE=4;
+const int EDGE_A=5, EDGE_B=6, CONDUCTANCE=7, FAR_TEMPERATURE=8, FLUX=9;
+const int INCIDENT_OFFSETS=10, INCIDENT_EDGES=11, ENERGY_CHANGE=12, FAR_SOURCE=13, FAR_SINK=14;
+const int SEGMENT_COUNTS=15, UPPER_ENERGY=16;
+const int UPPER_TEMPERATURE=19, SURFACE_INTERCEPT=20, SURFACE_CAPACITY=21;
+int integer(int field,int i){return int(words[p.fields[field]+i]);}
+double value(int field,int i){int a=p.fields[field]+2*i;return packDouble2x32(uvec2(words[a],words[a+1]));}
+void store(int field,int i,double v){int a=p.fields[field]+2*i;uvec2 bits=unpackDouble2x32(v);words[a]=bits.x;words[a+1]=bits.y;}
+bool finite(double v){return !isnan(v)&&!isinf(v);}
+dvec2 add(dvec2 a,double b){precise double s=a.x+b;precise double v=s-a.x;precise double e=(a.x-(s-v))+(b-v)+a.y;precise double r=s+e;return dvec2(r,e-(r-s));}
+void main(){
+ int id=int(gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*65535u*128u);
+ if(id>=p.count)return;
+ if(p.stage==0){
+  int first=id*p.segments,count=integer(SEGMENT_COUNTS,id),part=0;double energy=value(ENERGY,id),minimum=1.7976931348623157e308LF;
+  double surfaceB=value(SURFACE_INTERCEPT,id),surfaceC=value(SURFACE_CAPACITY,id);
+  for(int s=0;s<count;s++){minimum=min(minimum,value(CAPACITY,first+s)+surfaceC);if(s+1<count&&energy>=value(UPPER_ENERGY,first+s)+surfaceB+surfaceC*value(UPPER_TEMPERATURE,first+s))part=s+1;}
+  double c=value(CAPACITY,first+part)+surfaceC,t=(energy-value(INTERCEPT,first+part)-surfaceB)/c;
+  if(!(c>0.0LF)||!(t>0.0LF)||!finite(t)){atomicOr(errors,256u);return;}
+  double degree=0.0LF;
+  for(int i=integer(INCIDENT_OFFSETS,id);i<integer(INCIDENT_OFFSETS,id+1);i++)degree+=value(CONDUCTANCE,abs(integer(INCIDENT_EDGES,i))-1);
+  store(TEMPERATURE,id,t);store(RATE,id,degree/minimum);store(ENERGY_CHANGE,2*id,energy);
+ } else if(p.stage==1){
+  int a=integer(EDGE_A,id),b=integer(EDGE_B,id);double ta=value(TEMPERATURE,a);
+  double tb=b<0?value(FAR_TEMPERATURE,id):value(TEMPERATURE,b);
+  double q=p.dt*value(CONDUCTANCE,id)*(tb-ta)/(1.0LF+p.dt*p.maximumRate);
+  if(!finite(q)){atomicOr(errors,256u);return;}
+  store(FLUX,id,q);store(FAR_SOURCE,id,b<0?max(q,0.0LF):0.0LF);store(FAR_SINK,id,b<0?max(-q,0.0LF):0.0LF);
+ } else {
+  dvec2 sum=dvec2(0.0LF);
+  for(int i=integer(INCIDENT_OFFSETS,id);i<integer(INCIDENT_OFFSETS,id+1);i++){
+   int entry=integer(INCIDENT_EDGES,i);sum=add(sum,(entry>0?1.0LF:-1.0LF)*value(FLUX,abs(entry)-1));
+  }
+  double old=value(ENERGY,id),next=(old+sum.x)+sum.y;
+  if(!finite(next)||!((next-value(INTERCEPT,id*p.segments)-value(SURFACE_INTERCEPT,id))/(value(CAPACITY,id*p.segments)+value(SURFACE_CAPACITY,id))>0.0LF)){atomicOr(errors,256u);return;}
+  store(ENERGY,id,next);
+ }
+}

@@ -41,6 +41,7 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 		buffer.writeVarLong(value.checkpointGeneration());
 		buffer.writeVarLong(value.networkGeneration());
 		ControllerSummary.Footprint footprint = value.footprint();
+        buffer.writeUtf(footprint.name(), 64);
 		buffer.writeInt(footprint.controllerX());
 		buffer.writeInt(footprint.controllerY());
 		buffer.writeInt(footprint.controllerZ());
@@ -87,7 +88,7 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 		String dimension = buffer.readUtf(256), profile = buffer.readUtf(64);
 		long checkpoint = buffer.readVarLong(), network = buffer.readVarLong();
 		ControllerSummary.Footprint footprint = new ControllerSummary.Footprint(
-				buffer.readInt(), buffer.readInt(), buffer.readInt(),
+                buffer.readUtf(64), buffer.readInt(), buffer.readInt(), buffer.readInt(),
 				buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(),
 				buffer.readVarLong(), buffer.readVarInt());
 		boolean selected = buffer.readBoolean();

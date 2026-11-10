@@ -41,7 +41,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         ACTIVITY_FACES(31),
         PHASE_ENABLED(32),
         MAXIMUM_PHASE_OPERATIONS(33), AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
-        SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55);
+        SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55),WALL_PORT_INTERNAL_MASK(56);
         final int word;
         Header(int word) {
             this.word = word;
@@ -260,6 +260,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 h[Header.WALL_PORT_DEVICE.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_DEVICE);
                 h[Header.WALL_PORT_CELL.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_CELL);
                 h[Header.WALL_PORT_DIRECTION.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_DIRECTION);
+                h[Header.WALL_PORT_INTERNAL_MASK.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_INTERNAL_MASK);
                 h[Header.WALL_TEMPERATURE.word]=Math.toIntExact(inputs.deviceCaloric().temperatures().offset()/4);
                 h[Header.WALL_CALORIC.word]=Math.toIntExact(inputs.deviceCaloric().header().offset()/4);
                 h[Header.WALL_MATERIAL.word]=device.word(VulkanThermalDeviceLayout.Field.MATERIAL);

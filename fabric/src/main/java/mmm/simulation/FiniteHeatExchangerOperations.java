@@ -74,7 +74,7 @@ public final class FiniteHeatExchangerOperations {
 		if (context.getLevel().isClientSide()) return InteractionResult.SUCCESS;
 		if (!(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.FAIL;
 		return MmmRuntimeRegistry.require(player.level().getServer()).finiteHeatExchangers()
-				.install(player,context.getHand(),context.getClickedPos());
+				.install(player,context.getHand(),context.getClickedPos().relative(context.getClickedFace()));
 	}
 	public static InteractionResult uninstall(ServerPlayer player, InteractionHand hand, BlockPos position) {
 		return MmmRuntimeRegistry.require(player.level().getServer()).finiteHeatExchangers()
@@ -109,11 +109,11 @@ public final class FiniteHeatExchangerOperations {
         for(var region:regions.regions()){
             if(!region.dimension().equals(level.dimension()))continue;
             var footprint=region.footprint();
-            if(footprint!=null&&!footprint.containsInterior(position)&&!footprint.boundaryBlocks().contains(position.asLong())
+            if(footprint!=null&&!footprint.containsInterior(position)&&!footprint.poolShellBlocks().contains(position.asLong())
                 &&java.util.Arrays.stream(Direction.values()).noneMatch(direction->footprint.containsInterior(position.relative(direction))))continue;
             try {
-                var inventory=region.solverLoaded()?region.finiteThermalDevices(world.thermalRegistry().fingerprint()):operations.readFiniteDevices(region.id());
-                for(var device:inventory.devices())if(device.providerId().equals(OrdinaryThermalWalls.PROVIDER)
+                var inventory=region.solverLoaded()?currentDevices(region):operations.readFiniteDevices(region.id());
+                for(var device:inventory.devices())if(device.providerId().equals(WorldThermalEnvironment.PROVIDER)
                     &&device.objectId().startsWith(prefix)&&!device.surfaces().isEmpty())return device;
             }catch(IOException failure){throw new java.io.UncheckedIOException("无法读取表面库存："+position.toShortString(),failure);}
         }
@@ -124,9 +124,9 @@ public final class FiniteHeatExchangerOperations {
 			var region=targets.regionAtBlock(player.level(),position.relative(face));
 			if(region==null)region=targets.regionAtBlock(player.level(),position);
 			requireReady(player.level(),region);
-			var registry=world.thermalRegistry();var inventory=region.finiteThermalDevices(registry.fingerprint());
+			var registry=world.thermalRegistry();var inventory=currentDevices(region);
 			String prefix=position.asLong()+"@";
-			var wall=inventory.devices().stream().filter(d->d.providerId().equals(OrdinaryThermalWalls.PROVIDER)&&d.objectId().startsWith(prefix)).findFirst()
+			var wall=inventory.devices().stream().filter(d->d.providerId().equals(WorldThermalEnvironment.PROVIDER)&&d.objectId().startsWith(prefix)).findFirst()
 				.orElseThrow(()->new IllegalArgumentException("请在已启用区域的普通热墙或筛上装填"));
 			var localFace=FiniteThermalDeviceDefinition.LocalFace.valueOf(face.name());
 			ItemStack before=player.getItemInHand(hand).copy(),after;
@@ -162,8 +162,8 @@ public final class FiniteHeatExchangerOperations {
 	private InteractionResult install(ServerPlayer player,InteractionHand hand,BlockPos position) {
 		ServerLevel level=player.level();
 		try {
-			if (!level.getBlockState(position).is(MmmBlocks.FLUID_BOUNDARY))
-				throw new IllegalArgumentException("请对流体围墙模块安装有限换热器");
+			if (!level.isEmptyBlock(position))
+				throw new IllegalArgumentException("请在模拟区域相邻的空位安装有限换热器");
 			ItemStack source=player.getItemInHand(hand);
 			if (!source.is(MmmBlocks.FINITE_HEAT_EXCHANGER.asItem()) || source.getCount()!=1)
 				throw new IllegalArgumentException("每次安装一个有限换热器");
@@ -238,8 +238,8 @@ public final class FiniteHeatExchangerOperations {
 	}
 
 	private void requireReady(ServerLevel level,FluidRegion region) {
-		if (region==null || !region.controllerManaged() || !region.dimension().equals(level.dimension()))
-			throw new IllegalArgumentException("换热器端口需要连接已启用的控制器区域");
+		if (region==null || !region.hasSelectedVolume() || !region.dimension().equals(level.dimension()))
+			throw new IllegalArgumentException("换热器端口需要连接已启用的模拟区域");
 		if (!availability.ensure(level,region) || !phaseWork.settle(level,region))
 			throw new IllegalStateException("区域当前暂停或正在恢复事务");
 		if (!region.hasThermalState()) throw new IllegalStateException("当前世界未启用热模型");
@@ -251,6 +251,12 @@ public final class FiniteHeatExchangerOperations {
 		}
 	}
 	private String profile() { return world.profile().profileFingerprint(); }
+	private FiniteThermalDeviceInventory currentDevices(FluidRegion region) {
+		var inventory=region.finiteThermalDevices(world.thermalRegistry().fingerprint());
+		if (region.environmentBinding()==null) return inventory;
+		return WorldThermalInventories.project(inventory,region.environmentBinding(),
+				MmmRuntimeRegistry.require(server).environment().current(region.dimension().identifier().toString()));
+	}
 	private InteractionResult fail(ServerPlayer player,Exception failure) {
 		player.sendSystemMessage(Component.literal("有限换热器："+failure.getMessage()));
 		return InteractionResult.FAIL;
@@ -273,6 +279,12 @@ public final class FiniteHeatExchangerOperations {
 		pending.put(journal.operationId(),journal); store.write(journal);
 		fault(FaultPoint.AFTER_PREPARED);
 		FluidRegion candidate=region.finiteDeviceCandidate(inventory,world.thermalRegistry());
+		if (journal.surface()) {
+			try (var environment=MmmRuntimeRegistry.require(server).environment()
+					.prepareDeviceEdit(region.environmentBinding(),inventory)) {
+				candidate.environmentCandidate(environment.capture());
+			}
+		}
 		var staged=operations.stageCheckpoint(candidate,journal.targetGeneration());
 		journal=journal.committed(staged.manifestChecksum());
 		store.write(journal); pending.put(journal.operationId(),journal);
@@ -325,7 +337,7 @@ public final class FiniteHeatExchangerOperations {
 	private List<CrossDomainRecovery.ExternalTruth> truths(Journal journal,boolean readback) {
 		ServerLevel level=level(journal.dimensionId()); BlockPos position=BlockPos.of(journal.position());
 		boolean loaded=level!=null && level.hasChunkAt(position);
-		boolean boundary=loaded && level.getBlockState(position).is(MmmBlocks.FLUID_BOUNDARY);
+		boolean boundary=loaded && level.isEmptyBlock(position);
 		var body=FiniteThermalDeviceItemCodec.decode(journal.bodyContents());
 		boolean device=loaded && level.getBlockState(position).is(MmmBlocks.FINITE_HEAT_EXCHANGER)
 				&& level.getBlockEntity(position) instanceof FiniteHeatExchangerBlockEntity locator
@@ -361,7 +373,7 @@ public final class FiniteHeatExchangerOperations {
 	private void applyWorld(Journal journal,ServerLevel level) throws IOException {
 		if(journal.surface())return;
 		BlockPos position=BlockPos.of(journal.position());
-		if (!level.setBlock(position,(journal.placing()?MmmBlocks.FINITE_HEAT_EXCHANGER:MmmBlocks.FLUID_BOUNDARY).defaultBlockState(),3))
+		if (!level.setBlock(position,(journal.placing()?MmmBlocks.FINITE_HEAT_EXCHANGER:net.minecraft.world.level.block.Blocks.AIR).defaultBlockState(),3))
 			throw new IOException("World rejected finite device slot replacement");
 		if(journal.placing()) {
 			if (!(level.getBlockEntity(position) instanceof FiniteHeatExchangerBlockEntity locator))
@@ -423,7 +435,7 @@ public final class FiniteHeatExchangerOperations {
 			Direction direction=Direction.valueOf(port.localFace().name());
 			FluidRegion candidate=targets.regionAtBlock(level,position.relative(direction));
 			if(candidate==null) continue;
-			if(result!=null && result!=candidate) throw new IllegalArgumentException("换热器各端口需连接同一控制器区域");
+			if(result!=null && result!=candidate) throw new IllegalArgumentException("换热器各端口需连接同一模拟区域");
 			result=candidate;
 		}
 		return result;
@@ -440,7 +452,8 @@ public final class FiniteHeatExchangerOperations {
 				List<mmm.fluid.FluidDomainContracts.ThermalPortRequest> requests;
 				if (device.providerId().equals(PROVIDER)) requests = ports(region, BlockPos.of(Long.parseLong(device.objectId())),
 						registry.finiteDevice(device.deviceTypeId()), registry);
-				else if (device.providerId().equals(OrdinaryThermalWalls.PROVIDER)) requests = OrdinaryThermalWalls.ports(region, device, registry);
+				else if (device.providerId().equals(WorldThermalEnvironment.PROVIDER)) requests =
+                        MmmRuntimeRegistry.require(server).environment().portsFor(region, device, registry);
 				else continue;
 				for (var port : requests) devicePorts.add(new mmm.fluid.FluidStateAccess.DevicePort(device.providerId(),device.objectId(),port));
 				connections.add(requests.stream().mapToInt(port ->

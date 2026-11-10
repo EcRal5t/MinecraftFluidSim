@@ -29,6 +29,8 @@ public final class GpuResidentStateValidation {
             var cellObservation=new VulkanCellObservation(context);var waterContacts=new VulkanWaterContacts(context)) {
             var p=new VulkanLiquidProjection.Parameters(.5f,.05f,9.81f,1e-5f,200);
             try (var cold = region.captureState()) {
+                if (observation.capture(cold).expansionDirections() != 55)
+                    throw new AssertionError("Device edge observation differs from occupied liquid faces");
                 requireGasCell(cellObservation.capture(cold, codec, 1, 6, 1).carriers(),
                         domain.observeCellCarriers(1, 6, 1));
                 requireDisplayTemperature(fields.capture(cold, codec).thermal(), 65, 300);

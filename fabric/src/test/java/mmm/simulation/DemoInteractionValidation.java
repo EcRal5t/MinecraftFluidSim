@@ -11,7 +11,7 @@ import mmm.network.DemoAction;
 import mmm.network.DemoActionPayload;
 import mmm.network.DemoPreset;
 import mmm.network.DemoWorkbenchPayload;
-import mmm.simulation.controller.FluidBoundaryScanner;
+import mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
@@ -212,14 +212,7 @@ public final class DemoInteractionValidation {
 			if (failCreate) throw new IllegalStateException("world occupied");
 			lastAnchor = anchor; var layout = ControllerDemoLayout.at(anchor, facing);
 			for (var block : layout.shell()) shell.add(block.asLong());
-			var world = new FluidBoundaryScanner.ScanWorld() {
-				public boolean isInsideBuildHeight(BlockPos p) { return true; }
-				public boolean isChunkLoaded(int x, int z) { return true; }
-				public boolean isBoundary(BlockPos p) { return shell.contains(p.asLong()); }
-			};
-			var scan = FluidBoundaryScanner.scan(layout.controller(), world, 512);
-			require(scan.succeeded(), "Simulated tank did not form a real scanned shell");
-			var footprint = scan.footprint();
+            var footprint = FluidRegionFootprint.box(layout.minimum(), layout.minimum().offset(3, 3, 3));
 			var region = new FluidRegion(UUID.randomUUID(), key(), footprint.minimumInterior(), domain(), footprint);
 			require(manager.addAndSelect(region).accepted(), "Tank admission failed");
 		}
@@ -230,7 +223,7 @@ public final class DemoInteractionValidation {
 			lastAnchor = origin.offset(sx / 2, 0, sz / 2).relative(facing().getOpposite(), 9);
 			var selected = manager.selected();
 			var region = new FluidRegion(UUID.randomUUID(), key(), origin, domain());
-			var result = selected != null && !selected.controllerManaged() ? manager.replaceSelected(region) : manager.addAndSelect(region);
+			var result = selected != null && !selected.hasSelectedVolume() ? manager.replaceSelected(region) : manager.addAndSelect(region);
 			require(result.accepted(), "Transient admission failed");
 		}
 		public void applyTank(FluidRegion region, DemoPreset preset) {

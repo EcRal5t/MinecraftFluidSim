@@ -116,16 +116,16 @@ Query API 提供宏观状态查询（体积、质量、密度、温度、材料�
 
 该 carrier view 属于内部诊断结构，不构成公开 Query 的稳定契约承诺。
 
-对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
+对选区内位置使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
 live inventory（若 solver 已加载）、已观测载体温度范围、事务执行条件和数值诊断。
 
-控制器方块的空手激活与持物交互分离，探针必须进入物品入口，不能退化为 select/run-intent 消息。Minecraft adapter 先核对线程、距离、方块和 owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
+Minecraft adapter 先核对线程、距离、命中位置和区域归属，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
 `ControllerSummaryPort` 只返回 use-case-specific bounded read model，不返回 region/domain。
 
 用例先验证 view identity 与完整 summary 形状，成功后才签发按 player+region 隔离的一次性 opaque generation；
 失败读不产生未披露 token。availability pause 不阻止只读 summary；metadata-only UNLOADED 只报告 inventory unavailable，不为展示恢复派生状态。
 
-界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、方块和 区域归属，并使 token 失效。
+界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、位置和区域归属，并使 token 失效。
 pause/resume 的 permission、write-ready 与 idempotence 决策进入 `RegionLifecycleUseCase`，adapter 只在 accepted 后改 operator intent、按需唤醒并发布 snapshot。
 
 客户端 summary 没有提交权；打开或读取 summary 本身不加载、不唤醒、不 checkpoint。
@@ -139,10 +139,10 @@ Fabric 最后持久化 BlockEntity、刷新相邻已加载区域的 boundary flu
 ## Jade 观察适配
 
 Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。
-服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。
+服务端 provider 对非空气方块请求数据，并通过上述 Query API 观察命中面近侧或跨过一格方块的反侧位置。
 非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
 
-发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家交互命中外壳方块触发；查询过程保持无加载、不唤醒与服务端权威数据。
+发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家观察方块时触发；查询过程保持无加载、不唤醒与服务端权威数据。
 
 ## Committed event
 

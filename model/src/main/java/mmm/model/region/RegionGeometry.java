@@ -12,7 +12,7 @@ public record RegionGeometry(
 		int sizeY,
 		int sizeZ,
 		FluidSolverConfig solverConfig,
-		ControllerFootprint footprint
+		SelectedVolume footprint
 ) {
 	public RegionGeometry {
 		Objects.requireNonNull(origin, "origin");
@@ -46,50 +46,24 @@ public record RegionGeometry(
 		}
 	}
 
-	public enum RegionKind { CLOSED, POOL }
+	public enum RegionKind { SELECTED, POOL }
 
-	/** Immutable block-space topology represented only by stable coordinates and packed membership. */
-	public record ControllerFootprint(
-			BlockPosition controllerPosition,
-			BlockPosition minimumInterior,
-			BlockPosition maximumInterior,
-			Set<Long> interiorBlocks,
-			Set<Long> boundaryBlocks,
-			Set<Long> requiredChunks,
-			RegionKind kind,
-			Set<Long> atmosphereBlocks,
-			Set<Long> returnedBlocks
-	) {
-		public ControllerFootprint(BlockPosition controllerPosition, BlockPosition minimumInterior, BlockPosition maximumInterior,
-				Set<Long> interiorBlocks, Set<Long> boundaryBlocks, Set<Long> requiredChunks) {
-			this(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, RegionKind.CLOSED, Set.of(), Set.of());
-		}
-
-		public ControllerFootprint(BlockPosition controllerPosition, BlockPosition minimumInterior, BlockPosition maximumInterior,
-				Set<Long> interiorBlocks, Set<Long> boundaryBlocks, Set<Long> requiredChunks, RegionKind kind, Set<Long> atmosphereBlocks) {
-			this(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, kind, atmosphereBlocks, Set.of());
-		}
-
-		public ControllerFootprint {
-			Objects.requireNonNull(controllerPosition, "controllerPosition");
-			Objects.requireNonNull(minimumInterior, "minimumInterior");
-			Objects.requireNonNull(maximumInterior, "maximumInterior");
-			interiorBlocks = Set.copyOf(interiorBlocks);
-			boundaryBlocks = Set.copyOf(boundaryBlocks);
-			requiredChunks = Set.copyOf(requiredChunks);
-			Objects.requireNonNull(kind, "kind");
-			atmosphereBlocks = Set.copyOf(atmosphereBlocks);
-			returnedBlocks = Set.copyOf(returnedBlocks);
-			if (!interiorBlocks.containsAll(returnedBlocks)) throw new IllegalArgumentException("Returned blocks must belong to the region");
-			if (interiorBlocks.isEmpty() || kind == RegionKind.CLOSED && !boundaryBlocks.contains(controllerPosition.packed())
-					|| requiredChunks.isEmpty() || minimumInterior.x() > maximumInterior.x()
-					|| minimumInterior.y() > maximumInterior.y() || minimumInterior.z() > maximumInterior.z()) {
-				throw new IllegalArgumentException("Invalid controller footprint");
-			}
-		}
-
-		public int blockSizeX() { return Math.addExact(Math.subtractExact(maximumInterior.x(), minimumInterior.x()), 1); }
-		public int blockSizeY() { return Math.addExact(Math.subtractExact(maximumInterior.y(), minimumInterior.y()), 1); }
-		public int blockSizeZ() { return Math.addExact(Math.subtractExact(maximumInterior.z(), minimumInterior.z()), 1); }
-	}
+    /** Selected world blocks and pool ownership metadata. */
+    public record SelectedVolume(BlockPosition minimumInterior, BlockPosition maximumInterior,
+            Set<Long> interiorBlocks, Set<Long> requiredChunks, RegionKind kind,
+            Set<Long> poolShellBlocks, Set<Long> atmosphereBlocks, Set<Long> returnedBlocks, String name) {
+        public SelectedVolume {
+            Objects.requireNonNull(minimumInterior); Objects.requireNonNull(maximumInterior);
+            interiorBlocks = Set.copyOf(interiorBlocks); requiredChunks = Set.copyOf(requiredChunks);
+            poolShellBlocks = Set.copyOf(poolShellBlocks); atmosphereBlocks = Set.copyOf(atmosphereBlocks);
+            returnedBlocks = Set.copyOf(returnedBlocks); Objects.requireNonNull(kind);
+            if (name == null || name.isBlank() || name.length() > 64) throw new IllegalArgumentException("Invalid region name");
+            if (interiorBlocks.isEmpty() || requiredChunks.isEmpty() || !interiorBlocks.containsAll(returnedBlocks)
+                    || minimumInterior.x() > maximumInterior.x() || minimumInterior.y() > maximumInterior.y()
+                    || minimumInterior.z() > maximumInterior.z()) throw new IllegalArgumentException("Invalid selected volume");
+        }
+        public int blockSizeX() { return Math.addExact(Math.subtractExact(maximumInterior.x(), minimumInterior.x()), 1); }
+        public int blockSizeY() { return Math.addExact(Math.subtractExact(maximumInterior.y(), minimumInterior.y()), 1); }
+        public int blockSizeZ() { return Math.addExact(Math.subtractExact(maximumInterior.z(), minimumInterior.z()), 1); }
+    }
 }

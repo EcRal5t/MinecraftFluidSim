@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    "WWW",
+    "WSW",
+    "WWW"
+  ],
+  "key": {
+    "W": "#minecraft:wool",
+    "S": "minecraft:slime_ball"
+  },
+  "result": {
+    "id": "mmm:insulation",
+    "count": 8
+  }
+}

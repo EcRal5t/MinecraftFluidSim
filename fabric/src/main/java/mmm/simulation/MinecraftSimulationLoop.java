@@ -21,6 +21,9 @@ final class MinecraftSimulationLoop {
 	private final MinecraftRegionAvailability availability;
 	private final MinecraftRegionTick regionTick;
 	private final Consumer<List<String>> ownershipIssues;
+	private WorldThermalEnvironment environment;
+	private int thermalTicks;
+	void environment(WorldThermalEnvironment value) { environment = Objects.requireNonNull(value); }
 
 	MinecraftSimulationLoop(
 			FluidRegionManager regions,
@@ -46,6 +49,14 @@ final class MinecraftSimulationLoop {
 		operations.advanceTick();
 		containerRecovery.recoverIndexed();
 		takeover.maintainActive(server);
+		boolean environmentDue=environment!=null && ++thermalTicks==10;
+		if (environmentDue) {
+			thermalTicks=0;
+			for (var level:server.getAllLevels()) {
+				environment.refreshDirty(level);
+				environment.queueAdvance(level.dimension().identifier().toString(),0.5);
+			}
+		}
 		for (FluidRegion region : regions.regions()) {
 			runWithDeviceLossGuard(region, () -> tickRegion(server, region), failure -> {
 				regionTick.discardEntityResponse(region);
@@ -57,6 +68,8 @@ final class MinecraftSimulationLoop {
 			});
 		}
 		regionTick.finishServerTick();
+		if (environmentDue) for (var level:server.getAllLevels())
+			environment.flushAdvance(level.dimension().identifier().toString());
 	}
 
 	static void runWithDeviceLossGuard(FluidRegion region, Runnable tick, Consumer<RuntimeException> onDeviceLoss) {
@@ -108,6 +121,16 @@ final class MinecraftSimulationLoop {
 		ownershipIssues.accept(List.copyOf(refreshed));
 		containerRecovery.recoverIndexed();
 	}
+
+    void checkpointWorld(MinecraftServer server) {
+        if(environment==null)return;
+        try {
+            for(var level:server.getAllLevels())environment.refreshDirty(level);
+            operations.checkpointWorld();
+        } catch(java.io.IOException | RuntimeException failure) {
+            MmmMod.LOGGER.error("Could not checkpoint the world thermal generation",failure);
+        }
+    }
 
 	void checkpointForShutdown() {
 		operations.checkpointForShutdown(region -> !region.pauseForUnavailableDevice() && !availability.hasPending(region.id()));

@@ -43,24 +43,6 @@ final class MinecraftGroupAvailability {
         return sampleWorldCells(origin, mmm.spatial.SpatialGrid.rectangular(sx,sy,sz), h, chunkLoaded);
     }
 
-    static String loadedShellFailure(ServerLevel level, FluidRegion region) {
-        var footprint=region.footprint();
-        for(long packed:footprint.boundaryBlocks()) {
-            BlockPos position=BlockPos.of(packed);
-            if(!loaded(level,position)) continue;
-            var state=level.getBlockState(position);
-            boolean solid=footprint.kind()==mmm.model.region.RegionGeometry.RegionKind.POOL
-                    ? state.isCollisionShapeFullBlock(level,position) : mmm.block.MmmBlocks.isBoundary(state);
-            if(!solid) return "Region wall or floor changed at "+position.toShortString();
-        }
-        for(long packed:footprint.atmosphereBlocks()) {
-            BlockPos position=BlockPos.of(packed);
-            if(loaded(level,position) && !level.getBlockState(position).isAir())
-                return "Pool atmosphere opening changed at "+position.toShortString();
-        }
-        return null;
-    }
-
     static boolean loaded(ServerLevel level,BlockPos position) {
         return level.getChunkSource().getChunkNow(position.getX()>>4,position.getZ()>>4)!=null;
     }

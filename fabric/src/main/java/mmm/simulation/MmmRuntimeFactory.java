@@ -43,11 +43,7 @@ public final class MmmRuntimeFactory {
 		RegistryBundleLoader.RegistryBundle registries = startup.registries();
 		CommittedWorldRegistries worldRegistries = new CommittedWorldRegistries(startup);
 		FluidRegionManager regionManager = new FluidRegionManager(config.limits());
-		var comparatorSignals = new ControllerComparatorSignals(regionManager, (dimension, position) -> {
-			var level = server.getLevel(dimension);
-			if (level != null && level.hasChunkAt(position))
-				level.updateNeighbourForOutputSignal(position, level.getBlockState(position).getBlock());
-		});
+
 		FluidRegionOperations regionOperations = new FluidRegionOperations(worldRoot, regionManager, startup);
 		regionOperations.recoverRemovedQuarantines();
 		for (WorldStartupCoordinator.Issue issue : startup.issues()) if (issue.blocksCreation()) {
@@ -82,12 +78,24 @@ public final class MmmRuntimeFactory {
 		MinecraftTakeoverAdapter takeover = new MinecraftTakeoverAdapter();
 		MinecraftDebugScaffolding scaffolding = new MinecraftDebugScaffolding();
 		MinecraftWorldUpdates worldUpdates=new MinecraftWorldUpdates(regionManager);
+		WorldThermalEnvironment environment = worldRegistries.thermalOrNull() == null ? null
+				: new WorldThermalEnvironment(solverBackend, worldRegistries, regionManager);
+		if (environment != null) {
+            try { regionOperations.environment(environment); }
+            catch (java.io.IOException failure) { throw new IllegalStateException("Cannot restore world thermal checkpoint",failure); }
+			worldUpdates.environment(environment);
+			environment.worldUpdates(worldUpdates);
+			regionManager.observeGeometry(region -> environment.markDirty(region.dimension().identifier().toString()));
+		}
 		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(
 				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK,
 				worldRegistries.resolveMaterial("mmm:water").referenceDensity());
 		regionInputs.worldUpdates(worldUpdates);
+		if (environment != null) regionInputs.environment(environment);
 		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
-				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep());
+				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep(),
+				new RegionExpansion(regionManager, regionOperations, environment, snapshots, worldRegistries,
+						policy::liveWorldBridgeEnabled, policy.maximumThermalSubstepsPerStep()));
 		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
 				new MinecraftPendingPhaseWorkBarrier(motion, regionTick);
 		MinecraftRegionAvailability availability = new MinecraftRegionAvailability(
@@ -98,6 +106,7 @@ public final class MmmRuntimeFactory {
 		FarmlandMoistureOperations farmland = new FarmlandMoistureOperations(server, worldRoot,
 				regionManager, regionOperations, availability, phaseWorkBarrier, worldRegistries, snapshots);
 		availability.additionalPending(id -> finiteDevices.hasPending(id) || farmland.hasPending(id));
+        regionOperations.worldCheckpointBarrier(availability::hasPending);
 				regionTick.activityConnections(finiteDevices::refreshActivityConnections);
 		regionTick.farmlandHydration(farmland::tickAvailable);
 		ControllerQueryUseCase controllerQueries = new ControllerQueryUseCase(new ControllerSummaryAdapter(
@@ -117,6 +126,7 @@ public final class MmmRuntimeFactory {
 				containerRecovery, policy::controllerEnabled, policy::defaultEntityPhysicsEnabled,
 				policy::defaultDebugOverlays, ownership::current, availability,
 				policy.liveWorldBridgeEnabled(), policy.maximumThermalSubstepsPerStep());
+		regionActivation.environment(environment);
 		MinecraftPoolOperations pools = new MinecraftPoolOperations(regionManager, regionOperations, regionActivation,
 				availability, phaseWorkBarrier, regionLifecycle, snapshots, startup);
 		MinecraftDebugFixtures debugFixtures = new MinecraftDebugFixtures(
@@ -148,9 +158,9 @@ public final class MmmRuntimeFactory {
 								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
 					}
 					@Override public MinecraftDebugFixtures.ControllerActivation activateController(
-							net.minecraft.server.level.ServerPlayer player, net.minecraft.core.BlockPos position
+							net.minecraft.server.level.ServerPlayer player, net.minecraft.core.BlockPos minimum, net.minecraft.core.BlockPos maximum
 					) {
-						MinecraftRegionActivation.Result result = regionActivation.activate(player, position, false);
+						MinecraftRegionActivation.Result result = regionActivation.createSelection(player, minimum, maximum);
 						return new MinecraftDebugFixtures.ControllerActivation(
 								result.succeeded() ? null : result.failure(), result.retainShell());
 					}
@@ -180,15 +190,16 @@ public final class MmmRuntimeFactory {
 		MinecraftSimulationLoop simulationLoop = new MinecraftSimulationLoop(
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);
+		if (environment != null) simulationLoop.environment(environment);
 		DemoWorkbench demos = new DemoWorkbench(regionManager, debugFixtures, operatorActions,
 				new DemoTankOperations(startup, worldRegistries, regionManager, regionOperations,
 						regionLifecycle, availability, phaseWorkBarrier), startup, regionOperations);
 		return new MmmRuntime(simulationLoop, finiteDevices, farmland, operatorActions, containerTransactions, controllerConsole,
 				regionActivation, pools, debugFixtures, demos, regionAdministration, regionDiagnostics,
 				playerContainerTransfers, dispenserContainerTransfers,
-				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
+				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes, new IndustrialOperations(targets,worldRegistries,transferApi,containerRecovery,availability,phaseWorkBarrier),worldUpdates);
+				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes, new IndustrialOperations(targets,worldRegistries,transferApi,containerRecovery,availability,phaseWorkBarrier),worldUpdates,environment);
 		} catch (RuntimeException | Error failure) {
 			try { solverBackend.close(); }
 			catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }

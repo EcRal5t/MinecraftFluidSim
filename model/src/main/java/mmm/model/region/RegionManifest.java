@@ -62,7 +62,7 @@ public record RegionManifest(
 			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 			long networkGeneration, RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ,
 			FluidSolverConfig solverConfig, RegionRuntimeIntent runtime,
-			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
+			RegionGeometry.SelectedVolume footprint, int totalMarkerCount, long totalVolumeBits,
 			List<FluidMaterial> materialPalette, long totalMassUnits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, String registryFingerprint,
 			long quantaPerMol, List<String> speciesPalette,
@@ -79,7 +79,7 @@ public record RegionManifest(
 	/** Convenience constructor for the pure-water feature layout. */
 	public RegionManifest(
 			UUID regionId, String dimensionId, long checkpointGeneration, long networkGeneration,
-			RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ, FluidSolverConfig solverConfig, RegionRuntimeIntent runtime, RegionGeometry.ControllerFootprint footprint,
+			RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ, FluidSolverConfig solverConfig, RegionRuntimeIntent runtime, RegionGeometry.SelectedVolume footprint,
 			int totalMarkerCount, long totalVolumeBits, List<SectionDescriptor> sections,
 			List<RegionExtension> extensions, long checksum
 	) {
@@ -94,7 +94,7 @@ public record RegionManifest(
 			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 			long networkGeneration, RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ,
 			FluidSolverConfig solverConfig, RegionRuntimeIntent runtime,
-			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
+			RegionGeometry.SelectedVolume footprint, int totalMarkerCount, long totalVolumeBits,
 			List<FluidMaterial> materialPalette, long totalMassUnits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, long checksum
 	) {
@@ -167,7 +167,7 @@ public record RegionManifest(
 	public int sizeY() { return geometry.sizeY(); }
 	public int sizeZ() { return geometry.sizeZ(); }
 	public FluidSolverConfig solverConfig() { return geometry.solverConfig(); }
-	public RegionGeometry.ControllerFootprint footprint() { return geometry.footprint(); }
+	public RegionGeometry.SelectedVolume footprint() { return geometry.footprint(); }
 	@Override public long[] chemicalSpeciesTotals() { return chemicalSpeciesTotals.clone(); }
 
 	@Override

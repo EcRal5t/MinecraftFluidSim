@@ -80,29 +80,13 @@ public final class MinecraftControllerConsole {
 				region.observeCellCarriers(x, y, z));
 	}
 
-	/** Returns the centre of the first liquid/granular/coherent cell along an already resolved interior ray. */
-	public Vec3 firstCondensedProbePoint(ServerLevel level, Vec3 interiorPoint, Vec3 direction) {
-		if (!level.getServer().isSameThread()) throw new IllegalStateException("Probe traversal is server-thread-only");
-		FluidRegion region = targets.regionAtBlock(level, BlockPos.containing(interiorPoint));
-		if (region == null || region.availabilityFailure() != null || !region.solverLoaded()) return null;
-		int[] cell = targets.firstCondensedCellAlong(region, interiorPoint, direction);
-		if (cell == null) return null;
-		double h = region.solverConfig().cellSize();
-		return new Vec3(region.origin().getX() + (cell[0] + 0.5) * h,
-				region.origin().getY() + (cell[1] + 0.5) * h,
-				region.origin().getZ() + (cell[2] + 0.5) * h);
-	}
-
 	/** Snapshots bounded maintained ledgers without loading, waking, checkpointing or selecting. */
 	public ControllerSummary controllerSummary(ServerPlayer player, BlockPos controllerPosition) {
 		if (player == null || controllerPosition == null) return null;
 		ServerLevel level = player.level();
 		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller summary is server-thread-only");
-		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
-				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) return null;
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) return null;
-		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
-		if (region == null || !startup.profileProven()) return null;
+		FluidRegion region = targets.regionAtBlock(level, controllerPosition);
+		if (region == null || !startup.profileProven() || !MinecraftRegionActivation.nearRegion(player, region)) return null;
 		ControllerSummaryResult result = controllerQueries.query(
 				new ControllerSummaryCommand(player.getUUID(), region.id()));
 		return result.ok() ? result.summary() : null;
@@ -118,16 +102,11 @@ public final class MinecraftControllerConsole {
 		}
 		ServerLevel level = player.level();
 		if (!level.getServer().isSameThread()) throw new IllegalStateException("Controller actions are server-thread-only");
-		double distanceSquared = player.distanceToSqr(controllerPosition.getX() + 0.5,
-				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5);
-		if (distanceSquared > 64.0) return Component.translatable("message.mmm.controller.too_far");
-		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
-			return Component.translatable("message.mmm.controller.target_gone");
-		}
-		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+		FluidRegion region = targets.regionAtBlock(level, controllerPosition);
 		if (region == null || !region.id().equals(requestedRegionId)) {
 			return Component.translatable("message.mmm.controller.owner_changed");
 		}
+		if (!MinecraftRegionActivation.nearRegion(player, region)) return Component.translatable("message.mmm.controller.too_far");
 		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return Component.translatable("message.mmm.controller.summary_expired");
 		}
@@ -233,7 +212,7 @@ public final class MinecraftControllerConsole {
 		for (FluidRegion region : regions.regions()) {
 			FluidRegionFootprint footprint = region.footprint();
 			if (footprint == null || !region.dimension().equals(level.dimension())
-					|| !footprint.boundaryBlocks().contains(position.asLong())
+					|| !footprint.containsInterior(position)
 					|| !region.solverLoaded() || !region.hasThermalState()) continue;
 			regionTick.refreshThermalBoundary(level, region);
 		}

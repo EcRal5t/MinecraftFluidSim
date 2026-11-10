@@ -47,7 +47,7 @@ final class OwnershipTransactionCoordinator {
 	}
 
 	int committedBlockCount(FluidRegion region) throws IOException {
-		if (!region.controllerManaged()) return 0;
+		if (!region.hasSelectedVolume()) return 0;
 		OwnershipFiles files = ownershipStore.files(region.id());
 		files.assertUnlockedForTransition();
 		if (!files.hasCommitted()) return 0;
@@ -101,6 +101,8 @@ final class OwnershipTransactionCoordinator {
 		String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 				region.id(), dimensionId, OwnershipJournal.Operation.ACQUIRE,
 				baseGeneration, generation, candidates.size());
+		repository.stageEnvironment(region);
+		try {
 		long publishedGeneration;
 		try {
 			OwnershipCoordinator.AcquireResult result = OwnershipCoordinator.acquire(
@@ -129,6 +131,7 @@ final class OwnershipTransactionCoordinator {
 			throw new IOException("Acquired ownership checkpoint " + publishedGeneration
 					+ " was not accepted by the live region");
 		}
+		} finally { repository.clearStagedEnvironment(region.id()); }
 	}
 
 	ReleaseAttempt release(MinecraftServer server, FluidRegion region) {

@@ -1,0 +1,49 @@
+{
+  "thermal_material": "mmm:ordinary_gold_wall",
+  "body_mass_kg": "19300",
+  "initial_temperature_k": "293.15",
+  "ports": [
+    {
+      "id": "mmm:down",
+      "contact_group": "mmm:wall",
+      "local_face": "DOWN",
+      "wall_thickness_m": "0.5",
+      "fluid_film_thickness_m": "0.125"
+    },
+    {
+      "id": "mmm:up",
+      "contact_group": "mmm:wall",
+      "local_face": "UP",
+      "wall_thickness_m": "0.5",
+      "fluid_film_thickness_m": "0.125"
+    },
+    {
+      "id": "mmm:north",
+      "contact_group": "mmm:wall",
+      "local_face": "NORTH",
+      "wall_thickness_m": "0.5",
+      "fluid_film_thickness_m": "0.125"
+    },
+    {
+      "id": "mmm:south",
+      "contact_group": "mmm:wall",
+      "local_face": "SOUTH",
+      "wall_thickness_m": "0.5",
+      "fluid_film_thickness_m": "0.125"
+    },
+    {
+      "id": "mmm:west",
+      "contact_group": "mmm:wall",
+      "local_face": "WEST",
+      "wall_thickness_m": "0.5",
+      "fluid_film_thickness_m": "0.125"
+    },
+    {
+      "id": "mmm:east",
+      "contact_group": "mmm:wall",
+      "local_face": "EAST",
+      "wall_thickness_m": "0.5",
+      "fluid_film_thickness_m": "0.125"
+    }
+  ]
+}

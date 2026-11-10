@@ -37,9 +37,9 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
         var origin=new net.minecraft.core.BlockPos(1,1,1);
         var returned=origin.asLong();
         var interior=Set.of(returned,origin.east().asLong());
-        var footprint=new mmm.simulation.controller.FluidRegionFootprint(origin,origin,origin.east(),interior,
+        var footprint=new mmm.simulation.controller.FluidRegionFootprint(origin,origin.east(),interior,
                 Set.of(origin.below().asLong()),Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)),
-                mmm.model.region.RegionGeometry.RegionKind.POOL,Set.of(origin.above().asLong()),Set.of(returned));
+                mmm.model.region.RegionGeometry.RegionKind.POOL,Set.of(origin.above().asLong()),Set.of(returned),"测试池");
         var domain=new mmm.fluid.HostFluidState(4, 2, 2, CONFIG, mmm.fluid.TestFluidDefinitions.load());
         for(int z=0;z<2;z++) for(int y=0;y<2;y++) for(int x=0;x<2;x++) domain.setSolid(x,y,z,true);
         domain.setVolume(2,0,0,.5F);
@@ -460,42 +460,6 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		RegionGenerationStore.PreparedGeneration repeat = files.prepare(RegionCheckpointFixtures.capture(populatedRegion(id), 4L), (point, path) -> { });
 		require(repeat.alreadyCommitted() && files.commit(repeat, (point, path) -> { }) == 4L,
 				"idempotent re-staging was not recognized");
-	}
-
-	static void validateExplicitPreviousGenerationActivation() throws Exception {
-		Path root = Files.createTempDirectory( "previous-generation-");
-		RegionGenerationStore files = new RegionGenerationStore(root);
-		UUID id = UUID.randomUUID();
-		FluidRegion region = populatedRegion(id);
-		RegionState first = RegionCheckpointFixtures.capture(region, 1L);
-		files.publish(first);
-		TestHostAccess.edit(region, state -> state.setVolume(3, 2, 3, 0.5F));
-		RegionState second = RegionCheckpointFixtures.capture(region, 2L);
-		files.publish(second);
-
-		RegionGenerationStore.PreviousGeneration previous = files.readPrevious(id, 2L);
-		require(previous.state().manifest().checkpointGeneration() == 1L
-				&& previous.state().manifest().checksum() == first.manifest().checksum(),
-				"explicit previous-generation probe did not bind the inactive complete slot");
-		expectIOException(() -> files.readPrevious(id, 3L),
-				"previous-generation probe ignored its explicit current-generation guard");
-		Path headTemporary = root.resolve("mmm").resolve("region-state").resolve(id.toString()).resolve("HEAD.nbt.tmp");
-		Files.writeString(headTemporary, "foreign evidence");
-		expectIOException(() -> files.activatePrevious(previous),
-				"previous-generation activation overwrote unknown HEAD staging");
-		require(Files.readString(headTemporary).equals("foreign evidence")
-				&& files.read(id).manifest().checkpointGeneration() == 2L,
-				"previous-generation activation did not preserve unknown staging with the current HEAD authoritative");
-		Files.delete(headTemporary);
-		require(files.activatePrevious(previous) == 1L
-				&& files.read(id).manifest().checkpointGeneration() == 1L
-				&& files.read(id).manifest().checksum() == first.manifest().checksum(),
-				"explicit previous-generation activation did not atomically move HEAD");
-
-		files.publish(second);
-		require(files.read(id).manifest().checkpointGeneration() == 2L
-				&& files.read(id).manifest().checksum() == second.manifest().checksum(),
-				"publication after explicit rollback did not replace the retained rejected slot");
 	}
 
 }

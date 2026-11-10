@@ -54,8 +54,37 @@ public final class FieldProbeItem extends Item {
 		if (!(context.getLevel() instanceof ServerLevel level)
 				|| !(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
 		var runtime=MmmRuntimeRegistry.require(level.getServer());
+        if (player.isShiftKeyDown()) {
+            if (!runtime.regionActivation().selecting(player) && runtime.pools().hasPendingPreview(player)) {
+                var pending = runtime.pools().probe(player, context.getClickedPos());
+                if (pending != null) return pending;
+            }
+            if (runtime.regionActivation().selecting(player) || !runtime.regionActivation().contains(player, context.getClickedPos())) {
+                runtime.regionActivation().selectCorner(player, context.getClickedPos());
+            } else {
+                var result = runtime.regionActivation().activate(player, context.getClickedPos(), true);
+                player.sendSystemMessage(Component.literal(result.succeeded() ? "区域：" + result.action() : result.failure()));
+            }
+            return InteractionResult.SUCCESS_SERVER;
+        }
+
 		boolean surface=runtime.finiteHeatExchangers().inspectSurface(player,context.getClickedPos());
 		if(runtime.industrial().probe(player,context.getClickedPos())||surface)return InteractionResult.SUCCESS_SERVER;
+        if (runtime.pools().targetsPoolShell(player, context.getClickedPos())) {
+            var result = runtime.pools().probe(player, context.getClickedPos());
+            if (result != null) return result;
+        }
+        if (runtime.regionActivation().contains(player, context.getClickedPos())) {
+            var result = runtime.regionActivation().activate(player, context.getClickedPos(), false);
+            if (!result.succeeded()) {
+                player.sendSystemMessage(Component.literal(result.failure()));
+                return InteractionResult.FAIL;
+            }
+            ControllerSummary summary = runtime.controllerConsole().controllerSummary(player, context.getClickedPos());
+            if (summary != null && !FluidProtocolServer.send(player, new ControllerSummaryPayload(summary)))
+                player.sendSystemMessage(present(summary));
+            return InteractionResult.SUCCESS_SERVER;
+        }
 		var waterHit=getPlayerPOVHitResult(level,player,net.minecraft.world.level.ClipContext.Fluid.SOURCE_ONLY);
 		var poolHit=waterHit.getType()==net.minecraft.world.phys.HitResult.Type.BLOCK
 				&& level.getBlockState(waterHit.getBlockPos()).is(net.minecraft.world.level.block.Blocks.WATER)
@@ -71,33 +100,12 @@ public final class FieldProbeItem extends Item {
 			}
 			return InteractionResult.SUCCESS_SERVER;
 		}
-		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.FLUID_CONTROLLER)) {
-			ControllerSummary summary = console.controllerSummary(player, context.getClickedPos());
-			if (summary == null) {
-				player.sendSystemMessage(Component.translatable("message.mmm.probe.controller_missing"));
-				return InteractionResult.FAIL;
-			}
-			if (!FluidProtocolServer.send(player, new ControllerSummaryPayload(summary))) {
-				player.sendSystemMessage(present(summary));
-			}
-			return InteractionResult.SUCCESS_SERVER;
-		}
-		if (!MmmBlocks.isBoundary(level.getBlockState(context.getClickedPos()))) {
-			player.sendSystemMessage(Component.translatable("message.mmm.probe.not_shell"));
-			return InteractionResult.FAIL;
-		}
+
+
 		ShellFluidQuery.Resolution resolution = ShellFluidQuery.resolve(level, context.getClickedPos(),
 				context.getClickedFace(), context.getClickLocation());
 		net.minecraft.world.phys.Vec3 point = resolution.interiorPoint();
 		FluidQueryResult liquid = resolution.result();
-		if (player.isShiftKeyDown() && point != null) {
-			point = console.firstCondensedProbePoint(level, point, player.getLookAngle());
-			if (point == null) {
-				player.sendSystemMessage(Component.translatable("message.mmm.probe.no_condensed"));
-				return InteractionResult.FAIL;
-			}
-			liquid = ShellFluidQuery.queryPoint(level, point);
-		}
 		MinecraftControllerConsole.CarrierCellObservation carriers = point == null ? null
 				: console.observeCellCarriers(level, point);
 		player.sendSystemMessage(present(liquid, carriers));

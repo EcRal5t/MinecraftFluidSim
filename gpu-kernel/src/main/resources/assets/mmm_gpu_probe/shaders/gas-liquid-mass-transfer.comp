@@ -458,8 +458,9 @@ double donorVelocity(int cellId,int component){
     return .5LF*sum;
 }
 // A finite wall port exposes its dry part of the same physical gas face.
-double dryWallArea(int c,int direction){
+double dryWallArea(int c,int direction,int code){
     int axis=direction/2,side=direction&1,a=(axis+1)%3,b=(axis+2)%3;
+    int faceMask=code&255;bool internal=(code&256)!=0;
     int mask=int(words[geometryHeaderWord(GEO_H_MASKS)+c]);
     int dry=int(words[geometryHeaderWord(GEO_H_DRY_MASKS)+c]);
     int open=(~mask)&255,boxes=bitCount(uint(open));if(boxes==0)return 0.0LF;
@@ -468,11 +469,12 @@ double dryWallArea(int c,int direction){
     int plane=geometryHeaderWord(GEO_H_PLANES)+8*c;
     dvec3 normal=dvec3(readDouble(plane),readDouble(plane+2),readDouble(plane+4));
     double threshold=readDouble(plane+6),area=0.0LF;
-    for(int i=0;i<2;i++)for(int j=0;j<2;j++){
-        int bit=(side<<axis)|(i<<a)|(j<<b);
+    for(int bit=0;bit<8;bit++){
+        if(internal ? (faceMask&(1<<bit))==0 : ((bit>>axis)&1)!=side || (faceMask!=0&&(faceMask&(1<<bit))==0))continue;
+        int i=(bit>>a)&1,j=(bit>>b)&1;
         if((open&(1<<bit))==0 || (dry&(1<<bit))==0)continue;
         dvec2 lo=dvec2(.5LF*double(i),.5LF*double(j)),hi=lo+dvec2(.5LF);
-        if(fill>0.0LF && !plicContactRect(dvec4(normal,threshold),axis,double(side),false,lo,hi))continue;
+        if(fill>0.0LF && !plicContactRect(dvec4(normal,threshold),axis,internal?.5LF:double(side),false,lo,hi))continue;
         area+=max(0.0LF,hi.x-lo.x)*max(0.0LF,hi.y-lo.y);
     }
     return area*porosity;
@@ -489,7 +491,8 @@ void proposeDryWall(int index){
     if(gs<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)<=0l)return;
     int direction=int(words[headerWord(H_WALL_PORT_DIRECTION)+port]);
     if(direction<0 || direction>5)return;
-    double area=dryWallArea(c,direction);if(area<=0.0LF)return;
+    int internal=int(words[headerWord(H_WALL_PORT_INTERNAL_MASK)+port]);
+    double area=dryWallArea(c,direction,internal);if(area<=0.0LF)return;
     words[workField(FIELD_NEXT)+index]=atomicExchange(words[workField(FIELD_HEAD)+c],uint(index));
 }
 // Device sensible energy over a temperature interval uses the same segment tables as the caloric solver.
@@ -630,8 +633,9 @@ void exchangeSurfaces(){
         for(int port=0;port<ports;port++){
             if(int(words[headerWord(H_WALL_PORT_DEVICE)+port])!=device||int(words[headerWord(H_WALL_PORT_DIRECTION)+port])!=direction)continue;
             int node=int(words[headerWord(H_WALL_PORT_CELL)+port]);if(node<0||node>=headerWord(H_CELL_COUNT)||!activeCell(node))continue;
-            double area=dryWallArea(node,direction);if(area<=0.0LF)continue;
-            if(headerWord(H_SCREEN_FACES)>=0){int face=gridFace(node,direction);if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;
+            int internal=int(words[headerWord(H_WALL_PORT_INTERNAL_MASK)+port]);
+            double area=dryWallArea(node,direction,internal);if(area<=0.0LF)continue;
+            if((internal&256)==0&&headerWord(H_SCREEN_FACES)>=0){int face=gridFace(node,direction);if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;
                 if(readDouble(screen)>0.0LF)area*=1.0LF-clamp(readDouble(screen+2),0.0LF,1.0LF);}}
             area*=readDouble(p.header+H_CELL_SIZE)*readDouble(p.header+H_CELL_SIZE);if(area<=0.0LF)continue;
             for(int k=first;k<end;k++){

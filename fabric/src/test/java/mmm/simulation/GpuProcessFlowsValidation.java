@@ -475,7 +475,7 @@ public final class GpuProcessFlowsValidation {
     private static double counterflowWallEnergy(FluidRegion region,CommittedWorldRegistries world,IndustrialLayout layout) {
         var wallIds=layout.walls().stream().map(wall->wall.position().asLong()+"@").toList();
         return region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
-                .filter(device->device.providerId().equals(OrdinaryThermalWalls.PROVIDER)
+                .filter(device->device.providerId().equals(WorldThermalEnvironment.PROVIDER)
                         && wallIds.stream().anyMatch(device.objectId()::startsWith))
                 .mapToDouble(device->device.body().internalEnergyJ()).sum();
     }
@@ -1379,7 +1379,7 @@ public final class GpuProcessFlowsValidation {
         var wall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
                 .filter(value->value.objectId().equals(object)).findFirst().orElseThrow();
         var state=region.hostSnapshot().captureAuthoritativeState();int[] selected={11,4,1};
-        if(OrdinaryThermalWalls.ports(region,wall,world.thermalRegistry()).stream().noneMatch(port->
+        if(WorldThermalEnvironment.ports(region,wall,world.thermalRegistry()).stream().noneMatch(port->
                 port.cellX()==selected[0]&&port.cellY()==selected[1]&&port.cellZ()==selected[2]))
             throw new AssertionError("Collector is not in contact with the cold wall");
         int collector=region.grid().cell(selected[0],selected[1],selected[2]);long ethanol=0,water=0;
@@ -1473,14 +1473,14 @@ public final class GpuProcessFlowsValidation {
         var def=registry.finiteDevice(type);double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(def.thermalMaterialId()),def.bodyMassKilograms(),Map.of(),temperature);
         var body=new FiniteThermalBodyState(0,registry.fingerprint(),def.thermalMaterialId(),def.bodyMassUnits(),energy);
         var positions=excluded==null?Arrays.stream(Direction.values()).map(inside::relative)
-                .filter(p->region.footprint().boundaryBlocks().contains(p.asLong())).toList()
+                .filter(p->region.footprint().interiorBlocks().contains(p.asLong())).toList()
                 :region.sizeX()>4?List.of(region.origin().offset(5,1,0)):
-                region.footprint().boundaryBlocks().stream().map(BlockPos::of)
+                region.footprint().interiorBlocks().stream().map(BlockPos::of)
                 .sorted(Comparator.comparingDouble((BlockPos p)->p.distSqr(inside)).reversed()).toList();
         FiniteThermalDeviceState selected=null;
         for(var pos:positions){
-            var candidate=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,pos.asLong()+(excluded==null?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
-            if(!candidate.objectId().equals(excluded)&&!OrdinaryThermalWalls.ports(region,candidate,registry).isEmpty()){selected=candidate;break;}
+            var candidate=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+(excluded==null?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
+            if(!candidate.objectId().equals(excluded)&&!WorldThermalEnvironment.ports(region,candidate,registry).isEmpty()){selected=candidate;break;}
         }
         if(selected==null)throw new IllegalStateException("No exposed finite wall");
         return selected;
@@ -1492,8 +1492,8 @@ public final class GpuProcessFlowsValidation {
         var def=registry.finiteDevice(stone?"mmm:ordinary_stone_wall":"mmm:ordinary_metal_wall");
         double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(def.thermalMaterialId()),def.bodyMassKilograms(),Map.of(),temperature);
         var body=new FiniteThermalBodyState(0,registry.fingerprint(),def.thermalMaterialId(),def.bodyMassUnits(),energy);
-        var wall=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,pos.asLong()+(stone?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
-        if(OrdinaryThermalWalls.ports(region,wall,registry).isEmpty())throw new IllegalStateException("Cooling wall has no gas contact");
+        var wall=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+(stone?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
+        if(WorldThermalEnvironment.ports(region,wall,registry).isEmpty())throw new IllegalStateException("Cooling wall has no gas contact");
         return wall;
     }
     private static void installFiniteWalls(FluidRegion region,ThermalRegistry registry,List<FiniteThermalDeviceState> devices){

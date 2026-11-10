@@ -280,6 +280,40 @@ final class VulkanRegionStorage implements AutoCloseable {
             }
         }
 
+        /** Records a private generation inside another candidate's queue submission. */
+        GpuBuffer beginExternal() {
+            synchronized (VulkanRegionStorage.this) {
+                requireOpen();
+                if (released || finished || !copySource || committed != origin)
+                    throw new IllegalStateException("External candidate is not available");
+                attempted = true;
+                return slot.buffer;
+            }
+        }
+
+        /** Called after the enclosing submission reports success. */
+        void finishExternal() {
+            synchronized (VulkanRegionStorage.this) {
+                requireOpen();
+                if (released || !attempted || finished) throw new IllegalStateException("External candidate is incomplete");
+                submitted = true; finished = true; error = 0;
+            }
+        }
+
+        GpuBuffer externalBuffer() {
+            synchronized (VulkanRegionStorage.this) {
+                requireOpen();
+                if (released || !attempted || finished) throw new IllegalStateException("External candidate is incomplete");
+                return slot.buffer;
+            }
+        }
+
+        boolean canCommit() {
+            synchronized (VulkanRegionStorage.this) {
+                return !closed && !released && submitted && finished && error == 0 && committed == origin;
+            }
+        }
+
         record BatchResult(int error, ByteBuffer feedback) { }
 
         /** Writes a complete replacement into this private slot without publishing it. */

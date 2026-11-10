@@ -60,7 +60,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 				"multiple registered regions claim the requested point");
 		if (owner == null) {
 			if (outsideInterior) return absent(FluidQueryStatus.OUTSIDE_INTERIOR,
-					"point is outside the controller-owned interior");
+					"point is outside the selected volume");
 			return absent(FluidQueryStatus.NO_REGION, identityMatch == null
 					? "no matching region identity/dimension" : "point is outside the matching region");
 		}

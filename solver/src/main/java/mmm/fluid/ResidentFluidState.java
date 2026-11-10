@@ -13,6 +13,8 @@ public interface ResidentFluidState extends FluidStateAccess {
     PhysicalActivityGraph activityGraph();
     boolean hasPendingPhaseMotion(boolean[] activeCells);
     Observation observation();
+    /** Condensed inventory within two cells of the domain edge; x-/x+/y-/y+/z-/z+ bits. */
+    default int expansionDirections() { return 0; }
     InventorySummary inventorySummary();
     Display display();
     ThermalAuditLedger thermalAudit();

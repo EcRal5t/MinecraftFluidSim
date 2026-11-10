@@ -14,6 +14,11 @@ public final class HostValidationSuite {
         checks.put("mixture-edits", () -> mmm.fluid.MarkerVelocityTransferValidation.main(new String[0]));
         checks.put("region-manager", () -> mmm.simulation.FluidRegionManagerValidation.main(new String[0]));
         checks.put("shape", () -> mmm.simulation.FluidCutCellShapeValidation.main(new String[0]));
+        checks.put("environment", () -> {
+            mmm.simulation.WorldThermalProjectionValidation.main(new String[0]);
+            mmm.simulation.WorldThermalSamplingValidation.main(new String[0]);
+            mmm.simulation.persistence.EnvironmentThermalStoreValidation.main(new String[0]);
+        });
         checks.put("region-state", () -> {
             mmm.simulation.persistence.RegionRepositoryAdapterValidation.main(new String[0]);
             mmm.simulation.M7RegionChemistryPersistenceValidation.main(new String[0]);
@@ -28,7 +33,6 @@ public final class HostValidationSuite {
             mmm.simulation.CommittedEventHubValidation.main(new String[0]);
             mmm.simulation.ShellFluidQueryValidation.main(new String[0]);
         });
-        checks.put("boundary", () -> mmm.simulation.controller.FluidBoundaryScannerValidation.main(new String[0]));
         checks.put("takeover", () -> mmm.simulation.TakeoverJournalValidation.main(new String[0]));
         checks.put("containers", () -> {
             mmm.simulation.persistence.PlayerInventorySaveValidation.main(new String[0]);

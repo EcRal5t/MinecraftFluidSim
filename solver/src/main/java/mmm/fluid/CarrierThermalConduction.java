@@ -8,7 +8,7 @@ import java.util.List;
 /** Finite-volume conduction between persistent thermal owners in connected cut-cell supports. */
 final class CarrierThermalConduction {
 	private CarrierThermalConduction() { }
-	/** Physical cell faces; contact ordinals are linear cell indices. */
+	/** Exposed external and internal microfaces; contact ordinals are linear cell indices. */
 	static List<mmm.thermal.FiniteThermalExchange.Contact> finitePorts(
 			HostFluidState domain, List<FluidDomainContracts.ThermalPortRequest> requests) {
 		domain.domainFlowFields.preparePhysicalState();
@@ -23,13 +23,16 @@ final class CarrierThermalConduction {
 		var phase = domain.pressureSystem.phaseGeometry();
 		for (var request : requests) {
 			int cell = domain.domainFlowFields.cellIndexChecked(request.cellX(), request.cellY(), request.cellZ());
-            if(!domain.groupAvailable(cell))continue;
-			if (!seen.add(6L * cell + request.direction())) throw new IllegalArgumentException("Repeated thermal port face");
+            if(!domain.groupAvailable(cell) || request.wallConductivityWPerMetreK()==0)continue;
+			if (!seen.add(12L * cell + 2L * request.direction() + (request.internalFace()?1:0)))
+				throw new IllegalArgumentException("Repeated thermal port face");
 			var owners = byCell.get(cell);
 			if (owners == null) continue;
 			int axis = request.direction() / 2, side = request.direction() & 1;
 			for (int micro = 0; micro < 8; micro++) {
-				if ((micro >> axis & 1) != side || (domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) continue;
+				if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) continue;
+				if (request.openMicroMask()!=0 && (request.openMicroMask() & 1 << micro)==0) continue;
+				if (!request.internalFace() && (micro >> axis & 1)!=side) continue;
 				double[] coverage = new double[3];
 				for (int owner : owners) {
 					int support = access.supportMask(owner);
@@ -38,7 +41,8 @@ final class CarrierThermalConduction {
 				}
 				double tangent = .5 * (micro >> ((axis + 1) % 3) & 1);
 				double other = .5 * (micro >> ((axis + 2) % 3) & 1);
-				double dry = GasFaceIntersection.area(phase, cell, -1, axis, side, 0, tangent, other, .5);
+				double dry = GasFaceIntersection.area(phase, cell, micro, -1, 0, axis,
+						request.internalFace() ? .5 : side, 0, tangent, other, .5);
 				double porosity = phase.componentPoreScale(cell, micro, phase.poreVolume(cell).toDouble()
 						/ (Integer.bitCount(~domain.geometry.cutCells.mask(cell) & 255) * .125));
 				double[] area = {(.25 - dry) * porosity, dry * porosity, .25 * Math.min(1, coverage[2] / .125)};

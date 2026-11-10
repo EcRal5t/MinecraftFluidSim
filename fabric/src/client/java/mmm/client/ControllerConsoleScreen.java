@@ -43,7 +43,7 @@ public final class ControllerConsoleScreen extends Screen {
 		this(summary, null);
 	}
 	ControllerConsoleScreen(ControllerSummary summary, String failure) {
-		super(Component.translatable("screen.mmm.controller.title"));
+		super(Component.literal(summary.footprint().name()));
 		this.summary = summary;
 		this.failure = failure;
 		this.request = new Request(summary);

@@ -54,6 +54,7 @@ public final class M6OwnershipValidation {
 	public static void main(String[] args) throws Exception {
 		run("wal and committed codec strictness", M6OwnershipValidation::testCodecs);
 		run("normal acquire commits the joint state", M6OwnershipValidation::testNormalAcquire);
+		run("additional acquire recovers prior and new ownership", M6OwnershipValidation::testAdditionalAcquireRecovery);
 		run("acquire rejects a non-adjacent target generation", M6OwnershipValidation::testGenerationGuard);
 		run("crash after region prepare aborts private staging", M6OwnershipValidation::testCrashAfterPrepare);
 		run("boot removes only fully known first-publication staging", M6OwnershipValidation::testBootCleansFirstPublicationStaging);
@@ -150,6 +151,31 @@ public final class M6OwnershipValidation {
 			check(!fixture.ownershipFiles().isLocked(), "acquire kept the WAL or warning");
 			OwnershipCommitted committed = fixture.ownershipFiles().readCommitted();
 			check(committed.generation() == 1L && committed.ownedBlocks().size() == 3, "committed registry is wrong");
+		});
+	}
+
+	private static void testAdditionalAcquireRecovery() throws Exception {
+		withTemporaryWorld(root -> {
+			Fixture fixture = new Fixture(root, 2);
+			var entries = fixture.world().originalEntries();
+			var first = RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()), 1L);
+			OwnershipCoordinator.acquire(fixture.regionFiles(), fixture.ownershipFiles(), first,
+					entries.subList(0, 1), "first", fixture.world(), FailureInjector.NONE);
+			var second = RegionCheckpointFixtures.capture(populatedRegion(fixture.regionId()), 2L);
+			try {
+				OwnershipCoordinator.acquire(fixture.regionFiles(), fixture.ownershipFiles(), second,
+						entries.subList(1, 2), "second", fixture.world(), failAt(FailurePoint.AFTER_HEAD_PUBLISH, 0));
+				throw new AssertionError("Expected injected failure");
+			} catch (IOException expected) {
+				if (!expected.getMessage().contains("AFTER_HEAD_PUBLISH")) throw expected;
+			}
+			recover(fixture, FailureInjector.NONE);
+			var owned = fixture.ownershipFiles().readCommitted();
+			check(owned.generation() == 2L && owned.ownedBlocks().stream().map(OwnershipJournal.BlockEntry::packedPosition).toList()
+					.equals(entries.stream().map(OwnershipJournal.BlockEntry::packedPosition).toList()),
+					"Additional acquire did not preserve prior ownership after recovery: generation=" + owned.generation()
+							+ " positions=" + owned.ownedBlocks().stream().map(OwnershipJournal.BlockEntry::packedPosition).toList());
+			check(fixture.world().airCount() == 2, "Additional acquire did not remove the new water");
 		});
 	}
 
@@ -642,8 +668,7 @@ public final class M6OwnershipValidation {
 		}
 		BlockPos controller = new BlockPos(14, 16, 15);
 		Set<Long> chunks = Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(1, 0), ChunkPos.pack(0, 1), ChunkPos.pack(1, 1));
-		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
-				interior, Set.of(controller.asLong()), chunks);
+		FluidRegionFootprint footprint = FluidRegionFootprint.selected(origin, new BlockPos(17, 17, 17), interior, chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 

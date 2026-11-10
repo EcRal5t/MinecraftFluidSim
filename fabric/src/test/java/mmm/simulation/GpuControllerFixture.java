@@ -5,7 +5,7 @@ import mmm.fluid.BuiltinFluidMaterials;
 import mmm.item.ContainerItemMapper;
 import mmm.item.ContainerItemStacks;
 import mmm.recovery.CrossDomainRecovery;
-import mmm.simulation.controller.FluidBoundaryScanner;
+import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.simulation.persistence.ContainerJournalFileStore;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalStateFunction;
@@ -71,7 +71,7 @@ final class GpuControllerFixture {
         initializeIndustrialBlocks();
         var industrial=IndustrialLayout.at(new BlockPos(14,64,20),scenario);
         var first=industrial.ports().getFirst();
-        var shell=industrial.blocks().entrySet().stream().filter(e->mmm.block.MmmBlocks.isBoundary(e.getValue())).map(Map.Entry::getKey).toList();
+        var shell=industrial.blocks().entrySet().stream().filter(e->e.getValue().isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE,e.getKey())).map(Map.Entry::getKey).toList();
         var layout=new ControllerDemoLayout(industrial.minimum(),industrial.controller(),first.position(),first.outward(),
                 List.copyOf(industrial.blocks().keySet()),shell);
         return createLayout(startup,world,manager,operations,layout,false,false,industrial);
@@ -80,29 +80,25 @@ final class GpuControllerFixture {
     private static GpuControllerFixture createLayout(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
             FluidRegionManager manager, FluidRegionOperations operations, ControllerDemoLayout layout,
             boolean distillation, boolean crossBlock, IndustrialLayout industrial) throws IOException {
-        Set<Long> shell = new HashSet<>();
-        layout.shell().forEach(position -> shell.add(position.asLong()));
-        var worldView = new FluidBoundaryScanner.ScanWorld() {
-            public boolean isInsideBuildHeight(BlockPos p) { return p.getY() >= -64 && p.getY() < 320; }
-            public boolean isChunkLoaded(int x, int z) { return true; }
-            public boolean isBoundary(BlockPos p) { return shell.contains(p.asLong()); }
-        };
-        var scan = FluidBoundaryScanner.scan(layout.controller(), worldView, 512);
-        if (!scan.succeeded()) throw new IllegalStateException("controller scan: " + scan.failure());
+        int maxX = layout.occupied().stream().mapToInt(BlockPos::getX).max().orElseThrow();
+        int maxY = layout.occupied().stream().mapToInt(BlockPos::getY).max().orElseThrow();
+        int maxZ = layout.occupied().stream().mapToInt(BlockPos::getZ).max().orElseThrow();
+        var footprint = FluidRegionFootprint.box(layout.minimum(), new BlockPos(maxX, maxY, maxZ));
         var dimension = ResourceKey.create(Registries.DIMENSION, Identifier.fromNamespaceAndPath("mmm", "gpu_controller"));
-        var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false, world,
+        var result = RegionCreation.create(manager, dimension, footprint, true, false, world,
                 () -> null, candidate -> {
-                    if (distillation) installDistillationWalls(candidate, crossBlock ? 6 : 0);
                     if (industrial != null) installIndustrialGeometry(candidate,industrial);
+                    else installShellGeometry(candidate, layout);
+                    if (distillation) installDistillationWalls(candidate, crossBlock ? 6 : 0);
                     world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep());
                 },
                 operations::checkpoint);
         if (result.failure() != null) throw new IllegalStateException("controller creation: " + result.failure());
         FluidRegion region = result.region();
         if(industrial!=null && region.hasThermalState()) {
-            new OrdinaryThermalWalls(world.thermalRegistry(),new ThermalBoundaryResolver(world.thermalRegistry()))
-                    .refresh(region,FluidRegionFactory.CELLS_PER_BLOCK,industrial.blocks());
-            IndustrialWorkbench.initializeThermal(region,industrial,world.thermalRegistry());
+            var environment=new WorldThermalEnvironment(manager.solverBackend(),world,manager);
+            environment.refresh(region,FluidRegionFactory.CELLS_PER_BLOCK,industrial.blocks());
+            IndustrialWorkbench.initializeThermal(region,industrial,world.thermalRegistry(),environment);
             attachOrdinaryWallPorts(region,world.thermalRegistry());
         }
         var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension, layout.port(),
@@ -116,6 +112,19 @@ final class GpuControllerFixture {
         var transactions = new MinecraftContainerTransactionAdapter(manager, operations, recovery,
                 world.profile().profileFingerprint(), world.thermalRegistryFingerprint());
         return new GpuControllerFixture(region, cell, transactions, recovery, journal, actor, world);
+    }
+
+    private static void installShellGeometry(FluidRegion region, ControllerDemoLayout layout) {
+        var host = region.editableHost();
+        int scale = FluidRegionFactory.CELLS_PER_BLOCK;
+        byte[] masks = MinecraftCollisionWorldPort.sampleBlockMasks(net.minecraft.world.phys.shapes.Shapes.block(), scale);
+        for (BlockPos position : layout.shell()) {
+            int bx = (position.getX() - region.origin().getX()) * scale;
+            int by = (position.getY() - region.origin().getY()) * scale;
+            int bz = (position.getZ() - region.origin().getZ()) * scale;
+            for (int z = 0; z < scale; z++) for (int y = 0; y < scale; y++) for (int x = 0; x < scale; x++)
+                host.setSolidMicroMask(bx + x, by + y, bz + z, masks[(z * scale + y) * scale + x] & 255);
+        }
     }
 
     private static void installIndustrialGeometry(FluidRegion region,IndustrialLayout layout) {
@@ -164,15 +173,15 @@ final class GpuControllerFixture {
     private static void installDistillationWalls(FluidRegion region, int shift) {
         var host = region.editableHost();
         // A hot pool and a one-cell gas passage connect to a separately supported cold film.
-        for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < region.sizeX(); x++) {
+        for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < region.sizeX() - 4; x++) {
             boolean hotPool = x >= shift && x < shift + 2 && y < 4 && z < 2;
             boolean gasPassage = x >= shift && y == 4 && z == 1;
-            if (!hotPool && !gasPassage) host.setSolid(x, y, z, true);
+            if (!hotPool && !gasPassage) host.setSolid(x + 2, y + 2, z + 2, true);
         }
     }
 
     /** The offline Java launcher performs vanilla bootstrap without Fabric's registry setup. */
-    private static synchronized void initializeItems() {
+    static synchronized void initializeItems() {
         if (componentsInitialized) return;
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();
@@ -187,7 +196,7 @@ final class GpuControllerFixture {
 		initializeContainerDefaults();
 		componentsInitialized = true;
 	}
-	private static synchronized void initializeIndustrialBlocks() {
+	static synchronized void initializeIndustrialBlocks() {
 		if(industrialBlocksInitialized)return;
 		try {
 			registerOffline(net.minecraft.core.registries.BuiltInRegistries.BLOCK, true, () -> {
@@ -224,7 +233,7 @@ final class GpuControllerFixture {
         var attached=new java.util.ArrayList<mmm.fluid.FluidStateAccess.DevicePort>();
         var connections=new java.util.ArrayList<int[]>();
         for(var device:region.finiteThermalDevices(registry.fingerprint()).devices()) {
-            var ports=OrdinaryThermalWalls.ports(region,device,registry);
+            var ports=WorldThermalEnvironment.ports(region,device,registry);
             attached.addAll(ports.stream().map(port->new mmm.fluid.FluidStateAccess.DevicePort(device.providerId(),device.objectId(),port)).toList());
             connections.add(ports.stream().mapToInt(port->region.grid().cell(port.cellX(),port.cellY(),port.cellZ())).distinct().toArray());
         }

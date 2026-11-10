@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    "IGI",
+    "GGG",
+    "IGI"
+  ],
+  "key": {
+    "I": "mmm:insulation",
+    "G": "minecraft:glass"
+  },
+  "result": {
+    "id": "mmm:insulating_glass",
+    "count": 8
+  }
+}

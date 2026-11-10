@@ -17,11 +17,11 @@ import net.minecraft.world.level.material.MapColor;
 import java.util.Set;
 import java.util.function.Function;
 
-/** Visible controller shell blocks. Registration does not enable controller activation. */
+/** Material blocks and simulation devices. */
 public final class MmmBlocks {
-	public static final Block FLUID_BOUNDARY = register("fluid_boundary", Block::new);
+	public static final Block INSULATION = register("insulation", Block::new);
+	public static final Block INSULATING_GLASS = register("insulating_glass", Block::new);
 	public static final Block FLUID_PORT = register("fluid_port", FluidPortBlock::new);
-	public static final Block FLUID_CONTROLLER = register("fluid_controller", FluidControllerBlock::new);
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
 	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
 	public static final Block MECHANICAL_DRIVER = register("mechanical_driver", MechanicalDriverBlock::new);
@@ -52,23 +52,17 @@ public final class MmmBlocks {
 		// Loading this class performs the static block, item, and block-entity registrations.
 	}
 
-	public static boolean isBoundary(BlockState state) {
-		return state.is(FLUID_BOUNDARY) || state.is(FLUID_PORT) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER) || state.is(MECHANICAL_DRIVER) || state.is(PROCESS_SENSOR);
-	}
 
 	private static Block register(String path, Function<BlockBehaviour.Properties, Block> factory) {
 		Identifier identifier = MmmMod.id(path);
 		ResourceKey<Block> blockKey = ResourceKey.create(Registries.BLOCK, identifier);
+		BlockBehaviour.Properties properties = BlockBehaviour.Properties.of()
+				.mapColor(MapColor.METAL).noOcclusion().strength(5.0F, 6.0F).sound(SoundType.METAL).setId(blockKey);
+		if (!path.equals("insulation") && !path.equals("insulating_glass")) properties.requiresCorrectToolForDrops();
 		Block block = Registry.register(
 				BuiltInRegistries.BLOCK,
 				blockKey,
-				factory.apply(BlockBehaviour.Properties.of()
-						.mapColor(MapColor.METAL)
-						.noOcclusion()
-						.requiresCorrectToolForDrops()
-						.strength(5.0F, 6.0F)
-						.sound(SoundType.METAL)
-						.setId(blockKey))
+				factory.apply(properties)
 		);
 		ResourceKey<Item> itemKey = ResourceKey.create(Registries.ITEM, identifier);
 		Item.Properties itemProperties = new Item.Properties().setId(itemKey).useBlockDescriptionPrefix();

@@ -11,7 +11,7 @@ import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
 
-/** Full-collision controller shell slot; FACING points outward toward its container connection. */
+/** Full-collision container wall; FACING points outward toward its container connection. */
 public final class FluidPortBlock extends Block implements net.minecraft.world.level.block.EntityBlock {
 	public static final EnumProperty<Direction> FACING=BlockStateProperties.FACING;
 	FluidPortBlock(BlockBehaviour.Properties properties) {

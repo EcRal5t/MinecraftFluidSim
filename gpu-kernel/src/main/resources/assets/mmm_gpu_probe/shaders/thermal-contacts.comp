@@ -148,14 +148,15 @@ ivec3 shape(){return gridShape();}
 ivec3 xyz(int cell){return gridPosition(cell);}
 int neighbor(int cell,int axis,int side){return gridNeighbor(cell,2*axis+side);}
 int macFace(int cell,int axis,int side){return gridFace(cell,2*axis+side);}
-double wetPort(int cell,int bit,int axis,int side){
+double wetPortAt(int cell,int bit,int axis,double coordinate){
  if(headerWord(H_PLIC_PLANES)<0)return .25LF;
  double fill=readDouble(headerWord(H_PLIC_CELLS)+8*cell+6);
  if(fill<=0.0)return 0.0;if(fill>=1.0)return .25LF;
  int base=headerWord(H_PLIC_PLANES)+8*cell;
  dvec4 plane=dvec4(readDouble(base),readDouble(base+2),readDouble(base+4),readDouble(base+6));
- return plicWetPort(plane,axis,double(side),bit);
+ return plicWetPort(plane,axis,coordinate,bit);
 }
+double wetPort(int cell,int bit,int axis,int side){return wetPortAt(cell,bit,axis,double(side));}
 double sameConductance(int point,int q){
  int owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),other=int(words[workField(FIELD_SAMPLE_OWNER)+q]);int overlap=bitCount(words[workField(FIELD_SAMPLE_MASK)+point]&words[workField(FIELD_SAMPLE_MASK)+q]);
  if(owner==other)return 0.0;
@@ -224,22 +225,22 @@ double bathConductance(int point,int axis,int side){
 double deviceConductance(int point,int port){
  int mask=int(words[workField(FIELD_SAMPLE_MASK)+point]),owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),fam=family(owner);
  double k=readDouble(workField(FIELD_OWNER_K)+2*owner);if(k==0.0)return 0.0;
- int direction=int(words[headerWord(H_PORT_DIRECTION)+port]),axis=direction/2,side=direction&1;double area=0.0,fp=fraction(point);
- for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0){
+ int direction=int(words[headerWord(H_PORT_DIRECTION)+port]),axis=direction/2,side=direction&1,code=int(words[headerWord(H_PORT_INTERNAL_MASK)+port]),faceMask=code&255;bool internal=(code&256)!=0;double area=0.0,fp=fraction(point);
+ for(int bit=0;bit<8;bit++)if((internal?(faceMask&(1<<bit))!=0:((bit>>axis)&1)==side&&(faceMask==0||(faceMask&(1<<bit))!=0))&&(mask&(1<<bit))!=0){
   double factor=readDouble(workField(FIELD_COVERAGE)+2*(8*headerWord(H_CELL_COUNT)+24*port+8*fam+bit));
   if(factor>=0.0)area+=factor*fp;
-  else{int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]);double covered=-factor,wet=wetPort(cell,bit,axis,side),dry=.25LF-wet,pore=headerWord(H_PLIC_CELLS)<0?.125LF*double(bitCount(uint(openMask(cell)))):readDouble(headerWord(H_PLIC_CELLS)+8*cell+4);
+  else{int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]);double covered=-factor,wet=wetPortAt(cell,bit,axis,internal?.5LF:double(side)),dry=.25LF-wet,pore=headerWord(H_PLIC_CELLS)<0?.125LF*double(bitCount(uint(openMask(cell)))):readDouble(headerWord(H_PLIC_CELLS)+8*cell+4);
    double porosity=pore/(.125LF*double(bitCount(uint(openMask(cell))))),physical=fam==0?wet*porosity:fam==1?dry*porosity:.25LF*min(1.0LF,covered/.125LF);
    area+=physical*(fp*.125LF)/covered;
   }
  }
- if(headerWord(H_SCREEN_FACES)>=0){int cell=int(words[headerWord(H_PORT_CELL)+port]),face=gridFace(cell,direction);
+ if(!internal&&headerWord(H_SCREEN_FACES)>=0){int cell=int(words[headerWord(H_PORT_CELL)+port]),face=gridFace(cell,direction);
   if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;if(readDouble(screen)>0.0LF)area*=1.0LF-clamp(readDouble(screen+2),0.0LF,1.0LF);}}
  double film=readDouble(headerWord(H_PORT_FILM_THICKNESS)+2*port);
  if(fam==0 && area>0.0LF){
   int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]),wall=headerWord(H_PLIC_WALL_GEOMETRY);
-  double wet=wall<0?0.0LF:readDouble(wall+2*(12*cell+2*direction));
-  double inverseDistance=wall<0?0.0LF:readDouble(wall+2*(12*cell+2*direction+1));
+  double wet=wall<0||internal?0.0LF:readDouble(wall+2*(12*cell+2*direction));
+  double inverseDistance=wall<0||internal?0.0LF:readDouble(wall+2*(12*cell+2*direction+1));
   if(wet>0.0LF && inverseDistance>0.0LF)film=cellSize()*wet/inverseDistance;
   else {
    double volume=.125LF*double(bitCount(uint(mask)))*fp;
@@ -263,14 +264,14 @@ void projectContactGeometry(int id){
   writeDouble(base+8,reciprocal&&isFinite(sum)?sum:-1.0);
  }
  if(id<livePorts()){
-  int cell=int(words[headerWord(H_PORT_CELL)+id]),direction=int(words[headerWord(H_PORT_DIRECTION)+id]),axis=direction/2,side=direction&1,open=bitCount(uint(openMask(cell)));
+  int cell=int(words[headerWord(H_PORT_CELL)+id]),direction=int(words[headerWord(H_PORT_DIRECTION)+id]),axis=direction/2,side=direction&1,code=int(words[headerWord(H_PORT_INTERNAL_MASK)+id]),faceMask=code&255,open=bitCount(uint(openMask(cell)));bool internal=(code&256)!=0;
   double pore=headerWord(H_PLIC_CELLS)<0?.125LF*double(open):readDouble(headerWord(H_PLIC_CELLS)+8*cell+4),porosity=open==0?0.0:pore/(.125LF*double(open));
   for(int bit=0;bit<8;bit++){
    int base=workField(FIELD_COVERAGE)+2*(8*headerWord(H_CELL_COUNT)+24*id+bit);
    double liquid=readDouble(base),gas=readDouble(base+16),solid=readDouble(base+32);
    double liquidWeight=0.0,gasWeight=0.0,solidWeight=0.0;
-   if(((bit>>axis)&1)==side&&open>0){
-    double wet=wetPort(cell,bit,axis,side),dry=.25LF-wet;
+   if((internal?(faceMask&(1<<bit))!=0:((bit>>axis)&1)==side&&(faceMask==0||(faceMask&(1<<bit))!=0))&&open>0){
+    double wet=wetPortAt(cell,bit,axis,internal?.5LF:double(side)),dry=.25LF-wet;
     if(liquid>0.0){liquidWeight=wet*porosity*.125LF/liquid;if(!isFinite(liquidWeight))liquidWeight=-liquid;}
     if(gas>0.0){gasWeight=dry*porosity*.125LF/gas;if(!isFinite(gasWeight))gasWeight=-gas;}
     if(solid>0.0){solidWeight=(.25LF*min(1.0LF,solid/.125LF))*.125LF/solid;if(!isFinite(solidWeight))solidWeight=-solid;}
