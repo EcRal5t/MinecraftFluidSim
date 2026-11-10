@@ -187,10 +187,17 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         var result = new VulkanLiquidStateLayout.Column(align(cursor[0], alignment), count, width);
         cursor[0] = Math.addExact(result.offset(), result.bindingBytes());return result;
     }
+    static String caloricShader() {
+        try (var input = VulkanGasThermodynamics.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/gas-caloric.glsl")) {
+            if (input == null) throw new IllegalStateException("Gas caloric shader missing");
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException failure) { throw new IllegalStateException("Gas caloric shader unavailable", failure); }
+    }
     private static String shader() {
         try (var input = VulkanGasThermodynamics.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp")) {
             if (input == null) throw new IllegalStateException("Gas thermodynamics shader missing");
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout());
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout())
+                    .replace("// GAS_CALORIC_LIBRARY", caloricShader());
         } catch (IOException failure) { throw new IllegalStateException("Gas thermodynamics shader unavailable", failure); }
     }
     @Override public void close() { bindings.close(); }

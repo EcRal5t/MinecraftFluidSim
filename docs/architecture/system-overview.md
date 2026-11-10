@@ -158,7 +158,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 液体输运按来源温度、各份实际质量与组成分配携带内能；液体热容由载体材料曲线和质量决定。导热、反应和相变按完整请求时长执行，共用输运后的接触几何。导热以载体有限热容和接触热导计算成对热量，流体与有限墙的两端使用同一接受量；高刚性接触会减慢趋近平衡的速度。
 
-相转换共用液相候选行，按精确库存接受完整物种批次，为残余物种保留实际质量和体积，并保存实际物料和能量账。气液接触合并录制局部提案与交换，每批依据已接受库存计算共同压力，湿面与干壁复用同一状态方程。各阶段更新组成、温度和局部热力学状态，提交前统一重建相形状。
+相转换共用液相候选行，按精确库存接受完整物种批次，为残余物种保留实际质量和体积，并保存实际物料和能量账。气液接触合并录制局部提案与交换，每条规则依据已接受库存和内能计算当前温度、热容与共同压力；传质响应包含组成和潜热的温度反馈，湿面与干壁复用同一状态方程。各阶段更新组成、温度和局部热力学状态，提交前统一重建相形状。
 
 机械能结算后交接目标面数据，使扩散的面惯量与动量保持同代。独立热步沿用同一候选与提交协议，相变产生的待位移状态交给后续力学处理。算法与尺度见[流体求解](fluid-solver.md)、[气体](gas-state.md)和[热学](thermal-state.md)。
 
@@ -183,7 +183,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)、[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：实际组成的热载体、接触热导、成对有限热交换与反应。
 - [FixedSurfaceState](../../model/src/main/java/mmm/thermal/FixedSurfaceState.java)、[SurfaceMaterialDefinition](../../model/src/main/java/mmm/thermal/SurfaceMaterialDefinition.java)、[SurfaceThermalState](../../model/src/main/java/mmm/thermal/SurfaceThermalState.java)：固定表面库存、数据定义与有限墙温度；[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java) 结算实际吸附与解吸，[VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java) 应用接触催化。
 - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidThermodynamics.java)、[liquid-caloric-state.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-caloric-state.glsl)：载体分段热容和温度反演，供库存与扩散携能共用。
-- [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasThermodynamics.java)、[gas-thermodynamics.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp)：气体组成物性和分段温度反演；组成改变时完整求值，纯内能变化复用当前热容段，跨段时执行相同的完整求值。
+- [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasThermodynamics.java)、[gas-thermodynamics.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp)、[gas-caloric.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-caloric.glsl)：气体组成物性和共享分段温度反演；热状态发布与相间传质从实际库存和内能求值，纯内能变化复用当前热容段，跨段时执行完整反演。
 - [VulkanLiquidDiffusion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidDiffusion.java)、[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java)：同相扩散，以及 Henry 与多挥发组分共用的有限速率气液交换；[mixture-pressure-eos.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/mixture-pressure-eos.glsl) 统一局部混合状态和相变接受批次的压力求值。
 - [VulkanSolidLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSolidLiquidReactions.java)、[VulkanCondensedPhaseChange](../../gpu-kernel/src/main/java/mmm/gpu/VulkanCondensedPhaseChange.java)：颗粒溶解析出和凝固融化，沿同一库存、动量和内能候选提交。
 - [ChemicalReaction](../../model/src/main/java/mmm/chemistry/ChemicalReaction.java)、[ChemicalRegistry](../../model/src/main/java/mmm/chemistry/ChemicalRegistry.java)、[VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java)：计量定义、温度相关正逆动力学、共同反应物竞争与内能结算。`runGpuLiquidReactionsValidation` 覆盖快速反应、竞争、可逆平衡、温度反馈和小量进度恢复。

@@ -54,19 +54,12 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             return transport.entity.result(bytes.flip(),region.bodyConfiguration(targetBodyState),work);
         }
         VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions) {
-            this(region,liquid,definitions,region.granularConfiguration==null?0:region.granularConfiguration.contactCapacity());
-        }
-        VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,int contactCapacity) {
-            this(region,liquid,definitions,contactCapacity,0);
-        }
-        VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,int contactCapacity,int thermalContactCapacity) {
-            this(region,liquid,definitions,contactCapacity,thermalContactCapacity,0);
-        }
-        VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,int contactCapacity,int thermalContactCapacity,int thermalBathCapacity) {
-            this(region,liquid,definitions,contactCapacity,thermalContactCapacity,thermalBathCapacity,region.initialGranularReserves!=null?region.initialGranularReserves:region.granularConfiguration==null?null:new GranularReserves(Math.max(1,2*region.granularConfiguration.initial().particles().size()),Math.max(1,2*region.granularConfiguration.initial().deposits().size()),Math.max(1,2*region.granularConfiguration.speciesCapacity())));
-        }
-        VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,int contactCapacity,int thermalContactCapacity,int thermalBathCapacity,GranularReserves granularReserves){
-            this(region,liquid,definitions,contactCapacity,thermalContactCapacity,thermalBathCapacity,granularReserves,region.coherentConfiguration==null?0:region.coherentConfiguration.speciesCount());
+            this(region,liquid,definitions,region.granularConfiguration==null?0:region.granularConfiguration.contactCapacity(),0,0,
+                    region.initialGranularReserves!=null?region.initialGranularReserves:region.granularConfiguration==null?null:
+                            new GranularReserves(Math.max(1,2*region.granularConfiguration.initial().particles().size()),
+                                    Math.max(1,2*region.granularConfiguration.initial().deposits().size()),
+                                    Math.max(1,2*region.granularConfiguration.speciesCapacity())),
+                    region.coherentConfiguration==null?0:region.coherentConfiguration.speciesCount());
         }
         VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,int contactCapacity,int thermalContactCapacity,int thermalBathCapacity,GranularReserves granularReserves,int coherentSpeciesCapacity){
             this.region=region;

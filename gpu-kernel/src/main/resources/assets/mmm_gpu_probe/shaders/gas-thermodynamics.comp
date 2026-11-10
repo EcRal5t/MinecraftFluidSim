@@ -44,132 +44,9 @@ bool isFinite(double value) {
 void reportInvalid() {
     atomicOr(errors, ERROR_INVALID_STATE);
 }
-void addCompensated(inout double sum, inout double correction, double value) {
-    precise double adjusted = value - correction;
-    precise double next = sum + adjusted;
-    correction = (next - sum) - adjusted;
-    sum = next;
-}
-bool inventory(int node, out int first, out int last, out double anchor, out double mass, out double r,
-               out double hotCapacity,out double coldCapacity,out double hotBoundary,out double coldBoundary) {
-    first = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node]);
-    last = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
-    int components = int(words[gasField(GAS_COUNTS) + 1]), species = int(words[gasField(GAS_COUNTS) + 2]);
-    if (first < 0 || last < first || last > components) {
-        reportInvalid();
-        return false;
-    }
-    anchor = 0.0;
-    hotCapacity=0.0LF;coldCapacity=0.0LF;
-    hotBoundary=packDouble2x32(uvec2(0u,0x7ff00000u));
-    coldBoundary=readDouble(p.header+GAS_H_MINIMUM_TEMPERATURE);
-    double correction = 0.0,hotCorrection=0.0LF,coldCorrection=0.0LF;
-    double standardTemperature=readDouble(p.header+GAS_H_STANDARD_TEMPERATURE);
-    int64_t totalMass = int64_t(0), totalNanos = int64_t(0);
-    for (int component = first; component < last; component++) {
-        int64_t componentMass = readInt64(gasField(GAS_MASS_UNITS) + 2 * component),
-                nanos = readInt64(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * component);
-        if (componentMass == int64_t(0) && nanos == int64_t(0))
-            continue;
-        int handle = int(words[gasField(GAS_COMPONENT_HANDLES) + component]);
-        if (handle < 0 || handle >= headerWord(GAS_H_COMPONENT_COUNT)) {
-            reportInvalid();
-            return false;
-        }
-        int begin = int(words[headerWord(GAS_H_SEGMENT_OFFSETS) + handle]),
-            end = int(words[headerWord(GAS_H_SEGMENT_OFFSETS) + handle + 1]);
-        double reference = readDouble(headerWord(GAS_H_ANCHOR_ENERGY) + 2 * handle);
-        if (begin == end || !isFinite(reference) || componentMass <= int64_t(0) || nanos <= int64_t(0) ||
-            componentMass > int64_t(0x7fffffffffffffffUL) - totalMass ||
-            nanos > int64_t(0x7fffffffffffffffUL) - totalNanos) {
-            reportInvalid();
-            return false;
-        }
-        totalMass += componentMass;
-        totalNanos += nanos;
-        double componentKg=double(componentMass)*1e-10LF;
-        addCompensated(anchor, correction, componentKg * reference);
-        int hot=begin;
-        while(hot+1<end && standardTemperature>=readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*hot))hot++;
-        int cold=hot;
-        if(hot>begin && standardTemperature==readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*(hot-1)))cold--;
-        addCompensated(hotCapacity,hotCorrection,componentKg*readDouble(headerWord(GAS_H_SEGMENT_CAPACITY)+2*hot));
-        addCompensated(coldCapacity,coldCorrection,componentKg*readDouble(headerWord(GAS_H_SEGMENT_CAPACITY)+2*cold));
-        if(hot+1<end)hotBoundary=min(hotBoundary,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*hot));
-        if(cold>begin)coldBoundary=max(coldBoundary,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*(cold-1)));
-        int speciesBegin = int(words[gasField(GAS_COMPONENT_SPECIES_OFFSETS) + component]),
-            speciesEnd = int(words[gasField(GAS_COMPONENT_SPECIES_OFFSETS) + component + 1]);
-        if (speciesBegin < 0 || speciesEnd < speciesBegin || speciesEnd > species) {
-            reportInvalid();
-            return false;
-        }
-        for (int entry = speciesBegin; entry < speciesEnd; entry++) {
-            int64_t amount = readInt64(gasField(GAS_SPECIES_AMOUNTS) + 2 * entry);
-            if (amount == int64_t(0))
-                continue;
-            int speciesHandle = int(words[gasField(GAS_SPECIES_HANDLES) + entry]);
-            if (amount < int64_t(0) || speciesHandle < 0 || speciesHandle >= headerWord(GAS_H_SPECIES_STRIDE)) {
-                reportInvalid();
-                return false;
-            }
-            double offset = readDouble(headerWord(GAS_H_SPECIES_REFERENCE) + 2 * (handle * headerWord(GAS_H_SPECIES_STRIDE) + speciesHandle));
-            if (!isFinite(offset)) {
-                reportInvalid();
-                return false;
-            }
-            addCompensated(anchor, correction, double(amount) * offset);
-        }
-    }
-    if (totalMass == int64_t(0) && totalNanos == int64_t(0))
-        first = last;
-    mass = double(totalMass) * 1e-10LF;
-    r = double(totalNanos) * readDouble(p.header + GAS_H_PRESSURE_FACTOR);
-    if (!isFinite(anchor) || !isFinite(mass) || !isFinite(r)) {
-        reportInvalid();
-        return false;
-    }
-    return true;
-}
-// The union of material segment endpoints is traversed implicitly. Each iteration
-// advances to the next real caloric endpoint, so there is no numerical iteration cap.
-double capacityAndBoundary(int first, int last, double temperature, bool heating, out double boundary) {
-    boundary = heating ? packDouble2x32(uvec2(0u, 0x7ff00000u)) : readDouble(p.header + GAS_H_MINIMUM_TEMPERATURE);
-    double capacity = 0.0, correction = 0.0;
-    for (int component = first; component < last; component++) {
-        if (readInt64(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * component) == int64_t(0))
-            continue;
-        int handle = int(words[gasField(GAS_COMPONENT_HANDLES) + component]);
-        int begin = int(words[headerWord(GAS_H_SEGMENT_OFFSETS) + handle]),
-            end = int(words[headerWord(GAS_H_SEGMENT_OFFSETS) + handle + 1]), segment = begin;
-        while (segment + 1 < end) {
-            double upper = readDouble(headerWord(GAS_H_SEGMENT_UPPER) + 2 * segment);
-            if (heating ? temperature < upper : temperature <= upper)
-                break;
-            segment++;
-        }
-        double cp = readDouble(headerWord(GAS_H_SEGMENT_CAPACITY) + 2 * segment),
-               mass = double(readInt64(gasField(GAS_MASS_UNITS) + 2 * component)) * 1e-10LF;
-        addCompensated(capacity, correction, mass * cp);
-        if (heating && segment + 1 < end)
-            boundary = min(boundary, readDouble(headerWord(GAS_H_SEGMENT_UPPER) + 2 * segment));
-        else if (!heating && segment > begin)
-            boundary = max(boundary, readDouble(headerWord(GAS_H_SEGMENT_UPPER) + 2 * (segment - 1)));
-    }
-    return capacity;
-}
-void segmentBounds(int first,int last,double temperature,out double lower,out double upper){
-    lower=readDouble(p.header+GAS_H_MINIMUM_TEMPERATURE);
-    upper=packDouble2x32(uvec2(0u,0x7ff00000u));
-    for(int component=first;component<last;component++){
-        if(readInt64(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component)==int64_t(0))continue;
-        int handle=int(words[gasField(GAS_COMPONENT_HANDLES)+component]);
-        int begin=int(words[headerWord(GAS_H_SEGMENT_OFFSETS)+handle]);
-        int end=int(words[headerWord(GAS_H_SEGMENT_OFFSETS)+handle+1]),segment=begin;
-        while(segment+1<end && temperature>=readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*segment))segment++;
-        if(segment>begin)lower=max(lower,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*(segment-1)));
-        if(segment+1<end)upper=min(upper,readDouble(headerWord(GAS_H_SEGMENT_UPPER)+2*segment));
-    }
-}
+int gasCaloricHeader() { return p.header; }
+int64_t gasCaloricReadInt64(int at) { return readInt64(at); }
+// GAS_CALORIC_LIBRARY
 void publishCaloric(int outputOffset,double volume,double temperature,double mass,double r,double capacity){
     double pressure = GAS_MIXTURE_LIMIT * r * temperature / (GAS_MIXTURE_BULK * volume + r * temperature), density = mass / volume,
            gamma = headerWord(GAS_H_ISOTHERMAL) != 0 ? 1.0 : 1.0 + r / capacity;
@@ -231,7 +108,7 @@ void derive(int node) {
     }
     int first, last;
     double anchor, mass, r,hotCapacity,coldCapacity,hotBoundary,coldBoundary;
-    if (!inventory(node, first, last, anchor, mass, r,hotCapacity,coldCapacity,hotBoundary,coldBoundary))
+    if (!gasCaloricInventory(node, first, last, anchor, mass, r,hotCapacity,coldCapacity,hotBoundary,coldBoundary))
         return;
     double temperature = readDouble(p.header + GAS_H_STANDARD_TEMPERATURE);
     if (first == last) {
@@ -251,45 +128,13 @@ void derive(int node) {
         energy = anchor;
         writeDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node, anchor);
     }
-    double residual = energy - anchor;
-    if (!isFinite(residual)) {
-        reportInvalid();
-        return;
-    }
-    bool heating = residual >= 0.0;
-    double remaining=abs(residual),capacity=heating?hotCapacity:coldCapacity,
-           boundary=heating?hotBoundary:coldBoundary;
-    while (true) {
-        if (!(isFinite(capacity) && capacity > 0.0)) {
-            reportInvalid();
-            return;
-        }
-        double step=remaining/capacity,previous=temperature;
-        double span=heating?boundary-temperature:temperature-boundary;
-        if(step<=span){
-            temperature+=heating?step:-step;
-            // The reported endpoint derivative belongs to the upper-temperature segment.
-            if((heating && isFinite(boundary) && temperature>=boundary) || (!heating && temperature==previous))
-                capacity=capacityAndBoundary(first,last,temperature,true,boundary);
-            break;
-        }
-        if (!(span > 0.0 && isFinite(span))) {
-            reportInvalid();
-            return;
-        }
-        remaining-=span*capacity;
-        temperature=boundary;
-        capacity=capacityAndBoundary(first,last,temperature,heating,boundary);
-    }
-    if (!isFinite(temperature) || temperature < readDouble(p.header + GAS_H_MINIMUM_TEMPERATURE)) {
-        reportInvalid();
-        return;
-    }
+    double capacity;
+    if (!gasCaloricInvert(first,last,anchor,energy,hotCapacity,coldCapacity,hotBoundary,coldBoundary,temperature,capacity)) return;
     double standard=readDouble(p.header+GAS_H_STANDARD_TEMPERATURE),lower,upper;
     if(temperature>=coldBoundary && temperature<hotBoundary){
         lower=temperature>=standard?standard:coldBoundary;
         upper=temperature>=standard?hotBoundary:standard;
-    } else segmentBounds(first,last,temperature,lower,upper);
+    } else gasCaloricSegmentBounds(first,last,temperature,lower,upper);
     writeDouble(cache,energy);writeDouble(cache+2,mass);writeDouble(cache+4,lower);writeDouble(cache+6,upper);
     publishCaloric(outputOffset,volume,temperature,mass,r,capacity);
 }
