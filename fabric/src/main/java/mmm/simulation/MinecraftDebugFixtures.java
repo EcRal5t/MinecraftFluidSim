@@ -121,7 +121,7 @@ public final class MinecraftDebugFixtures {
 
 		ControllerActivation activation;
 		try {
-			activation = runtime.activateController(player, layout.minimum(), layout.minimum().offset(3, 3, 3));
+			activation = runtime.activateController(player, layout.minimum(), layout.maximum());
 		} catch (RuntimeException failure) {
 			// An unchecked activation failure may have reached persistent region-state. Keep the
 			// visible shell so recovery never has to guess whether removing it is safe.

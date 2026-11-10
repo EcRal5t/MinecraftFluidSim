@@ -304,7 +304,7 @@
   "screen.mmm.trend.gap": "Gap",
   "screen.mmm.controller.inventory": "Inventory",
   "screen.mmm.controller.liquid": "Liquid",
-  "screen.mmm.controller.gas": "Gas",
+  "screen.mmm.controller.gas": "Gas (standard)",
   "screen.mmm.controller.granular": "Granular solid",
   "screen.mmm.controller.coherent": "Coherent solid",
   "screen.mmm.controller.temperature": "Temperature",

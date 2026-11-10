@@ -28,9 +28,14 @@ public final class DebugDiagnosticsValidation {
         check(DebugLayout.readingLimit(8, 3, false, true, true) == 2, "reserve event rows below readings");
         check(DebugLayout.page(20, 3, 0).equals(new DebugLayout.Page(17, 20, 0)), "latest event page");
         check(DebugLayout.page(20, 3, 100).equals(new DebugLayout.Page(0, 3, 17)), "oldest event page");
+        var newest = DebugLayout.page(20, 3, 0);
+        var previous = DebugLayout.page(20, 3, 1);
+        check(previous.end() >= newest.start() && previous.start() < newest.start(), "adjacent pages retain context");
         check(DebugLayout.page(2, 5, 5).equals(new DebugLayout.Page(0, 2, 0)), "short event history");
         var wrapped = DebugLayout.wrap("abcd ef\nxyz", 4, (text, width) -> text.substring(0, Math.min(text.length(), width)));
         check(wrapped.equals(java.util.List.of("abcd", "ef", "xyz")), "wrapped event text");
+        var words = DebugLayout.wrap("step residual 0.1234", 12, (text, width) -> text.substring(0, Math.min(text.length(), width)));
+        check(words.equals(java.util.List.of("step", "residual", "0.1234")), "readings wrap between words");
     }
     private static void check(boolean condition, String name) { if (!condition) throw new AssertionError(name); }
 }

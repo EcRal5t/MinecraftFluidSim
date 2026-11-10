@@ -254,7 +254,7 @@ public final class DemoWorkbench {
 		var footprint = region.footprint();
         return footprint.kind() == mmm.model.region.RegionGeometry.RegionKind.SELECTED
                 && footprint.minimumInterior().equals(layout.minimum())
-                && footprint.maximumInterior().equals(layout.minimum().offset(3, 3, 3));
+                && footprint.maximumInterior().equals(layout.maximum());
 	}
 
 	private void persist() throws java.io.IOException {

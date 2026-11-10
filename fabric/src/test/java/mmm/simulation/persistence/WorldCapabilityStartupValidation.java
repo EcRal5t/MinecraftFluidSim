@@ -29,6 +29,7 @@ public final class WorldCapabilityStartupValidation {
 		full = definitions(EnumSet.allOf(WorldCapability.class));
 		emptyWorldPublishesAndAdmits();
 		committedWorldAdmitsWithoutRepublishing();
+		thermalWorldReopensWithCommittedProfile();
 		committedWorldReportsCapabilityDriftWithoutRepair();
 		recoveryDoesNotConsultTheDefinitionSource();
 		unreadableCommittedBundleLocks();
@@ -63,6 +64,34 @@ public final class WorldCapabilityStartupValidation {
 		require(second.bundle().profile().equals(full.profile()),
 				"a committed world must return its committed profile");
 	}
+
+	private static void thermalWorldReopensWithCommittedProfile() throws Exception {
+        Path root = Files.createTempDirectory(Path.of("."), "mmm-startup-thermal-");
+        var initial = WorldStartupCoordinator.start(root, () -> full);
+        require(initial.authoritativeWritesReady(), "fresh thermal world did not start");
+        var thermal = new EnvironmentThermalStore(root, registries.chemical(), registries.granular(),
+                registries.thermal(), registries.gas());
+        var solid = new mmm.thermal.EnvironmentThermalState.Node(
+                new mmm.thermal.EnvironmentThermalState.Key(0, 1, 2, mmm.thermal.EnvironmentThermalState.Kind.SOLID, 0),
+                "mmm:stone", 200, 0.5, mmm.fluid.air.GasInventory.EMPTY, 123.5, List.of());
+        var state = mmm.thermal.EnvironmentThermalState.initialized("minecraft:overworld", "fingerprint",
+                List.of(solid), List.of());
+        thermal.publish(java.util.Map.of(state.dimensionId(), state), java.util.Map.of());
+        var reopened = WorldStartupCoordinator.start(root, () -> full);
+        require(reopened.state() == WorldStartupCoordinator.State.READY && reopened.profileProven()
+                && reopened.authoritativeWritesReady(), "thermal world did not reopen: " + reopened);
+        var restored = new EnvironmentThermalStore(root, registries.chemical(), registries.granular(),
+                registries.thermal(), registries.gas()).read();
+        require(state.equals(restored.environments().get(state.dimensionId())), "thermal authority changed after reopen");
+
+        Path orphanRoot = Files.createTempDirectory(Path.of("."), "mmm-startup-orphan-thermal-");
+        new EnvironmentThermalStore(orphanRoot, registries.chemical(), registries.granular(),
+                registries.thermal(), registries.gas()).publish(java.util.Map.of(state.dimensionId(), state), java.util.Map.of());
+        var orphan = WorldStartupCoordinator.start(orphanRoot, () -> full);
+        require(orphan.state() == WorldStartupCoordinator.State.LOCKED_PROFILE && !orphan.profileProven()
+                && !orphan.authoritativeWritesReady(), "thermal authority without a committed profile was admitted");
+        require(!Files.exists(orphanRoot.resolve("mmm/world-capabilities")), "orphan thermal authority received a profile");
+    }
 
 	private static void committedWorldReportsCapabilityDriftWithoutRepair() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "mmm-startup-drift-");

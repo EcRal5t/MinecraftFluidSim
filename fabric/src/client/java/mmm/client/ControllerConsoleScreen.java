@@ -86,7 +86,7 @@ public final class ControllerConsoleScreen extends Screen {
 				button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
 				.bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
 
-		int lifecycleWidth = Math.min(76, Math.max(1, (width - 24) / 4));
+		int lifecycleWidth = Math.min(76, Math.max(1, (width - 32 - 3 * gap) / 4));
 		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
 		int lifecycleLeft = (width - lifecycleTotal) / 2;
 		int lifecycleY = height - 54;
@@ -179,7 +179,7 @@ public final class ControllerConsoleScreen extends Screen {
                 new DashboardCard(IndustrialUi.Icon.POWER, Component.translatable("screen.mmm.controller.energy"),
                         inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—", ""));
     }
-    private int dashboardColumns() { return width >= 460 && height >= 230 ? 2 : 1; }
+    private int dashboardColumns() { return width >= 360 && height >= 230 ? 2 : 1; }
     private int dashboardCardHeight() { return height >= 230 ? 46 : 36; }
     private int dashboardVisibleRows() { return Math.max(1, (height - 142) / dashboardCardHeight()); }
     private int dashboardTotalRows() { return 1 + (dashboardCards().size() + dashboardColumns() - 1) / dashboardColumns(); }
@@ -199,9 +199,7 @@ public final class ControllerConsoleScreen extends Screen {
                         left + 5, y + 6, 16);
                 Component status = failure != null ? Component.literal(failure) : Component.empty()
                         .append(localized("operator", summary.operatorIntent())).append(" · ")
-                        .append(summary.availability().ready() ? common("ready") : localized("availability", summary.availability().reason()))
-                        .append(" · ").append(localized("motion", summary.motionState()))
-                        .append(" · ").append(localized("thermal", summary.thermalState()));
+                        .append(summary.availability().ready() ? common("ready") : localized("availability", summary.availability().reason()));
                 var statusLines = font.split(status, Math.max(1, contentWidth - 28));
                 for (int i = 0; i < Math.min(statusLines.size(), (cardHeight - 8) / 11); i++)
                     graphics.text(font, statusLines.get(i), left + 25, y + 5 + i * 11,

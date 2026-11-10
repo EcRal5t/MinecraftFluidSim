@@ -304,7 +304,7 @@
   "screen.mmm.trend.gap": "数据间断",
   "screen.mmm.controller.inventory": "库存",
   "screen.mmm.controller.liquid": "液体",
-  "screen.mmm.controller.gas": "气体",
+  "screen.mmm.controller.gas": "气体（标准体积）",
   "screen.mmm.controller.granular": "颗粒固体",
   "screen.mmm.controller.coherent": "固结固体",
   "screen.mmm.controller.temperature": "温度",

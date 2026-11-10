@@ -42,8 +42,10 @@ final class DemoTankOperations {
     /** Called only after this runtime successfully created and admitted the demonstration region. */
     void register(FluidRegion region) {
         if (region == null || regions.region(region.id()) != region || region.footprint() == null
-                || region.footprint().blockSizeX() != 2 || region.footprint().blockSizeY() != 2
-                || region.footprint().blockSizeZ() != 2)
+                || region.footprint().kind() != mmm.model.region.RegionGeometry.RegionKind.SELECTED
+                || region.footprint().blockSizeX() != ControllerDemoLayout.OUTER_SIZE
+                || region.footprint().blockSizeY() != ControllerDemoLayout.OUTER_SIZE
+                || region.footprint().blockSizeZ() != ControllerDemoLayout.OUTER_SIZE)
             throw new IllegalArgumentException("演示区域身份或尺寸不匹配");
         demos.put(region.id(), region);
     }

@@ -66,8 +66,8 @@ final class MmmDebugPanel {
             }
             while (toggle.consumeClick()) if (client.gui.screen() == null) { visible = !visible; save(); }
             while (detail.consumeClick()) if (client.gui.screen() == null) { expanded = !expanded; save(); }
-            while (older.consumeClick()) if (client.gui.screen() == null && expanded) eventScroll += 5;
-            while (newer.consumeClick()) if (client.gui.screen() == null && expanded) eventScroll = Math.max(0, eventScroll - 5);
+            while (older.consumeClick()) if (client.gui.screen() == null && expanded) eventScroll++;
+            while (newer.consumeClick()) if (client.gui.screen() == null && expanded) eventScroll = Math.max(0, eventScroll - 1);
         });
         ClientConfigurationConnectionEvents.START.register((handler, client) -> clear());
         ClientConfigurationConnectionEvents.DISCONNECT.register((handler, client) -> clear());

@@ -9,6 +9,10 @@ final class DebugLayout {
             while (!paragraph.isEmpty()) {
                 String part = fit.apply(paragraph, Math.max(1, width));
                 if (part.isEmpty()) break;
+                if (part.length() < paragraph.length() && !Character.isWhitespace(paragraph.charAt(part.length()))) {
+                    int lastSpace = part.lastIndexOf(' ');
+                    if (lastSpace > 0) part = part.substring(0, lastSpace);
+                }
                 lines.add(part);
                 paragraph = paragraph.substring(part.length()).stripLeading();
             }
