@@ -37,6 +37,7 @@ public final class MmmRuntime {
 	private final MinecraftProcessOperations processes;
 	private final IndustrialOperations industrial;
 	private final MinecraftWorldUpdates worldUpdates;
+	private final ExternalMovingStructures externalStructures;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -64,7 +65,8 @@ public final class MmmRuntime {
 			WorldStartupCoordinator.Result startup,
 			mmm.api.transfer.MmmTransferApi transfers,
 			mmm.fluid.FluidSolverBackend solverBackend,
-			MinecraftProcessOperations processes, IndustrialOperations industrial, MinecraftWorldUpdates worldUpdates
+			MinecraftProcessOperations processes, IndustrialOperations industrial, MinecraftWorldUpdates worldUpdates,
+			ExternalMovingStructures externalStructures
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
@@ -93,9 +95,11 @@ public final class MmmRuntime {
 		this.processes = Objects.requireNonNull(processes);
 		this.industrial = Objects.requireNonNull(industrial);
 		this.worldUpdates=worldUpdates;
+		this.externalStructures=Objects.requireNonNull(externalStructures);
 	}
 
 	public MinecraftWorldUpdates worldUpdates() { return worldUpdates; }
+	public mmm.api.motion.MovingStructureApi movingStructures() { return externalStructures; }
 	public IndustrialOperations industrial() { return industrial; }
 	public MinecraftProcessOperations processes() { return processes; }
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }

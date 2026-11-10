@@ -28,6 +28,14 @@
   - 身份与回执：[PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)
   - 实际数量与持久交接复用容器计划、`ContainerTransferCoordinator` 和 `ContainerRecoveryCoordinator`。
 
+- **测点只读摘要**
+  - 代码入口：[ProcessSensorSnapshot](../../api/src/main/java/mmm/api/sensor/ProcessSensorSnapshot.java)、[ProcessSensorBlockEntity.snapshot](../../fabric/src/main/java/mmm/block/ProcessSensorBlockEntity.java)、[ProcessSensorSnapshotCodec](../../fabric/src/main/java/mmm/sensor/ProcessSensorSnapshotCodec.java)
+  - 验证入口：`ProcessSensorSnapshotValidation`、`ProcessSensorSyncValidation`、`FakeCreateDisplayValidation`。
+
+- **外部规定运动结构**
+  - 代码入口：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[MmmFabricApi.movingStructures](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
+  - 测试选择器：`external-motion`（`FakeCreateMotionValidation` 与运动体联动用例）。
+
 - **探针与控制台**
   - 代码入口：
     - [ShellFluidQuery](../../fabric/src/main/java/mmm/simulation/ShellFluidQuery.java)
@@ -47,6 +55,8 @@
 - [请求](#请求)
 - [结果和失败语义](#结果和失败语义)
 - [Observation](#observation)
+- [测点只读摘要](#测点只读摘要)
+- [外部规定运动结构](#外部规定运动结构)
 - [内置探针与控制界面](#内置探针与控制界面)
 - [Jade 观察适配](#jade-观察适配)
 - [Committed event](#committed-event)
@@ -105,6 +115,30 @@ overlap、预算、WAL、pending work、权限、数值暂停、可重试性能�
 材料和 species 均按 stable ID 排序。`regionNetworkGeneration` 专用于标识网络中的区域实例（incarnation），独立于 checkpoint generation 与逐 tick revision；调用方获取最新状态需重新执行查询。
 
 Query API 提供宏观状态查询（体积、质量、密度、温度、材料与化学组分），不包含内部速度场或调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义。
+
+## 测点只读摘要
+
+`ProcessSensorBlockEntity.snapshot()` 返回 MMM 自有的不可变 `ProcessSensorSnapshot`，服务端显示适配读取该快照，客户端护目镜等展示适配读取方块实体同步后的同一摘要。测点沿现有采样周期读取区域已提交观测；读取摘要不启动额外 GPU 采样、区域恢复或时间推进。
+
+`measure` 和 `unit()` 标明物理量：液位为 0—1 的无量纲比例，液体温度和气体温度为 K，压力为绝对 Pa，液体流量为 L/s。`RUNNING` 和 `PAUSED` 携带实际数值、区域 UUID、网络实例代次、求解代次和仿真秒数；`WAITING`、`UNAVAILABLE` 和 `NO_SAMPLE` 不携带数值与区域身份。状态和缺值共同表达测量是否可用，数值零保持实际测量含义。
+
+方块初始数据和更新包携带有界摘要，曲线历史另按需传输。状态、量纲、读数或区域实例变化即时同步；稳定读数仅时间或求解代次变化时最多每 20 tick 同步一次。摘要和历史属于会话状态，方块存档保存测点配置与红石输出。加载后摘要从 `WAITING` 开始，已保存的红石输出在首次新观测或不可用处理时通过正常 `signal` 路径更新邻居。重配测量或范围会清除旧值、身份和对应历史。
+
+接口：[ProcessSensorSnapshot](../../api/src/main/java/mmm/api/sensor/ProcessSensorSnapshot.java)、[ProcessSensorBlockEntity](../../fabric/src/main/java/mmm/block/ProcessSensorBlockEntity.java)、[ProcessSensorSnapshotCodec](../../fabric/src/main/java/mmm/sensor/ProcessSensorSnapshotCodec.java)。
+
+## 外部规定运动结构
+
+`MovingStructureApi` 是 MMM 提供的规定运动接口。Fabric 适配器在服务端主线程通过 `MmmFabricApi.movingStructures(server)` 取得服务，用稳定 provider ID 注册 `Provider`，并通过 `status(providerId, regionId)` 读取逐区域状态。provider 的 `sample(dimensionId)` 返回该维度当前结构的完整列表；注册与采样均在服务器主线程执行。Create 适配器负责观察并排队 Create 已发生的运动，Create 继续拥有原世界结构和动力。MMM 接收实际世界坐标与仿真时长，沿自身流体求解推进规定运动。
+
+每个 `Structure` 包含稳定结构 UUID、可选实体 UUID、`revision`、源位姿 `source`、目标位姿 `target`、`durationSeconds`、固定形状的 `pieces` 和 `retired` 标记。每个 `Piece` 由稳定键与局部轴对齐 `Box` 组成，`Pose` 给出世界坐标中的平移，长度单位为 m，时间单位为 s。实体 UUID 用于识别同一实体的重复碰撞输入。一个运动段保持相同 revision、起终点、时长及分块；后续段使用更大的 revision，以已接受终点作为源点并保持分块形状。
+
+MMM 按求解步时长逐段推进，并在对应运动步被接受后更新 `Progress` 中的 revision、已接受位姿和完成比例。适配器保留正在处理的段，按接受进度提交后续段；物理推进落后时继续排队，世界中的 Create 运动保持由 Create 控制。`WAITING` 表示尚无区域观测，`LAGGING` 表示运动段或提供方数据等待处理，`BUSY` 表示前一段尚未完成，`ACCEPTED` 表示已接受当前段，`REJECTED` 表示输入或当前可用条件需要处理。调用方根据状态和结构进度重试；修正输入后重新提供有效段。
+
+结构从区域外开始，允许按轴对齐盒组作平移；首次源形状须整体位于区域外，退役段的目标须整体位于区域外，接受退役后移除结构。接口使用实际方块／实体位置，外部适配器负责转换其已有运动描述；MMM 不转换 Create 动力单位，也不重建 Create 方块或动力网络。运动扫掠涉及的活动组须可用，结构与其他运动体共同受区域运动体预算约束；不满足时保持已接受状态，待条件恢复或输入修正后重试。
+
+区域 checkpoint 保存已接受的外部运动几何。服务器重启后，适配器重新注册相同 provider 并重放可与已保存几何匹配的结构段，MMM 据此恢复接受进度。已保存结构暂时缺少提供方时保留其几何并等待提供方恢复，避免遗漏结构改变区域占容；调用方应保留尚未完成的段，直到观察到接受结果。
+
+接口与实现：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)。测试选择器：`external-motion`。
 
 ## 内置探针与控制界面
 

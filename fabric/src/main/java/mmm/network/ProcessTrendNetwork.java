@@ -25,6 +25,6 @@ public final class ProcessTrendNetwork {
                 || !(level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor))
             return new ProcessTrendPayload(pos,request.dimension(),request.session(),request.sequence(),"","不可用",request.open(),false,List.of());
         return new ProcessTrendPayload(pos,request.dimension(),request.session(),request.sequence(),
-                sensor.measure().label(),sensor.history().status(),request.open(),true,sensor.history().points());
+                sensor.snapshot().measure().label(),sensor.snapshot().status().label(),request.open(),true,sensor.history().points());
     }
 }

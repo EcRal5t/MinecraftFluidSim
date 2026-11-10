@@ -35,6 +35,18 @@ Create 源码用于核对标准存储调用链；本项目当前没有 Create 26
 ./gradlew.bat :fabric:runHostValidation -PhostValidation=industrial-port --offline --no-daemon --max-workers=1
 ```
 
+### 测点显示与外部运动结构
+
+```powershell
+./gradlew.bat :fabric:runHostValidation -PhostValidation=sensor-display,external-motion --offline --no-daemon --max-workers=1
+```
+
+`sensor-display` 检查传感器生产快照、单位、状态、区域身份、重配置及重载，以及客户端初始摘要和增量同步。`FakeCreateDisplayValidation` 作为只读消费者，检查读取不改写红石输出和历史。
+
+`external-motion` 运行已有实体流体联动用例，并通过 `FakeCreateMotionValidation` 调用正式提供器采集、结构整体验证与接受进度入口。覆盖不同供帧时长、稳定分片身份、实体去重、域外进入、分段欠帧、反转、拒绝重试、256 片段总预算、扫掠途中不可用、恢复和退出重放。自动 tick 对输入拒绝的等待重试路径通过源码核对；此入口不运行服务器调度或 GPU。
+
+两个 `FakeCreate` 类仅存在于测试源码。Create 的局部形状与坐标约定来自适配计划固定的上游提交；当前验证不加载 Create，不涉及真实 Display Link、护目镜、装配拆解或动力网络。`sensor-display,protocol`、`external-motion`、模组构建、GameTest 编译与架构边界检查已通过；日志位于 `build/validation/create-display-motion-build.log` 和 `build/validation/create-external-motion.log`。
+
 ### 工业装置
 
 工业流程使用 `IndustrialLayout` 的方块布局和生产容器事务。箱、端口、筛、热墙及表面材料加载正式数据，逐步输出来自已提交库存。端口额度按在线 tick 计算，离线夹具与游戏入口共用配额和实际接触格选择。

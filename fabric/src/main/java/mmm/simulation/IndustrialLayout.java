@@ -26,7 +26,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         public BlockPos box() { return position.relative(outward); }
     }
     public record Screen(BlockPos position, double poreDiameter, double openFraction) { }
-    public record Sensor(BlockPos position, ProcessSensorBlockEntity.Measure measure, double low, double high,
+    public record Sensor(BlockPos position, mmm.api.sensor.ProcessSensorSnapshot.Measure measure, double low, double high,
                          boolean below, BlockPos first, BlockPos second) { }
     public record Wall(BlockPos position, double temperatureK) { }
     public record Coating(BlockPos position, Direction face, String materialId, double loadingKg) { }
@@ -108,7 +108,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         var sensorPos=min.offset(0,3,0);
         blocks.put(sensorPos,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
         {var p=ports.getFirst();ports.set(0,new Port(p.position(),p.outward(),p.mode(),p.phase(),p.rate(),true));}
-        var sensor=new Sensor(sensorPos,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(10,1,1),min.offset(12,3,3));
+        var sensor=new Sensor(sensorPos,mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,.25,.75,true,min.offset(10,1,1),min.offset(12,3,3));
         var controller=min.offset(1,2,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,screens,List.of(sensor),
                 List.of(),List.of());
@@ -226,18 +226,18 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         open.remove(temperatureSensor);
         var sensors=new ArrayList<Sensor>();
         var productPressure=min.offset(7,collectorY,3);blocks.put(productPressure,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
-        sensors.add(new Sensor(productPressure,ProcessSensorBlockEntity.Measure.PRESSURE,100_000,110_000,false,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
+        sensors.add(new Sensor(productPressure,mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE,100_000,110_000,false,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
         if(trays) {
             var refluxPressure=min.offset(3,13,5);blocks.put(refluxPressure,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
             open.remove(refluxPressure);
-            sensors.add(new Sensor(refluxPressure,ProcessSensorBlockEntity.Measure.PRESSURE,100_000,110_000,false,min.offset(3,12,4),min.offset(3,12,4)));
+            sensors.add(new Sensor(refluxPressure,mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE,100_000,110_000,false,min.offset(3,12,4),min.offset(3,12,4)));
         }
-        sensors.add(new Sensor(levelSensor,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(1,1,1),min.offset(6,2,5)));
-        sensors.add(new Sensor(temperatureSensor,ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,350,375,true,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
+        sensors.add(new Sensor(levelSensor,mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,.25,.75,true,min.offset(1,1,1),min.offset(6,2,5)));
+        sensors.add(new Sensor(temperatureSensor,mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,350,375,true,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
         if(trays) {
             var bottomSensor=min.offset(7,1,1);blocks.put(bottomSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.WEST));
             var seal=trays(min).getFirst().seal();
-            sensors.add(new Sensor(bottomSensor,ProcessSensorBlockEntity.Measure.LEVEL,.65,.85,false,seal,seal));
+            sensors.add(new Sensor(bottomSensor,mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,.65,.85,false,seal,seal));
         }
         for(int x=2;x<=4;x++)for(int z=1;z<=3;z++) {
             var hot=min.offset(x,0,z);blocks.put(hot,MmmBlocks.THERMAL_RESERVOIR.defaultBlockState());thermal.add(new Wall(hot,293.15));

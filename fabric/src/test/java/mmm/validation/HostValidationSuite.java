@@ -41,6 +41,15 @@ public final class HostValidationSuite {
             mmm.simulation.ContainerTransferStoreValidation.main(new String[0]);
         });
         checks.put("industrial-port", () -> mmm.simulation.IndustrialPortValidation.main(new String[0]));
+        checks.put("sensor-display", () -> {
+            mmm.simulation.ProcessSensorSnapshotValidation.main(new String[0]);
+            mmm.block.ProcessSensorSyncValidation.main(new String[0]);
+            mmm.simulation.FakeCreateDisplayValidation.main(new String[0]);
+        });
+        checks.put("external-motion", () -> {
+            mmm.simulation.EntityFluidWiringValidation.main(new String[0]);
+            mmm.simulation.FakeCreateMotionValidation.main(new String[0]);
+        });
         checks.put("ownership", () -> mmm.simulation.ownership.M6OwnershipValidation.main(new String[0]));
         checks.put("audit", () -> mmm.logging.CommandAuditFileValidation.main(new String[0]));
         String selection = args.length == 0 ? "full" : String.join(",", args);

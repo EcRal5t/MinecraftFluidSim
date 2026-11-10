@@ -77,7 +77,7 @@ public final class IndustrialControlGameTest {
         var sensors=new ProcessSensorBlockEntity[]{test.getBlockEntity(sensorPosition,ProcessSensorBlockEntity.class)};
         var ports=new FluidPortBlockEntity[]{test.getBlockEntity(portPosition,FluidPortBlockEntity.class)};
         var first=test.absolutePos(new BlockPos(2,2,2));var second=test.absolutePos(new BlockPos(5,3,3));
-        sensors[0].configure(ProcessSensorBlockEntity.Measure.LEVEL,.0001,.001,true,false,first,second);
+        sensors[0].configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,.0001,.001,true,false,first,second);
         ports[0].configure(FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,true);
         int[] stage={0};long[] accepted={0};
         var wall=test.absolutePos(wallPosition);
@@ -98,7 +98,7 @@ public final class IndustrialControlGameTest {
                         level.getBlockState(test.absolutePos(sensorPosition)),sensor.saveWithFullMetadata(level.registryAccess()),level.registryAccess());
                 var restoredPort=(FluidPortBlockEntity)BlockEntity.loadStatic(test.absolutePos(portPosition),
                         level.getBlockState(test.absolutePos(portPosition)),port.saveWithFullMetadata(level.registryAccess()),level.registryAccess());
-                test.assertTrue(restoredSensor!=null && restoredSensor.measure()==ProcessSensorBlockEntity.Measure.LEVEL
+                test.assertTrue(restoredSensor!=null && restoredSensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL
                                 && restoredSensor.low()==.0001 && restoredSensor.high()==.001 && restoredSensor.below()
                                 && first.equals(restoredSensor.first()) && second.equals(restoredSensor.second()),
                         "Sensor settings did not survive block-entity storage");
@@ -108,14 +108,14 @@ public final class IndustrialControlGameTest {
                         "Port settings did not survive block-entity storage");
                 level.setBlockEntity(restoredSensor);level.setBlockEntity(restoredPort);
                 sensors[0]=restoredSensor;ports[0]=restoredPort;
-                restoredSensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
+                restoredSensor.configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 stage[0]=2;
             } else if(stage[0]==2 && sensor.output()==15 && port.status().equals("运行")
                     && 1_000_000_000L-PartialWaterBucketItem.volume(box.getItem(0))>accepted[0]) {
-                sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,true,false,first,second);
+                sensor.configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,270,280,true,false,first,second);
                 stage[0]=3;
             } else if(stage[0]==3 && sensor.output()==0 && port.status().equals("等待红石")) {
-                sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
+                sensor.configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 port.configure(FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,true);
                 for(int i=0;i<box.getContainerSize();i++)box.setItem(i,MaterialBoxBlockEntity.newBatch(new ItemStack(Items.WATER_BUCKET)));
                 box.setItem(0,MaterialBoxBlockEntity.newBatch(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER)));

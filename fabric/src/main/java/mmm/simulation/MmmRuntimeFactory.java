@@ -82,10 +82,12 @@ public final class MmmRuntimeFactory {
 		MinecraftTakeoverAdapter takeover = new MinecraftTakeoverAdapter();
 		MinecraftDebugScaffolding scaffolding = new MinecraftDebugScaffolding();
 		MinecraftWorldUpdates worldUpdates=new MinecraftWorldUpdates(regionManager);
+		ExternalMovingStructures externalStructures=new ExternalMovingStructures(server);
 		MinecraftRegionInputs regionInputs = new MinecraftRegionInputs(
 				worldRegistries.thermalOrNull(), FluidRegionFactory.CELLS_PER_BLOCK,
 				worldRegistries.resolveMaterial("mmm:water").referenceDensity());
 		regionInputs.worldUpdates(worldUpdates);
+		regionInputs.externalStructures(externalStructures);
 		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
 				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep());
 		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
@@ -173,7 +175,7 @@ public final class MmmRuntimeFactory {
 		MinecraftProcessOperations processes = new MinecraftProcessOperations(worldRoot, regionManager, targets, startup);
 		regionInputs.prescribedBodies(processes::bodies);
 		regionInputs.manualPrescribedBodies(region -> processes.manualBodies(region.id(), region.entityBodyState().bodies()));
-		regionManager.observeRemoval(processes::regionRemoved);
+		regionManager.observeRemoval(region -> { processes.regionRemoved(region); externalStructures.regionRemoved(region); });
 		MinecraftRegionOperatorActions operatorActions = new MinecraftRegionOperatorActions(
 				startup, regionManager, targets, regionOperations, snapshots, takeover, debugFixtures,
 				availability, regionTick, motion, phaseWorkBarrier, policy, containerRecovery);
@@ -188,7 +190,7 @@ public final class MmmRuntimeFactory {
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes, new IndustrialOperations(startup,targets,worldRegistries,containerTransactions,containerRecovery,availability,phaseWorkBarrier,snapshots),worldUpdates);
+				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes, new IndustrialOperations(startup,targets,worldRegistries,containerTransactions,containerRecovery,availability,phaseWorkBarrier,snapshots),worldUpdates,externalStructures);
 		} catch (RuntimeException | Error failure) {
 			try { solverBackend.close(); }
 			catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }

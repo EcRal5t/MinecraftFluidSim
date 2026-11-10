@@ -1,6 +1,6 @@
 # Create 适配计划
 
-本计划以 Minecraft 26.2 / Fabric 的物料箱自动化为当前交付，并为 Create 可用后的运动、流体、动能与显示接入确定职责。现阶段没有可用的 Create 26.2 依赖；本轮通过 Fabric API 和项目逻辑验证，不进行 Create 实机测试。各阶段完成情况继续记录在[实施计划](solver-consolidation-plan.md)，验证结果记录在[验证指南](../maintenance/validation.md)。
+当前已交付 Minecraft 26.2 / Fabric 的物料箱自动化、测点只读展示和规定平移结构接口。MMM 与 Create 分别拥有自己的状态和运行规则，联动层负责转换和交接；本项目不引入 Create 的方块、动力网络或应力规则。现阶段没有可用的 Create 26.2 依赖，验证使用正式 MMM 接口、冻结的 Create 源码和仅测试侧的等价提供器。各阶段完成情况记录在[实施计划](solver-consolidation-plan.md)，验证入口记录在[验证指南](../maintenance/validation.md)。
 
 源码参考为 Fabricators-of-Create/Create 的 `mc1.21.1/fabric/dev` 开发分支，[提交 `7f1f67b6`](https://github.com/Fabricators-of-Create/Create/tree/7f1f67b6ecbbde512e8d35404f3621a6875ce838)；另查阅 `mc1.20.1/fabric/dev` 的[提交 `4c3fe779`](https://github.com/Fabricators-of-Create/Create/tree/4c3fe779d135d592548e4cb09da04d742d2637b7)。这些是源码参考，26.2 移植后需重新核对名称、时序、单位和行为。1.21.1 源码位于本地 `build/upstream/CreateFabric121/src/main/java/com/simibubi/create/`，不参与本项目构建。
 
@@ -10,8 +10,8 @@
 |---|---|---|
 | 物料箱物品搬运 | 通过 Fabric `ItemStorage` 事务搬运实际容器，检查嵌套提交、回滚与未决事务保护 | 用漏斗和仓储网络验证插入、取出与重载；机械臂直接选择箱体需另行注册交互点 |
 | 流体管道 | 保留完整容器和现有区域事务；明确单位与库存交接规则 | 明确支持的流体表示与精度，沿 Fabric 流体存储和区域 WAL 完成原子交接 |
-| 测量显示 | 传感器维护已接受读数、状态和单位 | 将服务端读数接入 Display Link；护目镜所需客户端数据单独同步 |
-| 平移结构 | 研究局部方块碰撞、位姿、身份和组装交接 | 以实际碰撞分块驱动流体，覆盖停止、卸载、拆解与恢复 |
+| 测量显示 | MMM 只读快照统一读数、状态、单位及区域身份；同步有界客户端摘要，现有界面共同消费 | 接入 Display Link 注册与护目镜接口，继续使用同一快照 |
+| 平移结构 | 通用提供器提交带时长的直线段，按 MMM 接受步推进；稳定分片身份、实体去重、预算、等待与重放 | 从 Create 采集真实局部碰撞及运动段，接入静态装配／拆解交接 |
 | 旋转结构与动能 | 保留刚体真实几何和物理功要求 | 实现旋转几何、力矩及 Create 负载映射，贯通流体与动力网络 |
 
 ## 物料箱与容器
@@ -36,11 +36,13 @@ Fabric 的内存事务与区域 HEAD、容器 WAL、外部世界存档的持久�
 
 ## 传感器与显示
 
-传感器沿 `IndustrialOperations.tickSensor` 使用已提交区域代的液位、温度、绝对压力或流量；暂停保留末次读数，不可用时呈现相应状态。数据展示复用同一观察，保持液位 0–1、温度 K、压力 Pa 和流量 L/s，无需额外触发 GPU 读取。
+MMM 的 `ProcessSensorSnapshot` 保存测量种类、状态、可选读数、区域 UUID／实例代、求解代和仿真秒数。传感器沿 `IndustrialOperations.tickSensor` 使用已提交区域代的液位、温度、绝对压力或流量；等待、运行、暂停、不可用和无样品分别呈现，缺失值不使用零代替。数据保持液位 0–1、温度 K、压力 Pa 和流量 L/s。读取快照只访问已缓存的不可变数据，不发起额外 GPU 观察。
+
+聊天提示、配置对话和曲线摘要共同使用快照。方块实体初始包和更新包携带同一有界摘要，状态／数值／实例变化即时通知，相同数值仅代次或时间变化时最多每 20 tick 更新。观测不写入世界存档，重载回到等待；重新配置清除旧测点结果。详细字段和同步契约见[外部 API](../architecture/external-api.md)。
 
 上游 `api/behaviour/display/DisplaySource.java:41–48,146–152` 登记来源并生成文本，`content/redstone/displayLink/DisplayLinkBlockEntity.java:71–132` 调度目标更新。Create 26.2 可用后，服务端 Display Link 直接读取传感器当前已接受的读数和状态；配置和刷新间隔遵循实际版本接口。
 
-上游 `content/equipment/goggles/GoggleOverlayRenderer.java:97–111` 从客户端方块实体读取 `api/equipment/goggles/IHaveGoggleInformation` 提示。护目镜接入需为 `ProcessSensorBlockEntity` 增加有界客户端同步，复用服务端同一观察，明确初始加载、变化、暂停和不可用状态。阈值开关读取整数范围，物理量的缩放和极值须结合实际版本与支持量程选定。验收覆盖正常读数、单位、暂停、区域不可用、状态恢复和客户端重载。
+上游 `content/equipment/goggles/GoggleOverlayRenderer.java:97–111` 从客户端方块实体读取 `api/equipment/goggles/IHaveGoggleInformation` 提示。联动适配器可以读取已同步的 `ProcessSensorBlockEntity.snapshot()`；Create 的接口实现和注册位于版本绑定层。阈值开关读取整数范围，物理量的缩放和极值须结合实际版本与支持量程选定。测试侧的 `FakeCreateDisplayValidation` 消费正式服务端快照与客户端摘要，覆盖正常读数、单位、暂停、无样品、不可用、重配置与重载。
 
 ## 运动结构与流体
 
@@ -54,7 +56,17 @@ MMM 的 `MinecraftWorldUpdates` 负责原版活塞运动和固定碰撞交接；
 
 `MinecraftRegionInputs.captureEntities` 当前将普通实体的大包围盒作为运动体。Create 结构接入时需从普通实体路径排除，再提交其实际局部形状，避免重复占容。区域每步现有 `MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP=256` 覆盖所有运动体；大结构需按完整结构设计形状合并和预算，使用明确的支持范围，保持全部实际碰撞，超出时给出可观察结果。
 
-第一轮运动接入限定姿态固定且世界轴对齐的平移构件，按真实碰撞分盒提交位置与速度。验收覆盖装配、平移排水、停止、拆解、卸载和恢复，检查液体及气体库存、静态与运动几何交接，以及同一区域其他实体的共存。
+### 已实现的规定平移入口
+
+`MmmFabricApi.movingStructures(server)` 提供 MMM 自有的 `MovingStructureApi`。提供者提交稳定结构 UUID、可排除的原实体 UUID、带稳定键的局部碰撞盒，以及递增 revision、起止世界平移和持续秒数。MMM 将这些输入转换为自己的运动体请求；Create 绑定负责从结构世界取得真实形状和连续运动段，并保留尚未交接的段。双方的坐标及时间语义见[外部 API](../architecture/external-api.md)。
+
+一个段由多个 MMM 物理步消费，只有已接受运动步推进进度。提前交付后继段得到 BUSY，当前段继续推进；失败、纯热步或等待均不消费运动时间。停止时保留已接受几何。输入拒绝保持原状态并在下一 tick 重试，不进入数值故障暂停。完整结构与普通实体、原版活塞共享 256 片段预算，扫掠途中遇到不可用活动组时整次交接等待。
+
+本轮只接收固定世界轴向的平移形状。新结构从区域外开始，域外源通过共同碰撞交接入口注册；结构退出区域后才能清除。首次直接出现在域内、自由旋转、形变和不连续后继段会被拒绝。静态方块与运动结构的原位装配／拆解仍需下一阶段完成完整交接，当前接口不据此宣称支持 Create 的全部构件。
+
+已持久化的外部碰撞片段在提供器缺席时保留，等待其重放可匹配的段；提供器重新注册后可恢复采集。进度和 revision 交接属于当前服务会话，提供器负责自身活动段的持久化。当前反馈只包含已接受位姿和进度，结构整体力矩与 Create 负载回写待后续动力契约。
+
+`FakeCreateMotionValidation` 仅位于测试源码，按冻结源码的形状与平移语义供给正式 MMM 接口，检查不同供帧时长、原点转换、分片顺序、拒绝重试、欠帧、停止及退出。它不进入模组 jar，也不创建替代 Create 的生产设备。
 
 ### 旋转与动力
 

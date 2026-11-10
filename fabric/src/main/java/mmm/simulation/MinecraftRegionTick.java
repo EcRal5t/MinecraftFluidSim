@@ -115,6 +115,9 @@ final class MinecraftRegionTick {
 			if (!farmlandHydration.test(level, region)) return;
 			activityConnections.accept(region);
 			frozen = inputs.captureTick(level, region, tick, profile.hasCapability(WorldCapability.THERMAL));
+		} catch (ExternalMovingStructures.InputRejectedException rejected) {
+			inputs.discardEntityResponse(region);
+			return;
 		} catch (RuntimeException failure) {
 			inputs.discardEntityResponse(region);
 			blockStepFailure(level, region, new RegionRepository.StateCaptureRejectedException(

@@ -31,9 +31,9 @@ final class IndustrialDialogs {
     static void sensor(ServerPlayer player,ProcessSensorBlockEntity sensor){
         var first=sensor.first()==null?sensor.getBlockPos().relative(sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getOpposite()):sensor.first();
         var second=sensor.second()==null?first:sensor.second();
-        var measures=ProcessSensorBlockEntity.Measure.values();var values=new String[measures.length];var labels=new String[measures.length];
+        var measures=mmm.api.sensor.ProcessSensorSnapshot.Measure.values();var values=new String[measures.length];var labels=new String[measures.length];
         for(int i=0;i<measures.length;i++){values[i]=measures[i].name();labels[i]=measures[i].label();}
-        show(player,"传感器 · "+String.format(java.util.Locale.ROOT,"%.3g",sensor.reading()),List.of(
+        show(player,"传感器 · "+sensor.snapshot().display(),List.of(
             option("measure","读数",sensor.measure().name(),values,labels),
             text("low","下限",Double.toString(sensor.low())),text("high","上限",Double.toString(sensor.high())),
             bool("below","低于阈值输出",sensor.below()),bool("analog","连续输出 0—15",sensor.analog()),
