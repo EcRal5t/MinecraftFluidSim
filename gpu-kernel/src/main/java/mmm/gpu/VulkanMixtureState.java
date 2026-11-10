@@ -43,7 +43,8 @@ final class VulkanMixtureState implements AutoCloseable {
     }
     private final FlipKernelBindings bindings;
     VulkanMixtureState(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,
-            VulkanLiquidPhaseRows.resource("mixture-state.comp").replace("// HOST_LAYOUT",VulkanShaderLayout.fields("Q_",Quantity.values())),20);}
+            VulkanLiquidPhaseRows.resource("mixture-state.comp").replace("// HOST_LAYOUT",VulkanShaderLayout.fields("Q_",Quantity.values()))
+                    .replace("// MIXTURE_PRESSURE_EOS",VulkanLiquidPhaseRows.resource("mixture-pressure-eos.glsl")),20);}
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors));}
     void record(VkCommandBuffer command,Layout layout){record(command,layout,layout.inputs().cellSize());}
     void record(VkCommandBuffer command,Layout layout,double cellSize){

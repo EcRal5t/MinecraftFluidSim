@@ -28,6 +28,7 @@ bool activeFace(int face);
 // HOST_LAYOUT
 // SERIES_CONDUCTANCE_LIBRARY
 // PLIC_FACE_LIBRARY
+// MIXTURE_PRESSURE_EOS
 const uint ERROR_INVALID_STATE = 67108864u;
 const int STAGE_INITIALIZE = 0;
 const int STAGE_PROPOSE = 1;
@@ -272,13 +273,7 @@ double vaporResponse(double capacity,double liquid,double nanos,double component
     if(!(capacity>0.0LF && total>0.0LF))return 0.0LF;
     double reference=max(0.0LF,liquid+liquidChange);
     double r=total*1e-9LF*(101325.0LF/293.15LF)*temperature;
-    double b=capacity*LIQUID_BULK+r-limit*reference,trial;
-    if(reference==0.0LF)trial=limit*r/(capacity*LIQUID_BULK+r);
-    else {
-        double cross=2.0LF*sqrt(reference)*sqrt(limit*r),magnitude=max(abs(b),cross);
-        double norm=magnitude*sqrt((b/magnitude)*(b/magnitude)+(cross/magnitude)*(cross/magnitude));
-        trial=b>=0.0LF?2.0LF*limit*r/(b+norm):(norm-b)/(2.0LF*reference);
-    }
+    double norm,trial=mixturePressure(capacity,reference,r,LIQUID_BULK,LIQUID_REFERENCE_PRESSURE,norm);
     double previous=nanos>0.0LF?pressure*componentNanos/nanos:0.0LF;
     return abs(trial*target/total-previous)/quantumMoles;
 }
@@ -380,6 +375,12 @@ void clearUnavailablePending(int c) {
 }
 int referenceInput(){return workField((p.maximum&1)==0?FIELD_LIQUID_REFERENCE:FIELD_LIQUID_REFERENCE_NEXT);}
 int referenceOutput(){return workField((p.maximum&1)==0?FIELD_LIQUID_REFERENCE_NEXT:FIELD_LIQUID_REFERENCE);}
+double currentPressure(int cell,double reference,double nanos,double temperature){
+    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h;
+    double capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*cell+2))*h3;
+    double r=nanos*1e-9LF*(101325.0LF/293.15LF)*temperature,norm;
+    return mixturePressure(capacity,reference*h3,r,LIQUID_BULK,LIQUID_REFERENCE_PRESSURE,norm);
+}
 int propose(int c) {
     if (!activeCell(c)) return -1;
     int node=contactNode(c,p.maximum);
@@ -423,9 +424,9 @@ int propose(int c) {
                 if(vapor){
                     if(!gasPrepared){
                         totalNanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*node));
-                        pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*node+MIXTURE_PRESSURE));
                         capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*node+2))*h3;
                         reference=readDouble(referenceInput()+2*node)*h3;
+                        pressure=currentPressure(node,reference/h3,totalNanos,gasTemperature);
                         gasPrepared=true;
                     }
                     double targetNanos=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(node,int(words[r+1]))));
@@ -538,7 +539,7 @@ void proposeDryWall(int index){
     double nanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*c));
     if(nanos<=0.0LF)return;
     double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,int(words[r+1]))));
-    double pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*c+MIXTURE_PRESSURE));
+    double pressure=currentPressure(c,readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c),nanos,gasTemperature);
     int64_t quantum=readQuantity(r+24);if(quantum<=0l){reportInvalid();return;}
     double totalSpecies=double(readQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr));
     double partial=pressure*target/nanos,fraction=0.0LF;
@@ -621,7 +622,7 @@ int64_t reserveWall(int device,int r,int c,int64_t requested,int64_t quantum,int
     for(int componentId=0;componentId<gasHeaderWord(GAS_H_COMPONENT_COUNT);componentId++)
         nanos+=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,componentId)));
     double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,gm)));
-    double pressure=readDouble(geometryHeaderWord(GEO_H_MIXTURE_STATES)+2*(MIXTURE_STRIDE*c+MIXTURE_PRESSURE));
+    double pressure=currentPressure(c,readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c),nanos,state(c,0));
     double partial=nanos>0.0LF?pressure*target/nanos:0.0LF;
     if(partial<=0.0LF)return 0l;
     double slope=readDouble(r+8),referenceTemperature=readDouble(r+6),saturationTemperature=0.0LF;

@@ -5,6 +5,7 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Push { int header; int count; int unused; uint hLow; uint hHigh; } p;
 // HOST_LAYOUT
+// MIXTURE_PRESSURE_EOS
 const uint ERROR_MIXTURE_STATE=16777216u;
 const uint ERROR_ZERO_PORE=4096u;
 int h(int index){return int(words[p.header+index]);}
@@ -29,12 +30,7 @@ void evaluate(int cell){
     if(v0==0.0&&mass!=0.0){invalid();return;}
     double limit=bulk+reference,r=constant*temperature,pressure,scale;
     if(!finiteNumber(r)){invalid();return;}
-    double b=capacity*bulk+r-limit*v0;
-    double cross=2.0LF*sqrt(v0)*sqrt(limit*r),magnitude=max(abs(b),cross);
-    double norm=magnitude>0.0LF?magnitude*sqrt((b/magnitude)*(b/magnitude)+(cross/magnitude)*(cross/magnitude)):0.0LF;
-    if(r==0.0LF)pressure=v0==0.0LF||b>=0.0LF?0.0LF:-b/v0;
-    else if(v0==0.0LF)pressure=limit*r/(capacity*bulk+r);
-    else pressure=b>=0.0LF?2.0LF*limit*r/(b+norm):(norm-b)/(2.0LF*v0);
+    double norm;pressure=mixturePressure(capacity,v0,r,bulk,reference,norm);
     if(v0==0.0LF)scale=1.0LF;
     else if(r==0.0LF)scale=pressure>0.0LF?capacity/v0:limit/bulk;
     else scale=2.0LF*capacity*limit/(capacity*bulk+limit*v0+r+norm);
