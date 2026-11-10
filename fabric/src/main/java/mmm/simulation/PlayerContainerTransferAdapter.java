@@ -76,9 +76,9 @@ public final class PlayerContainerTransferAdapter {
 		if (pouring && targetBlock == null) return null;
 		FluidWorldTargetResolver.TransferTarget target = pouring
 				? targets.transferTargetAtBlock(level, targetBlock, hit.getDirection().getOpposite())
-				: hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()))
+				: hit != null && level.getBlockState(hit.getBlockPos()).is(MmmBlocks.FLUID_PORT)
 						? targets.transferTargetAtBlock(level, hit.getBlockPos(), hit.getDirection().getOpposite()) : null;
-		boolean shellHit = hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()));
+		boolean shellHit = hit != null && level.getBlockState(hit.getBlockPos()).is(MmmBlocks.FLUID_PORT);
 		if (shellHit && target == null) {
 			message(player, "请对准蓝色接口的外侧面使用桶");
 			return InteractionResult.FAIL;
@@ -114,7 +114,7 @@ public final class PlayerContainerTransferAdapter {
 		}
 		MinecraftContainerTransferPlan plan = resolution.plan();
 		Attempt attempt;
-		if (region.controllerManaged()) {
+		if (region.hasSelectedVolume()) {
 			MinecraftContainerTransactionAdapter.Result transaction = plan.executeManaged(
 					level, ContainerTransferActor.player(player.getUUID(), actorHand(hand)), held, false);
 			attempt = new Attempt(transaction.outcome(), transaction.transactionId());
@@ -169,7 +169,7 @@ public final class PlayerContainerTransferAdapter {
 		if (targetBlock == null) return InteractionResult.FAIL;
 		FluidWorldTargetResolver.TransferTarget target = targets.transferTargetAtBlock(level, targetBlock, hit.getDirection().getOpposite());
 		FluidRegion region = target == null ? null : target.region();
-		if (region == null || !region.controllerManaged()
+		if (region == null || !region.hasSelectedVolume()
 				|| !ensureAvailableFor(player, region)) return InteractionResult.FAIL;
 		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
 		ItemStack actual = resolved.actualStack();
@@ -215,12 +215,12 @@ public final class PlayerContainerTransferAdapter {
 		}
 		BlockHitResult hit = playerBlockHit(player);
 		ServerLevel level = player.level();
-		if (hit == null || !MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()))) {
-			message(player, "请对准密闭气腔的真实外壳表面");
+		if (hit == null) {
+			message(player, "请对准气腔的墙面");
 			return InteractionResult.FAIL;
 		}
-		var target = targets.gasShellTargetAtBlock(level, hit.getBlockPos(), null);
-		if (target == null || !target.region().controllerManaged()) {
+		var target = targets.gasShellTargetAtBlock(level, hit.getBlockPos(), hit.getDirection().getOpposite());
+		if (target == null || !target.region().hasSelectedVolume()) {
 			message(player, "该外壳表面没有唯一的内侧气腔");
 			return InteractionResult.FAIL;
 		}
@@ -299,7 +299,7 @@ public final class PlayerContainerTransferAdapter {
 	private static BlockPos playerPourTargetBlock(ServerPlayer player, BlockHitResult hit) {
 		if (hit == null) return null;
 		BlockPos hitPos = hit.getBlockPos();
-		if (MmmBlocks.isBoundary(player.level().getBlockState(hitPos))) return hitPos;
+		if (player.level().getBlockState(hitPos).is(MmmBlocks.FLUID_PORT)) return hitPos;
 		return player.level().getBlockState(hitPos).canBeReplaced()
 				? hitPos : hitPos.relative(hit.getDirection());
 	}

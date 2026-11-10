@@ -1,0 +1,46 @@
+{
+  "textures": {
+    "particle": {
+      "sprite": "mmm:block/insulating_glass",
+      "force_translucent": true
+    },
+    "side": {
+      "sprite": "mmm:block/insulating_glass",
+      "force_translucent": true
+    }
+  },
+  "elements": [
+    {
+      "from": [
+        15,
+        4,
+        4
+      ],
+      "to": [
+        16,
+        12,
+        12
+      ],
+      "faces": {
+        "down": {
+          "texture": "#side"
+        },
+        "up": {
+          "texture": "#side"
+        },
+        "north": {
+          "texture": "#side"
+        },
+        "south": {
+          "texture": "#side"
+        },
+        "west": {
+          "texture": "#side"
+        },
+        "east": {
+          "texture": "#side"
+        }
+      }
+    }
+  ]
+}

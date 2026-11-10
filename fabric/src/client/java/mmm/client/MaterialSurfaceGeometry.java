@@ -23,6 +23,13 @@ final class MaterialSurfaceGeometry {
     static void buildGeometry(Vec3 camera, VertexConsumer vertices,
             ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow, boolean textured,
             java.util.function.Function<String, net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites) {
+        buildGeometry(camera, vertices, frame, shadow, textured, sprites, MaterialSurfaceGeometry::light);
+    }
+
+    static void buildGeometry(Vec3 camera, VertexConsumer vertices,
+            ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow, boolean textured,
+            java.util.function.Function<String, net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites,
+            java.util.function.ToIntFunction<BlockPos> lights) {
         var state = frame.payload();
         var anchor = FluidRenderCoordinates.at(camera).anchor();
         double ox = state.origin().getX() - anchor.getX();
@@ -32,37 +39,37 @@ final class MaterialSurfaceGeometry {
             var triangle = colored.triangle();
             var center = triangle.centroid();
             var normal = triangle.normal();
-            boolean back = normal.x() * (camera.x - state.origin().getX() - center.x())
-                    + normal.y() * (camera.y - state.origin().getY() - center.y())
-                    + normal.z() * (camera.z - state.origin().getZ() - center.z()) < 0;
-            int material = back && colored.secondMaterial() >= 0 ? colored.secondMaterial() : colored.firstMaterial();
-            String id = state.materials().get(material).id();
-            boolean composition = textured;
+            for (int side = 0; side < 2; side++) {
+                boolean back = side == 1;
+                int material = back && colored.secondMaterial() >= 0 ? colored.secondMaterial() : colored.firstMaterial();
+                String id = state.materials().get(material).id();
+                boolean composition = textured;
 
-            int argb = shadow ? state.materials().get(material).argb() : back && colored.secondMaterial() >= 0 ? colored.secondArgb() : colored.argb();
-            float alpha = composition ? ((state.materials().get(material).argb() >>> 24) & 255) / 255.0F : 0.92F;
-            var position = state.origin().offset((int) Math.floor(center.x()), (int) Math.floor(center.y()), (int) Math.floor(center.z()));
-            int light = light(position);
-            FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX() - anchor.getX(),
-                    position.getY() - anchor.getY(), position.getZ() - anchor.getZ());
-            var sprite = composition ? sprites.apply(id) : null;
-            double length = Math.sqrt(normal.x()*normal.x()+normal.y()*normal.y()+normal.z()*normal.z());
-            float sign = back ? -1 : 1;
-            float nx = (float)(normal.x()/length)*sign, ny = (float)(normal.y()/length)*sign, nz = (float)(normal.z()/length)*sign;
-            // Coordinates within the source block keep atlas sampling bounded across arbitrary PLIC slopes.
-            boolean projectX = Math.abs(nx) >= Math.abs(ny) && Math.abs(nx) >= Math.abs(nz);
-            boolean projectY = !projectX && Math.abs(ny) >= Math.abs(nz);
-            double uBase = Math.floor(projectX ? center.z() : center.x());
-            double vBase = Math.floor(projectY ? center.z() : center.y());
-            var points = back ? new FluidMaterialSurfaceMesher.Point[] {triangle.c(),triangle.b(),triangle.a(),triangle.a()}
-                    : new FluidMaterialSurfaceMesher.Point[] {triangle.a(),triangle.b(),triangle.c(),triangle.c()};
-            for (var point : points) {
-                double u = (projectX ? point.z() : point.x()) - uBase;
-                double v = (projectY ? point.z() : point.y()) - vBase;
-                var vertex = vertices.addVertex((float)(ox+point.x()),(float)(oy+point.y()),(float)(oz+point.z()))
-                        .setColor(((argb>>>16)&255)/255f,((argb>>>8)&255)/255f,(argb&255)/255f,alpha);
-                if (composition) vertex.setUv(sprite.getU((float)Math.clamp(u,0,1)),sprite.getV((float)Math.clamp(v,0,1)))
-                        .setUv2(light & 0xffff,light >>> 16).setNormal(nx,ny,nz);
+                int argb = shadow ? state.materials().get(material).argb() : back && colored.secondMaterial() >= 0 ? colored.secondArgb() : colored.argb();
+                float alpha = composition ? ((state.materials().get(material).argb() >>> 24) & 255) / 255.0F : 0.92F;
+                var position = state.origin().offset((int) Math.floor(center.x()), (int) Math.floor(center.y()), (int) Math.floor(center.z()));
+                int light = lights.applyAsInt(position);
+                FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX() - anchor.getX(),
+                        position.getY() - anchor.getY(), position.getZ() - anchor.getZ());
+                var sprite = composition ? sprites.apply(id) : null;
+                double length = Math.sqrt(normal.x()*normal.x()+normal.y()*normal.y()+normal.z()*normal.z());
+                float sign = back ? -1 : 1;
+                float nx = (float)(normal.x()/length)*sign, ny = (float)(normal.y()/length)*sign, nz = (float)(normal.z()/length)*sign;
+                // Coordinates within the source block keep atlas sampling bounded across arbitrary PLIC slopes.
+                boolean projectX = Math.abs(nx) >= Math.abs(ny) && Math.abs(nx) >= Math.abs(nz);
+                boolean projectY = !projectX && Math.abs(ny) >= Math.abs(nz);
+                double uBase = Math.floor(projectX ? center.z() : center.x());
+                double vBase = Math.floor(projectY ? center.z() : center.y());
+                var points = back ? new FluidMaterialSurfaceMesher.Point[] {triangle.c(),triangle.b(),triangle.a(),triangle.a()}
+                        : new FluidMaterialSurfaceMesher.Point[] {triangle.a(),triangle.b(),triangle.c(),triangle.c()};
+                for (var point : points) {
+                    double u = (projectX ? point.z() : point.x()) - uBase;
+                    double v = (projectY ? point.z() : point.y()) - vBase;
+                    var vertex = vertices.addVertex((float)(ox+point.x()),(float)(oy+point.y()),(float)(oz+point.z()))
+                            .setColor(((argb>>>16)&255)/255f,((argb>>>8)&255)/255f,(argb&255)/255f,alpha);
+                    if (composition) vertex.setUv(sprite.getU((float)Math.clamp(u,0,1)),sprite.getV((float)Math.clamp(v,0,1)))
+                            .setUv2(light & 0xffff,light >>> 16).setNormal(nx,ny,nz);
+                }
             }
         }
     }

@@ -92,6 +92,27 @@ public final class RegionCatalog<T> {
 				current.reservedCells());
 	}
 
+	/** Preflights a changed spatial reservation for the same registered owner. */
+	public AdmissionResult previewUpdate(T value, Descriptor descriptor) {
+		Objects.requireNonNull(value, "value");
+		Objects.requireNonNull(descriptor, "descriptor");
+		Entry<T> previous = entries.get(descriptor.regionId());
+		if (previous == null || previous.value() != value)
+			return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID, "region is no longer registered");
+		BudgetUsage current = usage();
+		AdmissionResult admission = evaluate(descriptor.reservedCells(), current.regionCount(),
+				current.reservedCells() - previous.descriptor().reservedCells());
+		return admission.accepted() ? evaluatePlacement(descriptor, value) : admission;
+	}
+
+	/** Publishes a previously prepared owner and its new reservation under the same identity. */
+	public AdmissionResult update(T previous, T next, Descriptor descriptor) {
+		Objects.requireNonNull(next, "next");
+		AdmissionResult admission = previewUpdate(previous, descriptor);
+		if (admission.accepted()) entries.put(descriptor.regionId(), new Entry<>(next, descriptor));
+		return admission;
+	}
+
 	public AdmissionResult replaceSelected(T value, Descriptor descriptor) {
 		Objects.requireNonNull(value, "value");
 		Objects.requireNonNull(descriptor, "descriptor");
@@ -103,6 +124,41 @@ public final class RegionCatalog<T> {
 		selectedId = descriptor.regionId();
 		return admission;
 	}
+
+    /** Reserves one replacement for a complete set of current owners without changing the catalog. */
+    public AdmissionResult previewMerge(List<T> sources, Descriptor descriptor) {
+        if(sources.isEmpty() || new java.util.HashSet<>(sources).size()!=sources.size())
+            throw new IllegalArgumentException("Merge sources must be nonempty and unique");
+        long released=0;
+        for(var source:sources) {
+            var entry=entries.values().stream().filter(e->e.value()==source).findFirst().orElse(null);
+            if(entry==null)return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,"merge source is no longer registered");
+            if(!entry.descriptor().dimensionId().equals(descriptor.dimensionId()))
+                return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,"merge dimensions differ");
+            released=Math.addExact(released,entry.descriptor().reservedCells());
+        }
+        var primary=entries.get(descriptor.regionId());
+        if(primary==null || !sources.contains(primary.value()))
+            return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID,"merge must retain a source identity");
+        var usage=usage();
+        var result=evaluate(descriptor.reservedCells(),usage.regionCount()-sources.size()+1,usage.reservedCells()-released);
+        if(!result.accepted())return result;
+        for(var entry:entries.values())if(!sources.contains(entry.value()) && descriptor.overlaps(entry.descriptor()))
+            return AdmissionResult.rejected(RegionAvailabilityReason.OVERLAP,"merge overlaps another region");
+        return AdmissionResult.ACCEPTED;
+    }
+
+    /** Changes all source reservations together, retaining selection on their successor. */
+    public AdmissionResult merge(List<T> sources,T successor,Descriptor descriptor) {
+        Objects.requireNonNull(successor);
+        var result=previewMerge(sources,descriptor);
+        if(!result.accepted())return result;
+        boolean selected=sources.contains(selected());
+        entries.values().removeIf(entry->sources.contains(entry.value()));
+        entries.put(descriptor.regionId(),new Entry<>(successor,descriptor));
+        if(selected)selectedId=descriptor.regionId();
+        return result;
+    }
 	public AdmissionResult previewReplacement(Descriptor descriptor) {
 		Objects.requireNonNull(descriptor, "descriptor");
 		Entry<T> selected = selectedId == null ? null : entries.get(selectedId);

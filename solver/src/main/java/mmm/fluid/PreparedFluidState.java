@@ -4,6 +4,9 @@ package mmm.fluid;
 public interface PreparedFluidState extends AutoCloseable {
     FluidDomainState.Layout layout();
     FluidDomainState exportState();
+    default void attachEnvironment(PreparedEnvironmentState environment) {
+        throw new UnsupportedOperationException("Environment thermal candidates are unavailable");
+    }
     FluidStateAccess commit();
     @Override void close();
 }

@@ -10,7 +10,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Conservative local gas routes over the registered inventory columns. */
 final class VulkanLocalGasTransport implements AutoCloseable {
-    enum Field { HEADER(4), NANOS(8), MASS(8), SPECIES(8), ENERGY(8), VOLUME(8), PRIMAL_MASS(8), WORK(8), EXTERNAL_PRESSURE_WORK(8), OLD_VOLUME(8), OLD_MASS(8), NEW_MASS(8), INFLOW_NANOS(8), EXTERNAL_SOURCE_ENERGY(8), EXTERNAL_SINK_ENERGY(8), AMBIENT_DATA(8), ENERGY_ROUNDOFF(8), GATHER_ROUNDOFF(8), SPECIES_MASS(8); final int width; Field(int width){this.width=width;} }
+    enum Field { HEADER(4), NANOS(8), MASS(8), SPECIES(8), ENERGY(8), VOLUME(8), PRIMAL_MASS(8), WORK(8), EXTERNAL_PRESSURE_WORK(8), OLD_VOLUME(8), OLD_MASS(8), NEW_MASS(8), INFLOW_NANOS(8), EXTERNAL_SOURCE_ENERGY(8), EXTERNAL_SINK_ENERGY(8), AMBIENT_DATA(8), ENERGY_ROUNDOFF(8), GATHER_ROUNDOFF(8), SPECIES_MASS(8), ENV_OLD_ENERGY(8), ENV_NEW_ENERGY(8), ENV_OLD_SINK(8), ENV_NEW_SINK(8); final int width; Field(int width){this.width=width;} }
     /** Production storage uses the resident cell inventory, mixture, and shared MAC fields. */
     static final class ProductionLayout {
         final VulkanGasStateLayout source; final VulkanGasThermodynamics.Layout eos;
@@ -31,7 +31,7 @@ final class VulkanLocalGasTransport implements AutoCloseable {
             if(source.nodeCapacity()<cells||eos.gas()!=source||mixture.inputs().cells()!=cells||faceFlux<0||projectedVelocity<0||velocityStride<1||pressureWord<0||base<mixture.endOffset())throw new IllegalArgumentException("Invalid production gas transport layout");
             long cursor=base;int components=source.definitions().componentIds().size(),species=source.definitions().speciesStride();
             for(Field f:Field.values()) {
-                int n=switch(f){case HEADER->96;case NANOS,MASS->6*cells*components;case SPECIES->6*cells*species;case ENERGY,VOLUME,INFLOW_NANOS,ENERGY_ROUNDOFF->6*cells;case GATHER_ROUNDOFF->27*cells;case WORK,EXTERNAL_PRESSURE_WORK,OLD_VOLUME,OLD_MASS,NEW_MASS,EXTERNAL_SOURCE_ENERGY,EXTERNAL_SINK_ENERGY->cells;case AMBIENT_DATA->5*ambient.handles().length+4*ambient.speciesHandles().length+1;case SPECIES_MASS->speciesMasses.length;default->faces;};
+                int n=switch(f){case HEADER->96;case NANOS,MASS->6*cells*components;case SPECIES->6*cells*species;case ENERGY,VOLUME,INFLOW_NANOS,ENERGY_ROUNDOFF->6*cells;case GATHER_ROUNDOFF->27*cells;case WORK,EXTERNAL_PRESSURE_WORK,OLD_VOLUME,OLD_MASS,NEW_MASS,EXTERNAL_SOURCE_ENERGY,EXTERNAL_SINK_ENERGY,ENV_OLD_ENERGY,ENV_NEW_ENERGY,ENV_OLD_SINK,ENV_NEW_SINK->cells;case AMBIENT_DATA->5*ambient.handles().length+4*ambient.speciesHandles().length+1;case SPECIES_MASS->speciesMasses.length;default->faces;};
                 long offset=(cursor+alignment-1)&-alignment;var c=new VulkanLiquidStateLayout.Column(offset,n,f.width);fields.put(f,c);cursor=offset+c.bindingBytes();
             }
             endOffset=(cursor+alignment-1)&-alignment;

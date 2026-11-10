@@ -20,7 +20,7 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         BASE_SOLID(12), MIXTURE_STATES(13), COUPLED_PRESSURE(14), CONTACT_IMPULSE(15),
         SOURCE_CELL_WORK(17), SOURCE_OCCUPATION(18), RESPONSE_VELOCITY_BASE(19), RESPONSE_TERM_BASE(20),
         SOURCE_CELL_OFFSETS(21), SOURCE_CELL_ENTRIES(22), SOURCE_ENTRY_BODY(23), ACTIVITY_FACES(24),
-        SOURCE_ENTRY_VOLUME(25), SOURCE_INVERSE_MASS(26), FIELDS(32);
+        SOURCE_ENTRY_VOLUME(25), SOURCE_INVERSE_MASS(26), EXTERIOR_MASKS(27), SEALED_EXTERIOR(28), FIELDS(32);
         final int word; Header(int word) { this.word = word; }
     }
 
@@ -135,6 +135,9 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
             inputs[Header.SOURCE_INVERSE_MASS.word]=source.word(Field.INVERSE_MASS);
         }
         void bindActivity(int faceWord){inputs[Header.ACTIVITY_FACES.word]=faceWord;}
+        void bindExterior(VulkanLiquidStateLayout.Column masks,boolean sealed){
+            inputs[Header.EXTERIOR_MASKS.word]=word(masks);inputs[Header.SEALED_EXTERIOR.word]=sealed?1:0;
+        }
         void bindPressure(VulkanMixtureState.Layout mixture,VulkanCoupledPressure.Layout coupled){
             if(mixture.inputs().cells()!=cells||coupled.pressureSize()!=pressureRows)throw new IllegalArgumentException("Body pressure rows differ");
             inputs[Header.MIXTURE_STATES.word]=mixture.statesWord();

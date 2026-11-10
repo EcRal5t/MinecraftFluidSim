@@ -40,6 +40,7 @@ public final class FluidNetworkProtocolValidation {
 	private FluidNetworkProtocolValidation() { }
 
 	public static void main(String[] args) {
+		validateObservationCodecs();
 		validateNegotiationMatrix();
 		validateQueryAvailabilityReason();
 		validateConfigurationCodecs();
@@ -53,6 +54,22 @@ public final class FluidNetworkProtocolValidation {
 		validateThermalSnapshot();
 		System.out.println("Fluid network protocol validation passed");
 	}
+
+	private static void validateObservationCodecs() {
+        UUID session=UUID.randomUUID(); var position=new BlockPos(1,2,3); String dimension="minecraft:overworld";
+        var trendRequest=new ProcessTrendRequest(position,dimension,session,7,false);
+        var trend=new ProcessTrendPayload(position,dimension,session,7,"液位","运行中",false,true,
+                List.of(new ProcessTrendHistory.Point(.05,2,false),new ProcessTrendHistory.Point(.1,3,true)));
+        var sampleRequest=new SampleAnalysisRequest(session,dimension,net.minecraft.world.InteractionHand.MAIN_HAND);
+        var sample=new SampleAnalysisPayload(session,dimension,List.of("水"));
+        var buffer=new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            ProcessTrendRequest.CODEC.encode(buffer,trendRequest); require(trendRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"trend request codec");
+            ProcessTrendPayload.CODEC.encode(buffer,trend); require(trend.equals(ProcessTrendPayload.CODEC.decode(buffer)),"trend response codec");
+            SampleAnalysisRequest.CODEC.encode(buffer,sampleRequest); require(sampleRequest.equals(SampleAnalysisRequest.CODEC.decode(buffer)),"sample request codec");
+            SampleAnalysisPayload.CODEC.encode(buffer,sample); require(sample.equals(SampleAnalysisPayload.CODEC.decode(buffer)),"sample response codec");
+        } finally { buffer.release(); }
+    }
 
 	private static void validateDemoWorkbenchCodecs() {
 		UUID player = new UUID(97, 101), session = new UUID(103, 107), otherPlayer = new UUID(109, 113);
@@ -168,7 +185,7 @@ public final class FluidNetworkProtocolValidation {
 		UUID otherPlayer = new UUID(41L, 43L);
 		ControllerSummary.Capacity full = ControllerSummary.Capacity.available(8L, 16L);
 		ControllerSummary summary = new ControllerSummary(7L, REGION, DIMENSION.toString(), "a".repeat(64),
-				11L, 13L, new ControllerSummary.Footprint(2, 3, 4, 5, 6, 7, 180L, 4), true,
+				11L, 13L, new ControllerSummary.Footprint("区域", 2, 3, 4, 5, 6, 7, 180L, 4), true,
 				ControllerSummary.OperatorIntent.RUNNING, ControllerSummary.MotionState.REDUCED,
 				ControllerSummary.ThermalState.SLEEP,
 				new ControllerSummary.Availability(RegionAvailabilityReason.CHUNK_MISSING, "required chunk missing"),
@@ -481,6 +498,9 @@ public final class FluidNetworkProtocolValidation {
 				new FluidProtocolResponsePayload(true, FluidProtocol.Layout.GRANULAR,
 						FluidProtocol.REQUIRED_CAPABILITIES | FluidProtocol.CAP_MATERIAL_SNAPSHOT, ""));
 		require(!omitted.accepted(), "granular response omitted the granular capability");
+        var oldClient=FluidProtocol.validateResponse(offer,new FluidProtocolResponsePayload(true,FluidProtocol.Layout.GRANULAR,
+                offer.requiredCapabilities() & ~FluidProtocol.CAP_GRANULAR_FIXED_MASKS,""));
+        require(!oldClient.accepted(),"granular client without fixed masks was accepted");
 
 		FluidGranularSnapshotPayload payload = granularSnapshot(9L, 13L, "c".repeat(64), false);
 		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer()); FluidGranularSnapshotPayload decoded;
@@ -491,6 +511,7 @@ public final class FluidNetworkProtocolValidation {
 		require(decoded.material().generation() == 9L && decoded.material().sequence() == 13L
 				&& decoded.registryFingerprint().equals(payload.registryFingerprint())
 				&& decoded.granularMaterials().equals(payload.granularMaterials())
+				&& Arrays.equals(decoded.fixedMasks(), payload.fixedMasks())
 				&& Arrays.equals(decoded.depositBulkFill(), payload.depositBulkFill())
 				&& Arrays.equals(decoded.depositPorosity(), payload.depositPorosity())
 				&& Arrays.equals(decoded.depositTopMaterial(), payload.depositTopMaterial())
@@ -812,6 +833,7 @@ public final class FluidNetworkProtocolValidation {
 	) {
 		byte[] bulk = {(byte) 160, 0, 0, 0, 0, 0, 0, 0};
 		byte[] porosity = {(byte) 102, 0, 0, 0, 0, 0, 0, 0};
+        byte[] masks = {(byte) 0xfa, 0, 0, 0, 0, 0, 0, 0};
 		short[] top = {0, -1, -1, -1, -1, -1, -1, -1};
 		FluidChemicalSnapshotPayload chemical = withChemical
 				? chemicalSnapshot(generation, sequence, "a".repeat(64)) : null;
@@ -820,7 +842,7 @@ public final class FluidNetworkProtocolValidation {
 				chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph());
 		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, materialSnapshot(generation, sequence), fingerprint,
 				List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:fine_sand", 0xffc2a065)),
-				bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(12_000, 24_000,
+				masks, bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(12_000, 24_000,
 				36_000, 32, 0)), layer);
 	}
 
@@ -830,7 +852,7 @@ public final class FluidNetworkProtocolValidation {
 		Arrays.fill(top, (short) -1); bulk[0] = (byte) 128; porosity[0] = (byte) 102; top[0] = 0;
 		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, chemical.material(), "c".repeat(64),
 				List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:fine_sand", 0xffc2a065)),
-				bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(1, 2, 3, 16, 0)),
+				new byte[bulk.length], bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(1, 2, 3, 16, 0)),
 				new FluidGranularSnapshotPayload.ChemicalLayer(chemical.registryFingerprint(), chemical.species(),
 						chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph()));
 	}
@@ -839,4 +861,3 @@ public final class FluidNetworkProtocolValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 }
-

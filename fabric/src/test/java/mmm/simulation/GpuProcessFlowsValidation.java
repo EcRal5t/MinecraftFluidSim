@@ -254,6 +254,8 @@ public final class GpuProcessFlowsValidation {
         if(startup.creationLocked())throw new IllegalStateException(startup.blockingSummary());
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.SCREENING);
         var region=fixture.region;var screens=region.hostSnapshot().captureAuthoritativeState().fixedGeometry().screens();
         if(screens.isEmpty())throw new AssertionError("Screen blocks did not configure shared faces");
@@ -269,8 +271,7 @@ public final class GpuProcessFlowsValidation {
         if(gasContents==null||gasContents.inventory().isEmpty())throw new AssertionError("Box output did not retain the gas mixture");
         fixture.transferBoxDurable(gas,fixture.portCell,false,gasContents.inventory().standardVolumeNanos());
         long initialMass=processMass(region.hostSnapshot().captureAuthoritativeState());
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -305,6 +306,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.TWO_TANKS);
         var region=fixture.region;int plane=11;var faceList=new ArrayList<Integer>();
         for(int y=0;y<4;y++)for(int z=0;z<4;z++)faceList.add(region.grid().faceAt(plane,y,z,0));
@@ -319,8 +322,7 @@ public final class GpuProcessFlowsValidation {
         }
         ItemStack batch=new ItemStack(Items.WATER_BUCKET);double flow=0;long output=0,inputMass=0,outputMass=0;
         long initialMass=processMass(region.hostSnapshot().captureAuthoritativeState());
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -346,12 +348,12 @@ public final class GpuProcessFlowsValidation {
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Valve process step rejected");
                 flow+=Math.abs(region.observeLiquidFlow(faces));
             }
+            long finalMass=processMass(region.hostSnapshot().captureAuthoritativeState());
+            System.out.println("valve_control_volume closed="+closed+" initial="+initialMass+" input="+inputMass+" output="+outputMass+" final="+finalMass);
+            if(inputMass<0 || outputMass<0 || finalMass!=Math.subtractExact(Math.addExact(initialMass,inputMass),outputMass))
+                throw new AssertionError("Valve control-volume mass did not close");
+            return new ValveResult(flow,output);
         }
-        long finalMass=processMass(region.hostSnapshot().captureAuthoritativeState());
-        System.out.println("valve_control_volume closed="+closed+" initial="+initialMass+" input="+inputMass+" output="+outputMass+" final="+finalMass);
-        if(inputMass<0 || outputMass<0 || finalMass!=Math.subtractExact(Math.addExact(initialMass,inputMass),outputMass))
-            throw new AssertionError("Valve control-volume mass did not close");
-        return new ValveResult(flow,output);
     }
     private static void industrialHeat(int steps) throws Exception {
         var metal=counterflowRun(steps,false,false);
@@ -365,6 +367,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,stone?IndustrialLayout.Scenario.COUNTERFLOW_STONE:IndustrialLayout.Scenario.COUNTERFLOW);
         var region=fixture.region;
         var layout=IndustrialLayout.at(new BlockPos(14,64,20),stone?IndustrialLayout.Scenario.COUNTERFLOW_STONE:IndustrialLayout.Scenario.COUNTERFLOW);
@@ -384,8 +388,7 @@ public final class GpuProcessFlowsValidation {
         long hotCapacity=layout.counterflowChargeNanos(Direction.NORTH),coldCapacity=layout.counterflowChargeNanos(Direction.SOUTH);
         double startupHot=Double.NaN,startupCold=Double.NaN;
         long initial=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(hot,world)+chemicalMass(cold,world),supplied=0;
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -523,7 +526,7 @@ public final class GpuProcessFlowsValidation {
     private static double counterflowWallEnergy(FluidRegion region,CommittedWorldRegistries world,IndustrialLayout layout) {
         var wallIds=layout.walls().stream().map(wall->wall.position().asLong()+"@").toList();
         return region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
-                .filter(device->(device.providerId().equals(OrdinaryThermalWalls.PROVIDER)
+                .filter(device->(device.providerId().equals(WorldThermalEnvironment.PROVIDER)
                         && wallIds.stream().anyMatch(device.objectId()::startsWith))
                         || (device.providerId().equals(FiniteHeatExchangerOperations.PROVIDER)
                         && layout.walls().stream().anyMatch(wall->device.objectId().equals(Long.toString(wall.position().asLong())))))
@@ -668,6 +671,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.ABSORPTION);
         var region=fixture.region;
         int[] treatedIn=fixture.portCell,controlIn={0,0,8},treatedOut={region.sizeX()-1,0,0},controlOut={region.sizeX()-1,0,8};
@@ -676,8 +681,7 @@ public final class GpuProcessFlowsValidation {
         var products=new ArrayList<ItemStack>();
         double peakSeparation=0;
         long initial=surfaceProcessMass(region,world)+gasMass(treated)+gasMass(control),supplied=0;
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -784,7 +788,7 @@ public final class GpuProcessFlowsValidation {
             int portDirection=axis*2+(direction.getAxisDirection()==Direction.AxisDirection.POSITIVE?0:1);
             double sites=Mass.kilograms(surface.loadingMassUnits())*material.siteCapacityMolesPerKg();
             int contacts=0;
-            for(var port:OrdinaryThermalWalls.ports(region,device,world.thermalRegistry())) {
+            for(var port:WorldThermalEnvironment.ports(region,device,world.thermalRegistry())) {
                 if(port.direction()!=portDirection)continue;
                 int cell=region.grid().cell(port.cellX(),port.cellY(),port.cellZ());
                 var inventory=gas.cells().get(cell);double weight=0;
@@ -871,6 +875,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,scenario);
         var region=fixture.region;
         int[] treatedIn=fixture.portCell,controlIn={0,0,8},treatedOut={region.sizeX()-1,0,0},controlOut={region.sizeX()-1,0,8};
@@ -880,8 +886,7 @@ public final class GpuProcessFlowsValidation {
         var treatedSamples=new ArrayList<ChemicalContents>();var controlSamples=new ArrayList<ChemicalContents>();long treatedVolume=0,controlVolume=0;
         long initial=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(treated,world)+chemicalMass(control,world),supplied=0;
         long catalyst=region.finiteThermalDevices(world.thermalRegistryFingerprint()).surfaceLoadingMassUnits();
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -943,13 +948,14 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.CATALYSIS);
         var region=fixture.region;int[] treatedIn=fixture.portCell,controlIn={0,0,8};
         ItemStack treated=catalysisFeed(world),control=catalysisFeed(world);
         long initial=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(treated,world)+chemicalMass(control,world);
         long catalyst=region.finiteThermalDevices(world.thermalRegistryFingerprint()).surfaceLoadingMassUnits();
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -1019,6 +1025,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.SCREENING);
         var region=fixture.region;int[] solidInput={0,6,0},solidOutput={0,4,0};
         var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.SCREENING);
@@ -1030,8 +1038,7 @@ public final class GpuProcessFlowsValidation {
         var source=screenFeed(world);long initial=mmm.item.GranularContainerItem.unvalidatedContents(source).totalMassUnits();
         ItemStack remaining=source;boolean seeded=false;
         ItemStack water=saltedWater(world,293.15);
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -1124,6 +1131,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.SCREENING_CRYSTALLIZATION);
         var region=fixture.region;var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.SCREENING_CRYSTALLIZATION);
         var wall=layout.walls().getFirst();
@@ -1146,8 +1155,7 @@ public final class GpuProcessFlowsValidation {
         var coldWall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().filter(device->device.objectId().startsWith(wallPrefix)).findFirst().orElseThrow();
         double wallEnergy=coldWall.body().internalEnergyJ();
         long coolingBudget=Math.max(4000,steps);
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
@@ -1315,6 +1323,8 @@ public final class GpuProcessFlowsValidation {
                 EnumSet.allOf(WorldCapability.class),definitions.material(),definitions.chemical(),definitions.granular(),definitions.gas(),definitions.thermal()));
         var world=new CommittedWorldRegistries(startup);var manager=new FluidRegionManager(startup.config().limits());
         var operations=new FluidRegionOperations(startup.worldRoot(),manager,startup);
+        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
+            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,scenario);
         var region=fixture.region;var layout=IndustrialLayout.at(new BlockPos(14,64,20),scenario);
         var sensors=new ArrayList<mmm.block.ProcessSensorBlockEntity>();
@@ -1340,8 +1350,7 @@ public final class GpuProcessFlowsValidation {
         var initialAudit=initialState.thermalOwner().audit();
         double initialWallEnergy=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().mapToDouble(value->value.body().internalEnergyJ()).sum();
         int tick=0;
-        try(var backend=MmmRuntimeFactory.createSolverBackend()) {
-            MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
+
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);region.replaceThermalBoundaryTemperatures(temperatures);
@@ -1496,7 +1505,7 @@ public final class GpuProcessFlowsValidation {
         var wall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
                 .filter(value->value.objectId().equals(object)).findFirst().orElseThrow();
         var state=region.hostSnapshot().captureAuthoritativeState();int[] selected={11,4,1};
-        if(OrdinaryThermalWalls.ports(region,wall,world.thermalRegistry()).stream().noneMatch(port->
+        if(WorldThermalEnvironment.ports(region,wall,world.thermalRegistry()).stream().noneMatch(port->
                 port.cellX()==selected[0]&&port.cellY()==selected[1]&&port.cellZ()==selected[2]))
             throw new AssertionError("Collector is not in contact with the cold wall");
         int collector=region.grid().cell(selected[0],selected[1],selected[2]);long ethanol=0,water=0;
@@ -1590,14 +1599,14 @@ public final class GpuProcessFlowsValidation {
         var def=registry.finiteDevice(type);double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(def.thermalMaterialId()),def.bodyMassKilograms(),Map.of(),temperature);
         var body=new FiniteThermalBodyState(0,registry.fingerprint(),def.thermalMaterialId(),def.bodyMassUnits(),energy);
         var positions=excluded==null?Arrays.stream(Direction.values()).map(inside::relative)
-                .filter(p->region.footprint().boundaryBlocks().contains(p.asLong())).toList()
+                .filter(p->region.footprint().interiorBlocks().contains(p.asLong())).toList()
                 :region.sizeX()>4?List.of(region.origin().offset(5,1,0)):
-                region.footprint().boundaryBlocks().stream().map(BlockPos::of)
+                region.footprint().interiorBlocks().stream().map(BlockPos::of)
                 .sorted(Comparator.comparingDouble((BlockPos p)->p.distSqr(inside)).reversed()).toList();
         FiniteThermalDeviceState selected=null;
         for(var pos:positions){
-            var candidate=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,pos.asLong()+(excluded==null?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
-            if(!candidate.objectId().equals(excluded)&&!OrdinaryThermalWalls.ports(region,candidate,registry).isEmpty()){selected=candidate;break;}
+            var candidate=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+(excluded==null?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
+            if(!candidate.objectId().equals(excluded)&&!WorldThermalEnvironment.ports(region,candidate,registry).isEmpty()){selected=candidate;break;}
         }
         if(selected==null)throw new IllegalStateException("No exposed finite wall");
         return selected;
@@ -1609,8 +1618,8 @@ public final class GpuProcessFlowsValidation {
         var def=registry.finiteDevice(stone?"mmm:ordinary_stone_wall":"mmm:ordinary_metal_wall");
         double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(def.thermalMaterialId()),def.bodyMassKilograms(),Map.of(),temperature);
         var body=new FiniteThermalBodyState(0,registry.fingerprint(),def.thermalMaterialId(),def.bodyMassUnits(),energy);
-        var wall=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,pos.asLong()+(stone?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
-        if(OrdinaryThermalWalls.ports(region,wall,registry).isEmpty())throw new IllegalStateException("Cooling wall has no gas contact");
+        var wall=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+(stone?"@minecraft:stone":"@minecraft:iron_block"),def.id(),body);
+        if(WorldThermalEnvironment.ports(region,wall,registry).isEmpty())throw new IllegalStateException("Cooling wall has no gas contact");
         return wall;
     }
     private static void installFiniteWalls(FluidRegion region,ThermalRegistry registry,List<FiniteThermalDeviceState> devices){

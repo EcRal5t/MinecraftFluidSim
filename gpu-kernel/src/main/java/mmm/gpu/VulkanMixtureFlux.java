@@ -114,6 +114,7 @@ final class VulkanMixtureFlux implements AutoCloseable {
         int[] counts=new int[n];
         for(int cell=0;cell<n;cell++)for(int side=0;side<6;side++){
             int next=closing[cell]?(side==sideToExit[cell]?destination[cell]:-1):grid.neighbor(cell,side);
+            if(!closing[cell] && next>=0 && closing[next])next=-1;
             target[6*cell+side]=next;if(next>=0)counts[next]++;
         }
         int[] offsets=new int[n+1];for(int cell=0;cell<n;cell++)offsets[cell+1]=Math.addExact(offsets[cell],counts[cell]);

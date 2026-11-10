@@ -12,6 +12,13 @@ import net.minecraft.server.MinecraftServer;
 /** Fabric discovery bridge; the returned contract itself is loader-neutral. */
 public final class MmmFabricApi {
 	private MmmFabricApi() { }
+	/** Registers prescribed structure providers on the active server runtime. */
+	public static mmm.api.motion.MovingStructureApi movingStructures(MinecraftServer server) {
+		if (server == null) throw new IllegalArgumentException("Minecraft server is missing");
+		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
+		if (runtime == null) throw new IllegalStateException("Matter, Motion & Mechanics server service is not initialized");
+		return runtime.movingStructures();
+	}
 	public static mmm.api.transfer.MmmTransferApi transfers(MinecraftServer server) {
 		if(server==null) throw new IllegalArgumentException("Minecraft server is missing");
 		MmmRuntime runtime=MmmRuntimeRegistry.find(server);

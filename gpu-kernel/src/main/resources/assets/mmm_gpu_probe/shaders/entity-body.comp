@@ -119,9 +119,19 @@ bool isMicrocellOpen(ivec3 microCoordinates) {
 }
 double openFaceArea(int faceIndex) {
     ivec2 adjacent = adjacentCells(faceIndex);
-    if (adjacent.x < 0 || adjacent.y < 0)
-        return 0.0;
     int axis = faceAxis(faceIndex), openMicrofaces = 0;
+    if (adjacent.x < 0 || adjacent.y < 0) {
+        if (headerWord(H_EXTERIOR_MASKS)<0 || headerWord(H_SEALED_EXTERIOR)!=0) return 0.0;
+        int cell=max(adjacent.x,adjacent.y),side=adjacent.x<0?0:1;
+        int a=axis==0?1:0,b=axis==2?1:2;
+        uint fixedMask=arenaWords[headerWord(H_MASKS)+cell];
+        uint outside=arenaWords[headerWord(H_EXTERIOR_MASKS)+cell] >> (4*(2*axis+side));
+        for(int u=0;u<2;u++)for(int v=0;v<2;v++){
+            int bit=(side<<axis)|(u<<a)|(v<<b),port=u+2*v;
+            if((fixedMask&(1u<<bit))==0u && (outside&(1u<<port))==0u)openMicrofaces++;
+        }
+        return MICROFACE_AREA*double(openMicrofaces);
+    }
     ivec3 faceMicroOrigin = cellCoordinates(adjacent.y) * 2;
     int tangentAxisA = axis == 0 ? 1 : 0, tangentAxisB = axis == 2 ? 1 : 2;
     for (int microface = 0; microface < 4; microface++) {

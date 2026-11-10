@@ -32,6 +32,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
         return material < 0 ? null : frame.payload().materials().get(material).id();
     }
 	private final ClientRegionSnapshotStore snapshots = new ClientRegionSnapshotStore();
+    private final ClientPipeSnapshotStore pipes=new ClientPipeSnapshotStore();
+    private volatile java.util.List<mmm.network.PipeSnapshotPayload.Segment> extractedPipes=java.util.List.of();
+    public void accept(mmm.network.PipeSnapshotPayload payload,FluidProtocol.Negotiation negotiation){pipes.accept(payload,negotiation);}
 	private final FluidRenderBackend backend = new FluidRenderBackend();
 
 
@@ -53,6 +56,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 	public void extract(LevelExtractionContext context) {
 		snapshots.extract(context);
+        extractedPipes=pipes.forDimension(context.level().dimension().identifier());
 	}
 
     public void render(LevelRenderContext context) {
@@ -65,26 +69,13 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
     }
 
     private void renderMaterials(net.minecraft.world.phys.Vec3 camera, boolean shadow) {
-        var materials = snapshots.materialFrames();
-        var granular = snapshots.granularFrames();
-        if (materials.isEmpty() && granular.isEmpty()) return;
-        var view = materials.isEmpty() ? granular.getFirst().material().view() : materials.getFirst().view();
-        boolean textured = shadow || view.mode() == FluidDisplaySettings.Mode.COMPOSITION;
-        var coordinates = FluidRenderCoordinates.at(camera);
-        {
-            java.util.function.Consumer<com.mojang.blaze3d.vertex.VertexConsumer> geometry = vertices -> {
-                for (var frame : materials) MaterialSurfaceGeometry.buildGeometry(camera, vertices, frame, shadow, textured);
-                for (var frame : granular) {
-                    MaterialSurfaceGeometry.buildGeometry(camera, vertices, frame.material(), shadow, textured);
-                    GranularSurfaceGeometry.buildGeometry(camera, vertices, frame, textured);
-                }
-            };
-            if (shadow) backend.renderShadow(coordinates, geometry);
-            else backend.render(textured, coordinates, geometry);
-        }
+        backend.render(snapshots.materialFrames(), snapshots.granularFrames(), extractedPipes,FluidRenderCoordinates.at(camera), shadow);
     }
+
+    void invalidateResources() { backend.invalidate(); }
 	public void clear() {
-		snapshots.clear();
+		snapshots.clear();pipes.clear();extractedPipes=java.util.List.of();
+        backend.invalidate();
 	}
 
 	@Override

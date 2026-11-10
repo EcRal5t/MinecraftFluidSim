@@ -40,6 +40,7 @@ final class MinecraftRegionTick {
 	private final MinecraftRegionInputs inputs;
 	private final FluidSnapshotPublisher snapshots;
 	private final WorldCapabilityProfile profile;
+	private final RegionExpansion expansion;
 	private java.util.function.Consumer<FluidRegion> activityConnections = region -> { };
 	void activityConnections(java.util.function.Consumer<FluidRegion> connections) { activityConnections = Objects.requireNonNull(connections); }
 	private java.util.function.BiPredicate<ServerLevel,FluidRegion> farmlandHydration = (level,region) -> true;
@@ -51,12 +52,14 @@ final class MinecraftRegionTick {
 			RegionApplicationService application,
 			MinecraftRegionInputs inputs,
 			FluidSnapshotPublisher snapshots,
-			WorldCapabilityProfile profile
+			WorldCapabilityProfile profile,
+			RegionExpansion expansion
 	) {
 		this.useCase = new RegionTickUseCase(Objects.requireNonNull(application, "Region application"), POLICY);
 		this.inputs = Objects.requireNonNull(inputs, "Minecraft region inputs");
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.profile = Objects.requireNonNull(profile, "World capability profile");
+		this.expansion = Objects.requireNonNull(expansion, "Region expansion");
 	}
 
 	void finishServerTick() { inputs.finishServerTick(); }
@@ -64,9 +67,10 @@ final class MinecraftRegionTick {
 
 	/** A manual motion step uses the same world observations and accepted entity response as a tick. */
 	void manualStep(ServerLevel level, FluidRegion region, MinecraftMotionExecutor motion) {
+		if (expansion.handle(level, region)) throw new IllegalStateException("区域扩容已处理，请重新执行单步");
 		inputs.discardEntityResponse(region);
 		try {
-			if (region.collisionRefreshRequired()) refreshRegionInputs(level, region);
+			if (region.collisionRefreshRequired() || inputs.externalHandoffsDue(region)) refreshRegionInputs(level, region);
 			activityConnections.accept(region);
 			MinecraftRegionInputs.TickInputs captured;
 			try { captured = inputs.captureManualStep(level, region, profile.hasCapability(WorldCapability.THERMAL)); }
@@ -95,8 +99,9 @@ final class MinecraftRegionTick {
 			return;
 		}
 		boolean collisionsChanged = false;
-		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick)) {
+		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick) || inputs.externalHandoffsDue(region)) {
 			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
+			catch (ExternalMovingStructures.InputRejectedException waiting) { return; }
 			catch (FluidDomainContracts.CollisionEditBlockedException blocked) {
 				if (region.pauseForUnavailableDevice()) throw blocked;
 				blockCollisionEdit(level, region, blocked);
@@ -109,6 +114,9 @@ final class MinecraftRegionTick {
 			if (!farmlandHydration.test(level, region)) return;
 			activityConnections.accept(region);
 			frozen = inputs.captureTick(level, region, tick, profile.hasCapability(WorldCapability.THERMAL));
+		} catch (ExternalMovingStructures.InputRejectedException rejected) {
+			inputs.discardEntityResponse(region);
+			return;
 		} catch (RuntimeException failure) {
 			inputs.discardEntityResponse(region);
 			blockStepFailure(level, region, new RegionRepository.StateCaptureRejectedException(
@@ -124,6 +132,10 @@ final class MinecraftRegionTick {
 			return;
 		}
 		boolean motionStepDue = tickPlan.axis() == RegionTickUseCase.Axis.MOTION;
+		if (motionStepDue && expansion.handle(level, region)) {
+			inputs.discardEntityResponse(region);
+			return;
+		}
 		ThermalAuditLedger thermalBefore = profile.hasCapability(WorldCapability.THERMAL)
 				? region.thermalAudit() : null;
 		FluidDomainContracts.ThermalAxisStats completedThermalAxis = null;
@@ -159,6 +171,7 @@ final class MinecraftRegionTick {
 			if (!blockStepFailure(level, region, failure)) throw failure;
 			return;
 		}
+		region.advanceSessionSimulationTime();
 		boolean thermalRequiresMotion = false;
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			thermalRequiresMotion = observeThermalStep(region, thermalBefore, motionStepDue,

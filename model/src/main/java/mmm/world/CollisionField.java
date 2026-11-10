@@ -6,16 +6,19 @@ import mmm.spatial.SpatialGrid;
 public final class CollisionField {
 	private final SpatialGrid grid;
 	private final byte[] microMasks;
+	private final int[] exteriorMasks;
 
 	public CollisionField(int sizeX, int sizeY, int sizeZ, byte[] microMasks) {
 		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),microMasks);
 	}
-	public CollisionField(SpatialGrid grid, byte[] microMasks) {
-		if (grid == null || microMasks == null || microMasks.length != grid.cellCount()) {
+	public CollisionField(SpatialGrid grid, byte[] microMasks) { this(grid,microMasks,new int[grid.cellCount()]); }
+	public CollisionField(SpatialGrid grid, byte[] microMasks, int[] exteriorMasks) {
+		if (grid == null || microMasks == null || microMasks.length != grid.cellCount() || exteriorMasks == null || exteriorMasks.length != grid.cellCount()) {
 			throw new IllegalArgumentException("Collision field dimensions are invalid");
 		}
 		this.grid = grid;
 		this.microMasks = microMasks.clone();
+		this.exteriorMasks = exteriorMasks.clone();
 	}
 
 	public SpatialGrid grid() { return grid; }
@@ -29,5 +32,6 @@ public final class CollisionField {
 		}
 		return Byte.toUnsignedInt(microMasks[cell]);
 	}
+	public int[] copyExteriorMasks() { return exteriorMasks.clone(); }
 	public byte[] copyMicroMasks() { return microMasks.clone(); }
 }

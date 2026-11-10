@@ -37,6 +37,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     private final VulkanCellObservation cellObservation;
     private final VulkanWaterContacts waterContacts;
     private final Set<Region> regions = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final java.util.Map<String, VulkanWorldEnvironment> environments = new java.util.HashMap<>();
     private boolean closed;
     private String unavailable;
     private long reusedImports;
@@ -45,6 +46,10 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     }
     synchronized long readbackBytes() {
         return regions.stream().mapToLong(region -> region.device.storage.metrics().readbackBytes()).sum();
+    }
+    synchronized VulkanRegionStorage.Metrics regionMetrics(FluidStateAccess state) {
+        if (!(state instanceof State resident) || resident.owner()!=this) throw new IllegalArgumentException("State belongs to another backend");
+        resident.ensure();return resident.region.device.storage.metrics();
     }
     @Override
     public synchronized String unavailableReason() {
@@ -119,7 +124,66 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     @Override
     public synchronized PreparedFluidState prepareState(FluidStateAccess source, FluidDomainState successor,
         FiniteThermalDeviceInventory devices, List<FluidStateAccess.DevicePort> ports) {
-        return deviceCall(() -> prepareStateInternal(source, successor, devices, ports));
+        return deviceCall(() -> prepareStateInternal(source, successor, devices, ports, source == null ? null : source.environmentBinding()));
+    }
+    @Override
+    public synchronized PreparedFluidState prepareState(FluidStateAccess source, FluidDomainState successor,
+        FiniteThermalDeviceInventory devices, List<FluidStateAccess.DevicePort> ports, EnvironmentBinding binding) {
+        return deviceCall(() -> prepareStateInternal(source, successor, devices, ports, binding));
+    }
+    @Override
+    public synchronized void configureEnvironment(EnvironmentThermalState state, FluidDefinitions definitions) {
+        if (closed) throw new IllegalStateException("Vulkan backend is closed");
+        var previous = environments.get(state.dimensionId());
+        if (previous != null && state.generation() != previous.generation())
+            throw new IllegalArgumentException("Environment edit uses a stale generation");
+        var next = deviceCall(() -> new VulkanWorldEnvironment(context, state, definitions));
+        if(previous!=null)next.retainQueuedFrom(previous);
+        environments.put(state.dimensionId(), next);
+        if (previous != null) previous.close();
+    }
+    @Override
+    public synchronized PreparedEnvironmentState prepareEnvironment(EnvironmentThermalState state, FluidDefinitions definitions) {
+        if (closed) throw new IllegalStateException("Vulkan backend is closed");
+        var previous = environments.get(state.dimensionId());
+        if (previous == null || state.generation() != previous.generation())
+            throw new IllegalArgumentException("Environment edit uses a stale generation");
+        var successor = new EnvironmentThermalState(state.dimensionId(), Math.addExact(state.generation(),1),
+                state.registryFingerprint(),state.nodes(),state.contacts(),state.audit());
+        return new EnvironmentEdit(previous,deviceCall(() -> new VulkanWorldEnvironment(context,successor,definitions)),state.dimensionId(),state.generation());
+    }
+    private final class EnvironmentEdit implements PreparedEnvironmentState {
+        final VulkanWorldEnvironment previous, successor;final String dimension;final long base;boolean handled;
+        EnvironmentEdit(VulkanWorldEnvironment previous,VulkanWorldEnvironment successor,String dimension,long base){this.previous=previous;this.successor=successor;this.dimension=dimension;this.base=base;}
+        VulkanFluidSolverBackend owner(){return VulkanFluidSolverBackend.this;}
+        public String dimensionId(){return dimension;}
+        public long baseGeneration(){return base;}
+        public EnvironmentThermalState capture(){synchronized(VulkanFluidSolverBackend.this){if(handled)throw new IllegalStateException("Environment candidate is closed");return successor.capture();}}
+        public boolean isCurrent(){synchronized(VulkanFluidSolverBackend.this){return !handled&&!closed&&environments.get(dimension)==previous&&previous.generation()==base;}}
+        public void commit(){synchronized(VulkanFluidSolverBackend.this){if(!isCurrent())throw new IllegalStateException("Environment candidate is stale");successor.retainQueuedFrom(previous);environments.put(dimension,successor);handled=true;previous.close();}}
+        public void close(){synchronized(VulkanFluidSolverBackend.this){if(!handled){handled=true;successor.close();}}}
+    }
+    @Override
+    public synchronized EnvironmentThermalState captureEnvironment(String dimensionId) {
+        var environment = environments.get(dimensionId);
+        if (environment == null) throw new IllegalArgumentException("Environment is not configured: " + dimensionId);
+        return deviceCall(environment::capture);
+    }
+    @Override
+    public synchronized void advanceEnvironment(String dimensionId, double durationSeconds) {
+        var environment = environments.get(dimensionId);
+        if (environment == null) throw new IllegalArgumentException("Environment is not configured: " + dimensionId);
+        deviceCall(() -> { environment.advance(durationSeconds); return null; });
+    }
+    @Override public synchronized void queueEnvironmentAdvance(String dimensionId,double durationSeconds) {
+        var environment=environments.get(dimensionId);
+        if(environment==null)throw new IllegalArgumentException("Environment is not configured: "+dimensionId);
+        environment.queueAdvance(durationSeconds);
+    }
+    @Override public synchronized void flushEnvironmentAdvance(String dimensionId) {
+        var environment=environments.get(dimensionId);
+        if(environment==null)throw new IllegalArgumentException("Environment is not configured: "+dimensionId);
+        deviceCall(()->{environment.flushAdvance();return null;});
     }
     @Override
     public synchronized PreparedFluidState prepareThermalBoundary(ResidentFluidState source, double[] temperatures) {
@@ -129,9 +193,11 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             current.ensure();
             var prepared = current.region.device.prepareThermalBoundary(current.capture, temperatures);
             try {
-                return new Edited(prepared,
-                    new State(current.region, current.codec.withBoundaryTemperatures(temperatures), current.ports,
-                        prepared.captureState(), current.audit));
+                var state = new State(current.region, current.codec.withBoundaryTemperatures(temperatures), current.ports,
+                        prepared.captureState(), current.audit);
+                state.binding = current.binding;
+                state.syncedEnvironment = current.syncedEnvironment;state.syncedGeneration = current.syncedGeneration;
+                return new Edited(prepared, state);
             } catch (RuntimeException | Error failure) {
                 prepared.close();
                 throw failure;
@@ -139,7 +205,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         });
     }
     private PreparedFluidState prepareStateInternal(FluidStateAccess source, FluidDomainState successor,
-        FiniteThermalDeviceInventory devices, List<FluidStateAccess.DevicePort> ports) {
+        FiniteThermalDeviceInventory devices, List<FluidStateAccess.DevicePort> ports, EnvironmentBinding binding) {
         if (source instanceof State current && current.owner() == this && current.layout().equals(successor.layout())) {
             current.ensure();
             var encodedPorts =
@@ -149,7 +215,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                         int cell = successor.grid().cell(contact.cellX(), contact.cellY(), contact.cellZ());
                         return new VulkanThermalDeviceLayout.Port(port.providerId(), port.objectId(), cell,
                             contact.direction(), contact.wallThicknessMetres(), contact.wallConductivityWPerMetreK(),
-                            contact.filmThicknessMetres());
+                            contact.filmThicknessMetres(), contact.openMicroMask(), contact.internalFace(),contact.areaScale());
                     })
                     .toList();
             var codec = new VulkanFluidStateCodec(successor, devices, encodedPorts);
@@ -160,8 +226,9 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                     var audit = successor.thermalOwner() == null
                         ? null
                         : codec.initialGasAudit(successor.thermalOwner().audit()).withRoundoff(prepared.importRoundoff());
-                    return new Edited(
-                        prepared, new State(current.region, codec, ports, prepared.captureState(), audit));
+                    var state = new State(current.region, codec, ports, prepared.captureState(), audit);
+                    state.binding = binding;
+                    return new Edited(prepared, state);
                 } catch (RuntimeException | Error failure) {
                     prepared.close();
                     throw failure;
@@ -185,6 +252,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             public List<FluidStateAccess.DevicePort> finiteThermalPorts() {
                 return ports;
             }
+            @Override public EnvironmentBinding environmentBinding() { return binding; }
         };
         return new Imported(acquire(payload));
     }
@@ -192,6 +260,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     private final class Edited implements PreparedFluidState {
         private final VulkanLiquidRegion.Prepared prepared;
         private State state;
+        private EnvironmentEdit environment;
         Edited(VulkanLiquidRegion.Prepared prepared, State state) {
             this.prepared = prepared;
             this.state = state;
@@ -209,13 +278,21 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         public FluidDomainState exportState() {
             return owned().exportState();
         }
+        @Override public void attachEnvironment(PreparedEnvironmentState candidate) {
+            if (!(candidate instanceof VulkanFluidSolverBackend.EnvironmentEdit edit) || edit.owner()!=VulkanFluidSolverBackend.this || environment != null || !edit.isCurrent())
+                throw new IllegalArgumentException("Environment candidate is unavailable");
+            environment=edit;
+        }
         @Override
         public FluidStateAccess commit() {
             synchronized (VulkanFluidSolverBackend.this) {
                 var result = owned();
                 result.ensure();
+                if (!prepared.canCommit() || environment != null && !environment.isCurrent())
+                    throw new IllegalStateException("Region or environment candidate is stale");
                 deviceCall(() -> {
                     prepared.commit();
+                    if(environment!=null)environment.commit();
                     return null;
                 });
                 state = null;
@@ -231,6 +308,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                         prepared.close();
                     } finally {
                         state.close();
+                        if(environment!=null)environment.close();
                         state = null;
                     }
                 }
@@ -241,6 +319,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     /** The imported storage stays private until the region's transaction adopts it. */
     private final class Imported implements PreparedFluidState {
         private State state;
+        private EnvironmentEdit environment;
         Imported(State state) {
             this.state = state;
         }
@@ -257,11 +336,17 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         public FluidDomainState exportState() {
             return owned().exportState();
         }
+        @Override public void attachEnvironment(PreparedEnvironmentState candidate) {
+            if (!(candidate instanceof VulkanFluidSolverBackend.EnvironmentEdit edit) || edit.owner()!=VulkanFluidSolverBackend.this || environment != null || !edit.isCurrent())
+                throw new IllegalArgumentException("Environment candidate is unavailable");
+            environment=edit;
+        }
         @Override
         public FluidStateAccess commit() {
             synchronized (VulkanFluidSolverBackend.this) {
                 var result = owned();
                 result.ensure();
+                if(environment!=null){if(!environment.isCurrent())throw new IllegalStateException("Environment candidate is stale");environment.commit();}
                 state = null;
                 return result;
             }
@@ -271,6 +356,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             synchronized (VulkanFluidSolverBackend.this) {
                 if (state != null) {
                     state.close();
+                    if(environment!=null)environment.close();
                     state = null;
                 }
             }
@@ -293,7 +379,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                         var c = port.contact();
                         return new VulkanThermalDeviceLayout.Port(port.providerId(), port.objectId(),
                             template.grid().cell(c.cellX(), c.cellY(), c.cellZ()), c.direction(),
-                            c.wallThicknessMetres(), c.wallConductivityWPerMetreK(), c.filmThicknessMetres());
+                            c.wallThicknessMetres(), c.wallConductivityWPerMetreK(), c.filmThicknessMetres(), c.openMicroMask(), c.internalFace(),c.areaScale());
                     })
                     .toList();
             var codec = new VulkanFluidStateCodec(template, input.finiteThermalDevices(), encoded);
@@ -306,7 +392,9 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 var audit = template.thermalOwner() == null
                     ? null
                     : codec.initialGasAudit(template.thermalOwner().audit()).withRoundoff(region.device.importRoundoff());
-                return new State(region, capture, audit);
+                var state = new State(region, capture, audit);
+                state.binding = input.environmentBinding();
+                return state;
             } catch (RuntimeException | Error failure) {
                 if (capture != null)
                     capture.close();
@@ -325,13 +413,19 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     public synchronized FluidStepCandidate evaluate(FluidStepRequest request) {
         State source = acquire(request.stateAccess());
         VulkanLiquidRegion.Prepared prepared = null;
+        VulkanWorldEnvironment.Pending environment = null;
         try {
             var config = source.codec.template().config();
-            prepared = source.region.device.prepareMechanical(source.capture,
+            environment = prepareEnvironment(source);
+            source.region.device.activeEnvironment = environment;
+            try { prepared = source.region.device.prepareMechanical(source.capture,
                 new VulkanLiquidProjection.Parameters(config.cellSize(), config.timeStep(), config.gravity(),
                     config.pressureTolerance(), config.maxPressureIterations()),
-                new VulkanLiquidRegion.RequestInputs(request));
-            var pending = new Pending(source, prepared);
+                new VulkanLiquidRegion.RequestInputs(request)); }
+            finally { source.region.device.activeEnvironment = null; }
+            if (environment != null) environment.finish();
+            var pending = new Pending(source, prepared, environment);
+            environment = null;
             prepared = null;
             try {
                 var before = source.totals();
@@ -366,6 +460,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             observeFailure(failure);
             if (prepared != null)
                 prepared.close();
+            if (environment != null) environment.close();
             source.close();
             if (failure instanceof CandidateEvaluationRejectedException rejected)
                 throw rejected;
@@ -376,6 +471,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         } catch (Error failure) {
             if (prepared != null)
                 prepared.close();
+            if (environment != null) environment.close();
             source.close();
             throw failure;
         }
@@ -384,11 +480,17 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     public synchronized FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
         State source = acquire(request.stateAccess());
         VulkanLiquidRegion.Prepared prepared = null;
+        VulkanWorldEnvironment.Pending environment = null;
         try {
-            prepared = source.region.device.prepareThermal(source.capture, source.codec.template().config().timeStep(),
+            environment = prepareEnvironment(source);
+            source.region.device.activeEnvironment = environment;
+            try { prepared = source.region.device.prepareThermal(source.capture, source.codec.template().config().timeStep(),
                 new VulkanLiquidRegion.RequestInputs(source.entityBodies(), request.phaseChangeEnabled(),
-                    request.activeCells()));
-            var pending = new Pending(source, prepared);
+                    request.activeCells())); }
+            finally { source.region.device.activeEnvironment = null; }
+            if (environment != null) environment.finish();
+            var pending = new Pending(source, prepared, environment);
+            environment = null;
             prepared = null;
             try {
                 return FluidThermalStepCandidate.preparedDevice(
@@ -401,6 +503,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             observeFailure(failure);
             if (prepared != null)
                 prepared.close();
+            if (environment != null) environment.close();
             source.close();
             if (failure instanceof CandidateEvaluationRejectedException rejected)
                 throw rejected;
@@ -409,9 +512,17 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         } catch (Error failure) {
             if (prepared != null)
                 prepared.close();
+            if (environment != null) environment.close();
             source.close();
             throw failure;
         }
+    }
+    private VulkanWorldEnvironment.Pending prepareEnvironment(State source) {
+        var binding = source.binding;
+        if (binding == null || binding.devices().isEmpty() && binding.gas().isEmpty()) return null;
+        var environment = environments.get(binding.dimensionId());
+        if (environment == null) throw new IllegalArgumentException("Environment is not configured: " + binding.dimensionId());
+        return environment.prepare(binding,source.syncedEnvironment==environment && source.syncedGeneration==environment.generation());
     }
     private FluidDomainContracts.ThermalAxisStats thermalStats(State state) {
         var totals = state.totals();
@@ -477,6 +588,8 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         Observation observed;
         Display display;
         FiniteThermalDeviceInventory devices;
+        EnvironmentBinding binding;
+        VulkanWorldEnvironment syncedEnvironment;long syncedGeneration=-1;
         int observedCell = -1;
         VulkanCellObservation.Cell cell;
         boolean released;
@@ -500,6 +613,8 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
             synchronized (owner()) {
                 ensure();
                 var state = new State(region, codec, ports, capture.retain(), audit);
+                state.binding = binding;
+                state.syncedEnvironment = syncedEnvironment;state.syncedGeneration = syncedGeneration;
                 state.totals = totals;
                 state.summary = summary;
                 state.observed = observed;
@@ -509,6 +624,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 return state;
             }
         }
+        @Override public EnvironmentBinding environmentBinding() { return binding; }
         private void ensure() {
             if (unavailable != null)
                 throw new DeviceLostException(unavailable);
@@ -593,9 +709,15 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                     ensure();
                     if (summary == null)
                         summary =
-                            inventorySummary.capture(capture, codec.template().config().cellSize(), audit != null);
+                            inventorySummary.capture(capture, codec.template().config().cellSize(), audit != null, binding);
                     return summary;
                 });
+            }
+        }
+        @Override
+        public int expansionDirections() {
+            synchronized (owner()) {
+                return deviceCall(() -> { ensure(); return totals().expansionDirections(); });
             }
         }
         @Override
@@ -716,15 +838,18 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     private final class Pending implements PreparedFluidState {
         private final State source, successor;
         private final VulkanLiquidRegion.Prepared prepared;
+        private final VulkanWorldEnvironment.Pending environment;
         private boolean released, committed;
-        Pending(State source, VulkanLiquidRegion.Prepared prepared) {
+        Pending(State source, VulkanLiquidRegion.Prepared prepared, VulkanWorldEnvironment.Pending environment) {
             this.source = source;
             this.prepared = prepared;
+            this.environment = environment;
             var capture = prepared.captureState();
             try {
-                var posting = source.audit == null ? null : capture.thermalPosting();
+                var posting = source.audit == null ? null : capture.thermalPosting(source.binding != null && !source.binding.gas().isEmpty());
                 successor = new State(source.region, source.codec, source.ports, capture,
                     posting == null ? null : posting.apply(source.audit));
+                successor.binding = source.binding;
                 successor.posting = posting;
                 if (posting != null && Boolean.getBoolean("mmm.gpu.handoffDiagnostics")) {
                     var actual = capture.exactThermalInventory();
@@ -756,10 +881,14 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 if (released || committed)
                     throw new IllegalStateException("Resident candidate already handled");
                 successor.ensure();
+                if (environment != null && !environment.canCommit())
+                    throw new IllegalStateException("Environment generation changed before region adoption");
                 deviceCall(() -> {
                     prepared.commit();
+                    if (environment != null) environment.commit();
                     return null;
                 });
+                if(environment!=null && environment.duration==0){successor.syncedEnvironment=environment.owner();successor.syncedGeneration=environment.owner().generation();}
                 committed = true;
                 State owned = successor.retain();
                 close();
@@ -775,6 +904,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                 try {
                     prepared.close();
                 } finally {
+                    if (environment != null) environment.close();
                     successor.close();
                     source.close();
                 }
@@ -789,6 +919,8 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         for (var r : List.copyOf(regions))
             r.dispose();
         regions.clear();
+        for (var environment : environments.values()) environment.close();
+        environments.clear();
         waterContacts.close();
         cellObservation.close();
         inventorySummary.close();

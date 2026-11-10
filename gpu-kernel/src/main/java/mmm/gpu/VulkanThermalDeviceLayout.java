@@ -25,8 +25,8 @@ final class VulkanThermalDeviceLayout {
     static final int DYADIC_WORDS=72;
     enum Field {
         COUNTS(4),GENERATION(8),REQUEST_GENERATION(8),MATERIAL(4),MASS_UNITS(8),INTERNAL_ENERGY(8),SPECIES_OFFSETS(4),SPECIES_HANDLES(4),SPECIES_AMOUNTS(8),
-        PORT_DEVICE(4),PORT_CELL(4),PORT_DIRECTION(4),PORT_WALL_THICKNESS(8),PORT_WALL_K(8),PORT_FILM_THICKNESS(8),
-        AUDIT(4),DEVICE_ENERGY_CHANGE(8),FLUID_EXCHANGE(4),EXCHANGE_ROUNDOFF(4),SURFACE_AMOUNTS(8),SURFACE_RESIDUALS(8),SURFACE_ENERGY_INTERCEPT(8),SURFACE_HEAT_CAPACITY(8);
+        PORT_DEVICE(4),PORT_CELL(4),PORT_DIRECTION(4),PORT_WALL_THICKNESS(8),PORT_WALL_K(8),PORT_FILM_THICKNESS(8),PORT_INTERNAL_MASK(4),
+        AUDIT(4),DEVICE_ENERGY_CHANGE(8),FLUID_EXCHANGE(4),EXCHANGE_ROUNDOFF(4),SURFACE_AMOUNTS(8),SURFACE_RESIDUALS(8),SURFACE_ENERGY_INTERCEPT(8),SURFACE_HEAT_CAPACITY(8),PORT_AREA_SCALE(8);
         final int width;Field(int width){this.width=width;}
     }
     enum Audit { INITIAL_INVENTORY,EXTERNAL_SOURCE,EXTERNAL_SINK,SOLVER_EXCHANGE,ROUNDOFF_RESIDUAL }
@@ -45,9 +45,11 @@ final class VulkanThermalDeviceLayout {
         int surfaceSpeciesCount(){return surfaces.stream().mapToInt(value->value.adsorbates().size()).sum();}
     }
     /** Captured port direction is -X,+X,-Y,+Y,-Z,+Z. Exposed area is derived by the thermal contact producer. */
-    record Port(String providerId,String objectId,int cell,int direction,double wallThickness,double wallConductivity,double filmThickness){
+    record Port(String providerId,String objectId,int cell,int direction,double wallThickness,double wallConductivity,double filmThickness,int openMicroMask,boolean internalFace,double areaScale){
+        Port(String providerId,String objectId,int cell,int direction,double wallThickness,double wallConductivity,double filmThickness,int openMicroMask,boolean internalFace){this(providerId,objectId,cell,direction,wallThickness,wallConductivity,filmThickness,openMicroMask,internalFace,1.0);}
+        Port(String providerId,String objectId,int cell,int direction,double wallThickness,double wallConductivity,double filmThickness){this(providerId,objectId,cell,direction,wallThickness,wallConductivity,filmThickness,0,false);}
         Port{if(providerId==null||objectId==null||cell<0||direction<0||direction>5||!Double.isFinite(wallThickness)||wallThickness<0
-                ||!Double.isFinite(wallConductivity)||wallConductivity<=0||!Double.isFinite(filmThickness)||filmThickness<=0)
+                ||!Double.isFinite(wallConductivity)||wallConductivity<0||!Double.isFinite(filmThickness)||filmThickness<=0||openMicroMask<0||openMicroMask>255||internalFace&&openMicroMask==0||!Double.isFinite(areaScale)||areaScale<=0)
             throw new IllegalArgumentException("Invalid finite thermal device port");}
     }
     record State(FiniteThermalDeviceInventory inventory,List<Port> ports){State{java.util.Objects.requireNonNull(inventory);ports=List.copyOf(ports);}}
@@ -86,7 +88,7 @@ final class VulkanThermalDeviceLayout {
         identityIndices=Map.copyOf(indices);baseOffset=align(base);long cursor=baseOffset;
         for(var f:Field.values()){
             int count=switch(f){case COUNTS->2;case SPECIES_OFFSETS->devices+1;case SPECIES_HANDLES,SPECIES_AMOUNTS->0;
-                case PORT_DEVICE,PORT_CELL,PORT_DIRECTION,PORT_WALL_THICKNESS,PORT_WALL_K,PORT_FILM_THICKNESS->ports;
+                case PORT_DEVICE,PORT_CELL,PORT_DIRECTION,PORT_WALL_THICKNESS,PORT_WALL_K,PORT_FILM_THICKNESS,PORT_INTERNAL_MASK,PORT_AREA_SCALE->ports;
                 case AUDIT->DYADIC_WORDS*Audit.values().length;case DEVICE_ENERGY_CHANGE->2*devices;case FLUID_EXCHANGE,EXCHANGE_ROUNDOFF->DYADIC_WORDS;
                 case SURFACE_AMOUNTS,SURFACE_RESIDUALS->definitions.surfaceSpeciesCount();default->devices;};
             var column=new VulkanLiquidStateLayout.Column(align(cursor),count,f.width);columns.put(f,column);cursor=column.offset()+column.bindingBytes();
@@ -131,7 +133,8 @@ final class VulkanThermalDeviceLayout {
         for(int i=0;i<state.ports().size();i++){var port=state.ports().get(i);int device=identity(port.providerId(),port.objectId());
             if(device<0||port.cell()>=cells||!seen.add(device+":"+port.cell()+":"+port.direction()))throw new IllegalArgumentException("Finite device port is absent, repeated or outside the region");
             putInt(b,Field.PORT_DEVICE,i,device);putInt(b,Field.PORT_CELL,i,port.cell());putInt(b,Field.PORT_DIRECTION,i,port.direction());
-            putDouble(b,Field.PORT_WALL_THICKNESS,i,port.wallThickness());putDouble(b,Field.PORT_WALL_K,i,port.wallConductivity());putDouble(b,Field.PORT_FILM_THICKNESS,i,port.filmThickness());
+            putDouble(b,Field.PORT_WALL_THICKNESS,i,port.wallThickness());putDouble(b,Field.PORT_WALL_K,i,port.wallConductivity());putDouble(b,Field.PORT_FILM_THICKNESS,i,port.filmThickness());putInt(b,Field.PORT_INTERNAL_MASK,i,port.openMicroMask()|(port.internalFace()?256:0));
+            putDouble(b,Field.PORT_AREA_SCALE,i,port.areaScale());
         }
         var audit=inventory.audit();SignedDyadic[] entries={audit.initialInventory(),audit.externalSource(),audit.externalSink(),audit.solverExchange(),audit.roundoffResidual()};
         for(var field:Audit.values())writeDyadic(b,relative(audit(field).offset()),entries[field.ordinal()]);
@@ -153,7 +156,8 @@ final class VulkanThermalDeviceLayout {
             }
             result.add(new FiniteThermalDeviceState(id.providerId(),id.objectId(),id.deviceTypeId(),body,surfaces));}
         for(int i=0;i<portCount;i++){int device=getInt(b,Field.PORT_DEVICE,i);if(device<0||device>=count)throw new IllegalStateException("Finite device port handle exceeds identities");var id=definitions.identities().get(device);
-            capturedPorts.add(new Port(id.providerId(),id.objectId(),getInt(b,Field.PORT_CELL,i),getInt(b,Field.PORT_DIRECTION,i),number(b,Field.PORT_WALL_THICKNESS,i),number(b,Field.PORT_WALL_K,i),number(b,Field.PORT_FILM_THICKNESS,i)));}
+            int encoded=getInt(b,Field.PORT_INTERNAL_MASK,i);
+            capturedPorts.add(new Port(id.providerId(),id.objectId(),getInt(b,Field.PORT_CELL,i),getInt(b,Field.PORT_DIRECTION,i),number(b,Field.PORT_WALL_THICKNESS,i),number(b,Field.PORT_WALL_K,i),number(b,Field.PORT_FILM_THICKNESS,i),encoded&255,(encoded&256)!=0,number(b,Field.PORT_AREA_SCALE,i)));}
         var audit=new FiniteThermalDeviceAudit(readAudit(b,Audit.INITIAL_INVENTORY),readAudit(b,Audit.EXTERNAL_SOURCE),readAudit(b,Audit.EXTERNAL_SINK),readAudit(b,Audit.SOLVER_EXCHANGE),readAudit(b,Audit.ROUNDOFF_RESIDUAL));
         return new State(new FiniteThermalDeviceInventory(definitions.thermalRegistryFingerprint(),result,audit),capturedPorts);
     }

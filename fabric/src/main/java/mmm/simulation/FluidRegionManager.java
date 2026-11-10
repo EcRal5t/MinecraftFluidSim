@@ -13,6 +13,8 @@ public final class FluidRegionManager {
 	private mmm.fluid.FluidSolverBackend solverBackend;
 	private java.util.function.BiConsumer<FluidRegion, Boolean> committedObserver = (region, present) -> { };
 	private java.util.function.Consumer<FluidRegion> removalObserver = region -> { };
+	private java.util.function.Consumer<FluidRegion> geometryObserver = region -> { };
+	void observeGeometry(java.util.function.Consumer<FluidRegion> observer) { geometryObserver = Objects.requireNonNull(observer); }
 	void observeRemoval(java.util.function.Consumer<FluidRegion> observer) { removalObserver = Objects.requireNonNull(observer); }
 
 	public FluidRegionManager(RegionCatalog.Limits limits) {
@@ -28,18 +30,15 @@ public final class FluidRegionManager {
 	public RegionCatalog.BudgetUsage usage() { return catalog.usage(); }
 
 	public RegionCatalog.AdmissionResult add(FluidRegion candidate) {
-		var wall = sharedWall(candidate, null);
-		return wall == null ? admitted(candidate, catalog.add(candidate, descriptor(candidate))) : wall;
+		return admitted(candidate, catalog.add(candidate, descriptor(candidate)));
 	}
 
 	public RegionCatalog.AdmissionResult addAndSelect(FluidRegion candidate) {
-		var wall = sharedWall(candidate, null);
-		return wall == null ? admitted(candidate, catalog.addAndSelect(candidate, descriptor(candidate))) : wall;
+		return admitted(candidate, catalog.addAndSelect(candidate, descriptor(candidate)));
 	}
 
 	public RegionCatalog.AdmissionResult previewAdd(FluidRegion candidate) {
-		var wall = sharedWall(candidate, null);
-		return wall == null ? catalog.previewAdd(descriptor(candidate)) : wall;
+		return catalog.previewAdd(descriptor(candidate));
 	}
 
 	public RegionCatalog.AdmissionResult registerDiscovered(FluidRegion candidate) {
@@ -47,22 +46,66 @@ public final class FluidRegionManager {
 	}
 
 	public RegionCatalog.AdmissionResult runtimeAdmission(FluidRegion candidate) {
-		var wall = sharedWall(candidate, candidate);
-		return wall == null ? catalog.runtimeAdmission(candidate, descriptor(candidate)) : wall;
+		return catalog.runtimeAdmission(candidate, descriptor(candidate));
 	}
 
 	public RegionCatalog.AdmissionResult previewAdd(long requiredCells) {
 		return catalog.previewAdd(requiredCells);
 	}
 
+	RegionCatalog.AdmissionResult previewResize(FluidRegion previous,
+			mmm.simulation.controller.FluidRegionFootprint footprint, mmm.spatial.SpatialGrid grid) {
+		var min = footprint.minimumInterior();
+		var max = footprint.maximumInterior();
+		var blocks = footprint.interiorBlocks().stream().map(net.minecraft.core.BlockPos::of)
+				.filter(footprint::containsInterior)
+				.map(p -> new RegionCatalog.Descriptor.Block(p.getX(), p.getY(), p.getZ()))
+				.collect(java.util.stream.Collectors.toUnmodifiableSet());
+		var descriptor = new RegionCatalog.Descriptor(previous.id(), previous.dimension().identifier().toString(),
+				min.getX(), min.getY(), min.getZ(), max.getX() + 1.0, max.getY() + 1.0, max.getZ() + 1.0,
+				grid.cellCount(), blocks);
+		return catalog.previewUpdate(previous, descriptor);
+	}
+
+	RegionCatalog.AdmissionResult adoptResize(FluidRegion previous, FluidRegion candidate) {
+		var result = catalog.update(previous, candidate, descriptor(candidate));
+		if (result.accepted()) {
+			bind(candidate);
+			geometryObserver.accept(candidate);
+			try { previous.releaseAfterReplacement(); }
+			catch (RuntimeException failure) {
+				mmm.MmmMod.LOGGER.error("Failed to release replaced region {}", previous.id(), failure);
+			}
+		}
+		return result;
+	}
+
 	public RegionCatalog.AdmissionResult replaceSelected(FluidRegion candidate) {
 		FluidRegion previous = catalog.selected();
-		var wall = sharedWall(candidate, previous);
-		if (wall != null) return wall;
 		var result = catalog.replaceSelected(candidate, descriptor(candidate));
 		if (result.accepted() && previous != null && previous != candidate) removed(previous);
 		return admitted(candidate, result);
 	}
+
+    RegionCatalog.AdmissionResult previewMerge(List<FluidRegion> sources,FluidRegion candidate) {
+        return catalog.previewMerge(sources,descriptor(candidate));
+    }
+
+    RegionCatalog.AdmissionResult adoptMerge(List<FluidRegion> sources,FluidRegion candidate) {
+        var result=catalog.merge(sources,candidate,descriptor(candidate));
+        if(result.accepted()) {
+            for(var source:sources) {
+                if(!source.id().equals(candidate.id()))removed(source);
+                try { source.releaseAfterReplacement(); }
+                catch (RuntimeException failure) {
+                    mmm.MmmMod.LOGGER.error("Failed to release merged region {}", source.id(), failure);
+                }
+            }
+            bind(candidate);
+            geometryObserver.accept(candidate);
+        }
+        return result;
+    }
 
 	public RegionCatalog.AdmissionResult previewReplacement(long requiredCells) {
 		return catalog.previewReplacement(requiredCells);
@@ -92,9 +135,11 @@ public final class FluidRegionManager {
 	}
 
 	private RegionCatalog.AdmissionResult admitted(FluidRegion region, RegionCatalog.AdmissionResult result) {
-		if (result.accepted()) bind(region);
+		if (result.accepted()) { bind(region); geometryObserver.accept(region); }
 		return result;
 	}
+
+	mmm.fluid.FluidSolverBackend solverBackend() { return solverBackend; }
 
 	void solverBackend(mmm.fluid.FluidSolverBackend backend) {
 		solverBackend = Objects.requireNonNull(backend);
@@ -104,7 +149,7 @@ public final class FluidRegionManager {
 	private void bind(FluidRegion region) {
 		if (solverBackend != null) {
 			region.solverBackend(solverBackend);
-			if (region.controllerManaged() && region.solverLoaded()) try { region.ensureDeviceResident(); }
+			if (region.hasSelectedVolume() && region.solverLoaded()) try { region.ensureDeviceResident(); }
 			catch (RuntimeException failure) { region.blockNumerical("Vulkan 区域初始化失败：" + failure.getMessage()); }
 		}
 		region.committedObservationListener(() -> committedObserver.accept(region, true));
@@ -112,36 +157,12 @@ public final class FluidRegionManager {
 	}
 
 	private void removed(FluidRegion region) {
+		geometryObserver.accept(region);
 		removalObserver.accept(region);
 		region.committedObservationListener(() -> { });
 		committedObserver.accept(region, false);
 	}
 
-
-	private RegionCatalog.AdmissionResult sharedWall(FluidRegion candidate, FluidRegion ignored) {
-		var proposed = possibleWallPositions(candidate);
-		for (var other : catalog.values()) {
-			if (other == ignored || other == candidate || !other.dimension().equals(candidate.dimension())) continue;
-			var walls = possibleWallPositions(other);
-			for (long position : proposed) if (walls.contains(position))
-				return new RegionCatalog.AdmissionResult(false, mmm.api.RegionAvailabilityReason.OVERLAP,
-						"两个区域共用墙体：" + net.minecraft.core.BlockPos.of(position).toShortString());
-		}
-		return null;
-	}
-
-
-	private static java.util.Set<Long> possibleWallPositions(FluidRegion region) {
-		if (region.footprint() != null) return region.footprint().boundaryBlocks();
-		double h = region.solverConfig().cellSize();
-		int sx=(int)Math.ceil(region.sizeX()*h), sy=(int)Math.ceil(region.sizeY()*h), sz=(int)Math.ceil(region.sizeZ()*h);
-		var positions = new java.util.HashSet<Long>();
-		var origin = region.origin();
-		for(int z=0;z<sz;z++)for(int y=0;y<sy;y++) { positions.add(origin.offset(-1,y,z).asLong()); positions.add(origin.offset(sx,y,z).asLong()); }
-		for(int z=0;z<sz;z++)for(int x=0;x<sx;x++) { positions.add(origin.offset(x,-1,z).asLong()); positions.add(origin.offset(x,sy,z).asLong()); }
-		for(int y=0;y<sy;y++)for(int x=0;x<sx;x++) { positions.add(origin.offset(x,y,-1).asLong()); positions.add(origin.offset(x,y,sz).asLong()); }
-		return positions;
-	}
 
 	private static RegionCatalog.Descriptor descriptor(FluidRegion region) {
 		Objects.requireNonNull(region, "region");

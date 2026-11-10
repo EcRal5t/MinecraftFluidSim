@@ -114,12 +114,14 @@ final class VulkanLiquidThermalStages {
 
         var status = candidate.beginBatch(headerBytes(headers), (command, input, output, errors, staging, stack) -> {
             if (source == workspace) {
-                workspace.copyPersistent(command, input, output, stack);
-                if(reuseGeometry)workspace.copyReusableGeometry(command,input,output,stack);
+                workspace.copies.recordPersistent(command, input, output, stack);
+                if(reuseGeometry)workspace.copies.recordReusableGeometry(command,input,output,stack);
                 workspace.writeHeaders(command, output, List.of(contactHeader), stack);
             } else {
                 workspace.migrate(command, source, input, output, stack, headers);
             }
+            if(region.activeEnvironment!=null)
+                region.activeEnvironment.recordImport(command,output,transport.devices==null?null:transport.devices.state,errors,stack);
             workspace.recordActivity(command, output, stack);
             transport.beginDeviceRequest(command, source.transport, input, output, stack, false);
             transport.recordSolidGeometry(command, output, errors, stack);
@@ -145,8 +147,18 @@ final class VulkanLiquidThermalStages {
 
         var stableHeader = new HeaderWrite(transport.thermal.contacts().header.offset(), transport.thermal.contacts().headerBytes());
         return candidate.finishBatch(stableHeader.bytes().remaining(), (command, input, output, errors, staging, stack) -> {
+            if(transport.gas!=null){
+                for(var field:new VulkanLocalGasTransport.Field[]{VulkanLocalGasTransport.Field.ENV_OLD_ENERGY,VulkanLocalGasTransport.Field.ENV_NEW_ENERGY,
+                        VulkanLocalGasTransport.Field.ENV_OLD_SINK,VulkanLocalGasTransport.Field.ENV_NEW_SINK}){
+                    var column=transport.gas.transport.column(field);org.lwjgl.vulkan.VK10.vkCmdFillBuffer(command,output.handle(),column.offset(),column.bytes(),0);
+                }
+                VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
+            }
             if(react)recordReactionCompletion(command,output,errors,stack);
             recordLocalState(command,output,errors,duration,!react);
+            if(region.activeEnvironment!=null)
+                region.activeEnvironment.recordExport(command,output,transport.devices==null?null:transport.devices.state,errors,stack);
             if(!sourceGeometryValid){
                 region.kernels.mixturePressureKernel.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                 region.kernels.mixturePressureKernel.recordInitializeWarm(command,transport.pressure.assembly);
@@ -157,6 +169,7 @@ final class VulkanLiquidThermalStages {
             region.kernels.ledger.record(command, transport.inventoryPosting);
             region.kernels.ledger.record(command, transport.sourcePosting);
             region.kernels.ledger.record(command, transport.sinkPosting);
+            if(region.activeEnvironment!=null&&region.activeEnvironment.gas!=null)region.kernels.ledger.record(command, transport.environmentPosting);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, stack);
             copyColumn(command, output, transport.thermalOnlyRoundoff.result(), output, transport.roundoff.result(), stack);

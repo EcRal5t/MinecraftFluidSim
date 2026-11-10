@@ -25,25 +25,49 @@ import net.minecraft.world.level.block.Blocks;
 
 /** Real sensor redstone, finite box transfers and block-entity settings. */
 public final class IndustrialControlGameTest {
+    @GameTest(structure="mmm_gametest:piston",maxTicks=20)
+    public void portAppearanceTracksSettings(GameTestHelper test) {
+        var position=new BlockPos(2,2,2);
+        var level=test.getLevel();
+        test.setBlock(position,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST));
+        var port=test.getBlockEntity(position,FluidPortBlockEntity.class);
+        for(var mode:FluidPortBlockEntity.Mode.values()) {
+            port.configure(mode,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,false);
+            var state=level.getBlockState(test.absolutePos(position));
+            test.assertTrue(state.getValue(FluidPortBlock.MODE)==mode && state.getValue(FluidPortBlock.FACING)==Direction.EAST,
+                    "Port model must follow its transfer mode and preserve its connection direction");
+        }
+        var restored=(FluidPortBlockEntity)BlockEntity.loadStatic(test.absolutePos(position),
+                MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST),
+                port.saveWithFullMetadata(level.registryAccess()),level.registryAccess());
+        test.assertTrue(restored!=null,"Port settings must load");
+        level.setBlock(test.absolutePos(position),restored.getBlockState(),net.minecraft.world.level.block.Block.UPDATE_ALL);
+        level.setBlockEntity(restored);
+        test.runAfterDelay(2,()->{
+            test.assertTrue(level.getBlockState(test.absolutePos(position)).getValue(FluidPortBlock.MODE)==FluidPortBlockEntity.Mode.OUTPUT,
+                    "Loaded port must publish its saved mode on the first tick");
+            test.succeed();
+        });
+    }
+
     @GameTest(structure="mmm_gametest:piston",maxTicks=1200)
     public void sensorControlsFinitePort(GameTestHelper test) {
         var level=test.getLevel();
         var runtime=MmmRuntimeRegistry.require(level.getServer());
-        var controller=new BlockPos(1,2,2);
+        var controller=new BlockPos(2,2,2);
         var portPosition=new BlockPos(6,2,2);
         var sensorPosition=new BlockPos(6,3,2);
         var boxPosition=new BlockPos(7,2,2);
         var screenPosition=new BlockPos(3,2,2);
         var wallPosition=new BlockPos(2,2,3);
         for(int z=1;z<=4;z++)for(int y=1;y<=4;y++)for(int x=1;x<=6;x++)
-            if(x==1||x==6||y==1||y==4||z==1||z==4)test.setBlock(x,y,z,MmmBlocks.FLUID_BOUNDARY);
+            if(x==1||x==6||y==1||y==4||z==1||z==4)test.setBlock(x,y,z,Blocks.IRON_BLOCK);
         test.setBlock(wallPosition,Blocks.IRON_BLOCK);
-        test.setBlock(controller,MmmBlocks.FLUID_CONTROLLER);
         test.setBlock(portPosition,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST));
         test.setBlock(sensorPosition,MmmBlocks.PROCESS_SENSOR);
         test.setBlock(boxPosition,MmmBlocks.MATERIAL_BOX);
         var player=test.makeMockServerPlayerInLevel();
-        var activation=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
+        var activation=runtime.regionActivation().createSelection(player,test.absolutePos(new BlockPos(2,2,2)),test.absolutePos(new BlockPos(5,3,3)));
         test.assertTrue(activation.succeeded(),"Controller activation failed: "+activation.failure());
         var region=runtime.worldUpdates().regions().selected();
         test.assertTrue(region!=null&&region.solverLoaded(),"Controller did not publish its region");
@@ -52,7 +76,7 @@ public final class IndustrialControlGameTest {
         var sensors=new ProcessSensorBlockEntity[]{test.getBlockEntity(sensorPosition,ProcessSensorBlockEntity.class)};
         var ports=new FluidPortBlockEntity[]{test.getBlockEntity(portPosition,FluidPortBlockEntity.class)};
         var first=test.absolutePos(new BlockPos(2,2,2));var second=test.absolutePos(new BlockPos(5,3,3));
-        sensors[0].configure(ProcessSensorBlockEntity.Measure.LEVEL,.0001,.001,true,false,first,second);
+        sensors[0].configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,.0001,.001,true,false,first,second);
         ports[0].configure(FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,true);
         int[] stage={0};long[] accepted={0};
         var wall=test.absolutePos(wallPosition);
@@ -73,7 +97,7 @@ public final class IndustrialControlGameTest {
                         level.getBlockState(test.absolutePos(sensorPosition)),sensor.saveWithFullMetadata(level.registryAccess()),level.registryAccess());
                 var restoredPort=(FluidPortBlockEntity)BlockEntity.loadStatic(test.absolutePos(portPosition),
                         level.getBlockState(test.absolutePos(portPosition)),port.saveWithFullMetadata(level.registryAccess()),level.registryAccess());
-                test.assertTrue(restoredSensor!=null && restoredSensor.measure()==ProcessSensorBlockEntity.Measure.LEVEL
+                test.assertTrue(restoredSensor!=null && restoredSensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL
                                 && restoredSensor.low()==.0001 && restoredSensor.high()==.001 && restoredSensor.below()
                                 && first.equals(restoredSensor.first()) && second.equals(restoredSensor.second()),
                         "Sensor settings did not survive block-entity storage");
@@ -83,18 +107,20 @@ public final class IndustrialControlGameTest {
                         "Port settings did not survive block-entity storage");
                 level.setBlockEntity(restoredSensor);level.setBlockEntity(restoredPort);
                 sensors[0]=restoredSensor;ports[0]=restoredPort;
-                restoredSensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
+                restoredSensor.configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 stage[0]=2;
             } else if(stage[0]==2 && sensor.output()==15 && port.status().equals("运行")
                     && 1_000_000_000L-PartialWaterBucketItem.volume(box.getItem(0))>accepted[0]) {
-                sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,true,false,first,second);
+                sensor.configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,270,280,true,false,first,second);
                 stage[0]=3;
             } else if(stage[0]==3 && sensor.output()==0 && port.status().equals("等待红石")) {
-                sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
+                sensor.configure(mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 port.configure(FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,true);
                 for(int i=0;i<box.getContainerSize();i++)box.setItem(i,MaterialBoxBlockEntity.newBatch(new ItemStack(Items.WATER_BUCKET)));
+                box.setItem(0,MaterialBoxBlockEntity.newBatch(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER)));
                 stage[0]=4;
             } else if(stage[0]==4 && sensor.output()==15 && port.status().equals("等待可用批次或接触物料")) {
+                test.assertTrue(box.getItem(0).is(mmm.item.MmmItems.GAS_CONTAINER),"Port changed an incompatible real container");
                 box.setItem(0,MaterialBoxBlockEntity.newBatch(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET)));
                 stage[0]=5;
             } else if(stage[0]==5 && port.status().equals("运行")) {
@@ -109,7 +135,8 @@ public final class IndustrialControlGameTest {
             } else if(stage[0]==7 && matchesScreen(region,test.absolutePos(screenPosition),level,.0005,.4)) {
                 test.setBlock(screenPosition,Blocks.AIR);
                 stage[0]=8;
-            } else if(stage[0]==8 && region.fixedGeometry().screens().isEmpty() && wallAt(region,thermal.fingerprint(),wall)!=null) {
+            } else if(stage[0]==8 && region.fixedGeometry().screens().isEmpty() && wallAt(region,thermal.fingerprint(),wall)!=null
+                    && !region.hasPendingPhaseMotionWork()) {
                 region.setPaused(true);
                 long generation=region.solverGeneration();
                 var candidate=region.beginHostEdit();
@@ -197,7 +224,7 @@ public final class IndustrialControlGameTest {
     private static FiniteThermalDeviceState wallAt(FluidRegion region,String fingerprint,BlockPos position) {
         String prefix=position.asLong()+"@";
         return region.finiteThermalDevices(fingerprint).devices().stream()
-                .filter(device->device.providerId().equals(OrdinaryThermalWalls.PROVIDER) && device.objectId().startsWith(prefix))
+                .filter(device->device.providerId().equals(WorldThermalEnvironment.PROVIDER) && device.objectId().startsWith(prefix))
                 .findFirst().orElse(null);
     }
 

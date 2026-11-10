@@ -29,12 +29,15 @@ final class MinecraftRegionInputs {
 	private final MotionHistory motion = new MotionHistory();
 	private final Map<UUID, List<Interaction>> pendingResponses = new HashMap<>();
 	private final ThermalBoundaryResolver thermalBoundaries;
-	private final OrdinaryThermalWalls ordinaryWalls;
+	private WorldThermalEnvironment environment;
+	void environment(WorldThermalEnvironment value) { environment = java.util.Objects.requireNonNull(value); }
 	private MinecraftWorldUpdates worldUpdates;
+	private ExternalMovingStructures externalStructures;
+	void externalStructures(ExternalMovingStructures structures) { externalStructures = java.util.Objects.requireNonNull(structures); }
 	boolean hasPendingWorldMotion(FluidRegion region) { return worldUpdates != null && worldUpdates.hasPendingMotion(region); }
 	void worldUpdates(MinecraftWorldUpdates updates) {
 		worldUpdates = java.util.Objects.requireNonNull(updates);
-		if (ordinaryWalls != null) ordinaryWalls.worldUpdates(updates);
+		if (environment != null) environment.worldUpdates(updates);
 	}
 	private java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> prescribedBodies = (region,tick) -> List.of();
 	void prescribedBodies(java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> source) { prescribedBodies=java.util.Objects.requireNonNull(source); }
@@ -46,14 +49,19 @@ final class MinecraftRegionInputs {
 		this.cellsPerBlock = cellsPerBlock;
 		this.waterDensity = waterDensity;
 		this.thermalBoundaries = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
-		this.ordinaryWalls = thermalRegistry == null ? null : new OrdinaryThermalWalls(thermalRegistry, thermalBoundaries);
 	}
 
 	boolean boundariesDue(long tick) { return tick % COLLISION_REFRESH_INTERVAL_TICKS == 0L; }
+	boolean externalHandoffsDue(FluidRegion region) { return externalStructures!=null && externalStructures.handoffsDue(region); }
 
 	FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {
-		FluidRegion.CollisionStats collisions = FluidRegionWorldInteraction.refreshCollisions(
-				level, region, cellsPerBlock, worldUpdates);
+		FluidRegion.CollisionStats collisions;
+		try { collisions = FluidRegionWorldInteraction.refreshCollisions(level, region, cellsPerBlock, worldUpdates, externalStructures, environment); }
+		catch(ExternalMovingStructures.InputRejectedException waiting) {
+			region.requireCollisionRefresh();
+			if(externalStructures!=null)externalStructures.rejected(region.id(),waiting.getMessage());
+			throw waiting;
+		}
 		if (collisions.changedCells() > 0 || collisions.displacedCellVolume() > 0.0F
 				|| collisions.escapedCellVolume() > 0.0F || collisions.markerBudgetLimited()) {
 			region.setLastCollisionStats(collisions);
@@ -69,7 +77,7 @@ final class MinecraftRegionInputs {
 
 	boolean refreshThermalBoundary(ServerLevel level, FluidRegion region) {
 		if (thermalBoundaries == null) return false;
-		boolean walls = ordinaryWalls.refresh(level, region, cellsPerBlock);
+		boolean walls = environment != null && environment.refresh(level, region, cellsPerBlock);
 		return thermalBoundaries.refresh(level, region, cellsPerBlock) || walls;
 	}
 
@@ -83,14 +91,25 @@ final class MinecraftRegionInputs {
 
 	private TickInputs capture(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled, boolean manual) {
 		MinecraftGroupAvailability.prepare(level, region);
-		List<Observation> observations = region.entityPhysicsEnabled() ? captureEntities(level, region) : List.of();
+		var external = externalStructures == null ? null : externalStructures.capture(region);
+		if (external != null && external.advancing()) region.wakeForActivity();
+		List<Observation> observations = region.entityPhysicsEnabled() ? captureEntities(level, region, external == null ? java.util.Set.of() : external.excludedEntities()) : List.of();
 		List<BodyMotion> motions = new ArrayList<>();
 		for (var observation : observations) if (canAffect(observation.entity()))
 			motions.add(new BodyMotion(observation.entity().getUUID(), observation.bounds(), 0, observation.displacement()));
 		List<MovingBodyFluidCoupling.Request> requestedBodies = new ArrayList<>(manual
 				? manualBodies(motions, manualPrescribedBodies.apply(region)) : bodyObservations(motions));
 		if (!manual) requestedBodies.addAll(prescribedBodies.apply(region, tick));
+		for(var body:region.entityBodyState().bodies())if(PipeCollisionBodies.isPipeBody(body.bodyId()))requestedBodies.add(body.stationary());
 		if (worldUpdates != null) requestedBodies.addAll(worldUpdates.targetBodies(region));
+		if (external != null) {
+			try {
+				integrateExternal(region, external, requestedBodies, bounds -> bodyAvailable(region, bounds));
+			} catch (ExternalMovingStructures.InputRejectedException failure) {
+				externalStructures.rejected(region.id(), failure.getMessage());
+				throw failure;
+			}
+		}
 		boolean[] activeCells = region.activityForBodies(requestedBodies);
 		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
 		checkBodyBudget(requestedBodies);
@@ -104,6 +123,37 @@ final class MinecraftRegionInputs {
 				region.hardOverrunStreak(), region.recoveryStreak(), region.canStep(),
 				thermalEnabled && region.canStepThermal());
 		return new TickInputs(runtime, requestedBodies, affectedEntities, activeCells);
+	}
+
+	/** Checks and seeds a whole structure before exposing its target to a motion step. */
+	static void integrateExternal(FluidRegion region, ExternalMovingStructures.Capture external,
+			List<MovingBodyFluidCoupling.Request> requestedBodies,
+			java.util.function.Predicate<MovingBodyFluidCoupling.Bounds> available) {
+		var sources = new HashMap<UUID, MovingBodyFluidCoupling.Request>();
+		for (var body : external.source()) sources.put(body.bodyId(), body);
+		for (var body : external.target()) {
+			var before = sources.getOrDefault(body.bodyId(), body).bounds(); var after = body.bounds();
+			var sweep = new MovingBodyFluidCoupling.Bounds(
+					Math.min(before.minimumX(),after.minimumX()),Math.min(before.minimumY(),after.minimumY()),Math.min(before.minimumZ(),after.minimumZ()),
+					Math.max(before.maximumX(),after.maximumX()),Math.max(before.maximumY(),after.maximumY()),Math.max(before.maximumZ(),after.maximumZ()));
+			if (!available.test(sweep)) throw new ExternalMovingStructures.InputRejectedException("External structure crosses an unavailable activity group");
+		}
+		requestedBodies.addAll(external.target());
+		if (requestedBodies.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP)
+			throw new ExternalMovingStructures.InputRejectedException("External structure exceeds the complete region body budget");
+		var existing = region.entityBodyState().bodies();
+		var combined = new ArrayList<>(existing);
+		var ids = new java.util.HashSet<UUID>();
+		for (var body : existing) ids.add(body.bodyId());
+		for (var body : external.source()) if (ids.add(body.bodyId())) combined.add(body);
+		if (combined.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP)
+			throw new ExternalMovingStructures.InputRejectedException("External source exceeds the complete region body budget");
+		if (combined.size() != existing.size()) {
+			long generation = region.solverGeneration();
+			var edit = region.beginHostEdit();
+			edit.handoffCollisionBodies(List.of(), new mmm.fluid.EntityBodyState(combined));
+			region.adoptCollisionCandidate(generation, edit);
+		}
 	}
 
 	static boolean bodyAvailable(FluidRegion region, MovingBodyFluidCoupling.Bounds bounds) {
@@ -132,6 +182,7 @@ final class MinecraftRegionInputs {
 	void finishServerTick() { motion.rotate(); pendingResponses.clear(); }
 
 	void commitEntityResponse(ServerLevel level, FluidRegion region, MovingBodyFluidCoupling.Result result) {
+		if (externalStructures != null) externalStructures.accepted(region.id());
 		if (worldUpdates != null) worldUpdates.completed(level, region);
 		var responses = pendingResponses.remove(region.id());
 		if (responses == null) return;
@@ -165,13 +216,13 @@ final class MinecraftRegionInputs {
 		return bounds.equals(interaction.contact().bounds());
 	}
 
-	void discardEntityResponse(FluidRegion region) { pendingResponses.remove(region.id()); }
+	void discardEntityResponse(FluidRegion region) { pendingResponses.remove(region.id()); if (externalStructures != null) externalStructures.discarded(region.id()); }
 
-	private List<Observation> captureEntities(ServerLevel level, FluidRegion region) {
+	private List<Observation> captureEntities(ServerLevel level, FluidRegion region, java.util.Set<UUID> excluded) {
 		pendingResponses.remove(region.id());
 		List<Observation> observations = new ArrayList<>();
 		for (Entity entity : level.getEntities((Entity) null, regionBounds(region),
-				entity -> canAffect(entity) || entity.isAlive() && !entity.isRemoved() && entity.isOnFire())) {
+				entity -> !excluded.contains(entity.getUUID()) && (canAffect(entity) || entity.isAlive() && !entity.isRemoved() && entity.isOnFire()))) {
 			motion.observe(level.dimension(), entity.getUUID(), entity.position());
 			var box = entity.getBoundingBox();
 			var origin = region.origin();

@@ -16,6 +16,8 @@ public final class GasThermalModel {
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
 	private final ThermalStateFunction stateFunction;
+	private record CachedState(long energyBits,ThermalStateFunction.State value) { }
+	private final java.util.IdentityHashMap<GasInventory,CachedState> states = new java.util.IdentityHashMap<>();
 
 	public GasThermalModel(ThermalRegistry thermalRegistry, GasRegistry gasRegistry) {
 		if (thermalRegistry == null || gasRegistry == null) throw new IllegalArgumentException("Gas thermal registries are missing");
@@ -46,7 +48,17 @@ public final class GasThermalModel {
 	}
 
 	public ThermalStateFunction.State state(GasInventory inventory, double internalEnergy) {
-		return stateFunction.stateForInventory(portions(inventory), internalEnergy);
+		long bits=Double.doubleToRawLongBits(internalEnergy);
+		synchronized(states) {
+			var cached=states.get(inventory);
+			if(cached!=null && cached.energyBits()==bits)return cached.value();
+		}
+		var result=stateFunction.stateForInventory(portions(inventory), internalEnergy);
+		synchronized(states) {
+			if(states.size()>=8192)states.clear();
+			states.put(inventory,new CachedState(bits,result));
+		}
+		return result;
 	}
 
 	/** Validates the complete authoritative inventory/U pair, including explicit vacuum. */

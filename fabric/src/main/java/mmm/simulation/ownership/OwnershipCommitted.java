@@ -5,7 +5,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Committed ownership registry for one controller region: which world positions it owns and the
+ * Committed ownership registry for one region: which world positions it owns and the
  * region checkpoint generation at which that ownership last changed. Region-state HEAD remains the
  * sole transaction commit point; this file is written after it and is rebuilt from the WAL by
  * post-commit recovery when a crash lands between the two.

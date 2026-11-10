@@ -32,6 +32,7 @@ public final class FluidProtocolServer {
 	private FluidProtocolServer() { }
 
 	public static void register() {
+        PayloadTypeRegistry.clientboundPlay().register(PipeSnapshotPayload.TYPE,PipeSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(DemoWorkbenchPayload.TYPE, DemoWorkbenchPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(DemoActionPayload.TYPE, DemoActionPayload.CODEC);
 		ServerPlayNetworking.registerGlobalReceiver(DemoActionPayload.TYPE, (payload, context) ->
@@ -84,6 +85,7 @@ public final class FluidProtocolServer {
 			MmmRuntime runtime = MmmRuntimeRegistry.require(server);
 			runtime.containerRecovery().retryPlayer(listener.player.getUUID());
 			runtime.regionObservation().sendAllTo(listener.player);
+            mmm.simulation.PipeSnapshotPublisher.sendCurrent(listener.player);
 		});
 		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, origin, destination) -> sendCurrentRegions(player));
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> sendCurrentRegions(newPlayer));
@@ -122,6 +124,11 @@ public final class FluidProtocolServer {
 		return true;
 	}
 
+    public static boolean send(ServerPlayer player,PipeSnapshotPayload payload) {
+        if(!isNegotiated(player.level().getServer(),player.getUUID()) || !ServerPlayNetworking.canSend(player,PipeSnapshotPayload.TYPE))return false;
+        ServerPlayNetworking.send(player,payload);return true;
+    }
+
 	public static boolean send(ServerPlayer player, ControllerSummaryPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID())
 				|| !ServerPlayNetworking.canSend(player, ControllerSummaryPayload.TYPE)) return false;
@@ -151,6 +158,7 @@ public final class FluidProtocolServer {
 	}
 
 	public static void clearServer(MinecraftServer server) {
+        mmm.simulation.PipeSnapshotPublisher.clearServer(server);
 		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
 		if (runtime != null) runtime.protocolSessions().clear();
 		synchronized (PENDING) {
@@ -262,6 +270,7 @@ public final class FluidProtocolServer {
 		if (!isNegotiated(server, player.getUUID())) return;
 		MmmRuntime runtime = MmmRuntimeRegistry.find(server);
 		if (runtime != null) runtime.regionObservation().sendAllTo(player);
+        mmm.simulation.PipeSnapshotPublisher.sendCurrent(player);
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId, FluidProtocol.Layout layout) {

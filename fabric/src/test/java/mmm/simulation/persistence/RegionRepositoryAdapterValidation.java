@@ -25,7 +25,6 @@ public final class RegionRepositoryAdapterValidation {
 		RegionGenerationValidationScenarios.validateFaultMatrix();
 		RegionGenerationValidationScenarios.validateStagedGeneration();
 		RegionGenerationValidationScenarios.validateRemovedHeadAndQuarantine();
-		RegionGenerationValidationScenarios.validateExplicitPreviousGenerationActivation();
 		RegionGenerationValidationScenarios.validateCorruptionAndAtomicMoveFailure();
 		RegionGenerationValidationScenarios.validateWorldConfig();
 		System.out.println("Fluid region persistence validation passed");

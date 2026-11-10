@@ -23,11 +23,24 @@ final class GranularSurfaceGeometry {
 	static void buildGeometry(Vec3 camera, VertexConsumer vertices,
 			ClientRegionSnapshotStore.GranularFrame frame, boolean textured,
 			java.util.function.Function<String, TextureAtlasSprite> sprites) {
+        buildGeometry(camera, vertices, frame, textured, sprites, position -> {
+            var client = Minecraft.getInstance();
+            var level = client == null ? null : client.level;
+            return level == null ? 0 : level.getBrightness(LightLayer.BLOCK,position)<<4
+                    | level.getBrightness(LightLayer.SKY,position)<<20;
+        });
+    }
+
+    static void buildGeometry(Vec3 camera, VertexConsumer vertices,
+            ClientRegionSnapshotStore.GranularFrame frame, boolean textured,
+            java.util.function.Function<String, TextureAtlasSprite> sprites,
+            java.util.function.ToIntFunction<BlockPos> lights) {
 		FluidGranularSnapshotPayload payload = frame.payload();
 		FluidMaterialSnapshotPayload state = payload.material();
-		Emitter emitter = new Emitter(vertices, camera, state, textured, sprites);
+		Emitter emitter = new Emitter(vertices, camera, state, textured, sprites, lights);
 		float h = state.cellSize();
 		var grid = state.geometry().grid();
+        byte[] masks=payload.fixedMasks();
         for (int cell = 0; cell < grid.cellCount(); cell++) {
             int x=grid.x(cell),y=grid.y(cell),z=grid.z(cell);
             float fill = Byte.toUnsignedInt(frame.bulkFill()[cell]) / 255.0F;
@@ -35,7 +48,7 @@ final class GranularSurfaceGeometry {
             int material = frame.topMaterial()[cell];
             int color = payload.granularMaterials().get(material).argb();
             float porosity = Byte.toUnsignedInt(frame.porosity()[cell]) / 255.0F;
-            renderDepositCell(emitter, state, frame.bulkFill(), x, y, z, h, fill, color,
+            renderDepositCell(emitter, state, frame.bulkFill(), masks, x, y, z, h, fill, color,
                     0.94F + 0.04F * (1.0F - porosity));
         }
 
@@ -52,53 +65,77 @@ final class GranularSurfaceGeometry {
 		}
 	}
 
-	private static void renderDepositCell(
-			Emitter emitter, FluidMaterialSnapshotPayload state, byte[] bulk,
-			int x, int y, int z, float h, float fill, int argb, float alpha
-	) {
-		float red = ((argb >>> 16) & 0xff) / 255.0F;
-		float green = ((argb >>> 8) & 0xff) / 255.0F;
-		float blue = (argb & 0xff) / 255.0F;
-		float minX = x * h;
-		float minY = y * h;
-		float minZ = z * h;
-		float maxX = minX + h;
-		float maxY = minY + h * fill;
-		float maxZ = minZ + h;
-		float left = granularFill(state, bulk, x - 1, y, z) * h;
-		if (left < h * fill) quadX(emitter, minX, minY + left, maxY, minZ, maxZ,
-				false, red, green, blue, alpha);
-		float right = granularFill(state, bulk, x + 1, y, z) * h;
-		if (right < h * fill) quadX(emitter, maxX, minY + right, maxY, minZ, maxZ,
-				true, red, green, blue, alpha);
-		float back = granularFill(state, bulk, x, y, z - 1) * h;
-		if (back < h * fill) quadZ(emitter, minZ, minX, maxX, minY + back, maxY,
-				false, red, green, blue, alpha);
-		float front = granularFill(state, bulk, x, y, z + 1) * h;
-		if (front < h * fill) quadZ(emitter, maxZ, minX, maxX, minY + front, maxY,
-				true, red, green, blue, alpha);
-		if (fill < 1.0F || granularFill(state, bulk, x, y + 1, z) == 0.0F) {
-			quadY(emitter, maxY, minX, maxX, minZ, maxZ, true, red, green, blue, alpha);
-		}
-		if (granularFill(state, bulk, x, y - 1, z) == 0.0F) {
-			quadY(emitter, minY, minX, maxX, minZ, maxZ, false,
-					red, green, blue, alpha);
-		}
-	}
-
-	private static float granularFill(
-			FluidMaterialSnapshotPayload state, byte[] bulk, int x, int y, int z
-	) {
-		if (x < 0 || x >= state.sizeX() || y < 0 || y >= state.sizeY() || z < 0 || z >= state.sizeZ()) {
-			return 0.0F;
-		}
-		int index = granularIndex(state,x,y,z);
-        return index < 0 ? 0.0F : Byte.toUnsignedInt(bulk[index]) / 255.0F;
-	}
-
-	private static int granularIndex(FluidMaterialSnapshotPayload state, int x, int y, int z) {
-		return state.geometry().grid().cell(x,y,z);
-	}
+    private static void renderDepositCell(Emitter emitter,FluidMaterialSnapshotPayload state,byte[] bulk,byte[] masks,
+            int x,int y,int z,float h,float fill,int argb,float alpha) {
+        int cell=state.geometry().grid().cell(x,y,z),mask=Byte.toUnsignedInt(masks[cell]);
+        if(mask==0 && openNeighbors(state,masks,x,y,z)) {
+            renderOpenDepositCell(emitter,state,bulk,x,y,z,h,fill,argb,alpha);
+            return;
+        }
+        float top=(y+bedHeight(mask,fill))*h,micro=h*.5F;
+        float red=((argb>>>16)&255)/255F,green=((argb>>>8)&255)/255F,blue=(argb&255)/255F;
+        for(int bit=0;bit<8;bit++) {
+            if((mask&(1<<bit))!=0)continue;
+            int mx=x*2+(bit&1),my=y*2+((bit>>1)&1),mz=z*2+((bit>>2)&1);
+            float x0=mx*micro,y0=my*micro,z0=mz*micro,x1=x0+micro,y1=Math.min(y0+micro,top),z1=z0+micro;
+            if(y1<=y0)continue;
+            for(int side=0;side<2;side++) {
+                int step=side==0?-1:1;boolean positive=side==1;
+                var nx=neighbor(state,bulk,masks,mx+step,my,mz,h);
+                float start=Math.max(y0,nx.top());
+                if(!nx.solid() && start<y1)quadX(emitter,positive?x1:x0,start,y1,z0,z1,positive,red,green,blue,alpha);
+                var nz=neighbor(state,bulk,masks,mx,my,mz+step,h);
+                start=Math.max(y0,nz.top());
+                if(!nz.solid() && start<y1)quadZ(emitter,positive?z1:z0,x0,x1,start,y1,positive,red,green,blue,alpha);
+            }
+            var below=neighbor(state,bulk,masks,mx,my-1,mz,h);
+            if(!below.solid() && below.top()<y0)quadY(emitter,y0,x0,x1,z0,z1,false,red,green,blue,alpha);
+            if(y1<y0+micro)quadY(emitter,y1,x0,x1,z0,z1,true,red,green,blue,alpha);
+            else {
+                var above=neighbor(state,bulk,masks,mx,my+1,mz,h);
+                if(!above.solid() && above.top()<=y1)quadY(emitter,y1,x0,x1,z0,z1,true,red,green,blue,alpha);
+            }
+        }
+    }
+    private static boolean openNeighbors(FluidMaterialSnapshotPayload state,byte[] masks,int x,int y,int z) {
+        var grid=state.geometry().grid();
+        for(var face:net.minecraft.core.Direction.values()) {
+            int cell=grid.cell(x+face.getStepX(),y+face.getStepY(),z+face.getStepZ());
+            if(cell>=0 && masks[cell]!=0)return false;
+        }
+        return true;
+    }
+    private static void renderOpenDepositCell(Emitter emitter,FluidMaterialSnapshotPayload state,byte[] bulk,
+            int x,int y,int z,float h,float fill,int argb,float alpha) {
+        float r=((argb>>>16)&255)/255F,g=((argb>>>8)&255)/255F,b=(argb&255)/255F;
+        float x0=x*h,y0=y*h,z0=z*h,x1=x0+h,y1=y0+h*fill,z1=z0+h;
+        float left=granularFill(state,bulk,x-1,y,z)*h,right=granularFill(state,bulk,x+1,y,z)*h;
+        float back=granularFill(state,bulk,x,y,z-1)*h,front=granularFill(state,bulk,x,y,z+1)*h;
+        if(left<h*fill)quadX(emitter,x0,y0+left,y1,z0,z1,false,r,g,b,alpha);
+        if(right<h*fill)quadX(emitter,x1,y0+right,y1,z0,z1,true,r,g,b,alpha);
+        if(back<h*fill)quadZ(emitter,z0,x0,x1,y0+back,y1,false,r,g,b,alpha);
+        if(front<h*fill)quadZ(emitter,z1,x0,x1,y0+front,y1,true,r,g,b,alpha);
+        if(fill<1 || granularFill(state,bulk,x,y+1,z)==0)quadY(emitter,y1,x0,x1,z0,z1,true,r,g,b,alpha);
+        if(granularFill(state,bulk,x,y-1,z)==0)quadY(emitter,y0,x0,x1,z0,z1,false,r,g,b,alpha);
+    }
+    private static float granularFill(FluidMaterialSnapshotPayload state,byte[] bulk,int x,int y,int z) {
+        int cell=state.geometry().grid().cell(x,y,z);
+        return cell<0?0:Byte.toUnsignedInt(bulk[cell])/255F;
+    }
+    private record Neighbor(boolean solid,float top) { }
+    private static Neighbor neighbor(FluidMaterialSnapshotPayload state,byte[] bulk,byte[] masks,int mx,int my,int mz,float h) {
+        int x=Math.floorDiv(mx,2),y=Math.floorDiv(my,2),z=Math.floorDiv(mz,2);
+        int cell=state.geometry().grid().cell(x,y,z);
+        if(cell<0)return new Neighbor(false,Float.NEGATIVE_INFINITY);
+        int mask=Byte.toUnsignedInt(masks[cell]);int bit=Math.floorMod(mx,2)+2*Math.floorMod(my,2)+4*Math.floorMod(mz,2);
+        return new Neighbor((mask&(1<<bit))!=0,(y+bedHeight(mask,Byte.toUnsignedInt(bulk[cell])/255F))*h);
+    }
+    static float bedHeight(int fixedMask,float bulk) {
+        int open=(~fixedMask)&255;
+        float lower=Integer.bitCount(open&0x33)/8F,upper=Integer.bitCount(open&0xcc)/8F;
+        float amount=Math.clamp(bulk,0,lower+upper);
+        return amount<=lower?(lower>0?.5F*amount/lower:0):.5F+(upper>0?.5F*(amount-lower)/upper:0);
+    }
 
     private static void box(Emitter emitter,float x0,float y0,float z0,float x1,float y1,float z1,
             float r,float g,float b,float alpha) {
@@ -130,11 +167,14 @@ final class GranularSurfaceGeometry {
         final boolean textured;
         final java.util.function.Function<String, TextureAtlasSprite> sprites;
         TextureAtlasSprite sprite;
+        final java.util.function.ToIntFunction<BlockPos> lights;
         final BlockPos anchor;
         final double ox,oy,oz;
 
         Emitter(VertexConsumer vertices, Vec3 camera, FluidMaterialSnapshotPayload state, boolean textured,
-                java.util.function.Function<String, TextureAtlasSprite> sprites) {
+                java.util.function.Function<String, TextureAtlasSprite> sprites,
+                java.util.function.ToIntFunction<BlockPos> lights) {
+            this.lights=lights;
             this.vertices=vertices;
             this.state=state;
             this.textured=textured;
@@ -152,10 +192,7 @@ final class GranularSurfaceGeometry {
             BlockPos position=BlockPos.containing(state.origin().getX()+(axis==0 ? plane : axis==1 ? centerV : centerU),
                     state.origin().getY()+(axis==0 ? centerU : axis==1 ? plane : centerV),
                     state.origin().getZ()+(axis==0 ? centerV : axis==1 ? centerU : plane));
-            var client=Minecraft.getInstance();
-            var level=client==null ? null : client.level;
-            int light=level==null ? 0 : level.getBrightness(LightLayer.BLOCK,position)<<4
-                    | level.getBrightness(LightLayer.SKY,position)<<20;
+            int light=lights.applyAsInt(position);
             FluidRenderBackend.beginMaterial(vertices,"mmm:granular",position.getX()-anchor.getX(),
                     position.getY()-anchor.getY(),position.getZ()-anchor.getZ());
             for (int i=0;i<4;i++) {

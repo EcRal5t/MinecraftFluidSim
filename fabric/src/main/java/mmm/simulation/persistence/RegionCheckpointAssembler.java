@@ -97,7 +97,7 @@ public final class RegionCheckpointAssembler {
 		var descriptors=sections.stream().map(s->new RegionManifest.SectionDescriptor(s.sectionX(),s.sectionY(),s.sectionZ(),s.stockCount(),Double.doubleToRawLongBits(s.exactVolume().toDouble()),s.massUnits(),s.checksum())).toList();
 		var extensions=new ArrayList<RegionExtension>();
 		extensions.add(new RegionExtension(SolverRuntimeCodec.MANIFEST_EXTENSION,new SolverRuntimeCodec().encode(state)));
-		extensions.add(new RegionExtension(ScreenFaceCodec.MANIFEST_EXTENSION,new ScreenFaceCodec().encode(grid,state.fixedGeometry().screens())));
+		extensions.add(new RegionExtension(FixedFaceGeometryCodec.MANIFEST_EXTENSION,new FixedFaceGeometryCodec().encode(state.fixedGeometry())));
 		if(state.chemicalRegistry()!=null)extensions.add(new RegionExtension("mmm:chemical_audit",ChemicalAuditLedgerCodec.encode(state.chemicalSource(),state.chemicalSink())));
 		if(spatialGas!=null){
 			var total=mmm.fluid.air.GasRegionAudit.aggregate(spatialGas.cells());

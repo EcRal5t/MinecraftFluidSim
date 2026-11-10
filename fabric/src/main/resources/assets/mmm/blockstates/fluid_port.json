@@ -1,10 +1,73 @@
 {
   "variants": {
-    "facing=north": { "model": "mmm:block/fluid_port" },
-    "facing=south": { "model": "mmm:block/fluid_port", "y": 180 },
-    "facing=west": { "model": "mmm:block/fluid_port", "y": 270 },
-    "facing=east": { "model": "mmm:block/fluid_port", "y": 90 },
-    "facing=up": { "model": "mmm:block/fluid_port", "x": 270 },
-    "facing=down": { "model": "mmm:block/fluid_port", "x": 90 }
+    "facing=north,mode=stopped": {
+      "model": "mmm:block/fluid_port"
+    },
+    "facing=south,mode=stopped": {
+      "model": "mmm:block/fluid_port",
+      "y": 180
+    },
+    "facing=west,mode=stopped": {
+      "model": "mmm:block/fluid_port",
+      "y": 270
+    },
+    "facing=east,mode=stopped": {
+      "model": "mmm:block/fluid_port",
+      "y": 90
+    },
+    "facing=up,mode=stopped": {
+      "model": "mmm:block/fluid_port",
+      "x": 270
+    },
+    "facing=down,mode=stopped": {
+      "model": "mmm:block/fluid_port",
+      "x": 90
+    },
+    "facing=north,mode=input": {
+      "model": "mmm:block/fluid_port_input"
+    },
+    "facing=south,mode=input": {
+      "model": "mmm:block/fluid_port_input",
+      "y": 180
+    },
+    "facing=west,mode=input": {
+      "model": "mmm:block/fluid_port_input",
+      "y": 270
+    },
+    "facing=east,mode=input": {
+      "model": "mmm:block/fluid_port_input",
+      "y": 90
+    },
+    "facing=up,mode=input": {
+      "model": "mmm:block/fluid_port_input",
+      "x": 270
+    },
+    "facing=down,mode=input": {
+      "model": "mmm:block/fluid_port_input",
+      "x": 90
+    },
+    "facing=north,mode=output": {
+      "model": "mmm:block/fluid_port_output"
+    },
+    "facing=south,mode=output": {
+      "model": "mmm:block/fluid_port_output",
+      "y": 180
+    },
+    "facing=west,mode=output": {
+      "model": "mmm:block/fluid_port_output",
+      "y": 270
+    },
+    "facing=east,mode=output": {
+      "model": "mmm:block/fluid_port_output",
+      "y": 90
+    },
+    "facing=up,mode=output": {
+      "model": "mmm:block/fluid_port_output",
+      "x": 270
+    },
+    "facing=down,mode=output": {
+      "model": "mmm:block/fluid_port_output",
+      "x": 90
+    }
   }
 }

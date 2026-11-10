@@ -15,6 +15,8 @@
 
 | 需要查什么 | 文档 |
 |---|---|
+| 生存模式配方、工具获取与入门操作 | [生存模式入门](gameplay/survival-progression.md) |
+| 工业方块与工具像素素材、方向标记与制作来源 | [工业展示素材](maintenance/visual-assets.md) |
 | 后端字段、MAC、PLIC、压力、速度传递与碰撞离散 | [流体离散参考](architecture/fluid-solver.md) |
 | 材料定义、质量、黏度与混合物换算 | [材料参考](architecture/material-state.md) |
 | 气腔几何、库存分配、状态方程与有限孔流 | [气体参考](architecture/gas-state.md) |
@@ -26,7 +28,9 @@
 | 能力包、checkpoint 字段、HEAD 与冷恢复 | [存档参考](architecture/region-state.md) |
 | 世界归属、容器载荷、WAL 与恢复分类 | [事务参考](architecture/world-ownership-and-containers.md) |
 | 外部查询、提交事件、线程和单位 | [接口参考](architecture/external-api.md) |
+| Create 物品自动化、流体、显示与运动结构的接入条件 | [Create 适配计划](roadmap/create-compatibility-plan.md) |
 | 后续玩家能力、产品阶段与范围 | [长期产品路线](roadmap/product-roadmap.md) |
+| 空间选区、附近空气与方块温度、共享热库存及迁移顺序 | [空间选区与环境热场方案](roadmap/region-and-environment-heat-plan.md) |
 | 自由构造工业玩法的阀门、筛、物料箱、测量控制及运动适配 | [后续工业玩法实施计划](roadmap/emergent-industrial-gameplay-plan.md) |
 | 基础方块搭建的蒸馏、过滤、活塞、吸附及催化测试 | [工业装置仿真测试规格](roadmap/industrial-simulation-test-plan.md) |
 | 范围扩张与完整 GPU 后端要求 | [后端扩展参考](roadmap/performance-and-backends.md) |

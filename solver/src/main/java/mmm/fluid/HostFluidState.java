@@ -331,8 +331,10 @@ public final class HostFluidState {
 	public float setSolidMicroMask(int x, int y, int z, int mask) { return domainCollision.setSolidMicroMask(x, y, z, mask); }
 	public FlipChemicalParticleState exportChemicalParticleState() { return domainCollision.exportChemicalParticleState(); }
 	public void handoffCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies) { domainCollision.handoffCollisionBodies(edits, bodies); }
+	public void replaceCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies) { domainCollision.replaceCollisionBodies(edits, bodies); }
 	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) { return domainCollision.planCollisionEdits(edits); }
 	public void beginCollisionEdits(CollisionEditPlan plan) { domainCollision.beginCollisionEdits(plan); }
+    public void replaceExteriorMasks(int[] masks) { geometry.cutCells.replaceExteriorMasks(masks); markCellInventoryChanged(); }
 	public float applyCollisionEdits(List<CollisionEdit> edits) { return domainCollision.applyCollisionEdits(edits); }
 	public boolean isSolid(int x, int y, int z) { return domainCollision.isSolid(x, y, z); }
 	public int solidMicroMask(int x, int y, int z) { return domainCollision.solidMicroMask(x, y, z); }

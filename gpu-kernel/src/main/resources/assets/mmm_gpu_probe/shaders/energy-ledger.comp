@@ -10,6 +10,7 @@ layout(binding=1,std430) buffer Candidate { uint words[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header;int stage;int count;int inputOffset;int outputOffset;int groups; } p;
 shared int bins[136];
+shared uint initialErrors;
 uint readWord(int bank,int at){return bank==0?sourceWords[at]:words[at];}
 void accumulateDouble(int index,int descriptor){
     int bank=int(words[descriptor+1]);
@@ -65,6 +66,9 @@ void writeCanonical(){
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x);
     if(block>=p.groups)return;
+    if(lane==0)initialErrors=errors;
+    barrier();
+    if(initialErrors!=0u)return;
     if(p.stage==STAGE_CANONICALIZE){if(lane==0)writeCanonical();return;}
     for(int digit=lane;digit<136;digit+=128)bins[digit]=0;barrier();
     if(p.stage==STAGE_ADD_CANONICAL){if(lane<68){accumulateCanonical(0,p.inputOffset,lane);accumulateCanonical(1,p.count,lane);}}

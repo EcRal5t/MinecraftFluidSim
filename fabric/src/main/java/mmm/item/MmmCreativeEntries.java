@@ -18,20 +18,26 @@ public final class MmmCreativeEntries {
 		Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, mmm.MmmMod.id("main"),
 				FabricCreativeModeTab.builder()
 						.title(Component.translatable("itemGroup.mmm.main"))
-						.icon(() -> MmmBlocks.FLUID_CONTROLLER.asItem().getDefaultInstance())
+						.icon(() -> MmmItems.FIELD_PROBE.getDefaultInstance())
 						.displayItems((parameters, entries) -> addEntries(entries))
 						.build());
 	}
 
 	private static void addEntries(CreativeModeTab.Output entries) {
 		entries.accept(MmmItems.QUICK_START_GUIDE);
-		entries.accept(MmmBlocks.FLUID_BOUNDARY);
+		entries.accept(MmmBlocks.INSULATION);
+		entries.accept(MmmBlocks.INSULATING_GLASS);
+		entries.accept(MmmBlocks.METAL_PIPE);
+		entries.accept(MmmBlocks.INSULATED_PIPE);
+		entries.accept(MmmBlocks.GLASS_PIPE);
+		entries.accept(MmmBlocks.INSULATED_GLASS_PIPE);
+		entries.accept(MmmBlocks.PIPE_VALVE);
+		entries.accept(MmmBlocks.PIPE_SCREEN);
 		entries.accept(MmmBlocks.FLUID_PORT);
 		entries.accept(MmmBlocks.MATERIAL_BOX);
 		entries.accept(MmmBlocks.VALVE);
 		entries.accept(MmmBlocks.PROCESS_SENSOR);
 		entries.accept(MmmBlocks.SCREEN);
-		entries.accept(MmmBlocks.FLUID_CONTROLLER);
 		entries.accept(MmmItems.FIELD_PROBE);
 		entries.accept(MmmItems.MATERIAL_BUCKET);
 		for (String id : java.util.List.of(

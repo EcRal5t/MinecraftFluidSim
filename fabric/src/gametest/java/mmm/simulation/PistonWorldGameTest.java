@@ -15,14 +15,14 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.piston.PistonBaseBlock;
 import net.minecraft.world.level.block.piston.PistonMovingBlockEntity;
 
-/** Real controller, finite box transfer, redstone piston and resident fluid state. */
+/** Spatial region, finite box transfer, redstone piston and resident fluid state. */
 public final class PistonWorldGameTest {
     @GameTest(structure="mmm_gametest:piston",maxTicks=200)
     public void stickyPistonAndFinitePort(GameTestHelper test) {
         var level=test.getLevel();
         var runtime=MmmRuntimeRegistry.require(level.getServer());
         var manager=runtime.worldUpdates().regions();
-        var controller=new BlockPos(1,2,2);
+        var controller=new BlockPos(2,2,2);
         var portPosition=new BlockPos(6,2,2);
         var boxPosition=new BlockPos(7,2,2);
         var piston=new BlockPos(2,2,3);
@@ -30,14 +30,13 @@ public final class PistonWorldGameTest {
         var destination=new BlockPos(4,2,3);
         var power=new BlockPos(2,2,2);
         for(int z=1;z<=4;z++)for(int y=1;y<=4;y++)for(int x=1;x<=6;x++)
-            if(x==1||x==6||y==1||y==4||z==1||z==4)test.setBlock(x,y,z,MmmBlocks.FLUID_BOUNDARY);
-        test.setBlock(controller,MmmBlocks.FLUID_CONTROLLER);
+            if(x==1||x==6||y==1||y==4||z==1||z==4)test.setBlock(x,y,z,Blocks.IRON_BLOCK);
         test.setBlock(portPosition,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST));
         test.setBlock(boxPosition,MmmBlocks.MATERIAL_BOX);
         test.setBlock(piston,Blocks.STICKY_PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING,Direction.EAST));
         test.setBlock(source,Blocks.STONE);
         var player=test.makeMockServerPlayerInLevel();
-        var activation=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
+        var activation=runtime.regionActivation().createSelection(player,test.absolutePos(new BlockPos(2,2,2)),test.absolutePos(new BlockPos(5,3,3)));
         test.assertTrue(activation.succeeded(),"Controller activation failed: "+activation.failure());
         var region=manager.selected();
         test.assertTrue(region!=null&&region.solverLoaded(),"Controller did not publish its region");

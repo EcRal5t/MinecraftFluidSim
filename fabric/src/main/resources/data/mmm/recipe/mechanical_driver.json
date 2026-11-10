@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    " I ",
+    "IPI",
+    " R "
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "P": "minecraft:piston",
+    "R": "minecraft:redstone"
+  },
+  "result": {
+    "id": "mmm:mechanical_driver",
+    "count": 1
+  }
+}

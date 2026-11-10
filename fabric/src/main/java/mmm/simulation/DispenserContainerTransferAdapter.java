@@ -75,7 +75,7 @@ public final class DispenserContainerTransferAdapter {
 		if (!resolution.resolved()) return stack;
 		MinecraftContainerTransferPlan plan = resolution.plan();
 
-		if (!region.controllerManaged()) {
+		if (!region.hasSelectedVolume()) {
 			MinecraftContainerTransferOperations.TransferOutcome outcome = plan.executeUnmanaged(plan.requestedAmount());
 			if (outcome == null || !outcome.transferred()) return stack;
 			snapshots.sendToLevel(level, region);

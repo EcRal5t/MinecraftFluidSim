@@ -61,7 +61,7 @@ public final class MinecraftRegionOperatorActions {
 	public boolean setPaused(boolean paused, ServerLevel level) {
 		FluidRegion region = activeRegion();
 		if (region != null && availability.hasPending(region.id())) return false;
-		if (region != null && paused && !region.solverLoaded() && region.controllerManaged()) {
+		if (region != null && paused && !region.solverLoaded() && region.hasSelectedVolume()) {
 			if (!startup.authoritativeWritesReady()) return false;
 			if (region.paused()) return true;
 			try { operations.setUnloadedRunIntent(region, true); return true; }
@@ -112,6 +112,7 @@ public final class MinecraftRegionOperatorActions {
 
 	/** Explicit run/step retries clear only wall-time evidence, never physical or transaction failures. */
 	static void clearPerformancePauseForExplicitRetry(FluidRegion region) {
+		region.clearExpansionBlock();
 		if (region.availabilityReason() == mmm.api.RegionAvailabilityReason.PERFORMANCE_PAUSE) {
 			region.clearPerformanceBlock();
 		}
@@ -181,9 +182,9 @@ public final class MinecraftRegionOperatorActions {
 	public RestorationStats remove(MinecraftServer server) {
 		FluidRegion selected = activeRegion();
 		if (selected == null) return RestorationStats.failed(false, 0, 0, 0, "没有选中的区域");
-		if (selected.controllerManaged()) {
+		if (selected.hasSelectedVolume()) {
 			return RestorationStats.failed(false, 0, 0, 0,
-					"控制器区域需使用探针打开控制台，依次清空凝聚相、排气、释放方块归属并移除区域");
+					"区域需使用探针打开控制台，依次清空凝聚相、排气、释放方块归属并移除区域");
 		}
 		if (containerRecovery.hasAnyLock()) return RestorationStats.failed(false, 0, 0, 0,
 				"存在未完成或不可识别的容器转移 WAL；拒绝移除区域，先完成恢复");
@@ -205,7 +206,7 @@ public final class MinecraftRegionOperatorActions {
 		if (!startup.authoritativeWritesReady()) return authoritativeWriteFailure("清空区域库存");
 		FluidRegion region = activeRegion();
 		if (region == null || !level.dimension().equals(region.dimension())) return "没有活动流体域或位于其他维度";
-		if (region.controllerManaged()) return "清空失败：请手持物质场探针普通右击控制器打开控制台，并使用“清空凝聚相”的预览/确认操作";
+		if (region.hasSelectedVolume()) return "清空失败：请手持物质场探针右击区域内方块打开控制台，并使用“清空凝聚相”的预览/确认操作";
 		if (!availability.ensureForInventoryDecrease(level, region)) {
 			return "清空失败：流体域当前不可用：" + region.availabilityFailure();
 		}
@@ -239,14 +240,7 @@ public final class MinecraftRegionOperatorActions {
 				granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
 	}
 
-	boolean isLifecycleManagedBlock(ServerLevel level, BlockPos position) {
-		if (level == null || position == null || !level.getServer().isSameThread()) return false;
-		long packed = position.asLong();
-		for (FluidRegion region : regions.regions()) if (region.dimension().equals(level.dimension())
-				&& region.footprint() != null && region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED
-				&& region.footprint().boundaryBlocks().contains(packed)) return true;
-		return false;
-	}
+    boolean isLifecycleManagedBlock(ServerLevel level, BlockPos position) { return false; }
 
 	private String authoritativeWriteFailure(String operation) {
 		if (!startup.authoritativeWritesReady() && startup.state() != WorldStartupCoordinator.State.READY) {

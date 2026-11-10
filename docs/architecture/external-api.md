@@ -28,6 +28,14 @@
   - 身份与回执：[PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)
   - 实际数量与持久交接复用容器计划、`ContainerTransferCoordinator` 和 `ContainerRecoveryCoordinator`。
 
+- **测点只读摘要**
+  - 代码入口：[ProcessSensorSnapshot](../../api/src/main/java/mmm/api/sensor/ProcessSensorSnapshot.java)、[ProcessSensorBlockEntity.snapshot](../../fabric/src/main/java/mmm/block/ProcessSensorBlockEntity.java)、[ProcessSensorSnapshotCodec](../../fabric/src/main/java/mmm/sensor/ProcessSensorSnapshotCodec.java)
+  - 验证入口：`ProcessSensorSnapshotValidation`、`ProcessSensorSyncValidation`、`FakeCreateDisplayValidation`。
+
+- **外部规定运动结构**
+  - 代码入口：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[MmmFabricApi.movingStructures](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
+  - 测试选择器：`structure-handoff`、`external-motion`。
+
 - **探针与控制台**
   - 代码入口：
     - [ShellFluidQuery](../../fabric/src/main/java/mmm/simulation/ShellFluidQuery.java)
@@ -47,6 +55,8 @@
 - [请求](#请求)
 - [结果和失败语义](#结果和失败语义)
 - [Observation](#observation)
+- [测点只读摘要](#测点只读摘要)
+- [外部规定运动结构](#外部规定运动结构)
 - [内置探针与控制界面](#内置探针与控制界面)
 - [Jade 观察适配](#jade-观察适配)
 - [Committed event](#committed-event)
@@ -106,6 +116,34 @@ overlap、预算、WAL、pending work、权限、数值暂停、可重试性能�
 
 Query API 提供宏观状态查询（体积、质量、密度、温度、材料与化学组分），不包含内部速度场或调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义。
 
+## 测点只读摘要
+
+`ProcessSensorBlockEntity.snapshot()` 返回 MMM 自有的不可变 `ProcessSensorSnapshot`，服务端显示适配读取该快照，客户端护目镜等展示适配读取方块实体同步后的同一摘要。测点沿现有采样周期读取区域已提交观测；读取摘要不启动额外 GPU 采样、区域恢复或时间推进。
+
+`measure` 和 `unit()` 标明物理量：液位为 0—1 的无量纲比例，液体温度和气体温度为 K，压力为绝对 Pa，液体流量为 L/s。`RUNNING` 和 `PAUSED` 携带实际数值、区域 UUID、网络实例代次、求解代次和仿真秒数；`WAITING`、`UNAVAILABLE` 和 `NO_SAMPLE` 不携带数值与区域身份。状态和缺值共同表达测量是否可用，数值零保持实际测量含义。
+
+方块初始数据和更新包携带有界摘要，曲线历史另按需传输。状态、量纲、读数或区域实例变化即时同步；稳定读数仅时间或求解代次变化时最多每 20 tick 同步一次。摘要和历史属于会话状态，方块存档保存测点配置与红石输出。加载后摘要从 `WAITING` 开始，已保存的红石输出在首次新观测或不可用处理时通过正常 `signal` 路径更新邻居。重配测量或范围会清除旧值、身份和对应历史。
+
+接口：[ProcessSensorSnapshot](../../api/src/main/java/mmm/api/sensor/ProcessSensorSnapshot.java)、[ProcessSensorBlockEntity](../../fabric/src/main/java/mmm/block/ProcessSensorBlockEntity.java)、[ProcessSensorSnapshotCodec](../../fabric/src/main/java/mmm/sensor/ProcessSensorSnapshotCodec.java)。
+
+## 外部规定运动结构
+
+`MovingStructureApi` 是 MMM 提供的规定运动接口。Fabric 适配器在服务端主线程通过 `MmmFabricApi.movingStructures(server)` 取得服务，用稳定 provider ID 注册 `Provider`，并通过 `status(providerId, regionId)` 读取逐区域状态。Create 适配器负责观察和排队 Create 的实际运动；Create 保有原世界结构、实体和动力网络，MMM 按实际位置、形状与仿真时长推进流体。适配器不需要 SU 换算，MMM 不重建 Create 方块或动力网络。
+
+`Provider.sample(dimensionId)` 返回该维度的当前结构列表。每个 `Structure` 包含稳定结构 UUID、可选实体 UUID、`revision`、世界坐标平移 `source` 与 `target`、正的 `durationSeconds`、固定形状 `pieces` 和 `retired` 标记。`Piece` 由稳定键和局部轴对齐 `Box` 组成；长度单位为 m，时间单位为 s。实体 UUID 用于避免同一实体被重复计入碰撞。一个运动段保持相同 revision、起终点、时长及分块；后续段使用更大的 revision，以已接受终点作为源点并保持分块形状。
+
+MMM 按求解步时长逐段推进，在运动步接受后更新 `Progress` 中的 revision、已接受位姿和完成比例。适配器保留正在处理的段，按接受进度排队后续段；Create 自身继续控制原世界运动。`WAITING` 表示尚无区域观测，`LAGGING` 表示运动段或提供方数据等待处理，`BUSY` 表示前一段尚未完成，`ACCEPTED` 表示当前段或交接已接受，`REJECTED` 表示输入或可用条件需要处理。调用方依据状态和进度重试，修正输入后重新提供有效段。扫掠涉及的活动组须可用，结构与其他运动体共同受完整区域运动体预算约束；拒绝时保留已接受状态。
+
+首次出现的普通运动结构须从区域外进入，退役段的目标须整体位于区域外。区域内的装配和拆解使用 `Provider.handoffs(dimensionId)`：每个结构提供最新的 `Handoff`，携带 `ASSEMBLE` 或 `DISASSEMBLE`、静止的结构帧和 `FixedBlock` 列表。适配器在修改世界方块前发布对应意图，并保存该结构的最新意图、世界方块和实体状态。每次生命周期变化使用递增 revision；`FixedBlock.key` 与结构内方块保持稳定，坐标给出本次交接的实际世界位置，`blockId` 标识该方块类型。拆解等待最后一个运动段被接受；拆解接受后，旧运动帧不会重新建立结构。
+
+交接要求整个结构位于同一区域，轴对齐形状与固定碰撞微格对齐，各块位置和所需区块可用。MMM 在普通世界碰撞刷新前核对真实世界微格与交接意图，并在同一个候选中转换固定碰撞和运动体归属。普通墙的内能和表面材料随对应方块从固定墙转给结构，拆解时再交回目标固定墙；热墙交接覆盖该墙的完整固定几何。世界改动尚未完成、几何或活动组暂不可用时，交接保持待处理，MMM 保留已接受状态并在后续刷新重试。
+
+区域 checkpoint 保存已接受的固定与运动几何；普通墙热库存由共享 `WorldThermalEnvironment` 管理，并写入环境存档。装配后的墙体以 `EnvironmentThermalState` 的 `CARRIED` 节点保存结构归属、内能和表面库存；区域 `finiteDevices` 是参与接触计算的投影。交接同时准备几何和环境原生候选，在双方均可采用时一起提交。重启后，适配器在首次刷新恢复区域之前重新注册 provider，并重放最近的生命周期意图及尚未完成的运动段；MMM 核对保存的几何与共享环境库存，恢复交接或运动进度。缺少对应 provider 时保留已接受状态，等待适配器恢复。
+
+当前支持轴对齐平移、同一区域装配与拆解，以及原区域内的墙体热库存交接。携带墙体热库存的结构在其原区域完成拆解；结构旋转、跨区域热库存转移和真实 Create 26.2 类型绑定列为后续工作。
+
+接口与实现：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[ExternalStructureGeometry](../../fabric/src/main/java/mmm/simulation/ExternalStructureGeometry.java)、[WorldThermalEnvironment](../../fabric/src/main/java/mmm/simulation/WorldThermalEnvironment.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)。测试选择器：`structure-handoff`、`external-motion`。
+
 ## 内置探针与控制界面
 
 主 Mod 的 field probe 是内部、服务端权威的产品入口，不扩展上述稳定 Query ABI。普通使用先通过 `ShellFluidQuery` 对命中壳面两侧分别调用公开 Query，只有唯一 owner 时才继续；潜行使用以有界 DDA 向内寻找第一格凝聚相。
@@ -116,16 +154,16 @@ Query API 提供宏观状态查询（体积、质量、密度、温度、材料�
 
 该 carrier view 属于内部诊断结构，不构成公开 Query 的稳定契约承诺。
 
-对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
+对选区内位置使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
 live inventory（若 solver 已加载）、已观测载体温度范围、事务执行条件和数值诊断。
 
-控制器方块的空手激活与持物交互分离，探针必须进入物品入口，不能退化为 select/run-intent 消息。Minecraft adapter 先核对线程、距离、方块和 owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
+Minecraft adapter 先核对线程、距离、命中位置和区域归属，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
 `ControllerSummaryPort` 只返回 use-case-specific bounded read model，不返回 region/domain。
 
 用例先验证 view identity 与完整 summary 形状，成功后才签发按 player+region 隔离的一次性 opaque generation；
 失败读不产生未披露 token。availability pause 不阻止只读 summary；metadata-only UNLOADED 只报告 inventory unavailable，不为展示恢复派生状态。
 
-界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、方块和 区域归属，并使 token 失效。
+界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、位置和区域归属，并使 token 失效。
 pause/resume 的 permission、write-ready 与 idempotence 决策进入 `RegionLifecycleUseCase`，adapter 只在 accepted 后改 operator intent、按需唤醒并发布 snapshot。
 
 客户端 summary 没有提交权；打开或读取 summary 本身不加载、不唤醒、不 checkpoint。
@@ -139,10 +177,10 @@ Fabric 最后持久化 BlockEntity、刷新相邻已加载区域的 boundary flu
 ## Jade 观察适配
 
 Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。
-服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。
+服务端 provider 对非空气方块请求数据，并通过上述 Query API 观察命中面近侧或跨过一格方块的反侧位置。
 非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
 
-发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家交互命中外壳方块触发；查询过程保持无加载、不唤醒与服务端权威数据。
+发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家观察方块时触发；查询过程保持无加载、不唤醒与服务端权威数据。
 
 ## Committed event
 
@@ -162,6 +200,18 @@ Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `Containe
 事件是即时通知。服务器可能在删除 WAL 后、发布事件前退出，监听器也可能晚注册而错过事件。接入方需要通过 Query API 重新读取当前状态，处理漏收情况。
 
 当前通知覆盖容器提交完成。checkpoint、世界归属、相变与安全暂停事件仍待设计。
+
+## Fabric 物料箱自动化
+
+物料箱通过 `ItemStorage.SIDED` 显式提供九槽 `SlottedStorage<ItemVariant>`，六个面和无方向查询共用同一存储实例。每槽保存一只实际容器，外部可模拟、插入和提取整只容器；所有物料、组分、内能及其他物品组件随容器保留。普通水桶在首次区域交接时沿共同转移路径准备热载荷，入箱和取回保持原有可见物品组件。
+
+箱内 `TRANSFER_ACTOR` 不进入外部 `ItemVariant`，每次重新入箱建立新的容器身份。未决 WAL 按槽地址拒绝搬运；开放中的 Fabric 事务占用箱体，暂停玩家换料、端口、公共转移、恢复和拆除。嵌套回滚恢复槽位及其身份，外层结束释放占用，最终提交标记方块实体待保存。
+
+该接口只移动物品，不执行区域库存提交。Fabric 的进程内事务由调用方决定提交或回滚，世界按正常存档保存物品；区域交接仍使用下面的持久 WAL、HEAD 和回执协议。Create 漏斗等标准 Fabric 调用方可复用此入口，真实 Create 版本绑定与其他能力见 [Create 适配计划](../roadmap/create-compatibility-plan.md)。
+
+入口：[MaterialBoxItemStorage](../../fabric/src/main/java/mmm/simulation/MaterialBoxItemStorage.java)、[MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)。
+
+内置端口通过 `IndustrialOperations.transferBatch` 直接执行共同容器事务，先保存真实物品前态，再提交区域及物品后态；不为每次换桶登记公共 actor。外部 `MmmTransferApi` 继续维护独立的注册、计划与回执。容器后态由 WAL 库存重建，并继承当前已核对物品的非库存组件，名称及其他辅助数据在交接和恢复时保留。
 
 ## 受控转移
 

@@ -16,7 +16,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.PushReaction;
 import net.minecraft.world.phys.BlockHitResult;
 
-/** Fixed north/south thermal ports installed in a controller shell slot. */
+/** Fixed north/south thermal ports installed in a container wall. */
 public final class FiniteHeatExchangerBlock extends Block implements EntityBlock {
 	FiniteHeatExchangerBlock(BlockBehaviour.Properties properties) {
 		super(properties.strength(5.0F, 3_600_000.0F).pushReaction(PushReaction.BLOCK));

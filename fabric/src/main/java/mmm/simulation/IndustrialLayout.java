@@ -26,7 +26,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         public BlockPos box() { return position.relative(outward); }
     }
     public record Screen(BlockPos position, double poreDiameter, double openFraction) { }
-    public record Sensor(BlockPos position, ProcessSensorBlockEntity.Measure measure, double low, double high,
+    public record Sensor(BlockPos position, mmm.api.sensor.ProcessSensorSnapshot.Measure measure, double low, double high,
                          boolean below, BlockPos first, BlockPos second) { }
     public record Wall(BlockPos position, double temperatureK) { }
     public record Coating(BlockPos position, Direction face, String materialId, double loadingKg) { }
@@ -57,7 +57,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         addPort(blocks,ports,min.offset(1,4,0),Direction.NORTH,FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.SOLID);
         addPort(blocks,ports,min.offset(1,3,0),Direction.NORTH,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.SOLID);
         var cold=min.offset(3,4,1);blocks.put(cold,Blocks.IRON_BLOCK.defaultBlockState());
-        var controller=min.offset(2,4,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        var controller=min.offset(2,4,0);blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,screens,List.of(),List.of(new Wall(cold,280)),List.of());
     }
     private static IndustrialLayout crystallization(BlockPos min) {
@@ -72,7 +72,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         addPort(blocks,ports,min.offset(1,2,2),Direction.SOUTH,FluidPortBlockEntity.Mode.INPUT);
         addPort(blocks,ports,min.offset(6,2,1),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
         addPort(blocks,ports,min.offset(1,2,0),Direction.NORTH,FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.SOLID);
-        var controller=min.offset(2,4,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        var controller=min.offset(2,4,0);blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,List.of(new Screen(screen,.000005,.6)),List.of(),walls,List.of());
     }
     private static IndustrialLayout connectedTanks(BlockPos min) {
@@ -91,8 +91,8 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         var sensorPos=min.offset(0,3,0);
         blocks.put(sensorPos,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
         {var p=ports.getFirst();ports.set(0,new Port(p.position(),p.outward(),p.mode(),p.phase(),p.rate(),true));}
-        var sensor=new Sensor(sensorPos,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(10,1,1),min.offset(12,3,3));
-        var controller=min.offset(1,2,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        var sensor=new Sensor(sensorPos,mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,.25,.75,true,min.offset(10,1,1),min.offset(12,3,3));
+        var controller=min.offset(1,2,0);blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,screens,List.of(sensor),
                 List.of(),List.of());
     }
@@ -120,7 +120,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         addPort(blocks,ports,min.offset(1,0,3),Direction.DOWN,FluidPortBlockEntity.Mode.STOPPED);
         for(int z:new int[]{3,5})addPort(blocks,ports,min.offset(1,4,z),Direction.UP,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
         ports.replaceAll(p->new Port(p.position(),p.outward(),p.mode(),p.phase(),1_000_000_000L,p.redstone()));
-        var controller=min.offset(1,2,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        var controller=min.offset(1,2,0);blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),List.of(),walls,List.of());
     }
     long counterflowChargeNanos(Direction side) {
@@ -148,7 +148,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         for(int y=1;y<4;y++)for(int x=1;x<5;x++)for(int z=1;z<3;z++) {
             var position=min.offset(x,y,z);
             if(!open.contains(position) && !position.equals(product.position()) && !position.equals(vent.position()))
-                blocks.put(position,MmmBlocks.FLUID_BOUNDARY.defaultBlockState());
+                blocks.put(position,Blocks.WOOL.white().defaultBlockState());
         }
         for(var passage:open)blocks.put(passage,MmmBlocks.VALVE.defaultBlockState()
                 .setValue(ValveBlock.FACING,Direction.UP).setValue(ValveBlock.OPENING,1));
@@ -166,9 +166,9 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         blocks.put(pressureSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.WEST));
         var condenser=min.offset(3,2,2);
         var sensors=List.of(
-                new Sensor(pressureSensor,ProcessSensorBlockEntity.Measure.PRESSURE,100_000,110_000,false,condenser,condenser));
+                new Sensor(pressureSensor,mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE,100_000,110_000,false,condenser,condenser));
         var controller=min.offset(1,2,1);
-        blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),sensors,thermal,List.of());
     }
     private static IndustrialLayout surfaceChannel(BlockPos min,boolean adsorption,boolean partial) {
@@ -188,14 +188,14 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         for(int x:new int[]{3,6})for(int y=1;y<=2;y++)for(int z=1;z<=2;z++)
             if((!partial || x==3) && blocks.containsKey(min.offset(x,y,z)))for(var face:List.of(Direction.WEST,Direction.EAST))
                 coatings.add(new Coating(min.offset(x,y,z),face,material,adsorption?.05:1));
-        var controller=min.offset(2,1,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        var controller=min.offset(2,1,0);blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),List.of(),List.of(),coatings);
     }
     private static LinkedHashMap<BlockPos,BlockState> shell(BlockPos min,int sx,int sy,int sz) {
         var blocks=new LinkedHashMap<BlockPos,BlockState>();
         for(int x=0;x<sx;x++)for(int y=0;y<sy;y++)for(int z=0;z<sz;z++)
             if(x==0||x==sx-1||y==0||y==sy-1||z==0||z==sz-1)
-                blocks.put(min.offset(x,y,z),MmmBlocks.FLUID_BOUNDARY.defaultBlockState());
+                blocks.put(min.offset(x,y,z),Blocks.GLASS.defaultBlockState());
         return blocks;
     }
     private static void addPort(Map<BlockPos,BlockState> blocks,List<Port> ports,BlockPos position,Direction outward,FluidPortBlockEntity.Mode mode) {

@@ -1,0 +1,70 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Region { uint words[]; };
+layout(binding=1,std430) buffer Environment { uint env[]; };
+layout(binding=2,std430) buffer Mapping { uint mapWords[]; };
+layout(binding=3,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Push { int stage;int count;int gasHeader;int envEnergy;int envIntercept;int envCapacity;int envUpper;int envUpperTemperature;int envCounts;int envSurfaceIntercept;int envSurfaceCapacity;int segments;int refs;int nodeGroups;int nodeRefs;int cellGroups; } p;
+// HOST_LAYOUT
+const int H_SOURCE_EOS=3;
+int headerWord(int i){return int(words[p.gasHeader+i]);}
+int sourceEosWord(int i){return int(words[headerWord(3)+i]);}
+int field(int i){return headerWord(64+i);}int gasField(int i){return headerWord(16+i);}
+uint64_t quantity(int at){return uint64_t(words[at])|(uint64_t(words[at+1])<<32);}
+double readDouble(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
+void putDouble(int at,double x){uvec2 v=unpackDouble2x32(x);words[at]=v.x;words[at+1]=v.y;}
+double envDouble(int at){return packDouble2x32(uvec2(env[at],env[at+1]));}
+void envPut(int at,double x){uvec2 v=unpackDouble2x32(x);env[at]=v.x;env[at+1]=v.y;}
+double scratch(int ref,int slot){int cellRefs=p.cellGroups+3*int(mapWords[2]);int start=(cellRefs+int(mapWords[0])+1)&~1;int at=start+10*ref+2*slot;return packDouble2x32(uvec2(mapWords[at],mapWords[at+1]));}
+void scratchPut(int ref,int slot,double x){int cellRefs=p.cellGroups+3*int(mapWords[2]);int start=(cellRefs+int(mapWords[0])+1)&~1;int at=start+10*ref+2*slot;uvec2 v=unpackDouble2x32(x);mapWords[at]=v.x;mapWords[at+1]=v.y;}
+bool isFinite(double x){return !isnan(x)&&!isinf(x);}void reportInvalid(){atomicOr(errors,8388608u);}
+// GAS_CALORIC_MATERIAL
+uint64_t ambient(int index){return quantity(field(F_AMBIENT_DATA)+2*index);}
+void packet(int ref){
+ int at=p.refs+4*ref,cell=int(mapWords[at]),side=int(mapWords[at+1]),cells=headerWord(0),components=headerWord(1);
+ double fraction=double(uintBitsToFloat(mapWords[at+3]));
+ int route=side*cells+cell;double inlet=double(quantity(field(F_INFLOW_NANOS)+2*route));
+ double t0=readDouble(p.gasHeader+10),tout=readDouble(sourceEosWord(GAS_H_STATES)+18*cell),cin=0.0LF,cout=0.0LF;
+ int ambientCount=headerWord(6);double totalWeight=double(quantity(p.gasHeader+8));
+ for(int component=0;component<components;component++){
+  double massIn=0.0LF;for(int i=0;i<ambientCount;i++)if(int(ambient(i))==component)
+      massIn=inlet*double(ambient(ambientCount+i))/totalWeight*double(ambient(2*ambientCount+i))/double(ambient(3*ambientCount+i))*1e-10LF;
+  double massOut=double(quantity(field(F_MASS)+2*((side*components+component)*cells+cell)))*1e-10LF;
+  double unused,cp;if(massIn>0.0LF){material(component,t0,unused,cp);cin+=massIn*cp;}
+  if(massOut>0.0LF){if(!(tout>0.0LF)){reportInvalid();return;}material(component,tout,unused,cp);cout+=massOut*cp;}
+ }
+ scratchPut(ref,0,cin*fraction);scratchPut(ref,1,cout*fraction);scratchPut(ref,2,tout);
+}
+void worldNode(int group){
+ int at=p.nodeGroups+3*group,node=int(mapWords[at]),first=int(mapWords[at+1]),last=int(mapWords[at+2]);
+ double energy=envDouble(p.envEnergy+2*node),surfaceB=envDouble(p.envSurfaceIntercept+2*node),surfaceC=envDouble(p.envSurfaceCapacity+2*node);
+ int base=node*p.segments,n=int(env[p.envCounts+node]),part=0;double minimum=1.7976931348623157e308LF;
+ for(int s=0;s<n;s++){minimum=min(minimum,envDouble(p.envCapacity+2*(base+s))+surfaceC);
+  if(s+1<n&&energy>=envDouble(p.envUpper+2*(base+s))+surfaceB+surfaceC*envDouble(p.envUpperTemperature+2*(base+s)))part=s+1;}
+ double temp=(energy-envDouble(p.envIntercept+2*(base+part))-surfaceB)/(envDouble(p.envCapacity+2*(base+part))+surfaceC);
+ if(!(temp>0.0LF&&minimum>0.0LF)){reportInvalid();return;}
+ double packets=0.0LF;for(int i=first;i<last;i++){int ref=int(mapWords[p.nodeRefs+i]);packets+=scratch(ref,0)+scratch(ref,1);}
+ double factor=minimum/(minimum+packets),change=0.0LF,t0=readDouble(p.gasHeader+10);
+ for(int i=first;i<last;i++){
+  int ref=int(mapWords[p.nodeRefs+i]);double qin=factor*scratch(ref,0)*(temp-t0),qout=factor*scratch(ref,1)*(scratch(ref,2)-temp);
+  scratchPut(ref,3,qin);scratchPut(ref,4,qout);change+=(qout-qin);
+ }
+ double next=energy+change;if(!isFinite(next)||!((next-envDouble(p.envIntercept+2*base)-surfaceB)/(envDouble(p.envCapacity+2*base)+surfaceC)>0.0LF)){reportInvalid();return;}
+ envPut(p.envEnergy+2*node,next);
+}
+void regionCell(int group){
+ int at=p.cellGroups+3*group,cell=int(mapWords[at]),first=int(mapWords[at+1]),last=int(mapWords[at+2]);
+ int cellRefs=p.cellGroups+3*int(mapWords[2]);double qin=0.0LF,qout=0.0LF;
+ for(int i=first;i<last;i++){int ref=int(mapWords[cellRefs+i]);qin+=scratch(ref,3);qout+=scratch(ref,4);}
+ int energy=gasField(G_INTERNAL_ENERGY)+2*cell,sink=field(F_EXTERNAL_SINK_ENERGY)+2*cell;
+ double old=readDouble(energy),oldSink=readDouble(sink),next=old+qin,nextSink=oldSink-qout;
+ if(!isFinite(next)||!isFinite(nextSink)){reportInvalid();return;}
+ putDouble(field(F_ENV_OLD_ENERGY)+2*cell,old);putDouble(field(F_ENV_NEW_ENERGY)+2*cell,next);
+ putDouble(field(F_ENV_OLD_SINK)+2*cell,oldSink);putDouble(field(F_ENV_NEW_SINK)+2*cell,nextSink);
+ putDouble(energy,next);putDouble(sink,nextSink);
+}
+void main(){int id=int(gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*65535u*128u);if(id>=p.count)return;
+ if(p.stage==0)packet(id);else if(p.stage==1)worldNode(id);else regionCell(id);
+}

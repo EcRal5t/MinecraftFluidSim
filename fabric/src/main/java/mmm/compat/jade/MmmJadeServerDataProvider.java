@@ -5,7 +5,6 @@ import mmm.api.fabric.MmmFabricApi;
 import mmm.api.query.FluidCellObservation;
 import mmm.api.query.FluidQueryRequest;
 import mmm.api.query.FluidQueryResult;
-import mmm.block.MmmBlocks;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -33,7 +32,7 @@ final class MmmJadeServerDataProvider implements IServerDataProvider<BlockAccess
 
 	@Override
 	public boolean shouldRequestData(BlockAccessor accessor) {
-		return MmmBlocks.isBoundary(accessor.getBlockState());
+		return !accessor.getBlockState().isAir();
 	}
 
 	@Override
@@ -42,8 +41,7 @@ final class MmmJadeServerDataProvider implements IServerDataProvider<BlockAccess
 	}
 
 	private static FluidCellObservation observe(BlockAccessor accessor) {
-		if (!(accessor.getLevel() instanceof ServerLevel level)
-				|| !MmmBlocks.isBoundary(accessor.getBlockState())) return null;
+		if (!(accessor.getLevel() instanceof ServerLevel level)) return null;
 		Direction face = accessor.getSide();
 		Vec3 hit = clampToFace(accessor.getHitResult().getLocation(), accessor.getPosition(), face.getAxis());
 		FluidCellObservation nearPlayer = query(level, hit, face, NEAR_FACE_OFFSET_METRES);

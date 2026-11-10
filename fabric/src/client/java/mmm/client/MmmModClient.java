@@ -28,7 +28,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class MmmModClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		InsulatingGlassModel.register();
 		FluidDisplaySettings.INSTANCE.load();
+		SampleAnalysisScreen.register();
+		ProcessTrendClient.register();
 		UseItemCallback.EVENT.register((player, level, hand) -> {
 			if (!level.isClientSide() || !player.getItemInHand(hand).is(MmmItems.QUICK_START_GUIDE)) {
 				return InteractionResult.PASS;
@@ -37,6 +40,11 @@ public final class MmmModClient implements ClientModInitializer {
 			return InteractionResult.SUCCESS;
 		});
 		ClientFluidVolumeRenderer renderer = new ClientFluidVolumeRenderer();
+        net.fabricmc.fabric.api.resource.ResourceManagerHelper.get(net.minecraft.server.packs.PackType.CLIENT_RESOURCES)
+                .registerReloadListener(new net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener() {
+                    public net.minecraft.resources.Identifier getFabricId() { return mmm.MmmMod.id("fluid_render_buffers"); }
+                    public void onResourceManagerReload(net.minecraft.server.packs.resources.ResourceManager manager) { renderer.invalidateResources(); }
+                });
 		AtomicReference<FluidProtocol.Negotiation> negotiated = new AtomicReference<>();
         var snapshotParts = new mmm.network.FluidSnapshotPartPayload.Assembler();
         ClientPlayNetworking.registerGlobalReceiver(mmm.network.FluidSnapshotPartPayload.TYPE, (part, context) -> {
@@ -51,6 +59,8 @@ public final class MmmModClient implements ClientModInitializer {
 			negotiated.set(negotiation.accepted() ? negotiation : null);
 			context.responseSender().sendPacket(FluidProtocolResponsePayload.from(negotiation));
 		});
+        ClientPlayNetworking.registerGlobalReceiver(mmm.network.PipeSnapshotPayload.TYPE,
+                (payload,context)->renderer.accept(payload,negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(FluidMaterialSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(FluidChemicalSnapshotPayload.TYPE,

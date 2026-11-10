@@ -47,7 +47,6 @@ abstract class RegionPersistenceValidationSupport {
 	}
 	static FluidRegion populatedRegion(UUID id,mmm.fluid.FluidDefinitions definitions) {
 		HostFluidState domain = new HostFluidState(6, 4, 6, CONFIG, definitions);
-		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -70,14 +69,13 @@ abstract class RegionPersistenceValidationSupport {
 			interior.add(new BlockPos(x,y,z).asLong());chunks.add(ChunkPos.pack(x>>4,z>>4));
 		}
 		BlockPos controller=origin.offset(-1,0,0);
-		FluidRegionFootprint footprint=new FluidRegionFootprint(controller,origin,maximum,interior,Set.of(controller.asLong()),chunks);
+		FluidRegionFootprint footprint=FluidRegionFootprint.selected(origin,maximum,interior,chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 
 	/** Fixed codec columns, independent of the runtime cell-fill quadrature. */
 	static FluidRegion canonicalCodecRegion(UUID id) {
 		var domain = new HostFluidState(6, 4, 6, CONFIG, mmm.fluid.TestFluidDefinitions.load());
-		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		var template = domain.exportParticleState();
 		float[] positions = {
@@ -99,14 +97,12 @@ abstract class RegionPersistenceValidationSupport {
 	static FluidRegion emptyRegion(UUID id) {
 		BlockPos origin = new BlockPos(32, 16, 32);
 		HostFluidState domain = new HostFluidState(8, 8, 8, CONFIG, mmm.fluid.TestFluidDefinitions.load());
-		domain.sealDomainBoundary();
 		Set<Long> interior = new HashSet<>();
 		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {
 			for (int x = 32; x <= 35; x++) interior.add(new BlockPos(x, y, z).asLong());
 		}
 		BlockPos controller = new BlockPos(31, 17, 33);
-		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(35, 19, 35),
-				interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(2, 2)));
+		FluidRegionFootprint footprint = FluidRegionFootprint.selected(origin, new BlockPos(35, 19, 35), interior, Set.of(ChunkPos.pack(2, 2)));
 		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 

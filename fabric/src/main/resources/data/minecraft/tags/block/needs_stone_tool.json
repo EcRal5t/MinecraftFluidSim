@@ -1,14 +1,18 @@
 {
   "replace": false,
   "values": [
-    "mmm:fluid_boundary",
     "mmm:fluid_port",
-    "mmm:fluid_controller",
     "mmm:thermal_reservoir",
     "mmm:mechanical_driver",
     "mmm:material_box",
     "mmm:valve",
     "mmm:process_sensor",
-    "mmm:screen"
+    "mmm:screen",
+    "mmm:metal_pipe",
+    "mmm:insulated_pipe",
+    "mmm:insulated_glass_pipe",
+    "mmm:glass_pipe",
+    "mmm:pipe_valve",
+    "mmm:pipe_screen"
   ]
 }

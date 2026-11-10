@@ -24,6 +24,15 @@ import java.util.UUID;
 
 /** Two-slot storage whose only commit point is an atomically replaced HEAD. */
 public final class RegionGenerationStore {
+    @FunctionalInterface public interface CommitHook {
+        void beforeCommit(RegionState state) throws IOException;
+        default void beforeRemoval(RemovedRegionManifest removed) throws IOException { }
+        default void beforePrepare(UUID id) throws IOException { }
+        default CommittedIdentity committed(UUID id) { return null; }
+    }
+    public record CommittedIdentity(long generation, long checksum) { }
+    private CommitHook commitHook;
+    public void commitHook(CommitHook hook) { this.commitHook = hook; }
 	private final Path root;
 	private final AtomicMover atomicMover;
 	private final RegionHeadStore headStore;
@@ -107,6 +116,7 @@ public final class RegionGenerationStore {
 	public PreparedGeneration prepare(RegionState state, FaultInjector injector) throws IOException {
 		state.validate();
 		UUID id = state.manifest().regionId();
+        if(commitHook!=null)commitHook.beforePrepare(id);
 		Path region = regionPath(id);
 		Files.createDirectories(root);
 		Head current = null;
@@ -164,6 +174,7 @@ public final class RegionGenerationStore {
 		Head next = RegionHeadStore.active(id, prepared.generation(), prepared.slot(), prepared.manifestChecksum());
 		Path headTemporary = headStore.writeTemporary(region, next);
 		injector.check(FaultPoint.BEFORE_HEAD_PUBLISH, headTemporary);
+        if (commitHook != null) commitHook.beforeCommit(activeStore.readSlot(region.resolve(prepared.slot())));
 		headStore.publishTemporary(region, headTemporary);
 		activeStore.readGeneration(region, headStore.read(region, id));
 		injector.check(FaultPoint.AFTER_HEAD_PUBLISH, region.resolve(HEAD));
@@ -219,12 +230,27 @@ public final class RegionGenerationStore {
 		}
 		RemovedRegionManifest verified = removedStore.readSlot(region.resolve(prepared.tombstoneSlot()), removed.regionId());
 		if (!verified.equals(removed)) throw new IOException("Staged REMOVED tombstone changed before commit");
+        if (commitHook != null) commitHook.beforeRemoval(removed);
 		Head next = RegionHeadStore.removed(removed.regionId(), removed.targetGeneration(),
 				prepared.tombstoneSlot(), removed.checksum());
 		Path temporary = headStore.writeTemporary(region, next);
 		headStore.publishTemporary(region, temporary);
 		return removedStore.readGeneration(region, headStore.read(region, removed.regionId()));
 	}
+
+    /** Completes a tombstone already committed by the world HEAD after an interrupted mirror write. */
+    public void completeWorldRemoval(UUID id, long generation, long checksum) throws IOException {
+        Path region=regionPath(id); Head current=headStore.read(region,id);
+        if(current.kind()==HeadKind.REMOVED) {
+            var removed=removedStore.readGeneration(region,current);
+            if(removed.targetGeneration()!=generation || removed.checksum()!=checksum)throw new IOException("World removal differs from region tombstone");
+            return;
+        }
+        String slot=current.slot().equals(SLOT_A)?SLOT_B:SLOT_A;
+        var removed=removedStore.readSlot(region.resolve(slot),id);
+        if(removed.targetGeneration()!=generation || removed.checksum()!=checksum)throw new IOException("World removal staging is missing");
+        commitRemoval(new PreparedRemoval(removed,slot,current.slot()));
+    }
 
 	public void abortRemoval(PreparedRemoval prepared) throws IOException {
 		RemovedRegionManifest removed = prepared.manifest(); Path region = regionPath(removed.regionId());
@@ -360,74 +386,26 @@ public final class RegionGenerationStore {
 	}
 
 	/**
-	 * Reads the inactive slot only when it is the immediately preceding complete generation.
-	 * This is an operator-recovery probe; ordinary discovery and restore continue to follow HEAD
-	 * exclusively and never fall back automatically.
-	 */
-	public PreviousGeneration readPrevious(UUID id, long expectedCurrentGeneration) throws IOException {
-		Path region = regionPath(id);
-		Head current = headStore.read(region, id);
-		if (current.generation() != expectedCurrentGeneration) {
-			throw new IOException("Region HEAD moved; expected generation " + expectedCurrentGeneration
-					+ " but found " + current.generation());
-		}
-		String previousSlot = current.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
-		RegionState previous = activeStore.readSlot(region.resolve(previousSlot));
-		previous.validate();
-		activeStore.validateReconstruction(previous);
-		RegionManifest manifest = previous.manifest();
-		if (!manifest.regionId().equals(id)
-				|| manifest.checkpointGeneration() != expectedCurrentGeneration - 1L) {
-			throw new IOException("Inactive slot is not the immediately preceding generation");
-		}
-		return new PreviousGeneration(id, current.generation(), current.manifestChecksum(), previousSlot, previous);
-	}
-
-	/**
-	 * Atomically moves only HEAD to a caller-probed previous generation. The rejected current slot
-	 * remains byte-for-byte available until the next successful publication overwrites it. This
-	 * exceptional operation requires an explicit expected generation and is never called by startup.
-	 */
-	public long activatePrevious(PreviousGeneration previous) throws IOException {
-		if (previous == null) throw new IOException("Previous-generation recovery plan is missing");
-		Path region = regionPath(previous.id());
-		Head current = headStore.read(region, previous.id());
-		if (current.generation() != previous.currentGeneration()
-				|| current.manifestChecksum() != previous.currentManifestChecksum()) {
-			throw new IOException("Region HEAD moved after previous-generation validation");
-		}
-		String expectedPreviousSlot = current.slot().equals(SLOT_A) ? SLOT_B : SLOT_A;
-		if (!expectedPreviousSlot.equals(previous.slot())) {
-			throw new IOException("Previous-generation slot changed after validation");
-		}
-		RegionState verified = activeStore.readSlot(region.resolve(previous.slot()));
-		verified.validate();
-		activeStore.validateReconstruction(verified);
-		if (verified.manifest().checkpointGeneration() != current.generation() - 1L
-				|| verified.manifest().checksum() != previous.state().manifest().checksum()
-				|| !verified.manifest().regionId().equals(previous.id())) {
-			throw new IOException("Previous generation changed after validation");
-		}
-		Head restored = RegionHeadStore.active(previous.id(), verified.manifest().checkpointGeneration(),
-				previous.slot(), verified.manifest().checksum());
-		discovery.discardMatchingHeadTemporary(region, restored);
-		Path headTemporary = headStore.writeTemporary(region, restored);
-		headStore.publishTemporary(region, headTemporary);
-		activeStore.readGeneration(region, headStore.read(region, previous.id()));
-		return restored.generation();
-	}
-
-	/**
 	 * HEAD generation of a committed region, or 0 when no generation was ever committed. A present
 	 * but corrupt HEAD still throws; whether staged leftovers may be retried is decided by prepare.
 	 */
 	public long committedGeneration(UUID id) throws IOException {
+        var authoritative=commitHook==null?null:commitHook.committed(id);
+        if(authoritative!=null)return authoritative.generation();
+        return physicalCommittedGeneration(id);
+    }
+    public long physicalCommittedGeneration(UUID id) throws IOException {
 		Path region = regionPath(id);
 		if (!Files.exists(region) || !Files.exists(region.resolve(HEAD))) return 0L;
 		return headStore.read(region, id).generation();
 	}
 
 	public long committedManifestChecksum(UUID id) throws IOException {
+        var authoritative=commitHook==null?null:commitHook.committed(id);
+        if(authoritative!=null)return authoritative.checksum();
+        return physicalCommittedManifestChecksum(id);
+    }
+    public long physicalCommittedManifestChecksum(UUID id) throws IOException {
 		Path region = regionPath(id);
 		if (!Files.exists(region.resolve(HEAD))) return -1L;
 		return headStore.read(region, id).manifestChecksum();
@@ -509,19 +487,6 @@ public final class RegionGenerationStore {
 	) {
 		public Discovery {
 			manifests = List.copyOf(manifests); removed = List.copyOf(removed); issues = Map.copyOf(issues);
-		}
-	}
-	public record PreviousGeneration(
-			UUID id,
-			long currentGeneration,
-			long currentManifestChecksum,
-			String slot,
-			RegionState state
-	) {
-		public PreviousGeneration {
-			java.util.Objects.requireNonNull(id, "id");
-			java.util.Objects.requireNonNull(slot, "slot");
-			java.util.Objects.requireNonNull(state, "state");
 		}
 	}
 }

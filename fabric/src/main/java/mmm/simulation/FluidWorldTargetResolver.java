@@ -25,16 +25,6 @@ final class FluidWorldTargetResolver {
 		return selected != null && selected.dimension().equals(level.dimension()) ? selected : null;
 	}
 
-	/** Exact controller identity lookup; boundary adjacency is deliberately not accepted. */
-	FluidRegion controllerRegionAt(ServerLevel level, BlockPos position) {
-		if (position == null) return null;
-		for (FluidRegion region : regionManager.regions()) {
-			FluidRegionFootprint footprint = region.footprint();
-			if (footprint != null && region.dimension().equals(level.dimension())
-					&& footprint.controllerPosition().equals(position)) return region;
-		}
-		return null;
-	}
 
 	/** Returns the sole region whose actual interior contains the block position. */
 	FluidRegion regionAtBlock(ServerLevel level, BlockPos position) {
@@ -57,13 +47,13 @@ final class FluidWorldTargetResolver {
 		return null;
 	}
 
-	/** Containers cross a shell only through the outward face of an explicit I/O port. */
+	/** Resolves explicit ports and accessible cells in the selected volume. */
 	TransferTarget transferTargetAtBlock(ServerLevel level, BlockPos position, Direction inwardDirection) {
 		if (position == null || !level.hasChunkAt(position)) return null;
 		var state = level.getBlockState(position);
 		if (state.is(MmmBlocks.FLUID_PORT)) return resolvePortTarget(regionManager.regions(), level.dimension(), position,
 				state.getValue(FluidPortBlock.FACING), inwardDirection);
-		if (MmmBlocks.isBoundary(state)) return null;
+		if (state.isCollisionShapeFullBlock(level, position)) return null;
 		FluidRegion direct = regionAtBlock(level, position);
 		return direct != null && direct.solverLoaded() ? new TransferTarget(direct, position.immutable(), null) : null;
 	}
@@ -89,11 +79,7 @@ final class FluidWorldTargetResolver {
 			ServerLevel level, BlockPos position, Direction boundaryInteriorDirection
 	) {
 		if (position == null) return null;
-		FluidRegion direct = regionAtBlock(level, position);
-		if (direct != null) return new TransferTarget(direct, position.immutable(), null);
-		if (!MmmBlocks.isBoundary(level.getBlockState(position))) return null;
-
-		TransferTarget resolved = null;
+        TransferTarget resolved = null;
 		for (FluidRegion region : regionManager.regions()) {
 			FluidRegionFootprint footprint = region.footprint();
 			if (footprint == null || !region.dimension().equals(level.dimension())) continue;

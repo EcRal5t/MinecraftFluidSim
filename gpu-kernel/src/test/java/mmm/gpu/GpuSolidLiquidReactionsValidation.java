@@ -22,11 +22,15 @@ public final class GpuSolidLiquidReactionsValidation {
                 case "region-capacity" -> run(args,true,0,false);
                 case "region" -> run(args,true,8,false);
                 case "multi-donor" -> run(args,false,0,true);
+                case "clipped" -> run(args,true,8,false,true);
                 default -> throw new IllegalArgumentException("Unknown solid/liquid scenario: "+args[1]);
             }
-        } else {run(args,false,8,false);run(args,true,0,false);run(args,true,8,false);run(args,false,0,true);}
+        } else {run(args,false,8,false);run(args,true,0,false);run(args,true,8,false);run(args,false,0,true);run(args,true,8,false,true);}
     }
     private static void run(String[] args,boolean region,int deposits,boolean multiDonor){
+        run(args,region,deposits,multiDonor,false);
+    }
+    private static void run(String[] args,boolean region,int deposits,boolean multiDonor,boolean clipped){
         var chemical=mmm.fluid.TestFluidDefinitions.load().chemistry();var granular=mmm.fluid.TestFluidDefinitions.load().granular();var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         int grid=3,cells=27,cell=13;double h=.5,gravity=9.81,duration=31_536_000;long initialMass=10_000_000_000L,ions=1_000_000;
         var fluid=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:water",1000,"mmm:water",0,90, 0xff197ae8)));
@@ -39,7 +43,7 @@ public final class GpuSolidLiquidReactionsValidation {
         var amounts=new java.util.TreeMap<Integer,Long>();if(!multiDonor){amounts.put(sodium,ions);amounts.put(chloride,ions);}amounts.put(chemical.speciesHandle(BuiltinChemicalDefinitions.H2O),multiDonor?10*ions:ions);
         int[] species=amounts.keySet().stream().mapToInt(Integer::intValue).toArray();
         long[] speciesAmounts=amounts.values().stream().mapToLong(Long::longValue).toArray();
-        var inventory=new DeviceLiquidInventory(offsets,new int[]{0},new int[]{255},DeviceDyadicArray.encode(List.of(SignedDyadic.of(.008))),
+        var inventory=new DeviceLiquidInventory(offsets,new int[]{0},new int[]{clipped?0xc0:255},DeviceDyadicArray.encode(List.of(SignedDyadic.of(.008))),
                 new long[]{initialMass},new long[]{0},new int[]{1},new int[]{0,species.length},species,speciesAmounts,new long[]{initialMass-(multiDonor?1800:760)*ions});
         int nx=4*3*3,ny=3*4*3,nz=3*3*4;double[] px=new double[nx],py=new double[ny],pz=new double[nz];double[] velocity={2,-1,3};
         for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){int x=1+(axis==0?side:0),y=1+(axis==1?side:0),z=1+(axis==2?side:0);
@@ -59,6 +63,7 @@ public final class GpuSolidLiquidReactionsValidation {
             long cursor=phase.endOffset;
             var fixed=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,8);cursor=fixed.offset()+fixed.bytes();
             var masks=new VulkanLiquidStateLayout.Column(align(cursor,a),cells,4);cursor=masks.offset()+masks.bytes();
+            phase.bindFixedMasks(Math.toIntExact(masks.offset()/4));
             var flowCells=new VulkanLiquidStateLayout.Column(align(cursor,a),4*cells,8);cursor=flowCells.offset()+flowCells.bytes();
             int faces=nx+ny+nz;var flowFaces=new VulkanLiquidStateLayout.Column(align(cursor,a),4*faces,8);cursor=flowFaces.offset()+flowFaces.bytes();
             var viscosity=new VulkanLiquidStateLayout.Column(align(cursor,a),liquid.slotCount(),8);cursor=viscosity.offset()+viscosity.bytes();
@@ -68,6 +73,7 @@ public final class GpuSolidLiquidReactionsValidation {
             var regionLayout=VulkanRegionReactions.layout(configuration,liquid,liquidCaloric,new VulkanRegionReactions.SolidInputs(phaseTransitions,solidCaloric,granular,h,-1),phaseTransitions.endOffset(),a);
             var ledger=VulkanEnergyLedger.layout(region?regionLayout.roundoffStreams():phase.roundoffStreams(),regionLayout.endOffset(),a);var initial=ByteBuffer.allocate(Math.toIntExact(ledger.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
             liquid.importState(initial,inventory,momentum);
+            if(clipped)initial.putInt(Math.toIntExact(masks.offset()+4L*cell),0x3f);
             var particles=new ArrayList<VulkanGranularStateLayout.Particle>();
             if(multiDonor){
                 int salt=granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE);long q=4096L*64;
@@ -149,7 +155,10 @@ public final class GpuSolidLiquidReactionsValidation {
                     for(int i=0;i<deposited.species().length;i++)if(deposited.species()[i]==s)count+=deposited.amounts()[i];if(count!=ions)throw new AssertionError("Phase species lost");}
                 double oldK=.5*(4+1+9),newK=0.0;var finalMomentum=liquid.exportState(ldata.duplicate().clear()).momentum();double finalMass=Mass.kilograms(after.massUnits()[0]);
                 for(double[] component:new double[][]{finalMomentum.copyX(),finalMomentum.copyY(),finalMomentum.copyZ()})for(double q:component)if(q!=0)newK+=q*q/finalMass;
-                double bulk=(double)deposited.solidVolumeSvq()/(1-bed.getFirst().porosity()),oldPE=gravity*.75,newPE=gravity*(finalMass*.75+Mass.kilograms(deposited.massUnits())*(.5+.5*bulk*Math.scalb(1.0,-27)/(.5*.5)));
+                double bulk=(double)deposited.solidVolumeSvq()/(1-bed.getFirst().porosity()),oldPE=gravity*.75;
+                double normalizedBulk=bulk*Math.scalb(1.0,-27)/(.5*.5*.5);
+                double bedCenter=clipped?.5+.5*(.5+normalizedBulk):.5+.25*normalizedBulk;
+                double newPE=gravity*(finalMass*.75+Mass.kilograms(deposited.massUnits())*bedCenter);
                 double total=Double.longBitsToDouble(after.energyBits()[0])+deposited.internalEnergy()+newK+newPE;
                 if(Math.abs(total-oldK-oldPE)>1e-8)throw new AssertionError("Phase U/K/PE did not close: "+total+" vs "+(oldK+oldPE));
                 System.out.println((region?"GPU region solid/liquid: ":"GPU solid/liquid: ")+" new bed, exact mass/species/SVQ, nonzero MAC transfer and U/K/PE passed; svq="+deposited.solidVolumeSvq());

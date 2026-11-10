@@ -1,0 +1,6 @@
+{
+  "parent": "mmm:block/fluid_port",
+  "textures": {
+    "direction": "mmm:block/port_output"
+  }
+}

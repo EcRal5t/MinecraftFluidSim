@@ -36,7 +36,7 @@ int routePart(int cell,int side){return localGasRouteIndex(cell,0,side,headerWor
 int componentPart(int cell,int component,int side){return localGasRouteIndex(cell,component,side,headerWord(0),headerWord(1));}
 int speciesPart(int cell,int species,int side){return localGasRouteIndex(cell,species,side,headerWord(0),headerWord(2));}
 int routeTarget(int cell,int side,ivec3 size){return int(words[headerWord(4)+6*cell+side]);}
-bool sourceClosing(int cell){return readDouble(sourceEosWord(GAS_H_STATES)+18*cell+4)>0.0LF&&headerWord(57)>=0&&headerWord(58)>=0&&
+bool sourceClosing(int cell){return headerWord(57)>=0&&headerWord(58)>=0&&
     (int64_t(bitCount((~words[headerWord(57)+cell])&255u))<<21)==signedQuantity(headerWord(58)+2*cell);}
 bool externalRoute(int cell,int side,ivec3 size){
     int target=routeTarget(cell,side,size);
@@ -179,6 +179,8 @@ int64_t routeResidual(int cell,int component,int side){
     return residual;
 }
 void gather(int cell){
+    putDouble(field(F_ENV_OLD_ENERGY)+2*cell,0.0LF);putDouble(field(F_ENV_NEW_ENERGY)+2*cell,0.0LF);
+    putDouble(field(F_ENV_OLD_SINK)+2*cell,0.0LF);putDouble(field(F_ENV_NEW_SINK)+2*cell,0.0LF);
     int components=headerWord(1),stride=headerWord(2);ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));uint64_t targetMass=uint64_t(0),outMass=uint64_t(0);
     double externalIn=0.0LF,externalOut=0.0LF,ambientTemperature=readDouble(p.header+10);
     for(int component=0;component<components;component++){

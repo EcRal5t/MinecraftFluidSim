@@ -36,8 +36,13 @@ final class GranularCollisionGeometry {
 			int cell = grid.cell(x,y,z);if(cell<0)continue;
 			if (skipBed.test(cell)) continue;
 			long bulk = deposits.cellBulkVolumeSvq(cell);
-			if (bulk > 0) action.accept(new double[]{x * h, y * h, z * h},
-					new double[]{(x + 1) * h, (y + bulk / (double) SolidVolume.SVQ_PER_CELL) * h, (z + 1) * h});
+			if (bulk <= 0) continue;
+			double top=bedTop(cell,bulk); int mask=cutCells.mask(cell);
+			for(int bit=0;bit<8;bit++)if((mask&(1<<bit))==0) {
+				double bx=(x+.5*(bit&1))*h,by=(y+.5*((bit>>1)&1))*h,bz=(z+.5*((bit>>2)&1))*h;
+				double upper=Math.min(by+h*.5,top);
+				if(upper>by)action.accept(new double[]{bx,by,bz},new double[]{bx+h*.5,upper,bz+h*.5});
+			}
 		}
 	}
 
@@ -79,19 +84,19 @@ final class GranularCollisionGeometry {
 		return squared < radius * radius;
 	}
 
-	/** Candidate full-footprint bed versus its eight fixed micro boxes, with pure tangency allowed. */
+	/** The horizontal bed is clipped to open microboxes and must fit their combined volume. */
 	boolean bedGeometryFits(int cell, long bulk) {
 		if (bulk < 0) throw new IllegalArgumentException("Candidate bed bulk is negative");
-		if (bulk > SolidVolume.SVQ_PER_CELL) return false;
-		int mask = cutCells.mask(cell), y = grid.y(cell);
-		double bottom = y * h, top = (y + bulk / (double) SolidVolume.SVQ_PER_CELL) * h;
-		if (bulk == 0) return true;
-		for (int bit = 0; bit < 8; bit++) if ((mask & 1 << bit) != 0) {
-			// The bed covers each micro box's entire x/z footprint within this same cell.
-			double microBottom = (2 * y + (bit >> 1 & 1)) * (h / 2);
-			if (bottom < microBottom + h / 2 && microBottom < top) return false;
-		}
-		return true;
+		long capacity=(long)Integer.bitCount(~cutCells.mask(cell)&255)*SolidVolume.SVQ_PER_CELL/8;
+		return bulk<=capacity;
+	}
+	double bedTop(int cell,long bulk) {
+		if(!bedGeometryFits(cell,bulk))throw new IllegalArgumentException("Deposit exceeds open microboxes");
+		int open=~cutCells.mask(cell)&255;
+		double lower=Integer.bitCount(open&0x33)*(SolidVolume.SVQ_PER_CELL/8.0);
+		double upper=Integer.bitCount(open&0xcc)*(SolidVolume.SVQ_PER_CELL/8.0);
+		double height=bulk<=lower?(lower>0?.5*bulk/lower:0):.5+(upper>0?.5*(bulk-lower)/upper:0);
+		return (grid.y(cell)+height)*h;
 	}
 
 	/** Number of candidate bed cells visited by the same vertical broad phase. */

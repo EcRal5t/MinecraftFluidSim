@@ -10,6 +10,7 @@ import net.minecraft.world.level.Level;
 /** Device-to-host handoff keeps current availability and restores one checkpoint generation. */
 final class RegionHostHandoffValidation {
     static void validate() throws Exception {
+        pipeEditsPublishTogether();
         finiteDeviceReloadUsesCheckpoint();
         ordinaryWallContactsSpanBothSides();
         sparseControllerSharesWallInventory();
@@ -18,6 +19,33 @@ final class RegionHostHandoffValidation {
         touchingUnavailableCellKeepsBodyAvailable();
         hostEditsRespectCurrentActivity();
         fullyLoadedPlannerGroupsRemainIndependent();
+    }
+
+    private static void pipeEditsPublishTogether() {
+        var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f);
+        var definitions=mmm.fluid.TestFluidDefinitions.load();
+        var backend=new HandoffBackend();
+        var first=region(new HostFluidState(2,2,2,config,definitions));
+        var second=region(new HostFluidState(2,2,2,config,definitions));
+        first.solverBackend(backend);second.solverBackend(backend);
+        first.ensureDeviceResident();second.ensureDeviceResident();
+        long generation=first.solverGeneration();
+        try(var a=new RegionPipeEdit(first,first.beginHostEdit());
+            var b=new RegionPipeEdit(second,second.beginHostEdit())) {
+            backend.commitsBeforeFailure=1;
+            boolean failed=false;
+            try { RegionPipeEdit.commit(List.of(a,b),null); }
+            catch(IllegalStateException expected) { failed=true; }
+            require(failed && first.solverGeneration()==generation && second.solverGeneration()==generation,
+                    "Failed private import published a partial pipe exchange");
+        }
+        backend.commitsBeforeFailure=-1;
+        try(var a=new RegionPipeEdit(first,first.beginHostEdit());
+            var b=new RegionPipeEdit(second,second.beginHostEdit())) {
+            RegionPipeEdit.commit(List.of(a,b),null);
+            require(first.solverGeneration()==generation+1 && second.solverGeneration()==generation+1,
+                    "Successful private imports did not publish both regions");
+        }
     }
 
     private static void processSettingsSurviveRestartAndStop() throws Exception {
@@ -89,8 +117,8 @@ final class RegionHostHandoffValidation {
         double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(definition.thermalMaterialId()),
                 definition.bodyMassKilograms(),java.util.Map.of(),definition.initialTemperatureK());
         var body=new FiniteThermalBodyState(0,registry.fingerprint(),definition.thermalMaterialId(),definition.bodyMassUnits(),energy);
-        var wall=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,pos.asLong()+"@minecraft:stone",definition.id(),body);
-        var ports=OrdinaryThermalWalls.ports(region,wall,registry);
+        var wall=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+"@minecraft:stone",definition.id(),body);
+        var ports=WorldThermalEnvironment.ports(region,wall,registry);
         require(ports.size()==24,"Ordinary wall lost exposed contact cells");
         for(int face=0;face<6;face++){
             final int expected=face;
@@ -104,8 +132,8 @@ final class RegionHostHandoffValidation {
         for (int x=2;x<=20;x++) interior.add(new BlockPos(x,0,0).asLong());
         for (int z=1;z<=20;z++) interior.add(new BlockPos(20,0,z).asLong());
         var wallPosition = new BlockPos(1,0,0);
-        var footprint = new mmm.simulation.controller.FluidRegionFootprint(wallPosition,BlockPos.ZERO,new BlockPos(20,0,20),
-                interior,java.util.Set.of(wallPosition.asLong()),java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)));
+        var footprint = mmm.simulation.controller.FluidRegionFootprint.selected(BlockPos.ZERO,new BlockPos(20,0,20),
+                interior,java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)));
         var grid = FluidRegionFactory.grid(footprint);
         require(grid.cellCount() < grid.sizeX()*grid.sizeY()*grid.sizeZ(),"Sparse footprint allocated its entire bounding box");
         require(grid.cell(0,0,0)>=0 && grid.cell(40,0,40)>=0 && grid.cell(20,0,20)<0,
@@ -121,9 +149,9 @@ final class RegionHostHandoffValidation {
         var thermal=definitions.thermal(); var type=thermal.finiteDevice("mmm:ordinary_stone_wall");
         double energy=new ThermalStateFunction(thermal).internalEnergyAtTemperature(thermal.materialHandle(type.thermalMaterialId()),
                 type.bodyMassKilograms(),java.util.Map.of(),type.initialTemperatureK());
-        var wall=new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER,wallPosition.asLong()+"@minecraft:stone",type.id(),
+        var wall=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,wallPosition.asLong()+"@minecraft:stone",type.id(),
                 new FiniteThermalBodyState(0,thermal.fingerprint(),type.thermalMaterialId(),type.bodyMassUnits(),energy));
-        var ports=OrdinaryThermalWalls.ports(region,wall,thermal);
+        var ports=WorldThermalEnvironment.ports(region,wall,thermal);
         require(ports.stream().anyMatch(port->port.cellX()==1) && ports.stream().anyMatch(port->port.cellX()==4),
                 "The shared wall did not contact both chambers");
         var inventory=FiniteThermalDeviceInventory.empty(thermal.fingerprint()).insertExternal(wall);
@@ -242,8 +270,8 @@ final class RegionHostHandoffValidation {
 
     private static FluidRegion region(HostFluidState host) {
         var controller = new BlockPos(-1,0,0);
-        var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
-                java.util.Set.of(BlockPos.ZERO.asLong()),java.util.Set.of(controller.asLong()),
+        var footprint = mmm.simulation.controller.FluidRegionFootprint.selected(BlockPos.ZERO, BlockPos.ZERO,
+                java.util.Set.of(BlockPos.ZERO.asLong()),
                 java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)));
         var dimensions = net.minecraft.resources.ResourceKey.<Level>createRegistryKey(
                 net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm", "handoff_dimensions"));
@@ -255,6 +283,7 @@ final class RegionHostHandoffValidation {
     /** Read-only committed device observations; no alternate simulation implementation. */
     private static final class HandoffBackend implements FluidSolverBackend {
         FiniteThermalDeviceInventory devices;
+        int commitsBeforeFailure=-1;
         public String id() { return "test:handoff"; }
         public PreparedFluidState prepareState(FluidStateAccess source, FluidDomainState state,
                 FiniteThermalDeviceInventory inventory, List<FluidStateAccess.DevicePort> ports) {
@@ -279,7 +308,11 @@ final class RegionHostHandoffValidation {
             return new PreparedFluidState() {
                 public FluidDomainState.Layout layout() { return state.layout(); }
                 public FluidDomainState exportState() { return state; }
-                public FluidStateAccess commit() { return resident; }
+                public FluidStateAccess commit() {
+                    if(commitsBeforeFailure==0) throw new IllegalStateException("Injected import failure");
+                    if(commitsBeforeFailure>0) commitsBeforeFailure--;
+                    return resident;
+                }
                 public void close() { }
             };
         }

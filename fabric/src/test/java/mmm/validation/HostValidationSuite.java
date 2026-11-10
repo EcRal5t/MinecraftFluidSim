@@ -13,7 +13,14 @@ public final class HostValidationSuite {
         checks.put("lifecycle", () -> mmm.simulation.FluidRegionLifecycleValidation.main(new String[0]));
         checks.put("mixture-edits", () -> mmm.fluid.MarkerVelocityTransferValidation.main(new String[0]));
         checks.put("region-manager", () -> mmm.simulation.FluidRegionManagerValidation.main(new String[0]));
+        checks.put("region-merge", () -> mmm.simulation.RegionMergePersistenceValidation.main(new String[0]));
+        checks.put("pipe-network", () -> mmm.simulation.PipeTopologyValidation.main(new String[0]));
         checks.put("shape", () -> mmm.simulation.FluidCutCellShapeValidation.main(new String[0]));
+        checks.put("environment", () -> {
+            mmm.simulation.WorldThermalProjectionValidation.main(new String[0]);
+            mmm.simulation.WorldThermalSamplingValidation.main(new String[0]);
+            mmm.simulation.persistence.EnvironmentThermalStoreValidation.main(new String[0]);
+        });
         checks.put("region-state", () -> {
             mmm.simulation.persistence.RegionRepositoryAdapterValidation.main(new String[0]);
             mmm.simulation.M7RegionChemistryPersistenceValidation.main(new String[0]);
@@ -24,17 +31,35 @@ public final class HostValidationSuite {
         });
         checks.put("protocol", () -> {
             mmm.network.FluidNetworkProtocolValidation.main(new String[0]);
+            mmm.simulation.SampleAnalysisValidation.main(new String[0]);
+            mmm.client.SampleComparisonValidation.main(new String[0]);
+            mmm.client.ObservationOpenValidation.main(new String[0]);
+            mmm.network.ProcessTrendHistoryValidation.main(new String[0]);
             mmm.client.ClientSurfaceValidation.main(new String[0]);
+            mmm.simulation.PipeSnapshotPublisherValidation.run();
             mmm.simulation.CommittedEventHubValidation.main(new String[0]);
             mmm.simulation.ShellFluidQueryValidation.main(new String[0]);
         });
-        checks.put("boundary", () -> mmm.simulation.controller.FluidBoundaryScannerValidation.main(new String[0]));
         checks.put("takeover", () -> mmm.simulation.TakeoverJournalValidation.main(new String[0]));
         checks.put("containers", () -> {
             mmm.simulation.persistence.PlayerInventorySaveValidation.main(new String[0]);
             mmm.item.M6ContainerValidation.main(new String[0]);
             mmm.application.ContainerApplicationValidation.main(new String[0]);
             mmm.simulation.ContainerTransferStoreValidation.main(new String[0]);
+        });
+        checks.put("industrial-port", () -> mmm.simulation.IndustrialPortValidation.main(new String[0]));
+        checks.put("sensor-display", () -> {
+            mmm.simulation.ProcessSensorSnapshotValidation.main(new String[0]);
+            mmm.block.ProcessSensorSyncValidation.main(new String[0]);
+            mmm.simulation.FakeCreateDisplayValidation.main(new String[0]);
+        });
+        checks.put("external-motion", () -> {
+            mmm.simulation.EntityFluidWiringValidation.main(new String[0]);
+            mmm.simulation.FakeCreateMotionValidation.main(new String[0]);
+        });
+        checks.put("structure-handoff", () -> {
+            mmm.simulation.ExternalStructureHandoffValidation.main(new String[0]);
+            mmm.simulation.ExternalStructureThermalHandoffValidation.main(new String[0]);
         });
         checks.put("ownership", () -> mmm.simulation.ownership.M6OwnershipValidation.main(new String[0]));
         checks.put("audit", () -> mmm.logging.CommandAuditFileValidation.main(new String[0]));

@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    " I ",
+    "IPI",
+    " I "
+  ],
+  "key": {
+    "I": "mmm:insulation",
+    "P": "mmm:metal_pipe"
+  },
+  "result": {
+    "id": "mmm:insulated_pipe",
+    "count": 1
+  }
+}

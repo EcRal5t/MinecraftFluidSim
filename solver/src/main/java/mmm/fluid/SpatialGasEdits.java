@@ -151,6 +151,8 @@ final class SpatialGasEdits {
     private static double dryFace(HostFluidState domain,FlipPressurePhaseGeometry oldPhase,FlipPressurePhaseGeometry futurePhase,int cell,int target,int side){
         int axis=side/2,face=side&1;double area=0;
         for(int a=0;a<2;a++)for(int b=0;b<2;b++){
+            int exteriorBit=axis==1?b+2*a:a+2*b;
+            if(target<0 && (domain.geometry.cutCells.snapshot().exteriorMask(cell,side)&(1<<exteriorBit))!=0)continue;
             int bit=face<<axis|a<<((axis+1)%3)|b<<((axis+2)%3);
             if((oldPhase.collisionMask(cell)&1<<bit)!=0)continue;
             if(target>=0 && (futurePhase.collisionMask(target)&1<<(bit^(1<<axis)))!=0)continue;

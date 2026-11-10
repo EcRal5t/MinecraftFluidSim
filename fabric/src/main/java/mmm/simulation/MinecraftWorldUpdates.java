@@ -6,14 +6,21 @@ import net.minecraft.server.level.ServerLevel;
 /** Collects committed world edits for the next region geometry and thermal refresh. */
 public final class MinecraftWorldUpdates {
     private final FluidRegionManager regions;
+    private WorldThermalEnvironment environment;
+    private PipeRuntime pipes;
+    void pipes(PipeRuntime value) { pipes=value; }
+    void environment(WorldThermalEnvironment value) { environment = java.util.Objects.requireNonNull(value); }
 
     public MinecraftWorldUpdates(FluidRegionManager regions) {
         this.regions = java.util.Objects.requireNonNull(regions);
     }
 
     FluidRegionManager regions() { return regions; }
+    public void chunksChanged() { if(pipes!=null)pipes.chunksChanged(); }
 
     public void changed(ServerLevel level, BlockPos position) {
+        if(pipes!=null)pipes.changed(level,position);
+        if (environment != null) environment.markDirty(level.dimension().identifier().toString(), position);
         for (var region : regions.regions()) {
             if (!region.dimension().equals(level.dimension())) continue;
             var origin = region.origin();
@@ -34,7 +41,7 @@ public final class MinecraftWorldUpdates {
                           java.util.List<mmm.world.MovingBodyFluidCoupling.Request> target) { }
     private record TrackedMotion(BlockPos position, boolean pistonHead, net.minecraft.world.level.block.Block block, Motion motion) { }
     private final java.util.Map<java.util.UUID, java.util.Map<java.util.UUID, TrackedMotion>> moving = new java.util.HashMap<>();
-    private final java.util.Map<java.util.UUID, java.util.Map<Long, Long>> wallMoves = new java.util.HashMap<>();
+    private final java.util.Map<String, java.util.Map<Long, Long>> thermalMoves = new java.util.HashMap<>();
     record WallMove(BlockPos destination, boolean active) { }
     private static final long BODY_PREFIX = 0x4d4d4d5000000000L;
 
@@ -42,6 +49,19 @@ public final class MinecraftWorldUpdates {
 
     /** Capture each completed vanilla piston tick, including its final block-entity tick. */
     public void pistonTick(ServerLevel level, BlockPos position, net.minecraft.world.level.block.piston.PistonMovingBlockEntity piston) {
+        String dimension=level.dimension().identifier().toString();
+        if (environment != null) {
+            environment.markDirty(dimension, position);
+            if(!piston.isSourcePiston()) {
+                var source=position.relative(piston.getMovementDirection().getOpposite());
+                if(environment.tracksPosition(dimension,source)||environment.tracksPosition(dimension,position)) {
+                    var moves=thermalMoves.computeIfAbsent(dimension,ignored->new java.util.HashMap<>());
+                    boolean continued=false;
+                    for(var entry:moves.entrySet())if(entry.getValue()==source.asLong()){entry.setValue(position.asLong());continued=true;}
+                    if(!continued)moves.put(source.asLong(),position.asLong());
+                }
+            }
+        }
         for (var region : regions.regions()) {
             if (!region.dimension().equals(level.dimension()) || !intersects(region, position)) continue;
             Motion frame = capturePiston(level, position, region.origin(), piston);
@@ -61,12 +81,6 @@ public final class MinecraftWorldUpdates {
                         && value.motion().source().size()==pieceCount).findFirst().orElse(null);
             }
             if(previous!=null)frame=withIdentity(frame,previous.motion());
-            if (!piston.isSourcePiston() && (previous==null || !previous.position().equals(position))) {
-                var walls=wallMoves.computeIfAbsent(region.id(), ignored -> new java.util.HashMap<>());
-                boolean continued=false;
-                for(var entry:walls.entrySet())if(entry.getValue()==source.asLong()) {entry.setValue(position.asLong());continued=true;}
-                if(!continued)walls.put(source.asLong(),position.asLong());
-            }
             var identity=frame.source().getFirst().bodyId();
             var sourceFrame=previous==null?frame.source():previous.motion().source();
             regionMotions.put(identity,new TrackedMotion(position,head,block,new Motion(sourceFrame,frame.target())));
@@ -123,29 +137,15 @@ public final class MinecraftWorldUpdates {
                 && position.getZ() <= origin.getZ()+Math.ceil(region.sizeZ()*h);
     }
 
-    WallMove wallMove(FluidRegion region, BlockPos source) {
-        var transfers = wallMoves.get(region.id());
-        if (transfers == null) return null;
-        Long destination = transfers.get(source.asLong());
-        if (destination == null) return null;
-        var frames = moving.get(region.id());
-        return new WallMove(BlockPos.of(destination),frames != null && frames.values().stream().anyMatch(frame->frame.position().asLong()==destination));
+    WallMove thermalMove(String dimension, BlockPos source, net.minecraft.world.level.BlockGetter world) {
+        var moves=thermalMoves.get(dimension); if(moves==null)return null;
+        Long target=moves.get(source.asLong()); if(target==null)return null;
+        var position=BlockPos.of(target);
+        return new WallMove(position,world.getBlockEntity(position) instanceof net.minecraft.world.level.block.piston.PistonMovingBlockEntity);
     }
-
-    WallMove continueWallMove(FluidRegion region, BlockPos source, BlockPos previousTarget) {
-        var transfers=wallMoves.get(region.id());
-        if(transfers==null)return null;
-        Long destination=transfers.remove(previousTarget.asLong());
-        if(destination==null)return null;
-        transfers.put(source.asLong(),destination);
-        return wallMove(region,source);
-    }
-
-    void finishWallMove(FluidRegion region, BlockPos source) {
-        var transfers = wallMoves.get(region.id());
-        if (transfers == null) return;
-        transfers.remove(source.asLong());
-        if (transfers.isEmpty()) wallMoves.remove(region.id());
+    void finishThermalMove(String dimension, BlockPos source) {
+        var moves=thermalMoves.get(dimension); if(moves==null)return;
+        moves.remove(source.asLong()); if(moves.isEmpty())thermalMoves.remove(dimension);
     }
 
     boolean movingBlock(FluidRegion region, BlockPos position) {

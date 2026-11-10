@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    "mmm:insulation",
+    "mmm:insulating_glass",
+    "mmm:insulated_pipe",
+    "mmm:insulated_glass_pipe"
+  ]
+}

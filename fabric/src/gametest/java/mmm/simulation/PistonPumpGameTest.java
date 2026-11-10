@@ -23,7 +23,7 @@ public final class PistonPumpGameTest {
         var level=test.getLevel();
         var runtime=MmmRuntimeRegistry.require(level.getServer());
         var manager=runtime.worldUpdates().regions();
-        var controller=new BlockPos(1,2,4);
+        var controller=new BlockPos(2,2,2);
         var portPos=new BlockPos(4,2,1);
         var boxPos=new BlockPos(4,2,0);
         var fillingPortPos=new BlockPos(4,4,4);
@@ -37,12 +37,11 @@ public final class PistonPumpGameTest {
         var inletPower=new BlockPos(4,3,3);
         var outletPower=new BlockPos(4,3,5);
         for(int x=1;x<=7;x++)for(int y=1;y<=4;y++)for(int z=1;z<=7;z++)
-            if(x==1||x==7||y==1||y==4||z==1||z==7)test.setBlock(x,y,z,MmmBlocks.FLUID_BOUNDARY);
+            if(x==1||x==7||y==1||y==4||z==1||z==7)test.setBlock(x,y,z,Blocks.IRON_BLOCK);
         for(int y=2;y<=3;y++)for(int z=2;z<=6;z++) {
             test.setBlock(3,y,z,Blocks.STONE);
             test.setBlock(5,y,z,Blocks.STONE);
         }
-        test.setBlock(controller,MmmBlocks.FLUID_CONTROLLER);
         test.setBlock(portPos,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.NORTH));
         test.setBlock(boxPos,MmmBlocks.MATERIAL_BOX);
         test.setBlock(fillingPortPos,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.UP));
@@ -55,12 +54,12 @@ public final class PistonPumpGameTest {
         test.setBlock(4,3,5,Blocks.STONE);
         test.setBlock(drive,Blocks.STONE);
         var player=test.makeMockServerPlayerInLevel();
-        var activation=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
+        var activation=runtime.regionActivation().createSelection(player,test.absolutePos(new BlockPos(2,2,2)),test.absolutePos(new BlockPos(6,3,6)));
         test.assertTrue(activation.succeeded(),"Pump controller activation failed: "+activation.failure());
-        var region=manager.selected();
-        test.assertTrue(region!=null&&region.solverLoaded(),"Pump region did not load");
-        region.setEntityPhysicsEnabled(false);
-        var initial=region.inventorySummary();
+        var initialRegion=manager.selected();
+        test.assertTrue(initialRegion!=null&&initialRegion.solverLoaded(),"Pump region did not load");
+        initialRegion.setEntityPhysicsEnabled(false);
+        var initial=initialRegion.inventorySummary();
         test.assertTrue(initial!=null&&initial.gasMassUnits()>0,"Pump chamber has no finite gas");
         long[] gas={initial.gasMassUnits()};
         var box=test.getBlockEntity(boxPos,MaterialBoxBlockEntity.class);
@@ -76,6 +75,11 @@ public final class PistonPumpGameTest {
         double[] compression={0,0,0,0};Chamber[] chamber={null};
         int[] stage={-3},ticks={0},cycles={0};long[] liquid={0},solids={Math.addExact(initial.granularMassUnits(),initial.coherentMassUnits())};double[] before={0,0};boolean[] moving={false};
         test.onEachTick(()->{
+            var region=manager.region(initialRegion.id());
+            if(region==null)throw new IllegalStateException("Pump region is unavailable");
+            if(stage[0]!=5 && stage[0]!=6 && region.availabilityFailure()!=null
+                    && !(stage[0]==13 && region.availabilityReason()==mmm.api.RegionAvailabilityReason.SECTION_LOADING))
+                throw new IllegalStateException("Pump stage "+stage[0]+" paused: "+region.availabilityFailure());
             ticks[0]++;
             if((stage[0]==-2||stage[0]==-1||stage[0]==2||stage[0]==3||stage[0]==15||stage[0]==17)
                     &&(level.getBlockEntity(test.absolutePos(source)) instanceof PistonMovingBlockEntity
@@ -147,17 +151,24 @@ public final class PistonPumpGameTest {
                     setPower(test,inletPower,false);setPower(test,outletPower,false);stage[0]=11;ticks[0]=0;
                 } else {stage[0]=1;ticks[0]=0;}
             } else if(stage[0]==12&&valvesAt(test,inlet,outlet,0,0)) {
-                    region.setPaused(true);manager.select(region.id());
-                    long oldGeneration=region.checkpointGeneration();
-                    String result=runtime.regionAdministration().checkpointSelected();
-                    test.assertTrue(region.checkpointGeneration()>oldGeneration,"Pump checkpoint failed: "+result);
-                    test.assertTrue(region.releaseSolverAfterCheckpoint(region.checkpointGeneration()),"Pump solver did not unload");
-                    var restored=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
-                    test.assertTrue(restored.succeeded()&&region.solverLoaded(),"Pump restore failed: "+restored.failure());
-                    assertInventory(test,region,liquid[0],gas[0],solids[0]);
-                    region.setPaused(false);
-                    setPower(test,inletPower,true);
-                    stage[0]=1;ticks[0]=0;
+                region.setPaused(true);manager.select(region.id());
+                long oldGeneration=region.checkpointGeneration();
+                String result=runtime.regionAdministration().checkpointSelected();
+                test.assertTrue(region.checkpointGeneration()>oldGeneration,"Pump checkpoint failed: "+result);
+                test.assertTrue(region.releaseSolverAfterCheckpoint(region.checkpointGeneration()),"Pump solver did not unload");
+                stage[0]=13;ticks[0]=0;
+            } else if(stage[0]==13) {
+                var restored=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
+                if(!restored.succeeded()) {
+                    test.assertTrue(region.availabilityReason()==mmm.api.RegionAvailabilityReason.SECTION_LOADING,
+                            "Pump restore failed: "+restored.failure());
+                    return;
+                }
+                test.assertTrue(region.solverLoaded(),"Pump restore did not load the solver");
+                assertInventory(test,region,liquid[0],gas[0],solids[0]);
+                region.setPaused(false);
+                setPower(test,inletPower,true);
+                stage[0]=1;ticks[0]=0;
             } else if(stage[0]==11&&valvesAt(test,inlet,outlet,0,0)) {
                     fillBucket(runtime,fillingBox);
                     fillingPort.configure(FluidPortBlockEntity.Mode.INPUT,FluidPortBlockEntity.Phase.LIQUID,1_000_000_000L,false);
@@ -260,6 +271,7 @@ public final class PistonPumpGameTest {
         var summary=region.inventorySummary();
         test.assertTrue(summary!=null&&Math.addExact(Math.addExact(summary.liquidMassUnits(),summary.gasMassUnits()),
                 Math.addExact(summary.granularMassUnits(),summary.coherentMassUnits()))==Math.addExact(Math.addExact(liquid,gas),solids),
-                "Pump changed finite material inventory");
+                "Pump changed finite material inventory: expected liquid="+liquid+" gas="+gas+" solids="+solids
+                        +" actual="+summary);
     }
 }

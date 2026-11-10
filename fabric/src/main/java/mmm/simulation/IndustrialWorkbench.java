@@ -23,7 +23,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 
-/** Builds industrial layouts through the ordinary controller and block entity entry points. */
+/** Builds industrial layouts through spatial selection and block entity entry points. */
 public final class IndustrialWorkbench {
     private IndustrialWorkbench() { }
     public static LiteralArgumentBuilder<CommandSourceStack> node() {
@@ -49,9 +49,9 @@ public final class IndustrialWorkbench {
                         IndustrialLayout.at(minimum.offset(8,0,0),IndustrialLayout.Scenario.DISTILLATION_SINGLE))
                 :java.util.List.of(IndustrialLayout.at(minimum,scenario));
         for(var layout:layouts)requireBuildSpace(player.level(),layout);
-        var controllers=new ArrayList<String>();
-        for(var layout:layouts){buildUnit(player,layout);controllers.add(layout.controller().toShortString());}
-        return "装置已建立："+scenario+"；控制器位于 "+String.join("、",controllers)
+        var regions=new ArrayList<String>();
+        for(var layout:layouts){buildUnit(player,layout);regions.add(layout.minimum().toShortString());}
+        return "装置已建立："+scenario+"；区域起点 "+String.join("、",regions)
                 +(layouts.size()==2?"；将第一台收集的馏分桶移入第二台进料箱":"");
     }
     private static void requireBuildSpace(net.minecraft.server.level.ServerLevel level,IndustrialLayout layout) {
@@ -67,6 +67,10 @@ public final class IndustrialWorkbench {
     }
     private static void buildUnit(ServerPlayer player,IndustrialLayout layout) {
         var level=player.level();var runtime=MmmRuntimeRegistry.require(level.getServer());var blocks=layout.blocks();
+        var selection=blocks.entrySet().stream().filter(e->!e.getValue().is(mmm.block.MmmBlocks.MATERIAL_BOX)).map(java.util.Map.Entry::getKey).toList();
+        int minX=selection.stream().mapToInt(BlockPos::getX).min().orElseThrow(),maxX=selection.stream().mapToInt(BlockPos::getX).max().orElseThrow();
+        int minY=selection.stream().mapToInt(BlockPos::getY).min().orElseThrow(),maxY=selection.stream().mapToInt(BlockPos::getY).max().orElseThrow();
+        int minZ=selection.stream().mapToInt(BlockPos::getZ).min().orElseThrow(),maxZ=selection.stream().mapToInt(BlockPos::getZ).max().orElseThrow();
         var placed=new ArrayList<BlockPos>();
         try {
             for(var entry:blocks.entrySet()) {
@@ -76,10 +80,10 @@ public final class IndustrialWorkbench {
             }
             for(var wall:layout.walls()) if(blocks.get(wall.position()).is(mmm.block.MmmBlocks.THERMAL_RESERVOIR))
                 ((mmm.block.ThermalReservoirBlockEntity)level.getBlockEntity(wall.position())).setTemperatureK(wall.temperatureK());
-            var result=runtime.regionActivation().activate(player,layout.controller(),false);
+            var result=runtime.regionActivation().createSelection(player,new BlockPos(minX,minY,minZ),new BlockPos(maxX,maxY,maxZ));
             if(!result.succeeded()) {
                 if(result.retainShell())placed.clear();
-                throw new IllegalStateException("控制器启用失败："+result.failure());
+                throw new IllegalStateException("模拟区域启用失败："+result.failure());
             }
         } catch(RuntimeException failure) {
             for(var position:placed) level.setBlock(position,Blocks.AIR.defaultBlockState(),Block.UPDATE_ALL);
@@ -89,10 +93,7 @@ public final class IndustrialWorkbench {
             level.setBlock(port.box(),mmm.block.MmmBlocks.MATERIAL_BOX.defaultBlockState(),Block.UPDATE_ALL);
             var block=(FluidPortBlockEntity)level.getBlockEntity(port.position());
             block.configure(port.mode(),port.phase(),port.rate(),port.redstone());
-            var box=(MaterialBoxBlockEntity)level.getBlockEntity(port.box());
-            var item=port.phase()==FluidPortBlockEntity.Phase.GAS?MmmItems.GAS_CONTAINER:
-                    port.phase()==FluidPortBlockEntity.Phase.SOLID?MmmItems.GRANULAR_CONTAINER:MmmItems.MATERIAL_BUCKET;
-            for(int slot=0;slot<box.getContainerSize();slot++)box.setItem(slot,MaterialBoxBlockEntity.newBatch(new ItemStack(item)));
+
         }
         for(var screen:layout.screens()) {
             var block=(ScreenBlockEntity)level.getBlockEntity(screen.position());
@@ -106,8 +107,8 @@ public final class IndustrialWorkbench {
             var region=runtime.industrial().regionAt(level,layout.controller().relative(net.minecraft.core.Direction.SOUTH));
             if(region==null)throw new IllegalStateException("装置区域不可用");
             var registry=runtime.worldRegistries().thermalRegistry();
-            new OrdinaryThermalWalls(registry,new ThermalBoundaryResolver(registry)).refresh(level,region,FluidRegionFactory.CELLS_PER_BLOCK);
-            initializeThermal(region,layout,registry);
+            runtime.environment().refresh(level,region,FluidRegionFactory.CELLS_PER_BLOCK);
+            initializeThermal(region,layout,registry,runtime.environment());
             for(var wall:layout.walls())if(blocks.get(wall.position()).is(mmm.block.MmmBlocks.FINITE_HEAT_EXCHANGER))
                 ((mmm.block.FiniteHeatExchangerBlockEntity)level.getBlockEntity(wall.position())).bind(region.id(),Long.toString(wall.position().asLong()));
         }
@@ -128,8 +129,10 @@ public final class IndustrialWorkbench {
             } catch(IllegalArgumentException ignored) { }
         }
     }
-    static void initializeThermal(FluidRegion region,IndustrialLayout layout,mmm.thermal.ThermalRegistry registry) {
-        var inventory=region.finiteThermalDevices(registry.fingerprint());
+    static void initializeThermal(FluidRegion region,IndustrialLayout layout,mmm.thermal.ThermalRegistry registry,
+                                  WorldThermalEnvironment environment) {
+        var inventory=WorldThermalInventories.project(region.finiteThermalDevices(registry.fingerprint()),
+                region.environmentBinding(),environment.current(region.dimension().identifier().toString()));
         for(var wall:layout.walls())if(layout.blocks().get(wall.position()).is(mmm.block.MmmBlocks.FINITE_HEAT_EXCHANGER))
             inventory=inventory.insertExternal(FiniteHeatExchangerOperations.newDevice(registry,wall.position(),wall.temperatureK()));
         var devices=new ArrayList<>(inventory.devices());
@@ -154,11 +157,13 @@ public final class IndustrialWorkbench {
         var updated=new mmm.thermal.FiniteThermalDeviceInventory(registry.fingerprint(),devices,
                 new mmm.thermal.FiniteThermalDeviceAudit(audit.initialInventory(),delta.signum()>0?audit.externalSource().add(delta):audit.externalSource(),
                         delta.signum()<0?audit.externalSink().subtract(delta):audit.externalSink(),audit.solverExchange(),audit.roundoffResidual()));
-        region.replaceOrdinaryWallInventory(updated,registry);
+        try(var prepared=environment.prepareDeviceEdit(region.environmentBinding(),updated)) {
+            region.editWorldThermalInventory(updated,registry,prepared);
+        }
     }
     private static int findWall(java.util.List<mmm.thermal.FiniteThermalDeviceState> devices,BlockPos position) {
         String prefix=position.asLong()+"@";
-        for(int i=0;i<devices.size();i++)if(devices.get(i).providerId().equals(OrdinaryThermalWalls.PROVIDER)
+        for(int i=0;i<devices.size();i++)if(devices.get(i).providerId().equals(WorldThermalEnvironment.PROVIDER)
                 && devices.get(i).objectId().startsWith(prefix))return i;
         throw new IllegalStateException("热墙未连接区域："+position.toShortString());
     }

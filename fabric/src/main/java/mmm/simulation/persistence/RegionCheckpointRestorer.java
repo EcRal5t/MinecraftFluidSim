@@ -102,9 +102,8 @@ public final class RegionCheckpointRestorer {
 	public FixedGeometrySnapshot reconstructFixedGeometry()throws IOException {
 		validateCheckpoint();var grid=runtime().grid();byte[] masks=new byte[grid.cellCount()];
 		for(var section:sections){byte[] slice=section.solidMask();int local=0;for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++){int cell=grid.cell(x,y,z);if(cell>=0)masks[cell]=slice[local];local++;}}
-		var screens = hasExtension(manifest.extensions(), ScreenFaceCodec.MANIFEST_EXTENSION)
-				? new ScreenFaceCodec().decode(grid, requiredExtension(manifest.extensions(), ScreenFaceCodec.MANIFEST_EXTENSION).payload()) : java.util.List.<mmm.fluid.ScreenFace>of();
-		return FixedGeometrySnapshot.fromMasks(grid,masks,screens);
+		return new FixedFaceGeometryCodec().decode(grid, masks,
+				requiredExtension(manifest.extensions(), FixedFaceGeometryCodec.MANIFEST_EXTENSION).payload());
 	}
 	/** Diagnostic sampling views; restore services use reconstructAuthoritativeState. */
 	public FlipParticleState reconstruct(FluidDefinitions definitions)throws IOException{if(manifest.layout().hasMaterials())throw new IOException("Material state requires its palette");return debugState(definitions,null).particles();}

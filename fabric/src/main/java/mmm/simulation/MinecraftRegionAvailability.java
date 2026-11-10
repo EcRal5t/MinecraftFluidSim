@@ -58,6 +58,8 @@ final class MinecraftRegionAvailability {
 			available = operations.ensureAvailable(
 					level, region, controllerFeatureEnabled.getAsBoolean(), regionTick::refreshRegionInputs,
 					snapshots::sendToLevel, snapshots::sendRemoval, inventoryDecrease);
+		} catch (ExternalMovingStructures.InputRejectedException waiting) {
+			return false;
 		} catch (mmm.fluid.FluidDomainContracts.CollisionEditBlockedException blocked) {
 			if (region.pauseForUnavailableDevice()) {
 				snapshots.sendRemoval(level.getServer(), region);

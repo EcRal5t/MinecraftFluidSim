@@ -168,6 +168,10 @@ public final class ContainerTransferStoreValidation {
 		check(recovery.hasPending(region) && wal.read(operation)!=null && writes[0]==1 && events[0]==0
 				&& receipts.entry(operation).state()==mmm.simulation.persistence.PublicTransferReceiptStore.State.PENDING,
 				"Receipt I/O failure deleted WAL, repeated inventory writes, or published completion");
+		var emptySlotAddress = new ContainerTransferActor.BlockInventory(address.dimensionId(),1,2,3,0);
+		var anotherSlot = new ContainerTransferActor.BlockInventory(address.dimensionId(),1,2,3,1);
+		check(recovery.hasPending(new UUID(0,0),emptySlotAddress) && !recovery.hasPending(new UUID(0,0),anotherSlot),
+				"Pending recovery did not protect the exact box slot without a current item identity");
 		recovery.retryTransaction(operation);
 		check(!recovery.hasPending(region) && writes[0]==1 && events[0]==1,"Receipt retry did not finish exactly one inventory commit");
 		var restarted=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
@@ -1072,9 +1076,7 @@ public final class ContainerTransferStoreValidation {
 			UUID regionId = UUID.randomUUID();
 			BlockPos origin = BlockPos.ZERO;
 			BlockPos controller = new BlockPos(-1, 0, 0);
-			FluidRegionFootprint footprint = new FluidRegionFootprint(
-					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
-					Set.of(ChunkPos.pack(0, 0)));
+			FluidRegionFootprint footprint = FluidRegionFootprint.selected(origin, origin, Set.of(origin.asLong()), Set.of(ChunkPos.pack(0, 0)));
 			HostFluidState domain = new HostFluidState(2, 2, 2, config, mmm.fluid.TestFluidDefinitions.load());
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
@@ -1108,9 +1110,7 @@ public final class ContainerTransferStoreValidation {
 			UUID regionId = UUID.randomUUID();
 			BlockPos origin = BlockPos.ZERO;
 			BlockPos controller = new BlockPos(-1, 0, 0);
-			FluidRegionFootprint footprint = new FluidRegionFootprint(
-					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
-					Set.of(ChunkPos.pack(0, 0)));
+			FluidRegionFootprint footprint = FluidRegionFootprint.selected(origin, origin, Set.of(origin.asLong()), Set.of(ChunkPos.pack(0, 0)));
 			HostFluidState pure = new HostFluidState(2, 2, 2, config, mmm.fluid.TestFluidDefinitions.load());
 			pure.setVolume(1, 1, 1, 0.25F);
 			FlipParticleState particles = pure.exportParticleState();
@@ -1128,7 +1128,6 @@ public final class ContainerTransferStoreValidation {
 					mmm.simulation.ProductionRegistries.palette(), positionVolume, particles.copyParticleVelocities(),
 					particles.copySolidMask(), java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(m)).toArray(), materials));
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, footprint);
-			base.sealDomainBoundary();
 			base.captureAuthoritativeState();
 			base.synchronizeGasTopologyForPersistence();
 			check(base.gasBoundary().topologyInitialized() && base.gasBoundary().auditClosed()
@@ -1195,4 +1194,3 @@ public final class ContainerTransferStoreValidation {
 		void run() throws Exception;
 	}
 }
-

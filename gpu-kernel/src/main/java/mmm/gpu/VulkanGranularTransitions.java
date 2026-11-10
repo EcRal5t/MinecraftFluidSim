@@ -63,7 +63,7 @@ final class VulkanGranularTransitions implements AutoCloseable {
         final VulkanGranularGeometry.Layout geometry;
         final VulkanLiquidStateLayout.Column header;
         final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
-        final int inputRows,hashSize,columnsCount;
+        final int inputRows,hashSize,columnsCount, masksWord;
         final long endOffset;
         private final int[] inputs;
         Layout(VulkanGranularStateLayout state,VulkanGranularGeometry.Layout geometry,
@@ -71,7 +71,7 @@ final class VulkanGranularTransitions implements AutoCloseable {
                VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column viscosity,long base,long alignment){
             if(geometry.state()!=state||liquid.cellCount()!=state.cells()||base<Math.max(state.endOffset(),geometry.endOffset()))
                 throw new IllegalArgumentException("Granular transition inputs differ");
-            this.state=state;this.geometry=geometry;inputRows=state.particleCapacity()+state.depositCapacity();columnsCount=state.grid().columnCount();
+            this.state=state;this.geometry=geometry;masksWord=word(masks);inputRows=state.particleCapacity()+state.depositCapacity();columnsCount=state.grid().columnCount();
             int hash=1;while(hash<Math.max(2,2*inputRows))hash=Math.multiplyExact(hash,2);hashSize=hash;
             source=new VulkanGranularStateLayout(state.grid(),state.particleCapacity(),state.depositCapacity(),state.speciesCapacity(),state.definitions(),base,alignment);
             header=new VulkanLiquidStateLayout.Column(align(source.endOffset(),alignment),128,4);long cursor=header.offset()+header.bytes();

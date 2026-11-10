@@ -151,7 +151,10 @@ final class DomainMetrics {
 			for(int cell=0;cell<domain.cellCount;cell++){
 				int mask=domain.geometry.cutCells.mask(cell);
 				for(int bit=0;bit<8;bit++)if((mask&(1<<bit))==0)
-					for(int axis=0;axis<3;axis++)if(domain.grid.neighbor(cell,2*axis+((bit>>axis)&1))<0)return true;
+					for(int axis=0;axis<3;axis++) {
+						int side=2*axis+((bit>>axis)&1),u=(bit>>(axis==0?1:0))&1,v=(bit>>(axis==2?1:2))&1;
+						if(domain.grid.neighbor(cell,side)<0&&(domain.geometry.cutCells.snapshot().exteriorMask(cell,side)&(1<<(u+2*v)))==0)return true;
+					}
 			}
 			return false;
 		}

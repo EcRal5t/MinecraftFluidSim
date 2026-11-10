@@ -1,1 +1,6 @@
-{"parent":"minecraft:block/cube_all","textures":{"all":"minecraft:block/piston_top"}}
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "mmm:block/mechanical_driver"
+  }
+}

@@ -16,6 +16,7 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 	private final ServerLevel level;
 	private final java.util.function.IntPredicate availableCell;
 	private final java.util.function.IntUnaryOperator previousMask;
+    private final java.util.function.IntUnaryOperator previousExterior;
     private final mmm.spatial.SpatialGrid grid;
     private final FluidRegion region;
     private final MinecraftWorldUpdates worldUpdates;
@@ -30,6 +31,8 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
         this.grid = previous == null ? null : previous.grid();
         this.region = null; this.worldUpdates = null;
         this.previousMask = previous==null?null:cell->previous.solidMicroMask(grid.x(cell),grid.y(cell),grid.z(cell));
+        int[] exterior=previous==null?null:previous.captureAuthoritativeState().fixedGeometry().copyExteriorMasks();
+        this.previousExterior=exterior==null?null:cell->exterior[cell];
 	}
 
 	MinecraftCollisionWorldPort(ServerLevel level, FluidRegion region) { this(level,region,null); }
@@ -40,6 +43,7 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 		this.availableCell = region::groupAvailable;
         this.grid = region.grid();
         this.previousMask = cell->region.solidMicroMask(grid.x(cell),grid.y(cell),grid.z(cell));
+        int[] exterior=region.fixedGeometry().copyExteriorMasks();this.previousExterior=cell->exterior[cell];
 	}
 
 	@Override public CollisionField capture(CollisionRegion region) {
@@ -79,14 +83,43 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
                             && piston.getMovedState().getBlock() instanceof net.minecraft.world.level.block.piston.PistonBaseBlock)
                         shape = Shapes.block();
                     else shape = Shapes.empty();
-                } else shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
+                } else if(PipeThermalGeometry.isPipe(state)) shape=Shapes.empty();
+                else shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
                 block=shapeMasks.computeIfAbsent(shape,value->sampleBlockMasks(value,n));
                 blockMasks.put(position,block);
             }
             masks[cell]=block[((z%n)*n+y%n)*n+x%n];
         }
-        return new CollisionField(topology,masks);
+        int[] exterior=new int[topology.cellCount()];
+        int[] previous=new int[topology.cellCount()];
+        if(previousExterior!=null)for(int cell=0;cell<previous.length;cell++)previous[cell]=previousExterior.applyAsInt(cell);
+        int microPerBlock=2*n;
+        for(int cell=0;cell<topology.cellCount();cell++)for(int side=0;side<6;side++) {
+            if(topology.neighbor(cell,side)>=0)continue;
+            if(availableCell!=null&&!availableCell.test(cell)){exterior[cell]|=previous[cell]&(15<<(4*side));continue;}
+            int axis=side/2;int[] start={2*topology.x(cell),2*topology.y(cell),2*topology.z(cell)};
+            start[axis]+=(side&1)==0?-1:2;
+            for(int u=0;u<2;u++)for(int v=0;v<2;v++) {
+                int[] micro=start.clone();micro[axis==0?1:0]+=u;micro[axis==2?1:2]+=v;
+                var position=new BlockPos(region.originX()+Math.floorDiv(micro[0],microPerBlock),
+                        region.originY()+Math.floorDiv(micro[1],microPerBlock),region.originZ()+Math.floorDiv(micro[2],microPerBlock));
+                if(!MinecraftGroupAvailability.loaded(level,position)) {
+                    exterior[cell]|=previous[cell]&(1<<(4*side+u+2*v));continue;
+                }
+                byte[] block=blockMasks.get(position);
+                if(block==null) {
+                    var state=level.getBlockState(position);
+                    var shape=state.isCollisionShapeFullBlock(level,position)?Shapes.block():state.getCollisionShape(level,position);
+                    block=shapeMasks.computeIfAbsent(shape,value->sampleBlockMasks(value,n));blockMasks.put(position,block);
+                }
+                int mx=Math.floorMod(micro[0],microPerBlock),my=Math.floorMod(micro[1],microPerBlock),mz=Math.floorMod(micro[2],microPerBlock);
+                int index=((mz/2)*n+my/2)*n+mx/2,bit=(mx&1)+2*((my&1)+2*(mz&1));
+                if((block[index]&(1<<bit))!=0)exterior[cell]|=1<<(4*side+u+2*v);
+            }
+        }
+        return new CollisionField(topology,masks,exterior);
 	}
+
 
 	static byte[] sampleBlockMasks(VoxelShape shape, int cellsPerBlock) {
 		byte[] masks = new byte[Math.multiplyExact(Math.multiplyExact(cellsPerBlock, cellsPerBlock), cellsPerBlock)];

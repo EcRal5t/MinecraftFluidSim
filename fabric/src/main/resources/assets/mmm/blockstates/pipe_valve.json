@@ -1,0 +1,58 @@
+{
+  "variants": {
+    "facing=down,opening=0": {
+      "model": "mmm:block/pipe_valve_y_0"
+    },
+    "facing=down,opening=1": {
+      "model": "mmm:block/pipe_valve_y_1"
+    },
+    "facing=down,opening=2": {
+      "model": "mmm:block/pipe_valve_y_2"
+    },
+    "facing=up,opening=0": {
+      "model": "mmm:block/pipe_valve_y_0"
+    },
+    "facing=up,opening=1": {
+      "model": "mmm:block/pipe_valve_y_1"
+    },
+    "facing=up,opening=2": {
+      "model": "mmm:block/pipe_valve_y_2"
+    },
+    "facing=north,opening=0": {
+      "model": "mmm:block/pipe_valve_z_0"
+    },
+    "facing=north,opening=1": {
+      "model": "mmm:block/pipe_valve_z_1"
+    },
+    "facing=north,opening=2": {
+      "model": "mmm:block/pipe_valve_z_2"
+    },
+    "facing=south,opening=0": {
+      "model": "mmm:block/pipe_valve_z_0"
+    },
+    "facing=south,opening=1": {
+      "model": "mmm:block/pipe_valve_z_1"
+    },
+    "facing=south,opening=2": {
+      "model": "mmm:block/pipe_valve_z_2"
+    },
+    "facing=west,opening=0": {
+      "model": "mmm:block/pipe_valve_x_0"
+    },
+    "facing=west,opening=1": {
+      "model": "mmm:block/pipe_valve_x_1"
+    },
+    "facing=west,opening=2": {
+      "model": "mmm:block/pipe_valve_x_2"
+    },
+    "facing=east,opening=0": {
+      "model": "mmm:block/pipe_valve_x_0"
+    },
+    "facing=east,opening=1": {
+      "model": "mmm:block/pipe_valve_x_1"
+    },
+    "facing=east,opening=2": {
+      "model": "mmm:block/pipe_valve_x_2"
+    }
+  }
+}

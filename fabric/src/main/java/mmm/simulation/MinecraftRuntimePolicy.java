@@ -43,7 +43,7 @@ final class MinecraftRuntimePolicy {
 		config = replacement;
 		controllerEnabled = enabled;
 		if (!enabled) for (FluidRegion region : regions.regions()) {
-			if (region.controllerManaged()) region.setAvailabilityFailure(
+			if (region.hasSelectedVolume()) region.setAvailabilityFailure(
 					RegionAvailabilityReason.POLICY_DISABLED, "controller admission policy is disabled");
 		}
 		return null;

@@ -16,7 +16,7 @@ final class VulkanRegionInventorySummary implements AutoCloseable {
         COHERENT_VOLUME(12), COHERENT_MASS(13), GAS_COUNTS(14), GAS_COMPONENT_OFFSETS(15),
         GAS_VOLUME(16), GAS_MASS(17), GAS_THERMAL(18), DEVICE_COUNTS(19),
         DEVICE_ENERGY(20), LIQUID_THERMAL(21), GRAIN_THERMAL(22), COHERENT_THERMAL(23),
-        DEVICE_THERMAL(24), THERMAL_BOUND(25), ERROR(28), CELL_VOLUME(32);
+        DEVICE_THERMAL(24), THERMAL_BOUND(25), DEVICE_OWNERSHIP(26), ERROR(28), CELL_VOLUME(32);
         final int word; Header(int word) { this.word = word; }
     }
     private enum Output { VOLUME, LIQUID_MASS, CHEMICAL_QUANTA, GRAIN_VOLUME, GRAIN_MASS, COHERENT_VOLUME, COHERENT_MASS, GAS_VOLUME, GAS_MASS, PARTICLES, DEPOSITS, COHERENT_GROUPS, GAS_NODES, DEVICES, MIN_TEMPERATURE, MAX_TEMPERATURE, DEVICE_ENERGY, ERROR, LIQUID_STOCKS }
@@ -35,23 +35,30 @@ final class VulkanRegionInventorySummary implements AutoCloseable {
             }catch(java.io.IOException failure){throw new IllegalStateException(failure);}
         }catch(RuntimeException|Error failure){resources.close();throw failure;}}
     synchronized mmm.fluid.ResidentFluidState.InventorySummary capture(VulkanLiquidRegion.Capture capture,double cellSize,boolean thermalBound){
+        return capture(capture,cellSize,thermalBound,null);
+    }
+    synchronized mmm.fluid.ResidentFluidState.InventorySummary capture(VulkanLiquidRegion.Capture capture,double cellSize,boolean thermalBound,mmm.fluid.EnvironmentBinding binding){
         var in=capture.readoutInputs();var liquid=in.liquid();var gran=in.granular();var coherent=in.coherent();var gas=in.gas();var devices=in.devices();
         int count=Math.max(1,liquid.stockCapacity());if(gran!=null)count=Math.max(count,gran.particleCapacity()+gran.depositCapacity());
         if(coherent!=null)count=Math.max(count,coherent.groupCapacity());if(gas!=null)count=Math.max(count,Math.max(gas.nodeCapacity(),gas.componentCapacity()));if(devices!=null)count=Math.max(count,devices.deviceCapacity());
-        int groups=(count+127)/128;long bytes=512L+96L*groups;if(bytes>capacity){if(output!=null)resources.destroy(output);output=resources.addDeviceStorage(bytes);capacity=bytes;}
+        int groups=(count+127)/128;long maskOffset=512L+96L*groups;long bytes=maskOffset+4L*Math.max(1,devices==null?0:devices.deviceCapacity());if(bytes>capacity){if(output!=null)resources.destroy(output);output=resources.addDeviceStorage(bytes);capacity=bytes;}
         int[] h=new int[32];java.util.Arrays.fill(h,-1);h[Header.COUNT.word]=count;h[Header.GROUPS.word]=groups;
         h[Header.LIQUID_COUNTS.word]=word(liquid.column(VulkanLiquidStateLayout.Field.COUNTS));h[Header.LIQUID_VOLUMES.word]=word(liquid.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES));h[Header.LIQUID_MASS.word]=word(liquid.column(VulkanLiquidStateLayout.Field.MASS_UNITS));
         h[Header.SPECIES_OFFSETS.word]=word(liquid.column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS));h[Header.SPECIES_AMOUNTS.word]=word(liquid.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS));
         if(gran!=null){h[Header.GRAIN_COUNTS.word]=gran.word(VulkanGranularStateLayout.Field.COUNTS);h[Header.PARTICLE_CAPACITY.word]=gran.particleCapacity();h[Header.GRAIN_VOLUME.word]=gran.word(VulkanGranularStateLayout.Field.SOLID_VOLUME_SVQ);h[Header.GRAIN_MASS.word]=gran.word(VulkanGranularStateLayout.Field.MASS_UNITS);}
         if(coherent!=null){h[Header.COHERENT_COUNTS.word]=coherent.word(VulkanCoherentStateLayout.Field.COUNTS);h[Header.COHERENT_VOLUME.word]=coherent.word(VulkanCoherentStateLayout.Field.OCCUPIED_VOLUME_SVQ);h[Header.COHERENT_MASS.word]=coherent.word(VulkanCoherentStateLayout.Field.MASS_UNITS);}
         if(gas!=null){h[Header.GAS_COUNTS.word]=word(gas.column(VulkanGasStateLayout.Field.COUNTS));h[Header.GAS_COMPONENT_OFFSETS.word]=word(gas.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS));h[Header.GAS_VOLUME.word]=word(gas.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS));h[Header.GAS_MASS.word]=word(gas.column(VulkanGasStateLayout.Field.MASS_UNITS));h[Header.GAS_THERMAL.word]=word(in.gasThermal().states());}
-        if(devices!=null){h[Header.DEVICE_COUNTS.word]=devices.word(VulkanThermalDeviceLayout.Field.COUNTS);h[Header.DEVICE_ENERGY.word]=devices.word(VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY);}
+        if(devices!=null){h[Header.DEVICE_COUNTS.word]=devices.word(VulkanThermalDeviceLayout.Field.COUNTS);h[Header.DEVICE_ENERGY.word]=devices.word(VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY);h[Header.DEVICE_OWNERSHIP.word]=Math.toIntExact(maskOffset/4);}
         h[Header.LIQUID_THERMAL.word]=in.liquidThermal()==null?-1:word(in.liquidThermal().header());h[Header.GRAIN_THERMAL.word]=in.granularThermal()==null?-1:word(in.granularThermal().header());
         h[Header.COHERENT_THERMAL.word]=in.coherentThermal()==null?-1:word(in.coherentThermal().header());h[Header.DEVICE_THERMAL.word]=in.deviceThermal()==null?-1:word(in.deviceThermal().header());h[Header.THERMAL_BOUND.word]=thermalBound?1:0;h[Header.ERROR.word]=0;
         var header=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<h.length;i++)header.putInt(4*i,h[i]);header.putDouble(4*Header.CELL_VOLUME.word,cellSize*cellSize*cellSize);
         bindings.rebindRanges(List.of(new FlipKernelBindings.BufferRange(capture.buffer()),new FlipKernelBindings.BufferRange(output)));
         try(var stack=stackPush()){
             var submission=scheduler.acquire();var command=scheduler.begin(submission,"region-inventory-summary");vkCmdUpdateBuffer(command,output.handle(),0,header);
+            if(devices!=null){var world=new java.util.HashSet<String>();if(binding!=null)for(var ref:binding.devices())world.add(ref.providerId()+"\0"+ref.objectId());
+                var mask=ByteBuffer.allocateDirect(Math.max(4,4*devices.deviceCapacity())).order(ByteOrder.LITTLE_ENDIAN);
+                for(int i=0;i<devices.definitions().identities().size();i++){var id=devices.definitions().identities().get(i);mask.putInt(4*i,world.contains(id.providerId()+"\0"+id.objectId())?1:0);}
+                for(int first=0;first<mask.capacity();first+=65536){int size=Math.min(65536,mask.capacity()-first);vkCmdUpdateBuffer(command,output.handle(),maskOffset+first,mask.slice(first,size));}}
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_ACCESS_MEMORY_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT,stack);
             for(int stage=0;stage<2;stage++){bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(stage,count,groups,0));vkCmdDispatch(command,stage==0?groups:1,1,1);
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,stage==0?VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT:VK_PIPELINE_STAGE_TRANSFER_BIT,stage==0?VK_ACCESS_SHADER_READ_BIT:VK_ACCESS_TRANSFER_READ_BIT,stack);}

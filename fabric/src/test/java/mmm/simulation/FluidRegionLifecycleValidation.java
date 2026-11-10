@@ -60,12 +60,12 @@ public final class FluidRegionLifecycleValidation {
 	public static void main(String[] args) throws Exception {
 		validateBackendInitializationFailure();
 		RegionHostHandoffValidation.validate();
+		PipeRegionExchangeValidation.validate();
 		RegionDeviceLossGuardValidation.validate();
 		EntityFluidWiringValidation.main(new String[0]);
 		validateDemoWorkbenchStore();
 		validateDemoWorldRestart();
 		validatePoolWallHandoff();
-		validateControllerComparatorObservation();
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
 		validateAvailabilityPreservesRunIntent();
@@ -90,15 +90,15 @@ public final class FluidRegionLifecycleValidation {
 		host.bindGasRegistry(registries.gas());
 		host.bindThermal(thermal, registries.liquids(), 300);
 		host.commitOperatorVentSealedGas(host.planOperatorVentSealedGas());
-		var footprint = new mmm.simulation.controller.FluidRegionFootprint(BlockPos.ZERO, BlockPos.ZERO, BlockPos.ZERO,
+		var footprint = new mmm.simulation.controller.FluidRegionFootprint(BlockPos.ZERO, BlockPos.ZERO,
 				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(new BlockPos(0,-1,0).asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)),
-				mmm.model.region.RegionGeometry.RegionKind.POOL, java.util.Set.of());
+				mmm.model.region.RegionGeometry.RegionKind.POOL, java.util.Set.of(), java.util.Set.of(), "测试区域");
 		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host, footprint);
 		var definition = thermal.finiteDevice("mmm:ordinary_stone_wall");
 		double energy = new ThermalStateFunction(thermal).internalEnergyAtTemperature(
 				thermal.materialHandle(definition.thermalMaterialId()), definition.bodyMassKilograms(), java.util.Map.of(), 350);
-		var wall = new FiniteThermalDeviceState(OrdinaryThermalWalls.PROVIDER, "1@minecraft:stone", definition.id(),
+		var wall = new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER, "1@minecraft:stone", definition.id(),
 				new FiniteThermalBodyState(0, thermal.fingerprint(), definition.thermalMaterialId(), definition.bodyMassUnits(), energy));
 		var walls = FiniteThermalDeviceInventory.empty(thermal.fingerprint()).insertExternal(wall);
 		region.restoreFiniteThermalDevices(walls, thermal, 0);
@@ -113,7 +113,7 @@ public final class FluidRegionLifecycleValidation {
 				thermal.materialHandle(heaterDefinition.thermalMaterialId()), heaterDefinition.bodyMassKilograms(), java.util.Map.of(), 300);
 		var heater = new FiniteThermalDeviceState("mmm:finite_heat_exchanger", "test:heater", heaterDefinition.id(),
 				new FiniteThermalBodyState(0, thermal.fingerprint(), heaterDefinition.thermalMaterialId(), heaterDefinition.bodyMassUnits(), heaterEnergy));
-		region.replaceOrdinaryWallInventory(walls.insertExternal(heater), thermal);
+		region.replaceWorldThermalInventory(walls.insertExternal(heater), thermal, null);
 		require(region.hasRemovableThermalDevices() && !OwnershipTransactionCoordinator.canRelinquishPool(region, region.hostSnapshot()),
 				"Installed heat exchanger did not block pool relinquishment");
 	}
@@ -157,8 +157,8 @@ public final class FluidRegionLifecycleValidation {
 
 	private static void validateDeviceLossRecovery() {
 		var controller = new BlockPos(-1, 0, 0);
-		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
-				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
+		var footprint = mmm.simulation.controller.FluidRegionFootprint.selected(BlockPos.ZERO, BlockPos.ZERO,
+				java.util.Set.of(BlockPos.ZERO.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
 		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults(), mmm.fluid.TestFluidDefinitions.load());
 		host.setVolume(0, 0, 0, .5F);
@@ -278,54 +278,6 @@ public final class FluidRegionLifecycleValidation {
 		require(lockedOperations.creationLocked(),"Unproven world did not retain its creation lock");
 	}
 
-	private static void validateControllerComparatorObservation() {
-		require(ControllerComparatorSignals.strength(0, 8) == 0
-				&& ControllerComparatorSignals.strength(.001, 8) == 1
-				&& ControllerComparatorSignals.strength(4, 8) == 8
-				&& ControllerComparatorSignals.strength(7.99, 8) == 14
-				&& ControllerComparatorSignals.strength(8, 8) == 15,
-				"Controller comparator did not use the vanilla container ratio");
-		var manager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
-		int[] notifications = {0};
-		var signals = new ControllerComparatorSignals(manager, (dimension, position) -> notifications[0]++);
-		var controller = new BlockPos(-1, 0, 0);
-		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
-				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
-				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
-		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F,0,.05F,48,1e-4F,.002F), mmm.fluid.TestFluidDefinitions.load());
-		domain.setSolidMicroMask(0,0,0,15);
-		var region = new FluidRegion(new UUID(127,131), DIMENSION, BlockPos.ZERO, domain, footprint);
-		require(signals.signal(DIMENSION, controller)==0 && manager.add(region).accepted()
-				&& notifications[0]==0, "Inactive or empty controller emitted a liquid signal");
-		var candidate = HostFluidState.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		float[] half = {.25F,.5F,.5F,.5F,.5F,.5F,.5F,.5F};
-		candidate.setVolumes(half);
-		region.adoptContainerCandidateDomain(candidate, 1, true);
-		require(signals.signal(DIMENSION, controller)==8 && region.paused() && notifications[0]==1
-				&& candidate.fixedOpenVolumeExact()==7.5,
-				"Committed liquid signal lost the fixed pore capacity or paused observation");
-		candidate.restoreEntityBodyState(new mmm.fluid.EntityBodyState(java.util.List.of(
-				new mmm.world.MovingBodyFluidCoupling.Request(new UUID(137,139),
-						new mmm.world.MovingBodyFluidCoupling.Bounds(.1,.1,.1,.8,.8,.8),0,0,0))));
-		region.publishCommittedObservation();
-		for(int i=0;i<20;i++) require(signals.signal(DIMENSION, controller)==8, "Comparator observation changed state");
-		require(notifications[0]==1 && region.editableHost()==candidate && region.paused()
-				&& candidate.fixedOpenVolumeExact()==7.5, "Read-only observation woke or rebuilt the region");
-		candidate.restoreEntityBodyState(mmm.fluid.EntityBodyState.EMPTY);
-		region.setAvailabilityFailure(mmm.api.RegionAvailabilityReason.CHUNK_MISSING,"test missing chunk");
-		require(signals.signal(DIMENSION,controller)==0 && notifications[0]==2,"Unavailable controller retained output");
-		region.setAvailabilityFailure(null);
-		var saved = candidate.captureAuthoritativeState();
-		require(region.recordPublishedCheckpoint(2) && region.releaseSolverAfterCheckpoint(2)
-				&& signals.signal(DIMENSION,controller)==0,"Unloaded controller retained output");
-		int unloadedNotifications = notifications[0];
-		for(int i=0;i<20;i++) require(signals.signal(DIMENSION,controller)==0,"Read-only signal restored an unloaded solver");
-		require(!region.solverLoaded() && notifications[0]==unloadedNotifications,"Signal query mutated unloaded state");
-		region.restoreAuthoritativeSolver(saved,2);
-		require(signals.signal(DIMENSION,controller)==8,"Restored controller lost its committed ratio");
-		manager.remove(region.id());
-		require(signals.signal(DIMENSION,controller)==0,"Removed controller retained output");
-	}
 
 	private static void validateLifecyclePreviewTokensBindEveryCommitGate() {
 		UUID player = new UUID(1L, 2L), otherPlayer = new UUID(3L, 4L), region = new UUID(5L, 6L);
@@ -394,8 +346,8 @@ public final class FluidRegionLifecycleValidation {
 		var root = java.nio.file.Files.createTempDirectory("mmm-controller-summary-flow-");
 		var manager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
 		var controller = new BlockPos(-1, 0, 0);
-		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
-				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
+		var footprint = mmm.simulation.controller.FluidRegionFootprint.selected(BlockPos.ZERO, BlockPos.ZERO,
+				java.util.Set.of(BlockPos.ZERO.asLong()),
 				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
 		var domain = new HostFluidState(2, 2, 2, new FluidSolverConfig(.5F, 0, .05F, 48, 1e-5F, 1e-4F), mmm.fluid.TestFluidDefinitions.load());
 		domain.setVolume(0, 0, 0, .5F);
@@ -720,7 +672,7 @@ public final class FluidRegionLifecycleValidation {
 		UUID region = new UUID(37L, 41L);
 		ControllerSummary.Capacity unavailableCapacity = ControllerSummary.Capacity.unavailable(64L);
 		ControllerSummaryPort.View view = new ControllerSummaryPort.View(region, "mmm:summary_dimension",
-				"0".repeat(64), 3L, 5L, new ControllerSummary.Footprint(1, 2, 3, 4, 5, 6, 120L, 4),
+				"0".repeat(64), 3L, 5L, new ControllerSummary.Footprint("区域", 1, 2, 3, 4, 5, 6, 120L, 4),
 				true, ControllerSummary.OperatorIntent.PAUSED, ControllerSummary.MotionState.UNLOADED,
 				ControllerSummary.ThermalState.UNBOUND, new ControllerSummary.Availability(null, null),
 				new ControllerSummary.Usage(unavailableCapacity,

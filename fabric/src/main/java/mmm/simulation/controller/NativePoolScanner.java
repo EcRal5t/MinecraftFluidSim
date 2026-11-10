@@ -57,24 +57,9 @@ public final class NativePoolScanner {
                     else return failed(Status.UNSUPPORTED_GEOMETRY,"Air above the pool must open to air or full solid blocks");
                 }
             }
-            return new ScanResult(Status.SUCCESS,new FluidRegionFootprint(seed,new BlockPos(minX,minY,minZ),
-                    new BlockPos(maxX,maxY+1,maxZ),interior,shell,chunks,RegionKind.POOL,atmosphere),null);
+            return new ScanResult(Status.SUCCESS,new FluidRegionFootprint(new BlockPos(minX,minY,minZ),
+                    new BlockPos(maxX,maxY+1,maxZ),interior,shell,chunks,RegionKind.POOL,atmosphere,Set.of(), FluidRegionFootprint.defaultName(new BlockPos(minX,minY,minZ))),null);
         } catch (Unavailable unavailable) { return failed(Status.INCOMPLETE_CHUNKS,unavailable.getMessage()); }
-    }
-
-    public static FluidBoundaryScanner.AvailabilityResult validateAvailability(FluidRegionFootprint footprint, PoolWorld world) {
-        for(long packed:footprint.requiredChunks()) {
-            ChunkPos chunk=ChunkPos.unpack(packed);
-            if(!world.isChunkLoaded(chunk.x(),chunk.z())) return new FluidBoundaryScanner.AvailabilityResult(
-                    FluidBoundaryScanner.AvailabilityStatus.INCOMPLETE_CHUNKS,"Pool requires a loaded chunk");
-        }
-        for(long packed:footprint.boundaryBlocks()) if(world.blockKind(BlockPos.of(packed))!=BlockKind.FULL_SOLID)
-            return new FluidBoundaryScanner.AvailabilityResult(FluidBoundaryScanner.AvailabilityStatus.OPEN_BOUNDARY,
-                    "Pool wall or floor changed at "+BlockPos.of(packed).toShortString());
-        for(long packed:footprint.atmosphereBlocks()) if(world.blockKind(BlockPos.of(packed))!=BlockKind.AIR)
-            return new FluidBoundaryScanner.AvailabilityResult(FluidBoundaryScanner.AvailabilityStatus.OPEN_BOUNDARY,
-                    "Pool atmosphere opening changed at "+BlockPos.of(packed).toShortString());
-        return new FluidBoundaryScanner.AvailabilityResult(FluidBoundaryScanner.AvailabilityStatus.READY,null);
     }
 
     private static BlockKind read(BlockPos position, PoolWorld world, Set<Long> chunks) {

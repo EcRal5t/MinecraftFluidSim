@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:bucket",
+    "minecraft:flint"
+  ],
+  "result": {
+    "id": "mmm:granular_container",
+    "count": 1
+  }
+}

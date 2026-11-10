@@ -20,6 +20,7 @@ public final class ContainerApplicationValidation {
 	private ContainerApplicationValidation() { }
 
 	public static void main(String[] args) {
+		run("region merge admission and selection", ContainerApplicationValidation::regionMerge);
 		run("fault matrix preserves WAL and HEAD boundaries", ContainerApplicationValidation::faultMatrix);
 		run("creative gas fault recovery uses ordered HEAD and unchanged source", ContainerApplicationValidation::gasFaultRecovery);
 		run("foreign profile is rejected before PREPARED WAL", ContainerApplicationValidation::profileMismatch);
@@ -31,6 +32,31 @@ public final class ContainerApplicationValidation {
 				ContainerApplicationValidation::publishedWalStaysPending);
 		run("I/O recovery backs off and retains semantic locks", ContainerApplicationValidation::ioRetry);
 		System.out.println("ContainerApplicationValidation passed " + passed + " scenarios");
+	}
+
+	private static void regionMerge() {
+		var catalog = new RegionCatalog<Object>(new RegionCatalog.Limits(3, 100, 120));
+		var firstId = UUID.randomUUID(); var secondId = UUID.randomUUID(); var thirdId = UUID.randomUUID();
+		var first = new Object(); var second = new Object(); var third = new Object();
+		var a = new RegionCatalog.Descriptor(firstId, "minecraft:overworld", 0, 0, 0, 2, 2, 2, 40);
+		var b = new RegionCatalog.Descriptor(secondId, "minecraft:overworld", 3, 0, 0, 5, 2, 2, 40);
+		var c = new RegionCatalog.Descriptor(thirdId, "minecraft:overworld", 8, 0, 0, 10, 2, 2, 30);
+		check(catalog.add(first, a).accepted() && catalog.add(second, b).accepted() && catalog.add(third, c).accepted(), "fixture admission");
+		var valid = new RegionCatalog.Descriptor(firstId, "minecraft:overworld", 0, 0, 0, 5, 2, 2, 90);
+		var overlap = new RegionCatalog.Descriptor(firstId, "minecraft:overworld", 0, 0, 0, 9, 2, 2, 90);
+		var sources = java.util.List.of(first, second);
+		check(catalog.previewMerge(sources, valid).accepted(), "source reservations not released for preview");
+		check(!catalog.merge(sources, new Object(), overlap).accepted(), "third-party overlap accepted");
+		check(catalog.values().size() == 3 && catalog.value(firstId) == first && catalog.value(secondId) == second
+				&& catalog.usage().reservedCells() == 110, "rejected merge changed catalog");
+		check(!catalog.previewMerge(java.util.List.of(first, new Object()), valid).accepted(), "stale source accepted");
+		catalog.select(secondId);
+		var successor = new Object();
+		check(catalog.merge(sources, successor, valid).accepted(), "merge failed");
+		check(catalog.value(firstId) == successor && catalog.value(secondId) == null && catalog.value(thirdId) == third
+				&& catalog.selected() == successor && catalog.usage().regionCount() == 2
+				&& catalog.usage().reservedCells() == 120, "merged identity, selection or budget changed");
+		check(!catalog.previewMerge(sources, valid).accepted(), "retired sources accepted");
 	}
 
 	private static void gasFaultRecovery() {

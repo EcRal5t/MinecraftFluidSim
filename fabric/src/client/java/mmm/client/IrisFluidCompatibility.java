@@ -42,16 +42,28 @@ final class IrisFluidCompatibility {
 				(byte) 0, x, y, z);
 	}
 
+    static Object materialState() {
+        if (BRIDGE == null) return java.util.List.of(false);
+        @SuppressWarnings("unchecked")
+        Map<BlockState, Integer> ids = (Map<BlockState, Integer>) BRIDGE.invoke(BRIDGE.blockIds, BRIDGE.settings);
+        return java.util.List.of(BRIDGE.invoke(BRIDGE.packInUse, BRIDGE.api),
+                ids == null ? 0 : ids.getOrDefault(Blocks.WATER.defaultBlockState(), 0),
+                ids == null ? 0 : ids.getOrDefault(Blocks.IRON_BLOCK.defaultBlockState(), 0),
+                ids == null ? 0 : ids.getOrDefault(Blocks.SAND.defaultBlockState(), 0),
+                ids == null ? 0 : ids.getOrDefault(Blocks.STAINED_GLASS.white().defaultBlockState(), 0));
+    }
+
 	private static final class Bridge {
 		final Object api, basicProgram, settings;
 		final Class<?> blockBuffer;
-		final Method assignPipeline, copyPipeline, beginBlock, blockIds;
+		final Method assignPipeline, copyPipeline, beginBlock, blockIds, packInUse;
 
 		Bridge() {
 			try {
 				Class<?> apiType = Class.forName("net.irisshaders.iris.api.v0.IrisApi");
 				Class<?> programType = Class.forName("net.irisshaders.iris.api.v0.IrisProgram");
 				api = apiType.getMethod("getInstance").invoke(null);
+                packInUse = apiType.getMethod("isShaderPackInUse");
 				basicProgram = programType.getField("BASIC").get(null);
 				assignPipeline = apiType.getMethod("assignPipeline", RenderPipeline.class, programType);
 				copyPipeline = Class.forName("net.irisshaders.iris.pipeline.IrisPipelines")

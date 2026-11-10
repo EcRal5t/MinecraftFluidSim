@@ -261,10 +261,13 @@ bool bedFits(int c, double b, int excluded) {
                     continue;
                 dvec3 pos = readVector(sourceFieldOffset(GRANULAR_POSITION), row);
                 double r = sphereRadius(solidVolume(row));
-                dvec3 lo = dvec3(q) * p.cellSize, hi = lo + p.cellSize;
-                hi.y = top;
-                if (top > lo.y && length(pos - clamp(pos, lo, hi)) < r - 1e-7 * p.cellSize)
-                    return false;
+                uint mask = words[headerValue(H_MASKS) + c];
+                for (int bit = 0; bit < 8; bit++) if ((mask & (1u << bit)) == 0u) {
+                    dvec3 lo = (dvec3(q) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize;
+                    dvec3 hi = lo + .5 * p.cellSize; hi.y = min(hi.y, top);
+                    if (hi.y > lo.y && length(pos - clamp(pos, lo, hi)) < r - 1e-7 * p.cellSize)
+                        return false;
+                }
             }
         }
     return true;
@@ -338,8 +341,18 @@ void settleColumn(int column) {
         for (int y = 0; y <= min(particleCellY, headerValue(H_SIZE_Y) - 1); y++) {
             int c = cell(ivec3(x, y, z));
             if (c < 0) continue;
-            if (read(FIELD_CELL_BULK, c) > 0.0)
-                support = max(support, bedHeight(c, read(FIELD_CELL_BULK, c)));
+            if (read(FIELD_CELL_BULK, c) > 0.0) {
+                double top = bedHeight(c, read(FIELD_CELL_BULK, c));
+                uint open = (~words[headerValue(H_MASKS) + c]) & 255u;
+                for (int bit=0;bit<8;bit++) if ((open & (1u << bit)) != 0u) {
+                    double bottom=(double(y)+.5*double((bit>>1)&1))*p.cellSize;
+                    double microTop=min(bottom+.5*p.cellSize,top);
+                    dvec2 lo=(dvec2(x,z)+.5*dvec2(bit&1,(bit>>2)&1))*p.cellSize;
+                    if(microTop>bottom && microTop<=position.y+1e-6*p.cellSize
+                            && length(position.xz-clamp(position.xz,lo,lo+.5*p.cellSize))<radius)
+                        support=max(support,microTop);
+                }
+            }
             uint mask = words[headerValue(H_MASKS) + c];
             for (int bit = 0; bit < 8; bit++)
                 if ((mask & (1u << bit)) != 0u) {

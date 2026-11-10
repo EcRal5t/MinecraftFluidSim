@@ -37,6 +37,9 @@ public final class MmmRuntime {
 	private final MinecraftProcessOperations processes;
 	private final IndustrialOperations industrial;
 	private final MinecraftWorldUpdates worldUpdates;
+	private final ExternalMovingStructures externalStructures;
+	private final WorldThermalEnvironment environment;
+    private final PipeRuntime pipes;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -64,8 +67,11 @@ public final class MmmRuntime {
 			WorldStartupCoordinator.Result startup,
 			mmm.api.transfer.MmmTransferApi transfers,
 			mmm.fluid.FluidSolverBackend solverBackend,
-			MinecraftProcessOperations processes, IndustrialOperations industrial, MinecraftWorldUpdates worldUpdates
+			MinecraftProcessOperations processes, IndustrialOperations industrial, MinecraftWorldUpdates worldUpdates,
+			ExternalMovingStructures externalStructures,
+			WorldThermalEnvironment environment, PipeRuntime pipes
 	) {
+        this.pipes=pipes;
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
 		this.farmlandMoisture = Objects.requireNonNull(farmlandMoisture);
@@ -93,9 +99,13 @@ public final class MmmRuntime {
 		this.processes = Objects.requireNonNull(processes);
 		this.industrial = Objects.requireNonNull(industrial);
 		this.worldUpdates=worldUpdates;
+		this.externalStructures=Objects.requireNonNull(externalStructures);
+		this.environment=environment;
 	}
 
 	public MinecraftWorldUpdates worldUpdates() { return worldUpdates; }
+	public mmm.api.motion.MovingStructureApi movingStructures() { return externalStructures; }
+	public WorldThermalEnvironment environment() { return environment; }
 	public IndustrialOperations industrial() { return industrial; }
 	public MinecraftProcessOperations processes() { return processes; }
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
@@ -126,6 +136,11 @@ public final class MmmRuntime {
 		processes.tick(server);
 		simulationLoop.tick(server);
 	}
+    public PipeRuntime pipes() { return pipes; }
+
+    public void checkpointWorld(MinecraftServer server) {
+        if(!closed && worldRecoveryCompleted) simulationLoop.checkpointWorld(server);
+    }
 
 	public boolean isLifecycleManagedBlock(
 			net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos position
@@ -164,6 +179,7 @@ public final class MmmRuntime {
 		if (closed) return;
 		closed = true;
 		try {
+            if(environment!=null) for(var level:server.getAllLevels()) environment.refreshDirty(level);
 			simulationLoop.checkpointForShutdown();
 			simulationLoop.restoreTakeover(server);
 		} finally {

@@ -8,7 +8,9 @@
     "fabric-gametest": [
       "mmm.simulation.PistonWorldGameTest",
       "mmm.simulation.IndustrialControlGameTest",
-      "mmm.simulation.PistonPumpGameTest"
+      "mmm.simulation.MultiplayerObservationGameTest",
+      "mmm.simulation.PistonPumpGameTest",
+      "mmm.simulation.SurvivalProgressionGameTest"
     ]
   },
   "depends": {

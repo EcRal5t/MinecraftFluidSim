@@ -20,9 +20,103 @@ public final class FluidCutCellShapeValidation {
 		thinPaneRemainsAClosedConservativeBarrier();
 		documentedStairPlacementRestoresExactLedger();
 		blockSamplingMatchesIndividualCells();
+		exteriorFacesSurviveCollisionEdits();
 		thermalFacesSampleEachWorldBlockOnce();
+		pipeGeometryUsesThinConnectedPassages();
+		pipeBodiesReserveOnlyEnvelope();
+		filledPipeRejectsBlockedEndClosure();
 		System.out.println("Minecraft cut-cell shape validation passed");
 	}
+	private static void exteriorFacesSurviveCollisionEdits() {
+		var domain=new HostFluidState(2,2,2,new FluidSolverConfig(.5f,0,.05f,48,1e-5f,.002f),mmm.fluid.TestFluidDefinitions.load());
+		int[] exterior=new int[domain.grid().cellCount()];
+		exterior[domain.grid().cell(0,0,0)]=0x9 | (0x2 << 8);
+		domain.replaceExteriorMasks(exterior);
+		domain.setSolidMicroMask(1,1,1,1);
+		var fixed=domain.captureAuthoritativeState().fixedGeometry();
+		check(fixed.exteriorMask(domain.grid().cell(0,0,0),0)==9 && fixed.exteriorMask(domain.grid().cell(0,0,0),2)==2,
+				"collision edit lost exterior face masks");
+	}
+	private static void pipeBodiesReserveOnlyEnvelope() {
+		var state=mmm.block.MmmBlocks.METAL_PIPE.defaultBlockState()
+				.setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.WEST),mmm.block.PipeBlock.Port.OPEN)
+				.setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.EAST),mmm.block.PipeBlock.Port.OPEN);
+		var domain=new HostFluidState(2,2,2,new FluidSolverConfig(.5f,0,.05f,48,1e-5f,.002f),mmm.fluid.TestFluidDefinitions.load());
+		var bodies=PipeCollisionBodies.forBlock(net.minecraft.core.BlockPos.ZERO,state,net.minecraft.core.BlockPos.ZERO);
+		try {
+			PipeCollisionBodies.checkBudget(java.util.Collections.nCopies(mmm.world.MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP+1,bodies.getFirst()));
+			throw new AssertionError("Pipe body budget overflow was accepted");
+		} catch(FluidDomainContracts.CollisionEditBlockedException expected) { }
+		domain.replaceCollisionBodies(java.util.List.of(),new mmm.fluid.EntityBodyState(bodies));
+		double open=0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++)open+=domain.cellCondensedRoom(x,y,z)*.125;
+		if(Math.abs(open-PipeThermalGeometry.outsideVolume(state))>1e-7)throw new AssertionError("Pipe body did not preserve its external volume: "+open);
+		domain.replaceCollisionBodies(java.util.List.of(),mmm.fluid.EntityBodyState.EMPTY);
+		open=0;for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++)open+=domain.cellCondensedRoom(x,y,z)*.125;
+		if(Math.abs(open-1)>1e-7)throw new AssertionError("Removed pipe body did not restore volume");
+	}
+	private static void filledPipeRejectsBlockedEndClosure() {
+		var definitions=mmm.fluid.TestFluidDefinitions.load();
+		var domain=new HostFluidState(2,2,2,new FluidSolverConfig(.5f,0,.05f,48,1e-5f,.002f),definitions);
+		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(java.util.List.of(definitions.material().entry("mmm:water").material())));
+		int both=mmm.block.PipeGeometry.bit(net.minecraft.core.Direction.NORTH)|mmm.block.PipeGeometry.bit(net.minecraft.core.Direction.SOUTH);
+		byte[] open=MinecraftCollisionWorldPort.sampleBlockMasks(mmm.block.PipeGeometry.shell(both),2);
+		byte[] closed=MinecraftCollisionWorldPort.sampleBlockMasks(mmm.block.PipeGeometry.shell(mmm.block.PipeGeometry.bit(net.minecraft.core.Direction.NORTH)),2);
+		for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
+			int cell=(z*2+y)*2+x;
+			domain.setSolidMicroMask(x,y,z,Byte.toUnsignedInt(open[cell]));
+			domain.setVolume(x,y,z,.25f);
+		}
+		var dimension=net.minecraft.resources.ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
+				net.minecraft.resources.Identifier.parse("test:sealed_pipe"));
+		var region=new FluidRegion(java.util.UUID.randomUUID(),dimension,net.minecraft.core.BlockPos.ZERO,domain);
+		long mass=domain.totalMassUnits();double volume=domain.totalVolumeExact();long generation=region.solverGeneration();
+		try {
+			FluidRegionWorldInteraction.applyCapturedCollisions(region,new mmm.world.CollisionField(domain.grid(),closed),2);
+			throw new AssertionError("fully occupied pipe end closure was accepted");
+		} catch(FluidDomainContracts.CollisionEditBlockedException expected) { }
+		check(region.solverGeneration()==generation && region.hostSnapshot().totalMassUnits()==mass
+				&& region.hostSnapshot().totalVolumeExact()==volume,"blocked pipe closure changed accepted liquid");
+		check(java.util.Arrays.equals(region.fixedGeometry().copyMasks(),open),"blocked pipe closure changed accepted geometry");
+	}
+
+	private static void pipeGeometryUsesThinConnectedPassages() {
+        GpuControllerFixture.initializeItems();GpuControllerFixture.initializeIndustrialBlocks();
+        mmm.block.PipeConnectionValidation.run();
+        PipeTopologyValidation.run();
+        try { PipeAssetsValidation.run(); } catch(Exception failure) { throw new IllegalStateException("Pipe resource validation failed",failure); }
+        var blocks=new net.minecraft.world.level.block.Block[]{mmm.block.MmmBlocks.METAL_PIPE,mmm.block.MmmBlocks.INSULATED_PIPE,
+                mmm.block.MmmBlocks.GLASS_PIPE,mmm.block.MmmBlocks.INSULATED_GLASS_PIPE};
+        for(int sides=0;sides<64;sides++)for(var block:blocks) {
+            var state=block.defaultBlockState();
+            for(var face:net.minecraft.core.Direction.values())state=state.setValue(mmm.block.PipeBlock.port(face),
+                    (sides&(1<<face.ordinal()))!=0?mmm.block.PipeBlock.Port.CONNECTED:mmm.block.PipeBlock.Port.SEALED);
+            var expected=mmm.block.PipeGeometry.shell(sides,sides);
+            check(!Shapes.joinIsNotEmpty(expected,mmm.block.PipeBlock.collision(state),BooleanOp.NOT_SAME),"registered pipe differs from geometry");
+            check(!Shapes.joinIsNotEmpty(expected,mmm.block.PipeGeometry.bore(state),BooleanOp.AND),"pipe wall overlaps bore");
+            var turned=state.rotate(net.minecraft.world.level.block.Rotation.CLOCKWISE_90);
+            for(var face:net.minecraft.core.Direction.values())check(state.getValue(mmm.block.PipeBlock.port(face))==
+                    turned.getValue(mmm.block.PipeBlock.port(net.minecraft.world.level.block.Rotation.CLOCKWISE_90.rotate(face))),"pipe rotation lost port state");
+        }
+        int axial=mmm.block.PipeGeometry.bit(net.minecraft.core.Direction.WEST)|mmm.block.PipeGeometry.bit(net.minecraft.core.Direction.EAST);
+        var straight=mmm.block.MmmBlocks.METAL_PIPE.defaultBlockState();
+        for(var face:net.minecraft.core.Direction.values())straight=straight.setValue(mmm.block.PipeBlock.port(face),
+                (axial&mmm.block.PipeGeometry.bit(face))!=0?mmm.block.PipeBlock.Port.OPEN:mmm.block.PipeBlock.Port.SEALED);
+        check(mmm.block.PipeGeometry.wallVolume(straight)==.140625 && mmm.block.PipeGeometry.innerArea(straight)==2
+                && mmm.block.PipeGeometry.outerArea(straight)==2.78125,"thin pipe physical measures differ");
+        var closed=straight.setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.WEST),mmm.block.PipeBlock.Port.NONE);
+        check(mmm.block.PipeGeometry.wallVolume(closed)==.15625 && mmm.block.PipeBlock.armFaces(closed)==axial,
+                "automatic unconnected end lost its arm or cap");
+        var retracted=closed.setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.WEST),mmm.block.PipeBlock.Port.SEALED);
+        check((mmm.block.PipeBlock.armFaces(retracted)&mmm.block.PipeGeometry.bit(net.minecraft.core.Direction.WEST))==0,
+                "sealed end did not retract its arm");
+        for(var face:net.minecraft.core.Direction.values())for(int opening=0;opening<=2;opening++) {
+            var state=mmm.block.MmmBlocks.PIPE_VALVE.defaultBlockState().setValue(mmm.block.PipeValveBlock.FACING,face)
+                    .setValue(mmm.block.PipeValveBlock.OPENING,opening);
+            check(!Shapes.joinIsNotEmpty(mmm.block.PipeGeometry.shell(state),mmm.block.PipeValveBlock.collision(state),BooleanOp.NOT_SAME),"registered valve differs");
+            double expected=.140625+(2-opening)/128.0;
+            check(mmm.block.PipeGeometry.wallVolume(state)==expected,"valve shutter volume differs");
+        }
+    }
 
 	private static void blockSamplingMatchesIndividualCells() {
 		for (VoxelShape shape : new VoxelShape[] {Shapes.empty(), Shapes.block(),

@@ -171,7 +171,7 @@ final class MinecraftContainerTransferPlan {
 					if (!world.hasCapability(WorldCapability.GRANULAR)) {
 						return new Resolution(null, "颗粒功能门本次启动未开启；干式容器保持不变");
 					}
-					if (!region.controllerManaged()) return new Resolution(null, "颗粒容器只允许在闭壳控制器区域转移");
+					if (!region.hasSelectedVolume()) return new Resolution(null, "颗粒容器只允许在闭壳模拟区域转移");
 					if (!region.hasGranularState()) return new Resolution(null, "该区域不是颗粒区域");
 					granular = ContainerItemStacks.granularContents(sourceStack, world.granularRegistry(),
 							world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
@@ -182,7 +182,7 @@ final class MinecraftContainerTransferPlan {
 					if (!world.hasCapability(WorldCapability.GRANULAR)) {
 						return new Resolution(null, "颗粒功能门本次启动未开启；干式容器保持不变");
 					}
-					if (!region.controllerManaged()) return new Resolution(null, "颗粒容器只允许在闭壳控制器区域转移");
+					if (!region.hasSelectedVolume()) return new Resolution(null, "颗粒容器只允许在闭壳模拟区域转移");
 					if (!region.hasGranularState() || !GranularContainerItem.isEmpty(sourceStack)) {
 						return new Resolution(null, "干式容器不为空或该区域不是颗粒区域");
 					}

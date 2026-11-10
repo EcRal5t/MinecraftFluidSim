@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "pattern": [
+    "G G",
+    "G G",
+    "G G"
+  ],
+  "key": {
+    "G": "mmm:insulating_glass"
+  },
+  "result": {
+    "id": "mmm:insulated_glass_pipe",
+    "count": 8
+  }
+}

@@ -277,3 +277,60 @@ registerGpuProbe('runGpuSpatialDomainValidation', 'Checks channel flow, heat and
 }
 
 
+
+registerGpuProbe('runGpuRegionExpansionValidation', 'Checks resident condensed-inventory edge observations.',
+    'mmm.gpu.GpuRegionExpansionValidation', 'gpu-region-expansion-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuEnvironmentThermalValidation', 'Checks and measures finite GPU environment heat exchange.',
+    'mmm.gpu.GpuEnvironmentThermalValidation', 'gpu-environment-thermal-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuEnvironmentWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuEnvironmentSamples').getOrElse('30')
+}
+
+registerGpuProbe('runGpuEnvironmentProductionValidation', 'Checks resident fluid and shared environment candidates.',
+    'mmm.gpu.GpuEnvironmentProductionValidation', 'gpu-environment-production-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuEnvironmentWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuEnvironmentSamples').getOrElse('30'),
+        providers.gradleProperty('gpuEnvironmentWalls').getOrElse('1')
+}
+
+registerGpuProbe('runGpuEnvironmentTheoryValidation', 'Compares production wall heat exchange with independent finite-capacity theory.',
+    'mmm.gpu.GpuEnvironmentTheoryValidation', 'gpu-environment-theory-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuEnvironmentMechanicalBenchmark', 'Measures full mechanical candidates with a shared world shell.',
+    'mmm.gpu.GpuEnvironmentMechanicalBenchmark', 'gpu-environment-mechanical-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuEnvironmentWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuEnvironmentSamples').getOrElse('30')
+}
+
+registerGpuProbe('runGpuPipeFlowValidation', 'Checks liquid flow through half-block pipe geometry.',
+    'mmm.gpu.GpuPipeFlowValidation', 'gpu-pipe-flow-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), providers.gradleProperty('gpuPipeSteps').getOrElse('16')
+}
+
+registerGpuProbe('runGpuPipeThermalValidation', 'Checks heat transfer through resolved pipe walls.',
+    'mmm.gpu.GpuPipeThermalValidation', 'gpu-pipe-thermal-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuPipeDepositValidation', 'Checks real deposit restriction and pipe cleaning.',
+    'mmm.gpu.GpuPipeDepositValidation', 'gpu-pipe-deposit-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuPipeCondensationValidation', 'Checks cooling and condensation in a resolved pipe bore.',
+    'mmm.gpu.GpuPipeCondensationValidation', 'gpu-pipe-condensation-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuScreenGeometryValidation', 'Checks screen obstruction in restricted openings.',
+    'mmm.gpu.GpuScreenGeometryValidation', 'gpu-screen-geometry-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}

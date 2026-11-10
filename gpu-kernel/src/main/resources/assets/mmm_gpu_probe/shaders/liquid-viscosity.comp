@@ -114,6 +114,39 @@ bool enabled(int f) {
 double harmonic(double a, double b) {
     return a == 0.0LF || b == 0.0LF ? 0.0LF : seriesConductance(2.0LF,a,1.0LF,b,1.0LF);
 }
+// Horizontal bed and free space act in parallel; vertical flow crosses them in series.
+// A fully covered cell has Kozeny-Carman permeability k = d² phi³ / (180 (1-phi)²).
+dvec3 bedConductance(int cell, double mu) {
+    int offsets=headerWord(H_BED_OFFSETS);
+    if(offsets<0)return dvec3(0.0);
+    int entries=headerWord(H_BED_ENTRIES),particleCapacity=headerWord(H_BED_PARTICLES);
+    double bulk=0.0, weightedResistance=0.0;
+    for(int i=int(words[offsets+cell]);i<int(words[offsets+cell+1]);i++) {
+        int entry=int(words[entries+i]),deposit=entry-8*particleCapacity;
+        if(deposit<0)continue;
+        int row=particleCapacity+deposit,volAddress=headerWord(H_BED_VOLUME)+2*row;
+        uint64_t units=uint64_t(words[volAddress])|(uint64_t(words[volAddress+1])<<32);
+        double phi=double(uintBitsToFloat(words[headerWord(H_BED_POROSITY)+deposit]));
+        int material=int(words[headerWord(H_BED_MATERIAL)+row]);
+        double diameter=candidateDouble(headerWord(H_BED_PROPERTIES)+2*(7*material+1));
+        if(!(phi>0.0 && phi<1.0 && diameter>0.0)) { atomicOr(errors,INVALID_VISCOSITY_ERROR);return dvec3(0.0); }
+        double volume=double(units)/134217728.0/(1.0-phi);
+        double permeability=diameter*diameter*phi*phi*phi/(180.0*(1.0-phi)*(1.0-phi));
+        bulk+=volume; weightedResistance+=volume/permeability;
+    }
+    if(!(bulk>0.0 && weightedResistance>0.0))return dvec3(0.0);
+    uint open=(~words[headerWord(H_BED_MASKS)+cell])&255u;
+    double volume=double(bitCount(open))*.125*p.h*p.h*p.h;
+    if(!(volume>0.0))return dvec3(0.0);
+    double fraction=clamp(bulk/volume,0.0,1.0),freeK=p.h*p.h/12.0,bedK=bulk/weightedResistance;
+    double gap=1.0-fraction;
+    // A narrowing free channel loses permeability with the square of its height.
+    double horizontal=gap*gap*gap*freeK+fraction*bedK;
+    double vertical=1.0/((1.0-fraction)/freeK+fraction/bedK);
+    double saturation=cellValue(cell,CELL_CAPACITY)>0.0?clamp(cellValue(cell,CELL_VOLUME)/cellValue(cell,CELL_CAPACITY),0.0,1.0):0.0;
+    double scale=.5*mu*volume*saturation;
+    return scale*max(dvec3(0.0),dvec3(1.0/horizontal,1.0/vertical,1.0/horizontal)-1.0/freeK);
+}
 // Evaluate each liquid carrier at its own temperature, then volume-average the
 // stresses represented by this cell's shared velocity. Carrier stocks remain distinct.
 void prepareCell(int c, bool refresh) {
@@ -124,6 +157,7 @@ void prepareCell(int c, bool refresh) {
         writeDoubleField(FIELD_SOURCE_CELL_WORK, c, 0.0);
         for (int axis = 0; axis < 3; axis++) {
             writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + axis, 0.0);
+            writeDoubleField(FIELD_BED_CONDUCTANCE, 3 * c + axis, 0.0);
             writeDoubleField(FIELD_CELL_FIXED_IMPULSE, 3 * c + axis, 0.0);
             writeDoubleField(FIELD_STRESS_HEAT, 3 * c + axis, 0.0);
             writeDoubleField(FIELD_STRESS_HEAT, 3 * cellCount() + 3 * c + axis, 0.0);
@@ -205,6 +239,7 @@ void prepareCell(int c, bool refresh) {
     double mu = weightedViscosity / totalVolume;
     writeIntField(FIELD_EXTRAPOLATED, c, extrapolated ? 1 : 0);
     writeDoubleField(FIELD_MU, c, mu);
+    dvec3 bed=bedConductance(c,mu);
 
     // The common PLIC geometry supplies only wetted fixed walls and their effective distances.
     // Split each cell's tangential drag equally between its two MAC velocity samples.
@@ -216,6 +251,7 @@ void prepareCell(int c, bool refresh) {
                     for (int side = 0; side < 2; side++)
                         sum += candidateDouble(headerWord(H_WALL_GEOMETRY) + 2 * (12 * c + 2 * (2 * axis + side) + 1));
         writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + tangent, .5 * mu * p.h * sum);
+        writeDoubleField(FIELD_BED_CONDUCTANCE, 3 * c + tangent, bed[tangent]);
     }
 }
 void prepareFace(int f) {

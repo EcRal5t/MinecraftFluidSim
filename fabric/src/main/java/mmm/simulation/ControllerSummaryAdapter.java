@@ -70,8 +70,8 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 				? availabilityFailure : null;
 		return Optional.of(new View(region.id(), region.dimension().identifier().toString(),
 				profile.profileFingerprint(), region.checkpointGeneration(), region.networkGeneration(),
-				new ControllerSummary.Footprint(footprint.controllerPosition().getX(),
-						footprint.controllerPosition().getY(), footprint.controllerPosition().getZ(),
+				new ControllerSummary.Footprint(footprint.name(), footprint.minimumInterior().getX(),
+						footprint.minimumInterior().getY(), footprint.minimumInterior().getZ(),
 						footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
 						footprint.interiorBlocks().size(), footprint.requiredChunks().size()),
 				regions.selected() == region,
@@ -134,8 +134,9 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 			totalInternalEnergy = domain.totalInternalEnergy();
 			if (thermalRegistry != null) {
 				var devices = region.finiteThermalDevices(thermalRegistry.fingerprint());
-				totalInternalEnergy += devices.exactInternalEnergy().toDouble();
 				for (var device : devices.devices()) {
+					if (!device.providerId().equals(WorldThermalEnvironment.PROVIDER))
+						totalInternalEnergy += device.body().internalEnergyJ();
 					double temperature = mmm.thermal.SurfaceThermalState.temperature(thermalRegistry, device);
 					minimumTemperature = Math.min(minimumTemperature, temperature);
 					maximumTemperature = Math.max(maximumTemperature, temperature);

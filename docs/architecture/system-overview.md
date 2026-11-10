@@ -2,7 +2,7 @@
 
 本文按完整职责链组织当前模型、数据归属和代码索引。开发时阅读本文及[当前实施计划](../roadmap/solver-consolidation-plan.md)，按改动范围查阅[验证指南](../maintenance/validation.md)。稳定公式和字段详见各专题；待办由实施计划维护，验证方法与预算由验证指南维护。
 
-当前支持最多四个闭壳控制器或有界静水池区域。默认格长为 0.5 m；液体采用单元有限体积与 MAC 动量，气体采用逐格组分与内能，液气共用 MAC 运动和局部有限压缩状态方程，颗粒采用活动代表粒子与床层。固定碰撞每个求解单元保留一个连通开放空间，隔墙以求解网格解析。
+当前支持最多四个空间选区或有界静水池区域。默认格长为 0.5 m；液体采用单元有限体积与 MAC 动量，气体采用逐格组分与内能，液气共用 MAC 运动和局部有限压缩状态方程，颗粒采用活动代表粒子与床层。固定碰撞每个求解单元保留一个连通开放空间，隔墙以求解网格解析。
 
 ## 模块职责
 
@@ -37,7 +37,7 @@
 
 固定拓扑由 `VulkanSpatialGrid` 编码为独立只读设备数据，创建域时上传，液体、气体、颗粒、热学及观察内核共同引用。热路径直接读取六邻格和面端点，任意坐标通过驻留块哈希查找。压力多重网格一次生成各层父子格映射，系数随当前状态更新。颗粒床层按实际驻留的竖向列存储；缺块处保留明确的几何隔断。块决定存储，物理连通和设备接触决定共同推进或暂停的范围。0.5 m／1 m 动态叶格的守恒表示和几何成本见[两级空间分辨率](fluid-solver.md#两级空间分辨率)。
 
-控制器和水池按实际空间占地登记、采样碰撞与检查世界区块。驻留块内位于容器外的单元按固体处理。资源计费使用驻留单元总数，长窄通道可跨越多个块；每区域和服务器总量继续受配置预算约束。所有块共享一个候选和区域 HEAD，完整 checkpoint 保存块成员与空间地址，恢复时重建紧凑索引。
+空间选区和水池按实际空间占地登记、采样碰撞与检查世界区块。区域内固体及开放空间由实际碰撞形状决定。资源计费使用驻留单元总数，长窄通道可跨越多个块；每区域和服务器总量继续受配置预算约束。所有块共享一个候选和区域 HEAD，完整 checkpoint 保存块成员与空间地址，恢复时重建紧凑索引。
 
 入口：[SpatialGrid](../../model/src/main/java/mmm/spatial/SpatialGrid.java)、[VulkanSpatialGrid](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSpatialGrid.java)、[spatial-grid.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/spatial-grid.glsl)、[FluidRegionFactory.grid](../../fabric/src/main/java/mmm/simulation/FluidRegionFactory.java)、[PhysicalActivityGraph](../../solver/src/main/java/mmm/fluid/PhysicalActivityGraph.java)。跨块完整步验证入口为 `runGpuSpatialDomainValidation`。
 
@@ -117,13 +117,23 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
 5. 日常查询与展示读取设备观察；checkpoint 和宿主编辑显式导出所需代次。
 
-普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。工业装置的世界建造与工艺验证共用同一方块标签、墙库存、端口与初始化规则；预热、冷却和表面装填按实际设备内能记入外部源汇。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
+固定世界方块与域外有限空气由维度共享热场持有。原版方块标签选择材料，未配置方块采用默认石材；铁、铜、金、木材、玻璃及绝热材料复用世界热学定义。每个固体按实际占据体积保存质量与内能，同格空气按微盒连通分量保存实际组成、质量与内能。区域设备行引用唯一世界节点，多个区域可共同加热同一面墙。
 
-物料箱保存九个有限批次，液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和回执提交；取样组成来自接触格。空批次接收对应物相，兼容批次合并组成与内能，满箱和断料保持配置等待。暂停与卸载保留运行意图，到期供料唤醒休眠区域。物料箱面板选择批次，手持实际容器点击交换所选批次。
+空间选区由探针两角确认，碰撞与容器独立。液体或颗粒接近边缘时，既有 GPU 观察输出六方向标志；运行入口先做预算、区块与重叠预检，再按 8³ 计算块生成更大候选，搬迁库存、气体、动量、几何及待处理任务。环境空气交给新气格、原版水接管及区域布局沿同一候选和世界发布记录采用。
+
+环境扩散每 10 个服务器 tick 排队，优先加入该维度下一次成功的区域 GPU 提交；无区域步时独立推进。区域墙接触随实际接受步长执行，失败候选同时丢弃区域和环境更改。静态拓扑驻留设备，正常步只复制可变库存及账本；墙投影未失效时复用已有值。环境远场为 293.15 K，有限空气可积热，远场实际收支单独记账。
+
+有限换热器保留自身物品库存；普通世界墙、筛表面装填与吸附物由共享环境持有。预热和装填先从当前世界代刷新投影，再共同准备区域与世界编辑。checkpoint 通过唯一世界 HEAD 发布环境、全部区域和删除标记；区域双槽镜像在恢复时追平同一组数据。
+
+物料箱的九个槽保存玩家放入的实际容器，空槽保持为空；液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和容器后态提交；取样组成来自接触格，出料要求对应物相的容器。内置端口直接使用共同容器事务，不占用公共外部 actor 注册额度。满箱和断料保持配置等待，暂停与卸载保留运行意图，到期供料唤醒休眠区域。持单个容器交换当前槽，空手取回，潜行空手切槽，探针打开选槽面板。容器离开箱体时移除箱内事务身份；未决交接保护对应槽位和箱体拆除。
+
+接口 `FACING` 指向外侧连接面，`mode` 方块状态由已保存的运行配置派生，配置后和加载后的首个 tick 同步给模型。传感器仪表朝向 `FACING`，默认测点位于反方向；模型随六向放置、旋转和镜像保持同一含义。配方、配方书解锁与获取顺序见[生存模式入门](../gameplay/survival-progression.md)，贴图与模型来源见[工业展示素材](../maintenance/visual-assets.md)。
 
 阀门闸板沿流向贯穿方块，五档开度改变通流截面；方块碰撞与显示共享该几何，固定碰撞编辑负责占容和物料交接。红石信号的目标开度在碰撞事务成功后提交；区域暂不可用或占容受阻时，方块按当前信号继续尝试，直至动作完成或信号改变。
 
 传感器从已提交状态读取指定格域的液位、液体温度、气体温度、绝对压力或液体截面流量。温度按所选物相的质量加权，该相没有库存时输出零信号；压力排除全封闭格，按实际开放体积加权；流量按实际接受面量和对应仿真步时长派生。阈值与滞环或连续映射产生 0—15 红石输出。探针打开方块原生配置面板，设置随方块实体保存。
+
+每次观测同时发布不可变 `ProcessSensorSnapshot`，统一保存读数、单位、状态、区域身份和仿真时长。聊天、配置面板、曲线摘要及外部显示读取同一结果；无样品和不可用状态没有数值。客户端接收有界摘要，实时观测不写入世界存档，重载等待重新采样。
 
 筛网按实际网格面保存孔径与开孔率，液气通流和颗粒运动读取同一面配置。活动颗粒碰到筛面时按材料的一次粒径决定穿过或截留，截留库存进入上游床层；床层沿坡面滑移与沉降时也按同一筛孔限制跨面移动。床层占容影响通流，接口从实际接触格取出滤渣，筛网随方块刷新、转向与拆除更新。
 
@@ -131,9 +141,11 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 区域按同代物理连通关系划分活动组：开放格面、局部气体、颗粒接触范围、实体扫掠范围和有限热设备端口共同决定分组。缺失区块使关联组暂停，其余组沿同一设备候选继续推进；暂停组保留库存、内能、动量和未决相变任务。详见[运行时](runtime-and-lifecycle.md)。
 
-世界方块变更唤醒相邻区域并刷新实际碰撞与热墙。活塞机座与运动头按完整方块表达，被推动方块采用实际形状；运动部件采集逐步姿态与表面速度，结束后把占容及有限墙库存交回静态几何。实体输入合并扫掠分组，按实际占据的半开单元范围检查可用性和设备预算；受阻实体保留旧占位，贴面接触保持相邻组独立。
+世界方块变更唤醒相邻区域并刷新实际碰撞与热墙。固定几何包含选区内部的微盒及紧邻外侧面的固体微面，宿主挤排、GPU 输运和壁面剪切共用其开放面积；外侧墙变化与内部碰撞沿同一候选提交。活塞机座与运动头按完整方块表达，被推动方块采用实际形状；运动部件采集逐步姿态与表面速度，结束后把占容及有限墙库存交回静态几何。实体输入合并扫掠分组，按实际占据的半开单元范围检查可用性和设备预算；受阻实体保留旧占位，贴面接触保持相邻组独立。
 
 接触速度包括平动和绕作用中心的转动。压力与黏性作用产生冲量、力矩和对应功；有限轴向惯量参与共同压力响应，规定运动按实际作用结算外功。位移历史按维度与实体 UUID 保存，进入新维度后的首次观测采用零规定速度。
+
+外部模组可通过 MMM 的 `MovingStructureApi` 提交固定轴向碰撞盒和带时长的平移段。`ExternalMovingStructures` 维护稳定分片身份、已接受进度及恢复匹配，`MinecraftRegionInputs` 统一检查完整结构的扫掠可用性和运动体预算，并排除原实体的大包围盒。初始结构从区域外进入或经原位装配交接进入，退出或原位拆解后清除。生命周期描述在普通世界碰撞刷新前核对，固定微格、运动体及普通墙热库存沿同一候选采用；旋转和外部动力负载绑定见 [Create 适配计划](../roadmap/create-compatibility-plan.md)。
 
 宿主快照及编辑候选使用区域当前有效组可用性，容器预览与执行共用该状态；待位移相变按涉及的物理组检查，暂停组任务保留。卸载清理同代设备库存、端口和派生缓存，恢复从已发布 checkpoint 重建。区域 tick 统一处理设备失效，暂停并清理未发布实体响应，保留 HEAD/WAL 恢复路径。
 
@@ -144,9 +156,10 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java)、[MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)：世界服务、设备和 tick。
 - [PhysicalActivityGraph](../../solver/src/main/java/mmm/fluid/PhysicalActivityGraph.java)、[VulkanLiquidWorkspace](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspace.java)：同代物理分组和设备活动输入。
 - [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftWorldUpdates](../../fabric/src/main/java/mmm/simulation/MinecraftWorldUpdates.java)：区块可用性、世界碰撞、活塞运动和实体输入。
-- [OrdinaryThermalWalls](../../fabric/src/main/java/mmm/simulation/OrdinaryThermalWalls.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
+- [WorldThermalEnvironment](../../fabric/src/main/java/mmm/simulation/WorldThermalEnvironment.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
 - [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、取样及驱动配置恢复。
 - [IndustrialOperations](../../fabric/src/main/java/mmm/simulation/IndustrialOperations.java)、[IndustrialDialogs](../../fabric/src/main/java/mmm/simulation/IndustrialDialogs.java)：物料箱、端口调度、阀门占容、传感器与原生交互面板。
+- [MaterialBoxItemStorage](../../fabric/src/main/java/mmm/simulation/MaterialBoxItemStorage.java)：九槽实际容器的 Fabric 自动化入口，完整物品组件、嵌套事务回滚和箱体占用；区域交接继续走持久容器事务。契约见[外部 API](external-api.md#fabric-物料箱自动化)。
 - [MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)、[GasContents](../../model/src/main/java/mmm/transfer/GasContents.java)：有限批次与气体载荷。
 - [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)、[IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：共享三维方块布局、有限墙初始化与工艺验证；离线夹具按正式碰撞采样入口生成微盒占据。
 - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交；[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 的 `manualStep` 负责原生单步输入和实体响应，失败采用共同暂停分类。
@@ -180,7 +193,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [VulkanScratchPool](../../gpu-kernel/src/main/java/mmm/gpu/VulkanScratchPool.java)：流动、导热与反应之间的临时列复用；各布局声明同时使用的列，库存和最终账目保持独立。
 - [VulkanLiquidGeometry](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGeometry.java)、[VulkanMixtureState](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixtureState.java)、[VulkanMixturePressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixturePressure.java)、[VulkanCoupledPressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanCoupledPressure.java)：单轴界面几何、局部液气状态方程与共同压力装配；[VulkanPressureKernel](../../gpu-kernel/src/main/java/mmm/gpu/VulkanPressureKernel.java) 和 [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpu/VulkanPressureMultigrid.java) 按解析尺度预算完成机械 PCG，预存多重网格父子映射；实际颗粒耦合行采用紧凑矩阵自由求积，其余行使用等价 CSR，初值沿绝对压力交接。
 - [plic-face.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/plic-face.glsl)、[VulkanLiquidViscosity](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidViscosity.java)：共同单侧 PLIC 面积、湿壁有效距离、无滑移应力、反冲与耗散热；热接触复用相同单侧面积。验证入口为 `runGpuWetWallValidation`、`runGpuChannelFlowValidation` 和 `runGpuEntityBodyCouplingBenchmark`，公式及尺度见[液体黏性应力](fluid-solver.md#液体黏性应力)。
-- [VulkanBufferCopyPlan](../../gpu-kernel/src/main/java/mmm/gpu/VulkanBufferCopyPlan.java)、[VulkanLiquidWorkspace.copyPersistent](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspace.java)：明确持久字段的并行复制、候选布局与资源释放。
+- [VulkanBufferCopyPlan](../../gpu-kernel/src/main/java/mmm/gpu/VulkanBufferCopyPlan.java)、[VulkanLiquidWorkspaceCopies](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspaceCopies.java)：明确持久字段的并行复制、候选布局与资源释放。
 - [VulkanMixtureFlux](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixtureFlux.java)、[mixture-flux.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/mixture-flux.comp)：按有限驻留时间接受普通面量，基于源开放面和目标孔容生成关闭格直达路由及反向索引；开放外界承接气体排放。[VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGather.java)、[VulkanLiquidMomentum](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMomentum.java) 和 [VulkanLocalGasTransport](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLocalGasTransport.java) 按同一成员关系交接液气库存、动量、热量与气体压缩功。
 - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMaterialRoutes.java)、[VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGather.java)、[VulkanLiquidMomentum](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMomentum.java)：物质输运、归并及动量。
 - [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMechanicalEnergy.java)：液气与颗粒的共同机械能结算；外侧面混合热按实际质量分配，连通体沿真实外排气路完全排空后将剩余机械能记入环境交换。
@@ -225,12 +238,32 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="client"></a>
 ## 查询与展示
 
-区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。登录、切换维度及复活时向玩家补发当前维度的已加载区域快照，暂停和休眠区域也参与补发。查询不改变设备代。容器与接口使用实际接受量及同代库存，比较器按固定开放容量展示液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
+区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。登录、切换维度及复活时向玩家补发当前维度的已加载区域快照，暂停和休眠区域也参与补发。查询不改变设备代。容器与接口使用实际接受量及同代库存，传感器按测量范围内的固定开放容量计算液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
+
+### 样品分析与工艺曲线
+
+容器分析从手持物品的实际载荷生成服务端只读摘要，沿匹配的世界定义把组成与内能换算为展示数量。液体浓度以样品总体积计算，气体体积与浓度注明标准态；完整物种库存提供摩尔分数。客户端支持滚动和两份样品并排比较，基准在维度切换与断线时清除。分析保持区域与物品库存，使用时无需区域回读。
+
+传感器在原有观测完成后追加有界会话记录。区域在成功机械步或独立热步后累计仿真时长；暂停、测点不可用和物理组缺失使曲线断开，暂停时的手动步留下独立观测点。配置和区域实例改变后清空旧序列。样品和曲线均由客户端发起打开请求，以会话标识与维度匹配回复；曲线按递增请求序号接收更新。关闭、换维或测点卸载后停止请求，旧会话回复丢弃；记录随方块实体会话释放。显示模式和样品基准由各客户端独立保存。
+
+- [SampleAnalysis](../../fabric/src/main/java/mmm/simulation/SampleAnalysis.java)、[SampleAnalysisPayload](../../fabric/src/main/java/mmm/network/SampleAnalysisPayload.java)、[SampleAnalysisScreen](../../fabric/src/client/java/mmm/client/SampleAnalysisScreen.java)：载荷分析、展示摘要与比较界面。
+- [ProcessTrendHistory](../../fabric/src/main/java/mmm/network/ProcessTrendHistory.java)、[ProcessTrendNetwork](../../fabric/src/main/java/mmm/network/ProcessTrendNetwork.java)、[ProcessTrendScreen](../../fabric/src/client/java/mmm/client/ProcessTrendScreen.java)：测点记录、只读请求与曲线。
+- [ObservationOpen](../../fabric/src/client/java/mmm/client/ObservationOpen.java)：打开请求、维度与回复序号的会话匹配。
+- [FluidRenderBatch](../../fabric/src/client/java/mmm/client/FluidRenderBatch.java)、[FluidRenderTiming](../../fabric/src/client/java/mmm/client/FluidRenderTiming.java)：持久绘制数据、透明排序与异步 GPU 计时。
+- 验证入口：`protocol` 中的 `ClientSurfaceValidation`、`SampleAnalysisValidation`、`SampleComparisonValidation`、`ObservationOpenValidation` 与 `ProcessTrendHistoryValidation`；专服请求处理见 `MultiplayerObservationGameTest`。
 
 <a id="gameplay"></a>
 ## 游戏入口
 
-控制器、外壳和接口建立区域；桶、发射器、气体源、换热器和耕地通过区域事务交接库存。演示复用相同初始化、调度与提交流程；原版静水池接管与归还使用世界归属日志。命令见[命令速查](../maintenance/commands.md)，后续玩法见[产品路线](../roadmap/product-roadmap.md)。
+探针选区建立区域；桶、接口、发射器、气体源、换热器和耕地通过区域事务交接库存。演示复用相同初始化、调度与提交流程；原版静水池接管与归还使用世界归属日志。命令见[命令速查](../maintenance/commands.md)，后续玩法见[产品路线](../roadmap/product-roadmap.md)。
+
+薄壁管道按有限管段保存液体、气体、床库存与内能，沿开放管口按压差和高差输运。区域端口在共同候选中交接物质及能量，管壁复用世界环境热场；管网、环境和区域通过同一世界 HEAD 保存。管件几何、段平均模型及操作见[薄壁管道](physical-pipes.md)。
+
+- [PipeNetworkSolver](../../solver/src/main/java/mmm/pipe/PipeNetworkSolver.java)：管段流动、相变、床载与热量结算。
+- [PipeRuntime](../../fabric/src/main/java/mmm/simulation/PipeRuntime.java)、[PipeRegionExchange](../../fabric/src/main/java/mmm/simulation/PipeRegionExchange.java)：世界管网、区域交接与生命周期。
+- 验证入口：`pipe-network`、`PipeLiquidTransportValidation` 与 `PipeWallHeatValidation`。
+
+区域创建与环境热场的完整方案见[空间选区与环境热场](../roadmap/region-and-environment-heat-plan.md)，涵盖空间选择、范围增长及世界坐标热库存；实施状态由当前计划维护。
 
 <a id="performance"></a>
 <a id="diagnosis"></a>

@@ -16,7 +16,7 @@ import static mmm.gpu.VulkanRegionStorage.barrier;
 final class VulkanLiquidGeometry implements AutoCloseable {
     enum Binding {
         OFFSETS, VOLUMES, MASSES, MASKS, SOLIDS, MOMENTUM_X, MOMENTUM_Y, MOMENTUM_Z,
-        CELLS, PLANES, MICRO, FACES, ERRORS, FLUX_PREFERENCES, WALL_GEOMETRY, SCREEN_FACES, BED_SOLID, COHERENT_SOLID
+        CELLS, PLANES, MICRO, FACES, ERRORS, FLUX_PREFERENCES, WALL_GEOMETRY, SCREEN_FACES, BED_SOLID, COHERENT_SOLID, EXTERIOR_MASKS
     }
 
     private final FlipKernelBindings bindings;
@@ -51,6 +51,7 @@ final class VulkanLiquidGeometry implements AutoCloseable {
                 case SCREEN_FACES -> geometry.get(GeometryField.SCREEN_FACES);
                 case BED_SOLID -> bedSolid;
                 case COHERENT_SOLID -> geometry.get(GeometryField.OCCUPIED_SOLID);
+                case EXTERIOR_MASKS -> geometry.get(GeometryField.EXTERIOR_MASKS);
                 case FACES -> faces;
                 case FLUX_PREFERENCES -> geometry.get(GeometryField.FLUXES);
                 case ERRORS -> null;

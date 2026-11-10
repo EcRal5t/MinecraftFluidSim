@@ -25,6 +25,7 @@
     - [RegionCheckpointValidator](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointValidator.java)
     - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
     - [PhaseOccupancyCodec](../../fabric/src/main/java/mmm/simulation/persistence/PhaseOccupancyCodec.java)：按 section 保存微盒液相占据
+    - [FixedFaceGeometryCodec](../../fabric/src/main/java/mmm/simulation/persistence/FixedFaceGeometryCodec.java)：按网格坐标保存外邻固体微面与筛面
   - 测试选择器：`region-state`
 
 - **文件编码与双槽提交**
@@ -325,16 +326,11 @@ wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启�
 
 ## 恢复
 
-- 正常启动只读取 HEAD 指向的 generation，不自动猜测另一槽。
-- 只有当前 HEAD 已出现可复核 restore failure、区域仍为 metadata-only 且暂停、ownership 与容器 WAL 无歧义时，管理员才能执行 `regions recoverprevious <expectedCheckpoint>`。
-- 恢复命令完整重建并审计紧邻上一槽，再原子移动 HEAD；成功后必须退出并重新进入世界。
-- 该命令仅用于回滚到紧邻上一代同布局的有效存档，不修改被拒绝的当前槽位。
+启用世界热场时，世界 HEAD 指向同一保存时点的环境库存、全部区域快照及区域删除标记。先写不可变完整载荷，再原子发布世界记录；区域双槽作为该记录的读取镜像，启动时追平落后的镜像。区域与共享墙、有限空气从这一组状态共同恢复。
 
-恢复上一完整代的原子边界仍然只有 HEAD：命令要求操作者给出当前 expected generation，先重新读取并完全重建 inactive slot，确认其恰为 `current - 1`；
-发布前再次核对当前 HEAD generation/checksum 未移动，再只替换 HEAD。被拒绝的当前 slot 保持字节不变，下一次正常 checkpoint 才可能覆盖它。
+环境存档格式为 2，节点同时保存结构携带归属和固定筛网轴。`CARRIED` 节点保留内能及表面库存，并从静态热接触图排除；原位装配／拆解沿共同候选转换其归属。读取时核对格式标识，旧格式不按新布局解码。
 
-这条路径不自动触发，是因为“另一个 slot 可读”不能证明它比当前失败状态更符合操作者意图，也不能解决外部 ownership/item WAL 的歧义。
-
+目标候选覆盖其区域快照与涉及的环境维度。其他活动区域在同一保存时点捕获；已有待恢复外部事务时保留其基代，先完成事务恢复。表面材料和空气交接沿同一世界发布入口保存。故障保留旧组或完整新组，未发布候选保持不可见。
 ## 发布前同步
 
 checkpoint 捕获读取已提交的同代单元库存、固体占容、逐格气体库存和内能。
@@ -353,7 +349,7 @@ checkpoint 捕获读取已提交的同代单元库存、固体占容、逐格气
 
 任何中断都只能恢复到 ACTIVE exact BEFORE、REMOVED 可收敛中间态或 LOCKED third state，不能让旧 payload 重新被 discovery 接纳为 solver。
 
-普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
+区域镜像保留原子覆盖所需的双槽；清理避开当前世界发布记录引用的完整载荷。
 
 气体区域载荷按 section 保存逐格非空库存及内能。恢复按格索引组装完整空间状态，依据保存的相占据和固体几何生成局部容量，并核对库存、内能及总账。
 具体格式见 [气体状态](gas-state.md)。

@@ -42,6 +42,14 @@ tasks.register('runSolverValidation', JavaExec) {
     enableAssertions = true
 }
 
+tasks.register('runFluidDomainMergeValidation', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.fluid.SpatialGridRemapValidation'
+    enableAssertions = true
+}
+
 tasks.register('testJar', Jar) {
 	archiveClassifier = 'tests'
 	from sourceSets.test.output
@@ -63,4 +71,27 @@ publishing {
 	publications {
 		create('mavenJava', MavenPublication) { from components.java }
 	}
+}
+
+tasks.register('runPipeLiquidTransportValidation', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.pipe.PipeLiquidTransportValidation'
+    enableAssertions = true
+}
+
+tasks.register('runPipeWallHeatValidation', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.pipe.PipeWallHeatValidation'
+    enableAssertions = true
+}
+
+tasks.register('runPipeNetworkBenchmark', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.pipe.PipeNetworkBenchmark'
 }

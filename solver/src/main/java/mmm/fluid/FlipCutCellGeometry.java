@@ -8,7 +8,7 @@ import mmm.spatial.SpatialGrid;
  *
  * <p>Each solver cell owns a 2x2x2 occupancy mask. Cell-open volume and the
  * shared 2x2 face apertures are numerical geometry; they never contribute to
- * the exact marker-volume ledger. Domain boundary faces are closed.</p>
+ * the exact marker-volume ledger. Exterior faces use sampled neighboring geometry.</p>
  */
 final class FlipCutCellGeometry {
 	static final int MICRO_CELLS_PER_AXIS = 2;
@@ -22,6 +22,7 @@ final class FlipCutCellGeometry {
 	private final SpatialGrid grid;
 	private FixedGeometrySnapshot layout;
 	private byte[] writableMasks;
+	private int[] exteriorMasks;
 	private java.util.List<ScreenFace> screens = java.util.List.of();
 
 	FlipCutCellGeometry(int sizeX,int sizeY,int sizeZ) {
@@ -29,26 +30,26 @@ final class FlipCutCellGeometry {
 	}
 	FlipCutCellGeometry(SpatialGrid grid) {
 		this.grid=grid;this.sizeX=grid.sizeX();this.sizeY=grid.sizeY();this.sizeZ=grid.sizeZ();
-		cellCount=grid.cellCount();
+		cellCount=grid.cellCount();exteriorMasks=new int[cellCount];
 	}
 
 	FixedGeometrySnapshot snapshot() {
 		if(layout==null){
-			layout=FixedGeometrySnapshot.takeMasks(grid,writableMasks==null?new byte[cellCount]:writableMasks,screens);
+			layout=FixedGeometrySnapshot.takeMasks(grid,writableMasks==null?new byte[cellCount]:writableMasks,exteriorMasks,screens);
 			writableMasks=null;
 		}
 		return layout;
 	}
 	void restoreSnapshot(FixedGeometrySnapshot snapshot) {
 		if(snapshot==null||!snapshot.grid().equals(grid))throw new IllegalArgumentException("Fixed collision geometry shape differs");
-		layout=snapshot;writableMasks=null;screens=snapshot.screens();
+		layout=snapshot;writableMasks=null;screens=snapshot.screens();exteriorMasks=snapshot.copyExteriorMasks();
 	}
 	void setScreen(int face, ScreenFace screen) {
 		var next = new java.util.ArrayList<>(screens);
 		next.removeIf(value -> value.face() == face);
 		if (screen != null) next.add(screen);
 		var current = snapshot();
-		layout = FixedGeometrySnapshot.fromMasks(grid, current.copyMasks(), next);
+		layout = FixedGeometrySnapshot.fromMasks(grid, current.copyMasks(), exteriorMasks, next);
 		screens = layout.screens();
 	}
 
@@ -77,6 +78,13 @@ final class FlipCutCellGeometry {
 		for(int cell=0;cell<cellCount;cell++)FixedGeometrySnapshot.requireConnectedOpenCell(cell,Byte.toUnsignedInt(microMasks[cell]));
 		writableMasks=microMasks.clone();layout=null;
 	}
+    void replaceExteriorMasks(int[] masks) {
+        if(masks==null||masks.length!=cellCount)throw new IllegalArgumentException("Exterior collision mask length differs");
+        for(int mask:masks)if((mask&0xff000000)!=0)throw new IllegalArgumentException("Exterior collision mask exceeds 24 bits");
+        if(Arrays.equals(exteriorMasks,masks))return;
+        if(writableMasks==null)writableMasks=layout==null?new byte[cellCount]:layout.copyMasks();
+        exteriorMasks=masks.clone();layout=null;
+    }
 	byte[] copyMicroMasks(){return writableMasks!=null?writableMasks.clone():layout!=null?layout.copyMasks():new byte[cellCount];}
 
 	byte[] copyBinaryFullMask() {

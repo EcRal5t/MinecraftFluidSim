@@ -16,6 +16,7 @@ const int STAGE_PUBLISH_FACES = 9;
 const int STAGE_PUBLISH_PARTICLES = 10;
 const int STAGE_CLAMP_PRESSURE = 11;
 const int STAGE_INITIALIZE_WARM = 12;
+const int STAGE_BED_HEAT = 13;
 const uint ERROR_GRANULAR_PRESSURE = 1048576u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
@@ -340,9 +341,21 @@ void fluidIncidence(int f) {
     double coefficient = face(f, 2) / p.cellSize, mass = face(f, 0);
     term(2 * f, a, f, coefficient);
     term(2 * f + 1, b, f, -coefficient);
-    double inverse = mass > 0.0 && face(f, 2) > 0.0 ? p.cellSize * p.cellSize * p.cellSize / mass : 0.0;
+    int axis=gridFaceEndpoints(f).z,bed=headerValue(H_BED_CONDUCTANCE);
+    double resistance=bed<0?0.0:(cells.x<0?0.0:readDouble(bed+2*(3*cells.x+axis)))
+                               +(cells.y<0?0.0:readDouble(bed+2*(3*cells.y+axis)));
+    double effectiveMass=mass+p.duration*resistance;
+    double inverse = mass > 0.0 && face(f, 2) > 0.0 ? p.cellSize * p.cellSize * p.cellSize / effectiveMass : 0.0;
+    if (resistance > 0.0 && a >= 0 && b >= 0) {
+        double offDiagonal = -coefficient * coefficient * inverse;
+        int starts = jh(COUPLED_H_STARTS), values = jh(COUPLED_H_VALUES);
+        int left = int(words[starts + a]) + 2 + 2 * axis;
+        int right = int(words[starts + b]) + 1 + 2 * axis;
+        writeNumber(values + 2 * left, offDiagonal);
+        writeNumber(values + 2 * right, offDiagonal);
+    }
     writeNumber(ja(COUPLED_INVERSE_MASS) + 2 * f, inverse);
-    writeNumber(ja(COUPLED_PREDICTED_VELOCITY) + 2 * f, face(f, 1));
+    writeNumber(ja(COUPLED_PREDICTED_VELOCITY) + 2 * f, resistance>0.0?face(f, 1)*mass/effectiveMass:face(f, 1));
     double exterior = 101325.0;
     writeNumber(ja(COUPLED_FIXED_REFERENCE_FORCE) + 2 * f,
                 ((cells.x < 0 ? exterior : 0.0) - (cells.y < 0 ? exterior : 0.0)) * coefficient);
@@ -458,9 +471,24 @@ void publishParticle(int parcel) {
     write(FIELD_FINAL_Y, parcel, read(FIELD_SOURCE_Y, parcel));
     write(FIELD_DRAG_HEAT, parcel, p.duration * read(FIELD_DRAG_RESISTANCE, parcel) * slipSquared);
 }
+void bedHeat(int c) {
+    if (!activeCell(c) || headerValue(H_BED_CONDUCTANCE) < 0) return;
+    double heat = 0.0;
+    for (int side = 0; side < 6; side++) {
+        int f = gridFace(c, side);
+        if (f < 0 || !activeFace(f)) continue;
+        double g = readDouble(headerValue(H_BED_CONDUCTANCE) + 2 * (3 * c + side / 2));
+        double v = face(f, 1);
+        heat += p.duration * g * v * v;
+    }
+    int target = headerValue(H_BED_HEAT) + 2 * c;
+    writeNumber(target, readDouble(target) + heat);
+}
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
-    if (p.stage == STAGE_CLEAR_FACES && id < headerValue(H_FACE_COUNT))
+    if (p.stage == STAGE_BED_HEAT && id < headerValue(H_SIZE_X) * headerValue(H_SIZE_Y) * headerValue(H_SIZE_Z))
+        bedHeat(id);
+    else if (p.stage == STAGE_CLEAR_FACES && id < headerValue(H_FACE_COUNT))
         clearFace(id);
     else if (p.stage == STAGE_PARTICLE_FACES && id < headerValue(H_PARTICLE_CAPACITY))
         particleFaces(id);

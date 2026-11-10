@@ -20,7 +20,7 @@ final class FluidRegionFactory {
 
 	private FluidRegionFactory() { }
 
-	static FluidRegion createControllerRegion(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+	static FluidRegion createSelectedRegion(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
 			FluidRegionFootprint footprint, CommittedWorldRegistries world) {
 		float cellSize = 1.0F / CELLS_PER_BLOCK;
         var config = new FluidSolverConfig(cellSize, 9.81F, 1.0F / 20.0F, 240, 1.0E-4F, 2.0E-3F);
@@ -98,13 +98,35 @@ final class FluidRegionFactory {
 	static int captureVanillaWater(ServerLevel level, FluidRegion region, boolean standaloneWaterOnly) {
 		return captureWater(region, position -> {
 			BlockState state = level.getBlockState(position);
-			if ((region.controllerManaged() || standaloneWaterOnly) && !state.is(net.minecraft.world.level.block.Blocks.WATER)) return 0.0F;
+			if ((region.hasSelectedVolume() || standaloneWaterOnly) && !state.is(net.minecraft.world.level.block.Blocks.WATER)) return 0.0F;
 			FluidState fluid = state.getFluidState();
 			if (!fluid.is(FluidTags.WATER)) return 0.0F;
 			return region.footprint() != null
 					&& region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.POOL
 					&& fluid.isSource() ? 1.0F : fluid.getHeight(level, position);
 		});
+	}
+
+	/** Adds water from newly acquired world blocks without replacing existing liquid rows. */
+	static int captureAddedWater(ServerLevel level, HostFluidState domain, BlockPos origin, java.util.Set<Long> positions) {
+		int changed = 0;
+		float h = domain.config().cellSize();
+		for (long packed : positions) {
+			BlockPos position = BlockPos.of(packed);
+			BlockState state = level.getBlockState(position);
+			if (!state.is(net.minecraft.world.level.block.Blocks.WATER)) continue;
+			float height = state.getFluidState().getHeight(level, position);
+			for (int z = 0; z < CELLS_PER_BLOCK; z++) for (int y = 0; y < CELLS_PER_BLOCK; y++)
+				for (int x = 0; x < CELLS_PER_BLOCK; x++) {
+					int cx = (position.getX() - origin.getX()) * CELLS_PER_BLOCK + x;
+					int cy = (position.getY() - origin.getY()) * CELLS_PER_BLOCK + y;
+					int cz = (position.getZ() - origin.getZ()) * CELLS_PER_BLOCK + z;
+					if (domain.grid().cell(cx, cy, cz) < 0 || domain.isSolid(cx, cy, cz)) continue;
+					float volume = Mth.clamp((height - y * h) / h, 0.0F, 1.0F);
+					if (volume > 0) { domain.setVolume(cx, cy, cz, volume); changed++; }
+				}
+		}
+		return changed;
 	}
 
 	/** Samples the same world water heights used by the Minecraft adapter. */

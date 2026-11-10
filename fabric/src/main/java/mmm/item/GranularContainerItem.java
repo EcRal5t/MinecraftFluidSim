@@ -45,6 +45,7 @@ public final class GranularContainerItem extends Item {
 	@Override public void appendHoverText(ItemStack stack, TooltipContext context,
 			net.minecraft.world.item.component.TooltipDisplay tooltipDisplay,
 			java.util.function.Consumer<Component> tooltip, TooltipFlag flag) {
+		tooltip.accept(net.minecraft.network.chat.Component.translatable("item.mmm.container.sample_analysis").withStyle(net.minecraft.ChatFormatting.GRAY));
 		GranularContents contents = unvalidatedContents(stack);
 		if (contents == null) {
 			if (isEmpty(stack)) tooltip.accept(Component.translatable("item.mmm.granular_container.empty")

@@ -1,1 +1,6 @@
-{"parent":"minecraft:item/bucket"}
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "mmm:item/gas_container"
+  }
+}

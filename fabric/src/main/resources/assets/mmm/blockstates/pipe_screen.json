@@ -1,0 +1,22 @@
+{
+  "variants": {
+    "facing=down": {
+      "model": "mmm:block/pipe_screen_y_0"
+    },
+    "facing=up": {
+      "model": "mmm:block/pipe_screen_y_0"
+    },
+    "facing=north": {
+      "model": "mmm:block/pipe_screen_z_0"
+    },
+    "facing=south": {
+      "model": "mmm:block/pipe_screen_z_0"
+    },
+    "facing=west": {
+      "model": "mmm:block/pipe_screen_x_0"
+    },
+    "facing=east": {
+      "model": "mmm:block/pipe_screen_x_0"
+    }
+  }
+}

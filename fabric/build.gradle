@@ -44,7 +44,7 @@ loom {
             server()
             source sourceSets.gametest
             name 'MMM Game Test'
-            runDir 'build/gametest'
+            runDir (project.findProperty('gameTestRunDir') ?: 'build/gametest')
             vmArg '-Dfabric-api.gametest'
             vmArg '--enable-native-access=ALL-UNNAMED'
             vmArg '-Xmx2g'
@@ -168,6 +168,21 @@ tasks.register('runHostValidation', JavaExec) {
 		validationWorkDir.mkdirs()
 		new File(validationWorkDir, 'classpath.txt').text = classpath.asPath
 	}
+}
+
+tasks.register('runMaterialBoxStorageValidation', JavaExec) {
+    group = 'verification'
+    description = 'Runs the material box Fabric transaction checks with loader mixins, without a game server.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'mmm.simulation.FabricStorageValidationLauncher'
+    enableAssertions = true
+    systemProperty 'fabric.development', 'true'
+    systemProperty 'fabric.gameVersion', project.minecraft_version
+    maxHeapSize = '512m'
+    def validationWorkDir = layout.buildDirectory.dir('material-box-storage-work').get().asFile
+    workingDir validationWorkDir
+    doFirst { validationWorkDir.mkdirs() }
 }
 
 tasks.register('runGpuProcessFlowsValidation', JavaExec) {

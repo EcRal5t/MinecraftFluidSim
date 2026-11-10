@@ -41,7 +41,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         ACTIVITY_FACES(31),
         PHASE_ENABLED(32),
         AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
-        SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55);
+        SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55),WALL_PORT_INTERNAL_MASK(56);
         final int word;
         Header(int word) {
             this.word = word;
@@ -82,8 +82,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         OLD_K(8),
         NEW_K(8),
         FACE_HEAT(8),
-        FACE_P(8),
-        PE_WORK(8),
+        FACE_P(8), FACE_P_NEXT(8),
+        PE_WORK(8), PE_STEP(8),
         PENDING_TIME(8),
         PENDING_RESIDUAL(8),
         PENDING_SLOT(4),
@@ -200,10 +200,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case CONTROL -> 8;
                     case HEAD -> groups;
                     case GAS_TO_LIQUID_MASS, LIQUID_TO_GAS_MASS -> Math.multiplyExact(cells, 7);
-                    case MOMENTUM_TRANSFER -> Math.multiplyExact(cells, 5);
+                    case MOMENTUM_TRANSFER -> Math.multiplyExact(cells, 8);
                     case OLD_GAS_U, NEW_GAS_U -> inputs.gas().gas().nodeCapacity();
                     case GAS_CALORIC -> Math.multiplyExact(inputs.gas().gas().nodeCapacity(), 4);
-                    case OLD_K, NEW_K, FACE_P -> faces;
+                    case OLD_K, NEW_K, FACE_P, FACE_P_NEXT -> faces;
                     case FACE_HEAT -> 2 * faces;
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
                     case AUDIT_QUANTA, AUDIT_NANOS -> Math.multiplyExact(Math.multiplyExact(cells, rules), 2);
@@ -265,6 +265,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 h[Header.WALL_PORT_DEVICE.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_DEVICE);
                 h[Header.WALL_PORT_CELL.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_CELL);
                 h[Header.WALL_PORT_DIRECTION.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_DIRECTION);
+                h[Header.WALL_PORT_INTERNAL_MASK.word]=device.word(VulkanThermalDeviceLayout.Field.PORT_INTERNAL_MASK);
                 h[Header.WALL_TEMPERATURE.word]=Math.toIntExact(inputs.deviceCaloric().temperatures().offset()/4);
                 h[Header.WALL_CALORIC.word]=Math.toIntExact(inputs.deviceCaloric().header().offset()/4);
                 h[Header.WALL_MATERIAL.word]=device.word(VulkanThermalDeviceLayout.Field.MATERIAL);
@@ -430,6 +431,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             if(pass==6)stage(c,l,15,l.cells,pass);
             timed(c,"gas-transfer-geometry",()->stage(c,l,1,l.cells,current));
             timed(c,"gas-transfer-contact",()->stage(c,l,17,l.cells,current));
+            if(pass>0)recordMomentumHeat(c,l,pass);
+            else { stage(c,l,7,l.inputs.gas().gas().nodeCapacity(),pass);stage(c,l,11,l.cells,pass); }
         }
         if(l.dryProposals>0){
             timed(c,"gas-transfer-dry-wall",()->{
@@ -440,15 +443,19 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         }
         if(l.rules>0)stage(c,l,20,Math.multiplyExact(Math.multiplyExact((l.cells+127)/128,Math.multiplyExact(l.rules,2)),128));
         if(l.surfaceRules>0)stage(c,l,16,1);
-        timed(c,"gas-transfer-momentum-heat",()->{
-            stage(c,l,19,l.cells);
-            stage(c,l,5,l.faces);
-            stage(c,l,6,l.cells);
-            stage(c,l,7,l.inputs.gas().gas().nodeCapacity());
-            stage(c,l,11,l.cells);
-        });
+        recordMomentumHeat(c,l,7);
         if(l.dryProposals>0 || l.surfaceRules>0)stage(c,l,14,l.wallDevices);
         timed(c,"gas-transfer-assemble",()->rows.recordAssemble(c,l.rows));
+    }
+    private void recordMomentumHeat(VkCommandBuffer c,Layout l,int pass) {
+        timed(c,"gas-transfer-momentum-heat",()->{
+            stage(c,l,19,l.cells,pass);
+            stage(c,l,5,l.faces,pass);
+            stage(c,l,6,l.cells,pass);
+            stage(c,l,7,l.inputs.gas().gas().nodeCapacity(),pass);
+            stage(c,l,11,l.cells,pass);
+            stage(c,l,21,l.cells,pass);
+        });
     }
     void recordPublish(VkCommandBuffer c, Layout l) {
         timed(c,"gas-transfer-publish",()->{

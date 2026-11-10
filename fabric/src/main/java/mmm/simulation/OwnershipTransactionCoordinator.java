@@ -47,7 +47,7 @@ final class OwnershipTransactionCoordinator {
 	}
 
 	int committedBlockCount(FluidRegion region) throws IOException {
-		if (!region.controllerManaged()) return 0;
+		if (!region.hasSelectedVolume()) return 0;
 		OwnershipFiles files = ownershipStore.files(region.id());
 		files.assertUnlockedForTransition();
 		if (!files.hasCommitted()) return 0;
@@ -84,9 +84,27 @@ final class OwnershipTransactionCoordinator {
 			FluidRegion region,
 			List<OwnershipJournal.BlockEntry> candidates
 	) throws IOException {
+        acquire(level,region,candidates,List.of());
+    }
+    void acquireMerged(ServerLevel level,FluidRegion region,List<OwnershipJournal.BlockEntry> candidates,
+                       List<FluidRegion> sources) throws IOException {
+        var transferred=new ArrayList<OwnershipJournal.BlockEntry>();
+        for(var source:sources)if(!source.id().equals(region.id())) {
+            var files=ownershipStore.files(source.id());files.assertUnlockedForTransition();
+            if(files.hasCommitted()) {
+                var owned=files.readCommitted();
+                if(!owned.regionId().equals(source.id()) || !owned.dimensionId().equals(region.dimension().identifier().toString())
+                        || owned.generation()>source.checkpointGeneration())throw new IOException("Source ownership identity differs");
+                transferred.addAll(owned.ownedBlocks());
+            }
+        }
+        acquire(level,region,candidates,transferred);
+    }
+    private void acquire(ServerLevel level,FluidRegion region,List<OwnershipJournal.BlockEntry> candidates,
+                         List<OwnershipJournal.BlockEntry> transferred) throws IOException {
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
 		candidates = List.copyOf(candidates);
-		if (candidates.isEmpty()) {
+		if (candidates.isEmpty() && transferred.isEmpty()) {
 			repository.checkpoint(region);
 			return;
 		}
@@ -101,10 +119,12 @@ final class OwnershipTransactionCoordinator {
 		String warning = OwnershipStore.warningText(ownershipStore.worldRoot(),
 				region.id(), dimensionId, OwnershipJournal.Operation.ACQUIRE,
 				baseGeneration, generation, candidates.size());
+		repository.stageEnvironment(region);
+		try {
 		long publishedGeneration;
 		try {
 			OwnershipCoordinator.AcquireResult result = OwnershipCoordinator.acquire(
-					generations, ownershipFiles, staged, candidates, warning,
+					generations, ownershipFiles, staged, candidates, transferred, warning,
 					OwnershipStore.worldAccess(level.getServer()), OwnershipCoordinator.FailureInjector.NONE);
 			publishedGeneration = result.generation();
 		} catch (IOException | RuntimeException failure) {
@@ -129,6 +149,7 @@ final class OwnershipTransactionCoordinator {
 			throw new IOException("Acquired ownership checkpoint " + publishedGeneration
 					+ " was not accepted by the live region");
 		}
+		} finally { repository.clearStagedEnvironment(region.id()); }
 	}
 
 	ReleaseAttempt release(MinecraftServer server, FluidRegion region) {

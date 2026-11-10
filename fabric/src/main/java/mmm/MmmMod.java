@@ -35,6 +35,9 @@ public final class MmmMod implements ModInitializer {
 		MmmRecipes.register();
 		registerDispenserBehaviors();
 		FluidProtocolServer.register();
+		mmm.simulation.SampleAnalysis.register();
+		mmm.network.ProcessTrendNetwork.register();
+		mmm.simulation.MaterialBoxItemStorage.register();
 		MmmCommands.register();
 		ServerLifecycleEvents.SERVER_STARTING.register(MmmRuntimeRegistry::start);
 		net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {
@@ -71,9 +74,23 @@ public final class MmmMod implements ModInitializer {
 			return net.minecraft.world.InteractionResult.PASS;
 		});
 		ServerTickEvents.END_SERVER_TICK.register(server -> MmmRuntimeRegistry.require(server).tick(server));
-		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) ->
-				MmmRuntimeRegistry.require(level.getServer())
-						.retryUnavailableContainerTransfers(level, chunk.getPos()));
+		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, newlyGenerated) -> {
+            var runtime = MmmRuntimeRegistry.require(level.getServer());
+            runtime.retryUnavailableContainerTransfers(level, chunk.getPos());
+            runtime.worldUpdates().chunksChanged();
+            if(runtime.pipes()!=null)runtime.pipes().chunkLoaded(level,chunk);
+            if (runtime.environment() != null) runtime.environment().markDirty(level.dimension().identifier().toString());
+        });
+        ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> {
+            var runtime = MmmRuntimeRegistry.find(level.getServer());
+            if(runtime!=null)runtime.worldUpdates().chunksChanged();
+            if (runtime != null && runtime.environment() != null)
+                runtime.environment().markDirty(level.dimension().identifier().toString());
+        });
+        ServerLifecycleEvents.BEFORE_SAVE.register((server, flush, forced) -> {
+            var runtime=MmmRuntimeRegistry.find(server);
+            if(runtime!=null)runtime.checkpointWorld(server);
+        });
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> MmmRuntimeRegistry.require(server).recoverWorld(server));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			MmmRuntime runtime = MmmRuntimeRegistry.find(server);

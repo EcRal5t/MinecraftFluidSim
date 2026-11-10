@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    " G ",
+    "ICI",
+    " R "
+  ],
+  "key": {
+    "G": "minecraft:glass_pane",
+    "I": "minecraft:iron_ingot",
+    "C": "minecraft:compass",
+    "R": "minecraft:redstone"
+  },
+  "result": {
+    "id": "mmm:field_probe",
+    "count": 1
+  }
+}

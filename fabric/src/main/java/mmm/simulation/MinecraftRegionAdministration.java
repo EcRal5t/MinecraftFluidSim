@@ -53,12 +53,4 @@ public final class MinecraftRegionAdministration {
 		};
 	}
 
-	public String recoverPreviousSelected(long expectedCurrentGeneration) {
-		FluidRegion selected = regions.selected();
-		if (selected == null) return "没有选中区域";
-		if (pendingRecovery.test(selected.id())) {
-			return "上一代恢复失败：区域存在未完成或不可识别的容器转移 WAL；禁止跨代回退";
-		}
-		return operations.recoverPreviousSelected(expectedCurrentGeneration);
-	}
 }

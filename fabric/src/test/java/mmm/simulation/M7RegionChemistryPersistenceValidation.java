@@ -250,8 +250,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		}
 		BlockPos controller = new BlockPos(14, 16, 15);
 		Set<Long> chunks = Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(1, 0), ChunkPos.pack(0, 1), ChunkPos.pack(1, 1));
-		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
-				interior, Set.of(controller.asLong()), chunks);
+		FluidRegionFootprint footprint = FluidRegionFootprint.selected(origin, new BlockPos(17, 17, 17), interior, chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 

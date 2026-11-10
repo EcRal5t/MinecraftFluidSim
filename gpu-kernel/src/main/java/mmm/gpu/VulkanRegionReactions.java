@@ -253,6 +253,7 @@ final class VulkanRegionReactions implements AutoCloseable {
                   solid.solidCaloric(), progress, configuration.fluids(), configuration.chemistry(), solid.registry(),
                   solid.cellSize(), configuration.gravity(), solid.faceGeometryWord(),
                   configuration.precipitationEnabled(), reaction.endOffset(), alignment,pool);
+        if (exchange != null) exchange.bindFixedMasks(solid.transitions().masksWord);
         long end = exchange == null ? reaction.endOffset() : exchange.endOffset;
         VulkanCondensedPhaseChange.Layout condensedPhase = null;
         if (condensed != null) {

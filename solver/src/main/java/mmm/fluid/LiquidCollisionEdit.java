@@ -110,7 +110,8 @@ final class LiquidCollisionEdit {
 		long[] beforeOccupied=domain.occupiedSolidSvq();for(int cell=0;cell<domain.cellCount;cell++)if(beforeOccupied[cell]!=occupied[cell])changed.add(cell);
 		var edit=HostMixtureEdit.prepare(domain,plan,occupied,masks,List.copyOf(changed));
 		plan=edit.inventory();var momentum=edit.momentum();var localGas=edit.gas();
-		var fixed=FixedGeometrySnapshot.fromMasks(domain.grid,masks);
+		var current=domain.geometry.cutCells.snapshot();
+		var fixed=FixedGeometrySnapshot.fromMasks(domain.grid,masks,current.copyExteriorMasks(),current.screens());
 		return new LiquidCollisionEdit(plan, momentum, localGas, fixed, removed);
 	}
 

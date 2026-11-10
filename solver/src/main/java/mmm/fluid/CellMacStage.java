@@ -133,7 +133,11 @@ final class CellMacStage {
 			if(domain.gasState.spatial==null||domain.gasState.sealedDomainBoundary)return true;
 			int cell=a<0?b:a;
 			int mask=masks==null?domain.geometry.cutCells.mask(cell):Byte.toUnsignedInt(masks[cell]),side=a<0?0:1;
-			for(int micro=0;micro<8;micro++)if((micro>>>axis&1)==side&&(mask&(1<<micro))==0)return false;
+			int exterior=domain.geometry.cutCells.snapshot().exteriorMask(cell,2*axis+side);
+			for(int u=0;u<2;u++)for(int v=0;v<2;v++) {
+				int micro=(side<<axis)|(u<<(axis==0?1:0))|(v<<(axis==2?1:2));
+				if((mask&(1<<micro))==0&&(exterior&(1<<(u+2*v)))==0)return false;
+			}
 			return true;
 		}
 		if(masks==null)return !(domain.geometry.cutCells.openFaceField(axis)[face]>0);

@@ -10,6 +10,14 @@ import java.util.Set;
 public record GranularTransferLedger(List<Group> groups) {
 	public static final int MAX_GROUPS = 16;
 
+    /** One material inventory and its carried internal energy, without a container size limit. */
+    public record Portion(Group inventory,double internalEnergy) {
+        public Portion {
+            java.util.Objects.requireNonNull(inventory);
+            if(!Double.isFinite(internalEnergy))throw new IllegalArgumentException("Invalid granular energy");
+        }
+    }
+
 	public GranularTransferLedger {
 		if (groups == null || groups.isEmpty() || groups.size() > MAX_GROUPS) {
 			throw new IllegalArgumentException("Granular transfer groups are empty or over budget");

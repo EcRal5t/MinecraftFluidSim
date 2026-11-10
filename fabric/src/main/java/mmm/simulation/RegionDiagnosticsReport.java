@@ -68,11 +68,11 @@ public final class RegionDiagnosticsReport {
 				.append("）");
 		boolean any = false;
 		for (FluidRegion region : regions.regions()) {
-			if (!region.controllerManaged()) continue;
+			if (!region.hasSelectedVolume()) continue;
 			any = true;
 			report.append("\n").append(operations.ownershipSummary(server, region));
 		}
-		if (!any) report.append("\n没有控制器区域");
+		if (!any) report.append("\n没有区域");
 		for (String issue : ownershipIssues.get()) report.append("\n! ").append(issue);
 		return report.toString();
 	}
@@ -99,7 +99,7 @@ public final class RegionDiagnosticsReport {
 			return String.format(
 					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %s, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
 					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regions.limits().maximumRegions(),
-					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), region.footprint().controllerPosition().toShortString(),
+					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), region.footprint().minimumInterior().toShortString(),
 					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
 					region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(), region.checkpointGeneration(),
 					UnitFormat.volume(SolverUnitScale.forCellSize(region.solverConfig().cellSize()).cubicMeters(region.checkpointVolume())),
@@ -125,8 +125,8 @@ public final class RegionDiagnosticsReport {
 		FluidRegionFootprint footprint = region.footprint();
 		String regionSource = footprint == null
 				? "command"
-				: "controller " + footprint.controllerPosition().toShortString() + ", boundary "
-						+ footprint.boundaryBlocks().size() + ", chunks " + footprint.requiredChunks().size();
+				: "selection " + footprint.minimumInterior().toShortString() + ", pool shell "
+						+ footprint.poolShellBlocks().size() + ", chunks " + footprint.requiredChunks().size();
 		String availability = region.availabilityDescription();
 		String gas = gasSummary(domain);
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";

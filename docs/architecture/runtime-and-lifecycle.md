@@ -1,6 +1,6 @@
 # 运行时与区域操作
 
-本文用于修改服务器启动、区域调度、运行状态和控制器操作。计算公式见 [流体求解器](fluid-solver.md)，磁盘提交见 [区域存档](region-state.md)。
+本文用于修改服务器启动、区域调度、运行状态和探针操作。计算公式见 [流体求解器](fluid-solver.md)，磁盘提交见 [区域存档](region-state.md)。
 
 - **启动、组装服务与停服**
   - 代码入口：
@@ -91,13 +91,13 @@ Vulkan 后端通过 `RegionApplicationService` 生成机械与热学设备候选
 |---|---|
 | `ACTIVE` | 按 20 Hz 目标推进 |
 | `REDUCED` | 单步超过 40 ms 后，按 1–4 tick 间隔推进完整的一步 |
-| `PAUSED` | 玩家暂停，或区域因外壳、身份、数值问题暂时停止计算 |
+| `PAUSED` | 玩家暂停，或区域因身份、数值问题暂时停止计算 |
 | `PERFORMANCE_PAUSE` | 连续三步超过 200 ms 后暂停，可通过 `run` 或手动 `step` 重试 |
 | `UNLOADED` | 释放求解器数组，保留区域元数据和预算预留 |
 
 存档记录玩家运行意图、恢复状态、执行间隔和 tick。连续过载、恢复计数属于本次进程的调度记录。性能重试清除这次耗时记录；数值失败仍按其具体原因处理。
 
-新控制器首次成功提交后开始运行。外壳破损造成的暂停保留玩家意图，条件恢复后按该意图继续。世界区块缺失时，关联的物理活动组等待并保留库存；所有开放活动组均不可用时设置 `CHUNK_MISSING`。
+新选区首次成功提交后开始运行。方块变化刷新碰撞与热接触，玩家运行意图保持不变。世界区块缺失时，关联的物理活动组等待并保留库存；所有开放活动组均不可用时设置 `CHUNK_MISSING`。
 
 <a id="candidate"></a>
 ## 后端计算与提交
@@ -106,7 +106,7 @@ Vulkan 后端通过 `RegionApplicationService` 生成机械与热学设备候选
 力学计算使用 [FluidStepRequest](../../solver/src/main/java/mmm/fluid/FluidStepRequest.java) / [FluidStepCandidate](../../solver/src/main/java/mmm/fluid/FluidStepCandidate.java)，
 单独热计算使用 [FluidThermalStepRequest](../../solver/src/main/java/mmm/fluid/FluidThermalStepRequest.java) / [FluidThermalStepCandidate](../../solver/src/main/java/mmm/fluid/FluidThermalStepCandidate.java)。
 
-后端在私有状态上完成计算。`RegionApplicationService` 检查后端标识、紧邻代次和完整 `Layout`，其中包括网格、求解配置、预算、外壳、载体种类、注册表指纹和功能配置。`FluidRegionRepository` 在替换当前状态前再次核对区域身份。
+后端在私有状态上完成计算。`RegionApplicationService` 检查后端标识、紧邻代次和完整 `Layout`，其中包括网格、求解配置、预算、几何、载体种类、注册表指纹和功能配置。`FluidRegionRepository` 在替换当前状态前再次核对区域身份。
 
 候选持有完整设备后继，成功采用时交接一次；失败或过期候选释放资源，已提交代保持有效。成功结果向 Minecraft 层返回本步统计和实体作用冲量。布局、容量或收支失败时报告对应原因。
 
@@ -120,23 +120,23 @@ Vulkan 后端通过 `RegionApplicationService` 生成机械与热学设备候选
 
 新区域在首次 HEAD 提交成功后登记。恢复时，已经提交的元数据先登记，再检查当前预算和运行条件。暂时超出预算的区域仍保留身份与预留量，等待以后恢复求解器。
 
-[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。世界区块缺失时检查已加载外壳，并按物理连通关系暂停受影响的组。冷恢复先导入已保存几何生成分组，再刷新可用组的世界碰撞；碰撞改变后重新计算分组。
+[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算和区块。数值或归属问题在原处阻止运行；政策或预算造成的卸载需要先成功保存完整 checkpoint。世界区块缺失时按物理连通关系暂停受影响的组。冷恢复先导入已保存几何生成分组，再刷新可用组的世界碰撞；碰撞改变后重新计算分组。
 
 冷恢复通过 `RegionRepositoryAdapter.restoreIncrementally` 分批读取同一 HEAD 的 section。完整区域磁盘库存到齐后构造宿主状态，并在世界区块可用后导入设备。世界区块缺失期间保留读取进度；缺失或损坏的磁盘分片保留具体恢复错误。
 
 [RegionAvailabilityReason](../../api/src/main/java/mmm/api/RegionAvailabilityReason.java) 给出具体不可用原因。
-控制器扫描在 [controller 包](../../fabric/src/main/java/mmm/simulation/controller/)：它检查已经加载的世界，要求唯一封闭内腔、完整所需区块、无重叠且预算足够。
+[MinecraftRegionActivation](../../fabric/src/main/java/mmm/simulation/MinecraftRegionActivation.java) 预检选区、所需区块、重叠和预算；实际碰撞由世界方块采样。
 
 <a id="console"></a>
-## 控制器查询和确认操作
+## 区域查询和确认操作
 
-[MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java) 先校验服务器线程、玩家距离、控制器方块和区域归属。
+[MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java) 先校验服务器线程、玩家距离、目标位置和区域归属。
 [ControllerSummaryAdapter](../../fabric/src/main/java/mmm/simulation/ControllerSummaryAdapter.java) 提供摘要数据，`ControllerQueryUseCase` 验证身份和字段后，
 生成摘要并签发绑定玩家与区域的一次性令牌。
 
 查询失败时返回失败状态。`UNLOADED` 区域显示已知元数据与未加载状态；实时库存在求解器加载后查询。
 
-普通玩家可选择、暂停、继续和刷新控制器，运行意图由 `RegionLifecycleUseCase` 按可写状态与现有意图判定。显式继续或刷新可重试性能暂停，数值故障保持可见。清空、排气、释放归属和删除采用预览与确认两步：
+普通玩家可选择、暂停、继续和刷新区域，运行意图由 `RegionLifecycleUseCase` 按可写状态与现有意图判定。显式继续或刷新可重试性能暂停，数值故障保持可见。清空、排气、释放归属和删除采用预览与确认两步：
 
 1. 玩家先暂停区域。`MinecraftRegionLifecycle` 使用与 Brigadier 命令相同的管理员权限，授权且可写后准备待处理相变，再收集区域、物品事务、库存和设备状态。
 2. 用例生成有效期为 200 tick 的预览，列出实际移除量和阻止执行的原因。
@@ -147,9 +147,9 @@ Vulkan 后端通过 `RegionApplicationService` 生成机械与热学设备候选
 
 摘要响应区分主动打开与操作回复。回复携带原请求代次，仅由仍等待该请求的同维度、同目标页面接收；目标消失时关闭对应页面。预览取消返回携带新令牌的摘要，确认提交后关闭页面不会被迟到回复重新打开。界面提供换行与滚动，请求期间禁用重复提交。
 
-单纯性能暂停允许规定的库存操作。数值暂停区域在已加载且 HEAD、注册表和事务日志均可验证时，也可通过私有候选执行清理。具体操作仍会检查外壳、归属、未完成事务、收支和设备状态，并在预览中列出阻止原因。
+单纯性能暂停允许规定的库存操作。数值暂停区域在已加载且 HEAD、注册表和事务日志均可验证时，也可通过私有候选执行清理。具体操作仍会检查归属、未完成事务、收支和设备状态，并在预览中列出阻止原因。
 
-排气把逐格气体库存、内能与携带动能结算为外部去向，形成密闭真空。释放和删除按实际库存及内能判定空区域。操作后区域保持暂停，玩家可显式恢复运行。
+排气把逐格气体库存、内能与携带动能结算为外部去向，形成密闭真空。释放和删除按实际库存及内能判定区域；标准组成空气及其内能可交还环境，其他气体先显式排出。操作后区域保持暂停，玩家可显式恢复运行。
 
 <a id="phase-work"></a>
 ## 转移前同步相变几何
@@ -159,13 +159,11 @@ Vulkan 后端通过 `RegionApplicationService` 生成机械与热学设备候选
 它通过当前后端执行一次仅含力学的计算，完成已有相变几何的力学同步。该次计算跳过导热、反应和相变，完成后清除已有待推进格。提交成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
 
 <a id="world-inputs"></a>
-## 控制器液位与比较器
+## 传感器与区域观察
 
-`FluidControllerBlock.getAnalogOutputSignal` 通过 `MinecraftRegionObservation.controllerComparatorSignal` 读取 `ControllerComparatorSignals` 的已提交缓存。输出采用原版容器比例：空液为0；正液量输出 `1 + floor(14 × min(1, 液体体积／固定开放容量))`，满液为15。分母是固定方块碰撞留下的内腔容量，包含颗粒和连续固相所在的几何空间；实体、颗粒或固相运动均使用同一容量标尺。固定容量由 `FixedGeometrySnapshot` 构造时累加，读取为常数成本。固定方块碰撞改变时使用新的几何容量。
+`ProcessSensorBlockEntity` 保存测量类型、范围、阈值及输出。`IndustrialOperations.tickSensor` 每四个游戏 tick 读取目标区域的已提交观察：液位按测量范围内液体体积与固定开放体积计算，温度按对应相的质量加权，压力和流量读取对应的实际状态。配置的上下限、方向与模拟／开关模式转换成 0—15 红石信号；目标区域不可用时输出零。
 
-`FluidRegion` 在成功采用运动、热、容器和生命周期候选，以及可用性、卸载、恢复改变后发布集中观察；`FluidRegionManager` 统一登记、替换和移除观察对象。快照发布入口补齐直接库存编辑，更新发生在检查在线玩家之前。`ControllerComparatorSignals` 仅在实际信号改变时通知原生比较器，不按 tick 扫描区域库存。主动暂停和静水平衡休眠保留稳定信号；区域不可用、卸载、移除和未激活时输出0。
-
-比较器读取只访问位置缓存，不加载区块、不恢复求解器、不唤醒区域、不生成网络快照，也不提交 checkpoint。服务端恢复区域后由相同观察入口重新发布液位。
+区域提交和可用性变化由 `FluidRegion` 发布集中观察，`FluidRegionManager` 登记、替换和移除观察对象。传感器输出变化时通知相邻方块；读取信号本身使用方块实体保存的值。
 
 ## 实体与碰撞输入
 
