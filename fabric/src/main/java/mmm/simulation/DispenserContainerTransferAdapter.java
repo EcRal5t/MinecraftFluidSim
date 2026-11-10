@@ -66,11 +66,12 @@ public final class DispenserContainerTransferAdapter {
 		if (MinecraftContainerTransferOperations.thermalTransferFailure(world, region, stack, kind) != null) {
 			return stack;
 		}
-		int[] cell = transferTarget.outward()==null?transferTarget.cell():transferTarget.cell(MinecraftContainerTransferOperations.contactQuantity(kind),inventoryDecrease);
+		var edit = region.beginHostEdit();
+		int[] cell = transferTarget.outward()==null?transferTarget.cell():transferTarget.cell(MinecraftContainerTransferOperations.contactQuantity(kind),inventoryDecrease,edit);
 		if (cell == null) return stack;
 
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				transactions, world, region, cell, stack, false, 0);
+				transactions, world, region, cell, edit, stack, false, 0);
 		if (!resolution.resolved()) return stack;
 		MinecraftContainerTransferPlan plan = resolution.plan();
 

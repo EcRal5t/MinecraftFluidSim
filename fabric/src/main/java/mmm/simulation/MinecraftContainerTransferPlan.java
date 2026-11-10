@@ -22,6 +22,8 @@ final class MinecraftContainerTransferPlan {
 	private final CommittedWorldRegistries world;
 	private final FluidRegion region;
 	private final int[] cell;
+	private mmm.fluid.HostFluidState edit;
+	private final long editGeneration;
 	private ItemStack sourceStack;
 	private final MinecraftContainerTransferOperations.TransferKind kind;
 	private final ContainerTransferJournal.Operation operation;
@@ -43,6 +45,7 @@ final class MinecraftContainerTransferPlan {
 			CommittedWorldRegistries world,
 			FluidRegion region,
 			int[] cell,
+			mmm.fluid.HostFluidState edit,
 			ItemStack sourceStack,
 			MinecraftContainerTransferOperations.TransferKind kind,
 			ContainerTransferJournal.Operation operation,
@@ -59,6 +62,8 @@ final class MinecraftContainerTransferPlan {
 		this.world = world;
 		this.region = region;
 		this.cell = cell;
+		this.edit = edit;
+		this.editGeneration = region.solverGeneration();
 		this.sourceStack = sourceStack;
 		this.kind = kind;
 		this.operation = operation;
@@ -78,6 +83,7 @@ final class MinecraftContainerTransferPlan {
 			CommittedWorldRegistries world,
 			FluidRegion region,
 			int[] cell,
+			mmm.fluid.HostFluidState edit,
 			ItemStack sourceStack,
 			boolean externalSource, int transferRadius
 	) {
@@ -129,7 +135,7 @@ final class MinecraftContainerTransferPlan {
 				}
 				case SCOOP -> {
 					base = MinecraftContainerTransferOperations.heldBaseVolumeNanos(sourceStack);
-					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
+					requested = MinecraftContainerTransferOperations.extractableNanos(edit, cell,
 							MinecraftContainerTransferOperations.heldFreeNanos(sourceStack), transferRadius, waterMaterial(region));
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的水体");
 				}
@@ -157,7 +163,7 @@ final class MinecraftContainerTransferPlan {
 						return new Resolution(null, "材料功能门未开启");
 					}
 					if (!region.hasMaterialState()) return new Resolution(null, "该区域不是材料区域");
-					requested = MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(), cell,
+					requested = MinecraftContainerTransferOperations.extractableNanos(edit, cell,
 							ContainerFluidLedger.NANOS_PER_BLOCK, transferRadius, -1);
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的材料流体");
 				}
@@ -195,21 +201,21 @@ final class MinecraftContainerTransferPlan {
 		}
 		if (requested <= 0L) return new Resolution(null, "容器转移请求没有正库存");
 		ThermalContents thermal = MinecraftContainerTransferOperations.thermalContents(sourceStack);
-		return new Resolution(new MinecraftContainerTransferPlan(transactions, world, region, cell, sourceStack, kind,
+		return new Resolution(new MinecraftContainerTransferPlan(transactions, world, region, cell, edit, sourceStack, kind,
 				operation, resourceKind, requested, base, externalSource, transferRadius,
 				mixture, chemical, granular, thermal), null);
 	}
 
 	static Resolution resolveDirected(MinecraftContainerTransactionAdapter transactions,CommittedWorldRegistries world,
-			FluidRegion region,int[] cell,ItemStack item,boolean extract) {
+			FluidRegion region,int[] cell,mmm.fluid.HostFluidState edit,ItemStack item,boolean extract) {
 		if(!extract) {
-			var result=resolve(transactions,world,region,cell,item,false,0);
+			var result=resolve(transactions,world,region,cell,edit,item,false,0);
 			if(result.resolved())result.plan().directed=true;
 			return result;
 		}
 		boolean solid=item.getItem() instanceof GranularContainerItem, gas=item.getItem() instanceof mmm.item.GasContainerItem;
 		var empty=new ItemStack(gas?mmm.item.MmmItems.GAS_CONTAINER:solid?mmm.item.MmmItems.GRANULAR_CONTAINER:mmm.item.MmmItems.MATERIAL_BUCKET);
-		var result=resolve(transactions,world,region,cell,empty,false,0);
+		var result=resolve(transactions,world,region,cell,edit,empty,false,0);
 		if(result.resolved()){
 			var plan=result.plan();plan.directed=true;plan.collectionBase=item.copy();plan.sourceStack=item.copy();
 			long used=gas?(mmm.item.GasContainerItem.contents(item)==null?0:mmm.item.GasContainerItem.contents(item).inventory().standardVolumeNanos()):solid?(GranularContainerItem.unvalidatedContents(item)==null?0:GranularContainerItem.unvalidatedContents(item).totalSolidVolumeSvq()):Math.max(0,MaterialBucketItem.volume(item));
@@ -274,8 +280,7 @@ final class MinecraftContainerTransferPlan {
 	}
 
 	MinecraftContainerTransferOperations.TransferOutcome executeUnmanaged() {
-		long generation = region.solverGeneration();
-		var edit = region.beginHostEdit();
+		long generation = editGeneration;
 		var candidate = region.lifecycleCandidate(edit, region.paused());
 		var outcome = executeExact(candidate, requestedAmount, baseAmount);
 		if (outcome != null && outcome.transferred()) {
@@ -295,18 +300,18 @@ final class MinecraftContainerTransferPlan {
 		if (descriptorActor) {
 			return transactions.executeCreativeSource(region, level, actor,
 					actorBefore, sourceStack, resourceKind, requestedAmount,
-					this::executeExact, (rawAfter, before) -> before.copy());
+					this::executeExact, (rawAfter, before) -> before.copy(), edit, editGeneration);
 		}
 		return transactions.executeResolvedSource(region, level, actor, actorBefore, sourceStack,
 				operation, resourceKind, requestedAmount, baseAmount, this::executeExact,
-				(rawAfter, before) -> externalSource && operation == ContainerTransferJournal.Operation.INSERT ? before.copy() : rawAfter);
+				(rawAfter, before) -> externalSource && operation == ContainerTransferJournal.Operation.INSERT ? before.copy() : rawAfter, edit, editGeneration);
 	}
 
 	/** Uses the same durable transaction as the world adapter after the region target is resolved. */
 	MinecraftContainerTransactionAdapter.Result executeManagedForRegion(ContainerTransferActor actor, ItemStack actorBefore) {
 		return transactions.executeForRegion(region, actor, actorBefore, sourceStack, operation, resourceKind,
 				requestedAmount, baseAmount, this::executeExact,
-				(rawAfter, before) -> externalSource && operation == ContainerTransferJournal.Operation.INSERT ? before.copy() : rawAfter, null);
+				(rawAfter, before) -> externalSource && operation == ContainerTransferJournal.Operation.INSERT ? before.copy() : rawAfter, null, edit, editGeneration);
 	}
 
 	boolean filled() { return operation == ContainerTransferJournal.Operation.INSERT; }
@@ -315,6 +320,9 @@ final class MinecraftContainerTransferPlan {
 	}
 	long requestedAmount() { return Math.min(requestedAmount,collectionSpace); }
 	long baseAmount() { return baseAmount; }
+	void discardEdit() { edit = null; }
+	mmm.fluid.HostFluidState edit() { return edit; }
+	long editGeneration() { return editGeneration; }
 	ItemStack sourceStack() { return sourceStack.copy(); }
 	ContainerTransferJournal.ResourceKind resourceKind() { return resourceKind; }
 

@@ -83,11 +83,12 @@ final class MinecraftContainerTransactionAdapter {
 			ContainerTransferJournal.ResourceKind resourceKind,
 			long requestedAmount,
 			TransferExecutor executor,
-			FinalItemResolver finalItemResolver
+			FinalItemResolver finalItemResolver, HostFluidState edit, long editGeneration
 	) {
-		return execute(region, level, actor, descriptorStack, resolvedSourceStack,
+		if (!region.dimension().equals(level.dimension())) throw new IllegalArgumentException("容器与区域位于不同维度");
+		return executeForRegion(region, actor, descriptorStack, resolvedSourceStack,
 				ContainerTransferJournal.Operation.INSERT, resourceKind, requestedAmount, 0L,
-				executor, finalItemResolver);
+				executor, finalItemResolver, null, edit, editGeneration);
 	}
 
 	/** Creative gas has no item inventory; operation UUID, actual settlement and HEAD identify the edit. */
@@ -127,8 +128,9 @@ final class MinecraftContainerTransactionAdapter {
 	Result executeResolvedSource(FluidRegion region, ServerLevel level, ContainerTransferActor actor,
 			ItemStack beforeStack, ItemStack sourceStack, ContainerTransferJournal.Operation operation,
 			ContainerTransferJournal.ResourceKind kind, long requested, long base, TransferExecutor executor,
-			FinalItemResolver finalItemResolver) {
-		return execute(region, level, actor, beforeStack, sourceStack, operation, kind, requested, base, executor, finalItemResolver);
+			FinalItemResolver finalItemResolver, HostFluidState edit, long editGeneration) {
+		if (!region.dimension().equals(level.dimension())) throw new IllegalArgumentException("容器与区域位于不同维度");
+		return executeForRegion(region, actor, beforeStack, sourceStack, operation, kind, requested, base, executor, finalItemResolver, null, edit, editGeneration);
 	}
 	private Result execute(FluidRegion region,ServerLevel level,ContainerTransferActor actor,
 			ItemStack beforeStack,ItemStack sourceStack,ContainerTransferJournal.Operation operation,
@@ -144,6 +146,13 @@ final class MinecraftContainerTransactionAdapter {
 			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
 			long requestedAmount, long baseAmount, TransferExecutor executor, FinalItemResolver finalItemResolver,
 			UUID publicOperationId) {
+		return executeForRegion(region, actor, beforeStack, sourceStack, operation, resourceKind, requestedAmount, baseAmount, executor, finalItemResolver, publicOperationId, null, -1);
+	}
+
+	Result executeForRegion(FluidRegion region, ContainerTransferActor actor, ItemStack beforeStack, ItemStack sourceStack,
+			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
+			long requestedAmount, long baseAmount, TransferExecutor executor, FinalItemResolver finalItemResolver,
+			UUID publicOperationId, HostFluidState edit, long editGeneration) {
 		Objects.requireNonNull(region, "region");
 		Objects.requireNonNull(executor, "executor");
 		Objects.requireNonNull(finalItemResolver, "finalItemResolver");
@@ -157,7 +166,7 @@ final class MinecraftContainerTransactionAdapter {
 		}
 
 		ContainerTransferCoordinator.RegionPort regionPort = new RegionPort(
-				region, beforeStack, executor, finalItemResolver);
+				region, beforeStack, executor, finalItemResolver, edit, editGeneration);
 		ContainerTransferCoordinator coordinator = new ContainerTransferCoordinator(recovery, regionPort, faults);
 		ContainerTransferUseCase useCase = new ContainerTransferUseCase(coordinator);
 		ContainerTransferUseCase.Result result = useCase.execute(new ContainerTransferUseCase.Command(
@@ -224,27 +233,31 @@ final class MinecraftContainerTransactionAdapter {
 		private final FinalItemResolver finalItemResolver;
 		private HostFluidState candidateDomain;
 		private boolean candidateOperatorPaused;
+		private final long editGeneration;
 
 		private RegionPort(
 				FluidRegion region,
 				ItemStack beforeStack,
 				TransferExecutor executor,
-				FinalItemResolver finalItemResolver
+				FinalItemResolver finalItemResolver, HostFluidState edit, long editGeneration
 		) {
 			this.region = region;
 			this.beforeStack = beforeStack;
 			this.executor = executor;
 			this.finalItemResolver = finalItemResolver;
+			this.candidateDomain = edit;
+			this.editGeneration = editGeneration;
 		}
 
 		@Override
 		public ContainerTransferCoordinator.Execution execute(ContainerTransferUseCase.Command command) {
 			if (regions.region(command.regionId()) != region || !region.solverLoaded()
-					|| region.checkpointGeneration() != command.baseGeneration()) {
+					|| region.checkpointGeneration() != command.baseGeneration()
+					|| candidateDomain != null && region.solverGeneration() != editGeneration) {
 				return new ContainerTransferCoordinator.Execution(false, null,
 						"容器转移目标在 WAL 准备前后发生变化", 0L, null);
 			}
-			candidateDomain = region.beginHostEdit();
+			if (candidateDomain == null) candidateDomain = region.beginHostEdit();
 			candidateOperatorPaused = region.paused();
 			FluidRegion candidate = region.lifecycleCandidate(candidateDomain, candidateOperatorPaused);
 			MinecraftContainerTransferOperations.TransferOutcome raw =

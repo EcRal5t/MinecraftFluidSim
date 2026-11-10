@@ -112,9 +112,10 @@ final class FabricTransferApi implements MmmTransferApi {
 			var target=portTarget(actor,region,request);
 			if(target==null) return result(TransferStatus.INVALID_REQUEST,
 					"Block inventory must touch the outward side of a fluid port and target its adjacent interior");
-			int[] cell=target.cell(request.quantity(),request.direction()==TransferRequest.Direction.EXTRACT);
+			var edit=region.beginHostEdit();
+			int[] cell=target.cell(request.quantity(),request.direction()==TransferRequest.Direction.EXTRACT,edit);
 			if(cell==null) return result(TransferStatus.NOT_TRANSFERRED,"接口接触面没有可用库存或空间");
-			var resolution=MinecraftContainerTransferPlan.resolveDirected(transactions,world,region,cell,actor.item().copy(),request.direction()==TransferRequest.Direction.EXTRACT);
+			var resolution=MinecraftContainerTransferPlan.resolveDirected(transactions,world,region,cell,edit,actor.item().copy(),request.direction()==TransferRequest.Direction.EXTRACT);
 			if(!resolution.resolved()) return result(TransferStatus.NOT_TRANSFERRED,resolution.diagnostic());
 			var operation=resolution.plan();
 			boolean insert=request.direction()==TransferRequest.Direction.INSERT;
@@ -122,8 +123,9 @@ final class FabricTransferApi implements MmmTransferApi {
 					|| (operation.resourceKind()==ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS)!=(request.quantity() instanceof TransferQuantity.Gas))
 				return result(TransferStatus.INVALID_REQUEST,"Request direction or quantity does not match the actual container inventory");
 			long maximum=amount(request.quantity());
-			var candidate=region.lifecycleCandidate(region.beginHostEdit(),region.paused());
+			var candidate=region.lifecycleCandidate(edit,region.paused());
 			var outcome=operation.executeExact(candidate,Math.min(maximum,operation.requestedAmount()),operation.baseAmount());
+			operation.discardEdit();
 			if(outcome==null || !outcome.transferred()) return result(TransferStatus.NOT_TRANSFERRED,outcome==null?"No inventory transferred":outcome.message());
 			if(outcome.resourceAmount()>maximum) return result(TransferStatus.NOT_TRANSFERRED,"Container cannot settle the requested bounded amount");
 			var before=ContainerItemMapper.fingerprint(actor.item());

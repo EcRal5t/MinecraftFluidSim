@@ -156,7 +156,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 设备准备同代固定几何、相占据与物性，以共享有限应变冲量结算黏性，再计算力和一个有界批次的半隐式共同压力。上风开放微盒与液面平面裁剪普通面扫掠需求，两相按有限驻留时间接受出流，共同面速度由实际接受量确定。运动体的压力、反冲与外功使用源态共同压力；目标姿态关闭孔容时，沿源开放面的连通关系将库存直接重映射至仍有孔容的格。液气质量、组分、携带内能、动量与耗散热使用同一组路由，局部状态方程和气体压缩功按后继库存与目标孔容结算。无可达接收空间时保留已提交状态与世界刷新请求。
 
-液体输运按来源温度、各份实际质量与组成分配携带内能；液体热容由载体材料曲线和质量决定。导热、反应和相变按完整请求时长执行，共用输运后的接触几何。导热以载体有限热容和接触热导计算成对热量，流体与有限墙的两端使用同一接受量；高刚性接触会减慢趋近平衡的速度。
+液体输运按来源温度、各份实际质量与组成分配携带内能；液体热容由载体材料曲线和质量决定。导热、反应和相变按完整请求时长执行，共用输运后的接触几何。导热以载体有限热容和接触热导计算成对热量，流体与有限墙的两端使用同一接受量；高刚性接触会减慢趋近平衡的速度。液体壁面共用自然与强制对流膜闭合，读取同代物性、区域重力和相对切向速度，与实际润湿面积、墙厚及墙导热率共同形成热阻。完整步和独立热步共用该接触流程，公式见[热状态](thermal-state.md#共同凝聚相有限体积导热)。
 
 相转换共用液相候选行，按精确库存接受完整物种批次，为残余物种保留实际质量和体积，并保存实际物料和能量账。气液接触合并录制局部提案与交换，每条规则依据已接受库存和内能计算当前温度、热容与共同压力；传质响应包含组成和潜热的温度反馈，湿面与干壁复用同一状态方程。各阶段更新组成、温度和局部热力学状态，提交前统一重建相形状。
 
@@ -180,7 +180,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMaterialRoutes.java)、[VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidGather.java)、[VulkanLiquidMomentum](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidMomentum.java)：物质输运、归并及动量。
 - [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMechanicalEnergy.java)：液气与颗粒的共同机械能结算；外侧面混合热按实际质量分配，连通体沿真实外排气路完全排空后将剩余机械能记入环境交换。
 - [VulkanGranularMotion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularMotion.java)、[VulkanGranularTransitions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGranularTransitions.java)：颗粒运动、筛面截留与床层迁移；气体占容随共同局部状态更新。
-- [VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)、[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：实际组成的热载体、接触热导、成对有限热交换与反应。
+- [VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)、[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：实际组成的热载体、共同壁面对流膜、接触热导、成对有限热交换与反应；`runGpuThermalContactsBenchmark` 核对热导及有限热量。
 - [FixedSurfaceState](../../model/src/main/java/mmm/thermal/FixedSurfaceState.java)、[SurfaceMaterialDefinition](../../model/src/main/java/mmm/thermal/SurfaceMaterialDefinition.java)、[SurfaceThermalState](../../model/src/main/java/mmm/thermal/SurfaceThermalState.java)：固定表面库存、数据定义与有限墙温度；[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java) 结算实际吸附与解吸，[VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java) 应用接触催化。
 - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidThermodynamics.java)、[liquid-caloric-state.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-caloric-state.glsl)：载体分段热容和温度反演，供库存与扩散携能共用。
 - [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasThermodynamics.java)、[gas-thermodynamics.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp)、[gas-caloric.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-caloric.glsl)：气体组成物性和共享分段温度反演；热状态发布与相间传质从实际库存和内能求值，纯内能变化复用当前热容段，跨段时执行完整反演。
@@ -205,7 +205,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：宿主共享相几何与局部状态方程压力查询。
 - [MovingBodyWetGeometry](../../solver/src/main/java/mmm/fluid/MovingBodyWetGeometry.java)、[WaterContactGeometry](../../solver/src/main/java/mmm/fluid/WaterContactGeometry.java)：基于共享 PLIC 和逐格气压计算实体浸液、压力作用与水接触。
 - [FluidRegionFactory](../../fabric/src/main/java/mmm/simulation/FluidRegionFactory.java)、[FluidRegionWorldInteraction](../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java)：创建与世界碰撞。
-- [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)、[OwnershipTransactionCoordinator](../../fabric/src/main/java/mmm/simulation/OwnershipTransactionCoordinator.java)：容器与世界归属事务。
+- [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)、[OwnershipTransactionCoordinator](../../fabric/src/main/java/mmm/simulation/OwnershipTransactionCoordinator.java)：容器与世界归属事务。容器接触选择、请求解析和执行共用单笔操作的宿主候选，提交核对求解代次；公开预览释放其候选，正式提交按当前状态重新计算实际接受量。
 
 <a id="persistence"></a>
 ## 保存和故障恢复

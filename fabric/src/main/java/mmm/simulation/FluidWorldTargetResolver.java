@@ -184,14 +184,19 @@ final class FluidWorldTargetResolver {
 	/** Selects an actual contact cell on the port's block face for one bounded transfer. */
 	static int[] transferCell(FluidRegion region, BlockPos position, Direction outward,
 			mmm.api.transfer.TransferQuantity quantity, boolean extract) {
+		if (outward == null || !region.solverLoaded()) return null;
+		return transferCell(region, position, outward, quantity, extract, region.hostSnapshot());
+	}
+
+	static int[] transferCell(FluidRegion region, BlockPos position, Direction outward,
+			mmm.api.transfer.TransferQuantity quantity, boolean extract, mmm.fluid.HostFluidState host) {
 		if(outward==null || !region.solverLoaded())return null;
 		int scale=Math.round(1.0f/region.solverConfig().cellSize());
 		int axis=outward.getAxis()==Direction.Axis.X?0:outward.getAxis()==Direction.Axis.Y?1:2;
 		var origin=region.origin();int[] base={(position.getX()-origin.getX())*scale,(position.getY()-origin.getY())*scale,(position.getZ()-origin.getZ())*scale};
 		base[axis]+=outward.getAxisDirection()==Direction.AxisDirection.NEGATIVE?0:scale-1;
-		var host=region.hostSnapshot();var solids=extract && quantity instanceof mmm.api.transfer.TransferQuantity.Granular ? host.exportGranularState() : null;
+		var solids=extract && quantity instanceof mmm.api.transfer.TransferQuantity.Granular ? host.exportGranularState() : null;
 		if(extract && quantity instanceof mmm.api.transfer.TransferQuantity.Granular && solids==null)return null;
-		var gas=extract && quantity instanceof mmm.api.transfer.TransferQuantity.Gas ? host.captureAuthoritativeState().spatialGas() : null;
 		int lowBits=axis==0?0x55:axis==1?0x33:0x0f;
 		int faceBits=outward.getAxisDirection()==Direction.AxisDirection.NEGATIVE?lowBits:(lowBits^0xff);
 		boolean solidInput=!extract && quantity instanceof mmm.api.transfer.TransferQuantity.Granular;
@@ -200,7 +205,7 @@ final class FluidWorldTargetResolver {
 		for(int u=0;u<scale;u++)for(int v=0;v<scale;v++) {
 			int[] cell=base.clone();cell[(axis+1)%3]+=u;cell[(axis+2)%3]+=v;
 			int index=region.grid().cell(cell[0],cell[1],cell[2]);
-			if(index<0 || !region.groupAvailable(index) || (region.solidMicroMask(cell[0],cell[1],cell[2])&faceBits)==faceBits)continue;
+			if(index<0 || !region.groupAvailable(index) || (host.solidMicroMask(cell[0],cell[1],cell[2])&faceBits)==faceBits)continue;
 			if(!extract) {
 				double volume=host.volume(cell[0],cell[1],cell[2]);
 				double room=gasInput?host.cellGasVolume(cell[0],cell[1],cell[2]):host.cellCondensedRoom(cell[0],cell[1],cell[2]);
@@ -218,7 +223,7 @@ final class FluidWorldTargetResolver {
 							&& (int)Math.floor(parcel.z()/region.solverConfig().cellSize())==cell[2])amount+=parcel.solidVolumeSvq();
 				}
 			} else if(quantity instanceof mmm.api.transfer.TransferQuantity.Gas) {
-				amount=gas==null?0:gas.cells().get(index).standardVolumeNanos();
+				amount=host.cellGasStandardVolumeNanos(index);
 			} else amount=host.volume(cell[0],cell[1],cell[2]);
 			if(amount>0 && amount>bestVolume){best=cell;bestVolume=amount;}
 		}
@@ -371,7 +376,7 @@ final class FluidWorldTargetResolver {
 
 	record TransferTarget(FluidRegion region, BlockPos interiorBlock, Direction outward) {
 		int[] cell() { return cellAtInteriorFace(region, interiorBlock, outward); }
-		int[] cell(mmm.api.transfer.TransferQuantity quantity,boolean extract) { return transferCell(region,interiorBlock,outward,quantity,extract); }
+		int[] cell(mmm.api.transfer.TransferQuantity quantity,boolean extract, mmm.fluid.HostFluidState host) { return transferCell(region,interiorBlock,outward,quantity,extract,host); }
 	}
 
 	@FunctionalInterface

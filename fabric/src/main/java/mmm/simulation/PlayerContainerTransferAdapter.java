@@ -97,15 +97,16 @@ public final class PlayerContainerTransferAdapter {
 			message(player, thermalFailure);
 			return InteractionResult.FAIL;
 		}
+		var edit = region.beginHostEdit();
 		int[] cell = target != null
-				? target.outward()==null?target.cell():target.cell(MinecraftContainerTransferOperations.contactQuantity(kind),!pouring)
+				? target.outward()==null?target.cell():target.cell(MinecraftContainerTransferOperations.contactQuantity(kind),!pouring,edit)
 				: kind == MinecraftContainerTransferOperations.TransferKind.GRANULAR_SCOOP
 						? targets.aimedGranularCellNear(player, region)
 						: targets.aimedCellNear(player, region, true);
 		if (cell == null) return null;
 
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				transactions, world, region, cell, held, player.hasInfiniteMaterials(),
+				transactions, world, region, cell, edit, held, player.hasInfiniteMaterials(),
 				(target != null && target.outward() != null) || (kind == MinecraftContainerTransferOperations.TransferKind.MATERIAL_SCOOP && player.isShiftKeyDown()) ? 0 : 6);
 		if (!resolution.resolved()) {
 			message(player, resolution.diagnostic());
@@ -172,12 +173,13 @@ public final class PlayerContainerTransferAdapter {
 				|| !ensureAvailableFor(player, region)) return InteractionResult.FAIL;
 		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
 		ItemStack actual = resolved.actualStack();
-		int[] cell = target.outward()==null?target.cell():target.cell(MinecraftContainerTransferOperations.contactQuantity(MinecraftContainerTransferOperations.classify(actual)),false);
+		var edit = region.beginHostEdit();
+		int[] cell = target.outward()==null?target.cell():target.cell(MinecraftContainerTransferOperations.contactQuantity(MinecraftContainerTransferOperations.classify(actual)),false,edit);
 		if (cell == null) return InteractionResult.FAIL;
 
 		ContainerTransferActor actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
 		MinecraftContainerTransferPlan.Resolution resolution = MinecraftContainerTransferPlan.resolve(
-				transactions, world, region, cell, actual, true, target.outward() == null ? 6 : 0);
+				transactions, world, region, cell, edit, actual, true, target.outward() == null ? 6 : 0);
 		if (!resolution.resolved()) {
 			message(player, resolution.diagnostic());
 			return InteractionResult.FAIL;

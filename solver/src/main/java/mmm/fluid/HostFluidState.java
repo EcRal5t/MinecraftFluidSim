@@ -439,6 +439,9 @@ public final class HostFluidState {
 	public FluidDomainContracts.CarrierViscosityStats carrierViscosityStats() { return domainPhaseInventory.carrierViscosityStats(); }
 	public Double carrierViscosityPascalSeconds(int cell) { return domainPhaseInventory.carrierViscosityPascalSeconds(cell); }
 	public GasPressureBoundary gasBoundary() { return domainPhaseInventory.gasBoundary(); }
+	public long cellGasStandardVolumeNanos(int cell) {
+		return gasState.spatial == null ? 0 : gasState.spatial.cells().get(cell).standardVolumeNanos();
+	}
 	/** Read-only local-metre query on the committed PLIC; -1 means no editable gas at the point. */
 	public int gasNodeAt(double x, double y, double z) { return domainPhaseInventory.gasNodeAt(x, y, z); }
 	/** Null component selects the ambient insertion recipe or the existing extraction mixture. */

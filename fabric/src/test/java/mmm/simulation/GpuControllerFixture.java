@@ -120,6 +120,7 @@ final class GpuControllerFixture {
 
     private static void installIndustrialGeometry(FluidRegion region,IndustrialLayout layout) {
         var host=region.editableHost();int scale=FluidRegionFactory.CELLS_PER_BLOCK;var origin=region.origin();
+        var edits=new java.util.ArrayList<mmm.fluid.FluidDomainContracts.CollisionEdit>();
         for(var entry:layout.blocks().entrySet()) {
             var position=entry.getKey();var state=entry.getValue();
             var shape=state.getCollisionShape(net.minecraft.world.level.EmptyBlockGetter.INSTANCE,position);
@@ -128,9 +129,11 @@ final class GpuControllerFixture {
                 int cx=(position.getX()-origin.getX())*scale+x,cy=(position.getY()-origin.getY())*scale+y,cz=(position.getZ()-origin.getZ())*scale+z;
                 if(region.grid().cell(cx,cy,cz)<0)continue;
                 int mask=masks[(z*scale+y)*scale+x]&255;
-                host.setSolidMicroMask(cx,cy,cz,mask);
+                if(host.solidMicroMask(cx,cy,cz)!=mask)
+                    edits.add(new mmm.fluid.FluidDomainContracts.CollisionEdit(cx,cy,cz,mask));
             }
         }
+        if(!edits.isEmpty())host.applyCollisionEdits(edits);
         for(var screen:layout.screens()) {
             for(int face:IndustrialOperations.screenFaces(region,screen.position(),layout.blocks().get(screen.position())))
                 host.setScreenFace(face,screen.poreDiameter(),screen.openFraction());
@@ -349,7 +352,8 @@ final class GpuControllerFixture {
 				:batch.getItem() instanceof mmm.item.GranularContainerItem?new mmm.api.transfer.TransferQuantity.Granular(maximum)
 				:new mmm.api.transfer.TransferQuantity.Liquid(maximum,java.util.OptionalDouble.empty());
 		int scale=FluidRegionFactory.CELLS_PER_BLOCK;var interior=region.origin().offset(cell[0]/scale,cell[1]/scale,cell[2]/scale);
-		cell=FluidWorldTargetResolver.transferCell(region,interior,outward,quantity,extract);
+		var edit=region.beginHostEdit();
+		cell=FluidWorldTargetResolver.transferCell(region,interior,outward,quantity,extract,edit);
 		if(cell==null)return batch;
         var before=mmm.block.MaterialBoxBlockEntity.newBatch(batch);
         var state=mmm.transfer.TransferActorState.decode(before.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
@@ -360,12 +364,12 @@ final class GpuControllerFixture {
         var boxRecovery=new ContainerRecoveryCoordinator(journal,boxActor,Map.of(),Set.of());
         var adapter=new MinecraftContainerTransactionAdapter(actor.manager,actor.operations,boxRecovery,
                 world.profile().profileFingerprint(),world.thermalRegistryFingerprint());
-        var resolution=MinecraftContainerTransferPlan.resolveDirected(adapter,world,region,cell,before,extract);
+        var resolution=MinecraftContainerTransferPlan.resolveDirected(adapter,world,region,cell,edit,before,extract);
         if(!resolution.resolved())return batch;
         var plan=resolution.plan();long requested=Math.min(maximum,plan.requestedAmount());
         var result=adapter.executeForRegion(region,identity,before,plan.sourceStack(),
                 extract?ContainerTransferJournal.Operation.EXTRACT:ContainerTransferJournal.Operation.INSERT,
-                plan.resourceKind(),requested,plan.baseAmount(),plan::executeExact,(raw,old)->raw,null);
+                plan.resourceKind(),requested,plan.baseAmount(),plan::executeExact,(raw,old)->raw,null,plan.edit(),plan.editGeneration());
         if(result.status()==mmm.application.ContainerTransferUseCase.Status.NOT_TRANSFERRED)return batch;
         if(result.status()!=mmm.application.ContainerTransferUseCase.Status.COMMITTED)
             throw new IllegalStateException("Box transfer "+result.status()+": "+result.outcome().message());
@@ -401,7 +405,7 @@ final class GpuControllerFixture {
                 domain.containerExtractableVolumeNear(cell[0], cell[1], cell[2], 6, 0), domain.totalVolumeExact());
         actor.current = before.copy();
         actor.persist();
-        var resolution = MinecraftContainerTransferPlan.resolve(transactions, world, region, cell, before, creative, materialScoopRadius);
+        var resolution = MinecraftContainerTransferPlan.resolve(transactions, world, region, cell, domain, before, creative, materialScoopRadius);
         if (!resolution.resolved()) throw new IllegalStateException("controller container plan: " + resolution.diagnostic());
         var result = resolution.plan().executeManagedForRegion(actor.identity, before);
         if (result.outcome() == null || !result.outcome().transferred())
