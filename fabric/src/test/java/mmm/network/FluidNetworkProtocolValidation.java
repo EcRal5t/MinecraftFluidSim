@@ -40,6 +40,7 @@ public final class FluidNetworkProtocolValidation {
 	private FluidNetworkProtocolValidation() { }
 
 	public static void main(String[] args) {
+		validateDebugDiagnostics();
 		validateObservationCodecs();
 		validateNegotiationMatrix();
 		validateQueryAvailabilityReason();
@@ -55,13 +56,35 @@ public final class FluidNetworkProtocolValidation {
 		System.out.println("Fluid network protocol validation passed");
 	}
 
+	private static void validateDebugDiagnostics() {
+        var packet = new DebugDiagnosticPayload(DebugDiagnosticPayload.Kind.SNAPSHOT, DebugDiagnosticPayload.Level.WARN,
+                "minecraft:overworld", "solver", "region", "压力 0.125\nstep 1.2 ms");
+        var buffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            DebugDiagnosticPayload.CODEC.encode(buffer, packet);
+            require(packet.equals(DebugDiagnosticPayload.CODEC.decode(buffer)) && buffer.readableBytes() == 0,
+                    "debug diagnostic codec roundtrip");
+        } finally { buffer.release(); }
+        String oversized = "x".repeat(2047) + "😀" + "z".repeat(2050);
+        var parts = DebugDiagnostics.split(oversized);
+        require(parts.size() == 3 && String.join("", parts).equals(oversized), "debug report chunks preserve text");
+        require(parts.stream().allMatch(part -> part.length() <= 2048 &&
+                !Character.isHighSurrogate(part.charAt(part.length() - 1))), "debug chunks respect UTF bounds");
+        var bounded = new DebugDiagnosticPayload(DebugDiagnosticPayload.Kind.EVENT, DebugDiagnosticPayload.Level.INFO,
+                "d".repeat(300), "s".repeat(140), "i".repeat(140), oversized);
+        require(bounded.dimension().length() == 256 && bounded.source().length() == 128 && bounded.id().length() == 128
+                && bounded.text().length() <= 2048, "debug fields are bounded");
+        require(!DebugDiagnostics.allowed(false, false) && DebugDiagnostics.allowed(true, false)
+                && DebugDiagnostics.allowed(false, true), "debug audience policy");
+    }
+
 	private static void validateObservationCodecs() {
         UUID session=UUID.randomUUID(); var position=new BlockPos(1,2,3); String dimension="minecraft:overworld";
         var trendRequest=new ProcessTrendRequest(position,dimension,session,7,false);
         var trend=new ProcessTrendPayload(position,dimension,session,7,"液位","运行中",false,true,
                 List.of(new ProcessTrendHistory.Point(.05,2,false),new ProcessTrendHistory.Point(.1,3,true)));
         var sampleRequest=new SampleAnalysisRequest(session,dimension,net.minecraft.world.InteractionHand.MAIN_HAND);
-        var sample=new SampleAnalysisPayload(session,dimension,List.of("水"));
+        var sample=new SampleAnalysisPayload(session,dimension,SampleAnalysisPayload.Phase.LIQUID,List.of("水"),List.of(new SampleAnalysisPayload.Fraction(0,0.5)));
         var buffer=new FriendlyByteBuf(Unpooled.buffer());
         try {
             ProcessTrendRequest.CODEC.encode(buffer,trendRequest); require(trendRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"trend request codec");

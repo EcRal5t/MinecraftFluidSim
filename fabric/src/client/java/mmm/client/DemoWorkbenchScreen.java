@@ -65,7 +65,7 @@ final class DemoWorkbenchScreen extends Screen {
 		action(left + 2 * (width + gap), actionY, width, DemoAction.STEP, current && state.paused());
 		action(left, height - 34, width, DemoAction.RESET, true);
 		action(left + width + gap, height - 34, width, DemoAction.REMOVE, current);
-		add(Button.builder(Component.translatable("screen.mmm.display.open"),
+		add(IndustrialUi.button(Component.translatable("screen.mmm.display.open"),
 				button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
 				.bounds(left + 2 * (width + gap), height - 34, width, 20).build(), true);
 	}
@@ -83,10 +83,10 @@ final class DemoWorkbenchScreen extends Screen {
 	private void choice(int x, int y, int width, String key, boolean selected, Runnable operation) {
 		Component name = Component.translatable("screen.mmm.demos." + key);
 		Component text = selected ? Component.literal("• ").append(name) : name;
-		add(Button.builder(text, button -> operation.run()).bounds(x, y, width, 20).build(), true);
+		add(IndustrialUi.button(text, button -> operation.run()).bounds(x, y, width, 20).build(), true);
 	}
 	private void action(int x, int y, int width, DemoAction action, boolean enabled) {
-		add(Button.builder(Component.translatable("screen.mmm.demos." + action.name().toLowerCase(java.util.Locale.ROOT)),
+		add(IndustrialUi.button(Component.translatable("screen.mmm.demos." + action.name().toLowerCase(java.util.Locale.ROOT)),
 				button -> send(action)).bounds(x, y, width, 20).build(), enabled);
 	}
 	private void add(Button button, boolean enabled) {
@@ -127,7 +127,10 @@ final class DemoWorkbenchScreen extends Screen {
 		return true;
 	}
 	@Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        IndustrialUi.brand(graphics, 13, 11, 16);
 		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		if (state.regionId() != null) {
 			Component status = Component.translatable(state.paused() || state.blocked() ? "screen.mmm.demos.paused" : "screen.mmm.demos.running");

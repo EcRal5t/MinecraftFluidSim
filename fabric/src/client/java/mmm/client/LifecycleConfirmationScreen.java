@@ -32,7 +32,7 @@ public final class LifecycleConfirmationScreen extends Screen {
 		rows = rows(payload.preview());
 		int width = Math.min(112, Math.max(1, (this.width - 32) / 2));
 		int gap = 8, left = (this.width - width * 2 - gap) / 2, y = height - 32;
-		Button confirm = Button.builder(Component.translatable("screen.mmm.lifecycle.confirm"), button -> {
+		Button confirm = IndustrialUi.button(Component.translatable("screen.mmm.lifecycle.confirm"), button -> {
 			requestPending = true;
 			button.active = false;
 			var preview = payload.preview();
@@ -42,13 +42,16 @@ public final class LifecycleConfirmationScreen extends Screen {
 		}).bounds(left, y, width, 20).build();
 		confirm.active = payload.preview().ready() && !requestPending;
 		addRenderableWidget(confirm);
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.lifecycle.cancel"), button -> {
+		addRenderableWidget(IndustrialUi.button(Component.translatable("screen.mmm.lifecycle.cancel"), button -> {
 			onClose();
 		}).bounds(left + width + gap, y, width, 20).build());
 	}
 
 	@Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        IndustrialUi.brand(graphics, 13, 11, 16);
 		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		List<FormattedCharSequence> lines = wrappedRows();
 		int visible = visibleLines();

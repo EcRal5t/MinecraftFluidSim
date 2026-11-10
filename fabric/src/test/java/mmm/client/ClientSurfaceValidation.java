@@ -21,6 +21,7 @@ import net.minecraft.world.phys.Vec3;
 /** Surface reuse and display-only colour updates, exercised without a running game. */
 public final class ClientSurfaceValidation {
 	public static void main(String[] args) {
+		DebugDiagnosticsValidation.run();
 		InsulatingGlassConnectionsValidation.run();
         PipeSnapshotValidation.run();
 		interactiveResponses();

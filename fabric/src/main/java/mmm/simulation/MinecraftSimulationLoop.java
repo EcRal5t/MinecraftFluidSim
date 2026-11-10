@@ -23,6 +23,7 @@ final class MinecraftSimulationLoop {
 	private final Consumer<List<String>> ownershipIssues;
 	private WorldThermalEnvironment environment;
 	private int thermalTicks;
+    private int diagnosticTicks;
     private PipeRuntime pipes;
     void pipes(PipeRuntime value) { pipes=value; }
 	void environment(WorldThermalEnvironment value) { environment = Objects.requireNonNull(value); }
@@ -49,6 +50,10 @@ final class MinecraftSimulationLoop {
 
 	void tick(MinecraftServer server) {
 		operations.advanceTick();
+        if (++diagnosticTicks == 10) {
+            diagnosticTicks = 0;
+            publishDiagnostics(server);
+        }
 		containerRecovery.recoverIndexed();
 		takeover.maintainActive(server);
         if(pipes!=null)pipes.reconcile(server);
@@ -77,7 +82,28 @@ final class MinecraftSimulationLoop {
 			environment.flushAdvance(level.dimension().identifier().toString());
 	}
 
-	static void runWithDeviceLossGuard(FluidRegion region, Runnable tick, Consumer<RuntimeException> onDeviceLoss) {
+	private void publishDiagnostics(MinecraftServer server) {
+        FluidRegion region = regions.selected();
+        for (var player : server.getPlayerList().getPlayers()) {
+            if (!mmm.network.DebugDiagnostics.canInspect(player)) continue;
+            String text = "No selected region in range";
+            if (region != null && region.footprint() != null && region.dimension().equals(player.level().dimension())
+                    && MinecraftRegionActivation.nearRegion(player, region)) {
+                var stats = region.lastStats();
+                text = String.format(java.util.Locale.ROOT,
+                        "Region %s | %s\nGrid %d × %d × %d | tick %d\nStep %.2f ms | interval %d ticks",
+                        region.id(), region.lifecycle().state(), region.sizeX(), region.sizeY(), region.sizeZ(),
+                        region.tick(), region.lastStepMilliseconds(), region.stepIntervalTicks());
+                if (stats != null) text += String.format(java.util.Locale.ROOT,
+                        "\nSubsteps %d | pressure iterations %d | residual %.4g\nRelative volume error %.4g | mass error %.4g",
+                        stats.substeps(), stats.pressureIterations(), stats.pressureResidual(),
+                        stats.relativeVolumeError(), stats.relativeMassError());
+            }
+            mmm.network.DebugDiagnostics.snapshot(player, "selected-region", text);
+        }
+    }
+
+    static void runWithDeviceLossGuard(FluidRegion region, Runnable tick, Consumer<RuntimeException> onDeviceLoss) {
 		boolean wasResident = region.deviceResident();
 		if (region.pauseForUnavailableDevice()) {
 			if (wasResident) onDeviceLoss.accept(null);

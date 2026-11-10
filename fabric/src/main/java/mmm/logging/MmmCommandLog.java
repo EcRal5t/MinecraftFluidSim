@@ -43,12 +43,16 @@ public final class MmmCommandLog {
 	}
 
 	public static void sendSuccess(CommandSourceStack source, String message, boolean broadcastToOps) {
-		source.sendSuccess(() -> Component.literal(message), broadcastToOps);
+		if (!(source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player)
+                || !mmm.network.DebugDiagnostics.event(player, mmm.network.DebugDiagnosticPayload.Level.INFO, "command", "result", message))
+            source.sendSuccess(() -> Component.literal(message), broadcastToOps);
 		record("SUCCESS", message);
 	}
 
 	public static void sendFailure(CommandSourceStack source, String message) {
-		source.sendFailure(Component.literal(message));
+		if (!(source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player)
+                || !mmm.network.DebugDiagnostics.event(player, mmm.network.DebugDiagnosticPayload.Level.ERROR, "command", "failure", message))
+            source.sendFailure(Component.literal(message));
 		record("FAILURE", message);
 	}
 

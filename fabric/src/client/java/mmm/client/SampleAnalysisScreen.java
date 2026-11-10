@@ -54,22 +54,32 @@ public final class SampleAnalysisScreen extends Screen {
     }
     @Override protected void init() {
         int buttonWidth = Math.min(140, (width - 24) / 2);
-        addRenderableWidget(Button.builder(Component.literal("保存当前样品为基准"), button -> {
+        addRenderableWidget(IndustrialUi.button(Component.literal("保存当前样品为基准"), button -> {
             comparison.save(sample); offset = 0; rebuildWidgets();
         }).bounds(width / 2 - buttonWidth - 3, height - 28, buttonWidth, 20).build());
-        var clear = Button.builder(Component.literal("清除基准"), button -> {
+        var clear = IndustrialUi.button(Component.literal("清除基准"), button -> {
             comparison.clear(); offset = 0; rebuildWidgets();
         }).bounds(width / 2 + 3, height - 28, buttonWidth, 20).build();
         clear.active = comparison.baseline() != null;
         addRenderableWidget(clear);
     }
-    private List<FormattedCharSequence> wrapped(SampleAnalysisPayload value, int columnWidth) {
-        var result = new ArrayList<FormattedCharSequence>();
-        for (String line : value.lines()) result.addAll(font.split(Component.literal(line), Math.max(1, columnWidth)));
+    private record DisplayLine(FormattedCharSequence text, double fraction) { }
+    private List<DisplayLine> wrapped(SampleAnalysisPayload value, int columnWidth) {
+        var result = new ArrayList<DisplayLine>();
+        double[] fractions = new double[value.lines().size()];
+        java.util.Arrays.fill(fractions, -1);
+        for (var fraction : value.fractions()) fractions[fraction.line()] = fraction.value();
+        for (int index = 0; index < value.lines().size(); index++) {
+            String line = value.lines().get(index);
+            double fraction = fractions[index];
+            int textWidth = fraction >= 0 && columnWidth >= 140 ? columnWidth - 48 : columnWidth;
+            var parts = font.split(Component.literal(line), Math.max(1, textWidth));
+            for (int i = 0; i < parts.size(); i++) result.add(new DisplayLine(parts.get(i), i == 0 ? fraction : -1));
+        }
         return result;
     }
     private int columnWidth() { return comparison.baseline() == null ? Math.max(1, width - 32) : Math.max(1, (width - 40) / 2); }
-    private int visibleLines() { return Math.max(1, (height - 70) / 11); }
+    private int visibleLines() { return Math.max(1, (height - 91) / 11); }
     private int maxOffset() {
         int count = wrapped(sample, columnWidth()).size();
         if (comparison.baseline() != null) count = Math.max(count, wrapped(comparison.baseline(), columnWidth()).size());
@@ -84,19 +94,46 @@ public final class SampleAnalysisScreen extends Screen {
         if(minecraft.level==null || !sample.dimension().equals(minecraft.level.dimension().identifier().toString())) onClose();
     }
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+        IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-        graphics.centeredText(font, title, width / 2, 8, 0xffffffff);
+        IndustrialUi.brand(graphics, 13, 11, 16);
+        graphics.centeredText(font, title, width / 2, 14, IndustrialUi.TEXT);
         int columnWidth = columnWidth();
-        graphics.text(font, comparison.baseline() == null ? "当前样品" : "基准样品", 16, 23, 0xffaaddff, false);
-        if (comparison.baseline() != null) graphics.text(font, "当前样品", 24 + columnWidth, 23, 0xffaaddff, false);
+        if (comparison.baseline() != null) graphics.fill(20 + columnWidth, 48, 21 + columnWidth, height - 36, IndustrialUi.EDGE);
+        IndustrialUi.icon(graphics, phase(comparison.baseline() == null ? sample : comparison.baseline()), 16, 31, 16);
+        graphics.text(font, comparison.baseline() == null ? "当前样品" : "基准样品", 35, 35, IndustrialUi.CYAN, false);
+        if (comparison.baseline() != null) {
+            IndustrialUi.icon(graphics, phase(sample), 24 + columnWidth, 31, 16);
+            graphics.text(font, "当前样品", 43 + columnWidth, 35, IndustrialUi.CYAN, false);
+        }
         offset = Math.min(offset, maxOffset());
         drawLines(graphics, comparison.baseline() == null ? sample : comparison.baseline(), 16, columnWidth);
         if (comparison.baseline() != null) drawLines(graphics, sample, 24 + columnWidth, columnWidth);
-        if (offset < maxOffset()) graphics.text(font, "↓", width - 16, height - 40, 0xffaaaaaa, false);
+        if (maxOffset() > 0) {
+            int top = 50, track = Math.max(1, visibleLines() * 11 - 2);
+            int thumb = Math.max(4, track * visibleLines() / (visibleLines() + maxOffset()));
+            int position = (track - thumb) * offset / maxOffset();
+            graphics.fill(width - 14, top, width - 12, top + track, IndustrialUi.INSET);
+            graphics.fill(width - 14, top + position, width - 12, top + position + thumb, IndustrialUi.CYAN);
+        }
+    }
+    private static IndustrialUi.Icon phase(SampleAnalysisPayload payload) {
+        return switch (payload.phase()) {
+            case LIQUID -> IndustrialUi.Icon.LIQUID;
+            case GAS -> IndustrialUi.Icon.GAS;
+            case SOLID -> IndustrialUi.Icon.SOLID;
+        };
     }
     private void drawLines(GuiGraphicsExtractor graphics, SampleAnalysisPayload payload, int x, int columnWidth) {
         var lines = wrapped(payload, columnWidth);
         for (int i = offset; i < Math.min(lines.size(), offset + visibleLines()); i++)
-            graphics.text(font, lines.get(i), x, 37 + (i - offset) * 11, 0xffffffff, false);
+            {
+                var line = lines.get(i);
+                int y = 52 + (i - offset) * 11;
+                graphics.text(font, line.text(), x, y, IndustrialUi.TEXT, false);
+                if (line.fraction() >= 0 && columnWidth >= 140)
+                    IndustrialUi.bar(graphics, x + columnWidth - 44, y + 2, 42, 6, line.fraction(), IndustrialUi.CYAN);
+            }
     }
 }
