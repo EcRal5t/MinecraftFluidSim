@@ -161,10 +161,10 @@ public final class DemoWorkbench {
 		BlockPos anchor = session.anchor == null ? host.position().immutable() : session.anchor;
 		Direction facing = session.anchor == null ? host.facing() : session.facing;
 		FluidRegion old = current(session);
-		if (!preset.tank() && regions.regions().stream().anyMatch(region -> !region.controllerManaged()
+		if (!preset.tank() && regions.regions().stream().anyMatch(region -> !region.hasSelectedVolume()
 				&& !region.id().equals(session.region)))
 			throw new IllegalStateException("已有临时场景，请先移除它");
-		if (old != null && (old.controllerManaged() != preset.tank())) {
+		if (old != null && (old.hasSelectedVolume() != preset.tank())) {
 			host.preflightReplacement(old, session.tankLayout, anchor, facing, preset);
 			remove(host, session);
 		}
@@ -195,7 +195,7 @@ public final class DemoWorkbench {
 		FluidRegion region = current(session);
 		if (region == null) return;
 		regions.select(region.id());
-		if (region.controllerManaged()) {
+		if (region.hasSelectedVolume()) {
 			host.removeTank(region);
 			if (session.tankLayout != null) host.clearShell(session.tankLayout);
 			session.tankLayout = null;
@@ -218,7 +218,7 @@ public final class DemoWorkbench {
 	private void reconcileRemovedTank(Host host, Session session) {
 		var position = session.tankLayout.controller();
 		if (!host.nearController(position))
-			throw new IllegalStateException("请回到演示控制器附近");
+			throw new IllegalStateException("请回到演示区域附近");
 		host.verifyRemoved(session.region);
 		host.clearShell(session.tankLayout);
 		session.region = null; session.tankLayout = null; session.recipeReady = false;
@@ -238,9 +238,9 @@ public final class DemoWorkbench {
 		}
 	}
 	static net.minecraft.world.level.block.state.BlockState shellState(ControllerDemoLayout layout, BlockPos position) {
-		return position.equals(layout.controller()) ? MmmBlocks.FLUID_CONTROLLER.defaultBlockState()
+		return position.equals(layout.controller()) ? Blocks.IRON_BLOCK.defaultBlockState()
 				: position.equals(layout.port()) ? MmmBlocks.FLUID_PORT.defaultBlockState()
-						.setValue(FluidPortBlock.FACING, layout.portOutward()) : MmmBlocks.FLUID_BOUNDARY.defaultBlockState();
+						.setValue(FluidPortBlock.FACING, layout.portOutward()) : Blocks.GLASS.defaultBlockState();
 	}
 	static BlockPos transientOrigin(BlockPos anchor, Direction facing, DemoPreset preset) {
 		boolean flow = preset == DemoPreset.FLOW;
@@ -250,23 +250,11 @@ public final class DemoWorkbench {
 	}
 
 	static boolean matchesTank(FluidRegion region, ControllerDemoLayout layout, String dimensionId) {
-		if (!region.controllerManaged() || !region.dimension().identifier().toString().equals(dimensionId)) return false;
+		if (!region.hasSelectedVolume() || !region.dimension().identifier().toString().equals(dimensionId)) return false;
 		var footprint = region.footprint();
-		if (!footprint.controllerPosition().equals(layout.controller())
-				|| footprint.kind() != mmm.model.region.RegionGeometry.RegionKind.CLOSED
-				|| !footprint.returnedBlocks().isEmpty() || !footprint.atmosphereBlocks().isEmpty()) return false;
-		var shell = new java.util.HashSet<Long>();
-		for (var block : layout.shell()) shell.add(block.asLong());
-		var interior = new java.util.HashSet<Long>();
-		for (var block : layout.occupied()) if (!shell.contains(block.asLong())) interior.add(block.asLong());
-		var boundary = new java.util.HashSet<Long>();
-		for (long packed : interior) for (Direction direction : Direction.values()) {
-			long neighbor = BlockPos.of(packed).relative(direction).asLong();
-			if (shell.contains(neighbor)) boundary.add(neighbor);
-		}
-		return footprint.minimumInterior().equals(layout.minimum().offset(1, 1, 1))
-				&& footprint.maximumInterior().equals(layout.minimum().offset(2, 2, 2))
-				&& footprint.interiorBlocks().equals(interior) && footprint.boundaryBlocks().equals(boundary);
+        return footprint.kind() == mmm.model.region.RegionGeometry.RegionKind.SELECTED
+                && footprint.minimumInterior().equals(layout.minimum())
+                && footprint.maximumInterior().equals(layout.minimum().offset(3, 3, 3));
 	}
 
 	private void persist() throws java.io.IOException {
@@ -311,8 +299,8 @@ public final class DemoWorkbench {
 		public void registerTank(FluidRegion region) { tanks.register(region); }
 		public void preflightReplacement(FluidRegion previous, ControllerDemoLayout oldTank, BlockPos anchor, Direction facing, DemoPreset preset) {
 			if (preset.tank()) {
-				if (!actions.controllerFeatureEnabled()) throw new IllegalStateException("控制器功能未启用");
-				if (operations.creationLocked()) throw new IllegalStateException("区域存档尚需恢复，无法创建控制器");
+				if (!actions.controllerFeatureEnabled()) throw new IllegalStateException("区域运行未启用");
+				if (operations.creationLocked()) throw new IllegalStateException("区域存档尚需恢复，无法创建区域");
 				String failure = tanks.recipeCapabilityFailure(preset);
 				if (failure != null) throw new IllegalStateException(failure);
 			}

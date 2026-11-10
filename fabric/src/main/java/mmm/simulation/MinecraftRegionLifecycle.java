@@ -71,13 +71,13 @@ public final class MinecraftRegionLifecycle {
 		if (decision != RegionLifecycleUseCase.RunIntentDecision.ACCEPTED) return switch (decision) {
 			case PERMISSION_DENIED -> Component.translatable("message.mmm.controller.creative_required");
 			case WRITE_NOT_READY -> Component.translatable("message.mmm.controller.write_not_ready",
-					authoritativeWriteFailure("修改控制器运行意图"));
+					authoritativeWriteFailure("修改区域运行状态"));
 			case UNCHANGED -> Component.translatable("message.mmm.controller.intent_changed");
 			case ACCEPTED -> throw new IllegalStateException("Accepted run intent entered failure mapping");
 		};
 		if (availability.hasPending(region.id()))
 			return Component.literal("存在未完成的区域事务，请先完成恢复");
-		if (!region.solverLoaded() && region.controllerManaged()) {
+		if (!region.solverLoaded() && region.hasSelectedVolume()) {
 			try { operations.setUnloadedRunIntent(region, pause); }
 			catch (IOException | RuntimeException failure) {
 				return Component.literal("保存区域运行状态失败：" + failure.getMessage());
@@ -254,7 +254,8 @@ public final class MinecraftRegionLifecycle {
 	CommitResult removeEmptyPool(ServerPlayer player, FluidRegion region) {
 		var facts=lifecycleFacts(player,region,LifecycleOperation.REMOVE_EMPTY_REGION);
 		if (!facts.blockers().isEmpty()) return CommitResult.failedDetail("池中仍有物质、热量或未完成事务，已保留区域");
-		if (!region.hostSnapshot().exactInternalEnergy().equals(mmm.units.SignedDyadic.ZERO))
+        var pool=region.hostSnapshot();
+		if (!pool.exactInternalEnergy().subtract(pool.exactGasInternalEnergy()).equals(mmm.units.SignedDyadic.ZERO))
 			return CommitResult.failedDetail("池中仍有热量，已保留区域");
 		return commitRemoval(player.level().getServer(),region);
 	}
@@ -269,12 +270,21 @@ public final class MinecraftRegionLifecycle {
 			return CommitResult.failedDetail(invalid.getMessage());
 		}
 		mmm.simulation.persistence.RegionGenerationStore.PreparedRemoval prepared = null;
+        WorldThermalEnvironment.AirReturn airReturn = null;
 		boolean committed = false;
 		try {
+            var environment=MmmRuntimeRegistry.require(server).environment();
+            var level=server.getLevel(region.dimension());
+            if(environment!=null && level!=null && region.hasThermalState()) {
+                airReturn=environment.prepareAirReturn(level,region);
+                region.environmentCandidate(airReturn.snapshot()); region.environmentCandidateExternal(true);
+                operations.stageEnvironment(region);
+            }
 			prepared = operations.prepareRemoval(region, tombstoneGeneration, UUID.randomUUID(),
 					maximumQuarantineEntries, maximumQuarantineBytes);
 			var removed = operations.commitRemoval(prepared);
 			committed = true;
+            if(airReturn!=null)airReturn.commit();
 			ArrayList<String> pending = new ArrayList<>();
 			try {
 				snapshots.sendRemoval(server, region, removed.networkTombstoneGeneration());
@@ -296,7 +306,8 @@ public final class MinecraftRegionLifecycle {
 		} catch (IOException | RuntimeException failure) {
 			if (!committed && prepared != null) {
 				try {
-					committed = operations.readRemoved(region.id()).equals(prepared.manifest());
+                    committed = operations.committedGeneration(region.id())==prepared.manifest().targetGeneration()
+                            && operations.committedManifestChecksum(region.id())==prepared.manifest().checksum();
 				} catch (IOException | RuntimeException notRemoved) {
 					failure.addSuppressed(notRemoved);
 				}
@@ -306,6 +317,8 @@ public final class MinecraftRegionLifecycle {
 				catch (IOException abortFailure) { failure.addSuppressed(abortFailure); }
 			}
 			if (committed) {
+                if(airReturn!=null && airReturn.isCurrent()) try { airReturn.commit(); }
+                catch(RuntimeException recovery) { failure.addSuppressed(recovery); }
 				operations.recordIssue("REMOVED " + region.id() + " 收敛待恢复：" + failure.getMessage());
 				try {
 					snapshots.sendRemoval(server, region, prepared.manifest().networkTombstoneGeneration());
@@ -322,7 +335,11 @@ public final class MinecraftRegionLifecycle {
 						failure.getMessage());
 			}
 			return CommitResult.failed("message.mmm.lifecycle.remove_failed", failure.getMessage());
-		}
+		} finally {
+            operations.clearStagedEnvironment(region.id());
+            region.clearEnvironmentCandidate();
+            if(airReturn!=null)airReturn.close();
+        }
 	}
 
 	private String authoritativeWriteFailure(String operation) {
@@ -395,7 +412,8 @@ public final class MinecraftRegionLifecycle {
 		boolean condensedEmpty = domain.particleCount() == 0
 				&& domain.totalGranularSolidVolumeSvq() == 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L;
-		boolean gasEmpty = gasInventoryEmpty(domain);
+        var environment=MmmRuntimeRegistry.require(player.level().getServer()).environment();
+		boolean gasEmpty = gasInventoryEmpty(domain) || environment!=null && environment.canReturnAir(region);
 		boolean devicesEmpty = !region.hasRemovableThermalDevices();
 		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
 				&& !condensedEmpty) blockers.add(LifecycleOperationPreview.Blocker.CONDENSED_NOT_EMPTY);
@@ -463,17 +481,12 @@ public final class MinecraftRegionLifecycle {
 		}
 		ServerLevel level = player.level();
 		if (!level.getServer().isSameThread()) throw new IllegalStateException("Lifecycle actions are server-thread-only");
-		if (player.distanceToSqr(controllerPosition.getX() + 0.5,
-				controllerPosition.getY() + 0.5, controllerPosition.getZ() + 0.5) > 64.0) {
-			return ResolvedController.failed("message.mmm.controller.too_far");
-		}
-		if (!level.getBlockState(controllerPosition).is(mmm.block.MmmBlocks.FLUID_CONTROLLER)) {
-			return ResolvedController.failed("message.mmm.controller.target_gone");
-		}
-		FluidRegion region = targets.controllerRegionAt(level, controllerPosition);
+
+		FluidRegion region = targets.regionAtBlock(level, controllerPosition);
 		if (region == null || !region.id().equals(requestedRegionId)) {
 			return ResolvedController.failed("message.mmm.controller.owner_changed");
 		}
+		if (!MinecraftRegionActivation.nearRegion(player, region)) return ResolvedController.failed("message.mmm.controller.too_far");
 		return new ResolvedController(region, null);
 	}
 

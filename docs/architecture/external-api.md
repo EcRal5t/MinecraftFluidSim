@@ -138,11 +138,11 @@ MMM 按求解步时长逐段推进，在运动步接受后更新 `Progress` 中�
 
 交接要求整个结构位于同一区域，轴对齐形状与固定碰撞微格对齐，各块位置和所需区块可用。MMM 在普通世界碰撞刷新前核对真实世界微格与交接意图，并在同一个候选中转换固定碰撞和运动体归属。普通墙的内能和表面材料随对应方块从固定墙转给结构，拆解时再交回目标固定墙；热墙交接覆盖该墙的完整固定几何。世界改动尚未完成、几何或活动组暂不可用时，交接保持待处理，MMM 保留已接受状态并在后续刷新重试。
 
-MMM checkpoint 保存已接受的运动几何和热库存。重启后，适配器在 MMM 首次刷新恢复区域之前重新注册 provider，并重放每个结构最近的生命周期意图及尚未完成的运动段；MMM 核对已保存几何，恢复交接或运动进度。缺少对应 provider 的已保存结构保留原有几何与热库存，等待适配器恢复。MMM checkpoint 与适配器的世界、实体和意图存档各自持久化，恢复依靠上述意图与几何核对完成。
+区域 checkpoint 保存已接受的固定与运动几何；普通墙热库存由共享 `WorldThermalEnvironment` 管理，并写入环境存档。装配后的墙体以 `EnvironmentThermalState` 的 `CARRIED` 节点保存结构归属、内能和表面库存；区域 `finiteDevices` 是参与接触计算的投影。交接同时准备几何和环境原生候选，在双方均可采用时一起提交。重启后，适配器在首次刷新恢复区域之前重新注册 provider，并重放最近的生命周期意图及尚未完成的运动段；MMM 核对保存的几何与共享环境库存，恢复交接或运动进度。缺少对应 provider 时保留已接受状态，等待适配器恢复。
 
 当前支持轴对齐平移、同一区域装配与拆解，以及原区域内的墙体热库存交接。携带墙体热库存的结构在其原区域完成拆解；结构旋转、跨区域热库存转移和真实 Create 26.2 类型绑定列为后续工作。
 
-接口与实现：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[ExternalStructureGeometry](../../fabric/src/main/java/mmm/simulation/ExternalStructureGeometry.java)、[ExternalStructureThermalHandoff](../../fabric/src/main/java/mmm/simulation/ExternalStructureThermalHandoff.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)。测试选择器：`structure-handoff`、`external-motion`。
+接口与实现：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[ExternalStructureGeometry](../../fabric/src/main/java/mmm/simulation/ExternalStructureGeometry.java)、[WorldThermalEnvironment](../../fabric/src/main/java/mmm/simulation/WorldThermalEnvironment.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)。测试选择器：`structure-handoff`、`external-motion`。
 
 ## 内置探针与控制界面
 
@@ -154,16 +154,16 @@ MMM checkpoint 保存已接受的运动几何和热库存。重启后，适配�
 
 该 carrier view 属于内部诊断结构，不构成公开 Query 的稳定契约承诺。
 
-对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
+对选区内位置使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
 live inventory（若 solver 已加载）、已观测载体温度范围、事务执行条件和数值诊断。
 
-控制器方块的空手激活与持物交互分离，探针必须进入物品入口，不能退化为 select/run-intent 消息。Minecraft adapter 先核对线程、距离、方块和 owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
+Minecraft adapter 先核对线程、距离、命中位置和区域归属，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
 `ControllerSummaryPort` 只返回 use-case-specific bounded read model，不返回 region/domain。
 
 用例先验证 view identity 与完整 summary 形状，成功后才签发按 player+region 隔离的一次性 opaque generation；
 失败读不产生未披露 token。availability pause 不阻止只读 summary；metadata-only UNLOADED 只报告 inventory unavailable，不为展示恢复派生状态。
 
-界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、方块和 区域归属，并使 token 失效。
+界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、位置和区域归属，并使 token 失效。
 pause/resume 的 permission、write-ready 与 idempotence 决策进入 `RegionLifecycleUseCase`，adapter 只在 accepted 后改 operator intent、按需唤醒并发布 snapshot。
 
 客户端 summary 没有提交权；打开或读取 summary 本身不加载、不唤醒、不 checkpoint。
@@ -177,10 +177,10 @@ Fabric 最后持久化 BlockEntity、刷新相邻已加载区域的 boundary flu
 ## Jade 观察适配
 
 Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。
-服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。
+服务端 provider 对非空气方块请求数据，并通过上述 Query API 观察命中面近侧或跨过一格方块的反侧位置。
 非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
 
-发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家交互命中外壳方块触发；查询过程保持无加载、不唤醒与服务端权威数据。
+发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家观察方块时触发；查询过程保持无加载、不唤醒与服务端权威数据。
 
 ## Committed event
 

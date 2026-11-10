@@ -78,12 +78,10 @@ final class ExternalStructureGeometry {
     }
 
     static void requireWholeThermalBlocks(FluidRegion region,Handoff handoff,Map<Integer,Integer> owned,
-            mmm.thermal.FiniteThermalDeviceInventory inventory) {
+            WorldThermalEnvironment environment) {
         int scale=(int)Math.round(1/region.solverConfig().cellSize());
         for(var block:handoff.blocks()) {
-            String prefix=BlockPos.asLong(block.x(),block.y(),block.z())+"@";
-            boolean thermal=inventory.devices().stream().anyMatch(device->device.providerId().equals(OrdinaryThermalWalls.PROVIDER)
-                    && device.objectId().startsWith(prefix));
+            boolean thermal=environment.hasSolid(region.dimension().identifier().toString(),new BlockPos(block.x(),block.y(),block.z()));
             if(!thermal)continue;
             for(int z=0;z<scale;z++)for(int y=0;y<scale;y++)for(int x=0;x<scale;x++) {
                 int cx=(block.x()-region.origin().getX())*scale+x,cy=(block.y()-region.origin().getY())*scale+y,cz=(block.z()-region.origin().getZ())*scale+z;

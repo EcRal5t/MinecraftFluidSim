@@ -184,8 +184,8 @@ public final class OwnershipStore {
 		return """
 				REAL WATER WORLD OWNERSHIP RECOVERY WARNING / 物质、运动与力学世界所有权恢复警告
 
-				The Matter, Motion & Mechanics controller region below is in the middle of a world ownership transition.
-				下方 Matter, Motion & Mechanics 控制器区域正在进行世界所有权事务。
+				The Matter, Motion & Mechanics region below is in the middle of a world ownership transition.
+				下方 Matter, Motion & Mechanics 模拟区域正在进行世界所有权事务。
 
 				World directory / 世界目录: %s
 				Region / 区域: %s
@@ -201,7 +201,7 @@ public final class OwnershipStore {
 				   and either rolls the world back or completes the committed ownership.
 				   使用本 Mod 重启世界；启动恢复按 region HEAD 代次判定，回滚世界或完成已提交 ownership。
 				3. Or approach the controller and run /mmm ownership to inspect the state.
-				   或靠近控制器执行 /mmm ownership 检查状态。
+				   或靠近区域执行 /mmm ownership 检查状态。
 				4. Confirm wal.nbt and this WARNING are gone before removing the mod.
 				   确认 wal.nbt 与本 WARNING 消失后，才能卸载 Mod。
 				""".formatted(worldRoot, regionId, dimensionId, operation, baseGeneration, targetGeneration, entries);

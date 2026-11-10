@@ -51,11 +51,13 @@ public record ControllerSummary(
 	public enum ThermalState { UNBOUND, ACTIVE, REDUCED, SLEEP, PAUSED }
 
 	public record Footprint(
+            String name,
 			int controllerX, int controllerY, int controllerZ,
 			int blockSizeX, int blockSizeY, int blockSizeZ,
 			long interiorBlocks, int requiredChunks
 	) {
 		public Footprint {
+            if (name == null || name.isBlank() || name.length() > 64) throw new IllegalArgumentException("Invalid region name");
 			if (blockSizeX <= 0 || blockSizeY <= 0 || blockSizeZ <= 0
 					|| interiorBlocks <= 0L || requiredChunks <= 0) {
 				throw new IllegalArgumentException("Controller summary footprint is invalid");

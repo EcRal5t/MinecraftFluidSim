@@ -11,6 +11,7 @@ public interface FluidStateAccess extends AutoCloseable {
     record DevicePort(String providerId, String objectId, FluidDomainContracts.ThermalPortRequest contact) { }
     default mmm.thermal.FiniteThermalDeviceInventory finiteThermalDevices() { return null; }
     default java.util.List<DevicePort> finiteThermalPorts() { return java.util.List.of(); }
+    default EnvironmentBinding environmentBinding() { return null; }
     /** Retains this immutable generation independently of the caller's lifetime. */
     default FluidStateAccess retain() { return this; }
     @Override default void close() { }

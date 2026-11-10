@@ -8,7 +8,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * In-flight world ownership transition WAL for one controller region. Recovery compares the
+ * In-flight world ownership transition WAL for one region. Recovery compares the
  * region-state HEAD generation against {@code baseGeneration}/{@code targetGeneration} to decide
  * between rolling the world back and completing committed ownership, never by guessing.
  */

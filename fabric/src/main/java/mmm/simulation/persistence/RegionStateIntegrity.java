@@ -141,12 +141,12 @@ final class RegionStateIntegrity {
 		out.writeInt(runtime.stepIntervalTicks()); out.writeLong(runtime.tick());
 	}
 
-	private static void writeFootprint(DataOutputStream out, RegionGeometry.ControllerFootprint footprint) throws IOException {
-		writeBlockPos(out, footprint.controllerPosition());
+	private static void writeFootprint(DataOutputStream out, RegionGeometry.SelectedVolume footprint) throws IOException {
+        out.writeUTF(footprint.name());
 		writeBlockPos(out, footprint.minimumInterior());
 		writeBlockPos(out, footprint.maximumInterior());
 		writeLongSet(out, footprint.interiorBlocks());
-		writeLongSet(out, footprint.boundaryBlocks());
+		writeLongSet(out, footprint.poolShellBlocks());
 		writeLongSet(out, footprint.requiredChunks());
 		out.writeUTF(footprint.kind().name());
 		writeLongSet(out, footprint.atmosphereBlocks());

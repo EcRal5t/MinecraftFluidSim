@@ -209,7 +209,7 @@ final class MmmCommandHandlers {
 				? actions.pourWater(player, buckets)
 				: actions.drainWater(player, buckets);
 		if (!result.domainExists()) return fail(source, "请先创建流体域，并处于相同维度");
-		if (result.failure() != null) return fail(source, "控制器域当前不可修改：" + result.failure());
+		if (result.failure() != null) return fail(source, "区域当前不可修改：" + result.failure());
 		if (result.target() == null) {
 			return fail(source, pour ? "请把准星对准黄色模拟域内的水面、地面或障碍物" : "准星方向没有模拟水体");
 		}
@@ -256,15 +256,15 @@ final class MmmCommandHandlers {
 
 	static int controllerFeatureStatus(CommandSourceStack source) {
 		MinecraftRegionOperatorActions actions = MmmRuntimeRegistry.require(source.getServer()).operatorActions();
-		return succeed(source, "控制器功能门：" + (actions.controllerFeatureEnabled() ? "开启" : "关闭"),
+		return succeed(source, "区域运行设置：" + (actions.controllerFeatureEnabled() ? "开启" : "关闭"),
 				actions.controllerFeatureEnabled() ? 1 : 0);
 	}
 
 	static int setControllerFeature(CommandSourceStack source, boolean enabled) {
 		String failure = MmmRuntimeRegistry.require(source.getServer()).operatorActions()
 				.setControllerFeatureEnabled(enabled);
-		if (failure != null) return fail(source, "控制器功能门未改变；配置原子发布失败：" + failure);
-		return succeed(source, "控制器功能门已" + (enabled ? "开启" : "关闭；现有控制器域已暂停但未删除"), 1);
+		if (failure != null) return fail(source, "区域运行设置未改变；配置原子发布失败：" + failure);
+		return succeed(source, "区域运行设置已" + (enabled ? "开启" : "关闭；现有区域已暂停但未删除"), 1);
 	}
 
 	static int worldBridgeFeatureStatus(CommandSourceStack source) {
@@ -281,7 +281,7 @@ final class MmmCommandHandlers {
 		if (failure != null) return fail(source, "世界桥功能门未改变；配置原子发布失败：" + failure);
 		return succeed(source, "世界桥功能门配置已" + (enabled ? "开启" : "关闭")
 				+ "；本次启动仍为" + (actions.worldBridgeFeatureEnabled() ? "开启" : "关闭")
-				+ "，重启服务器后生效；开启后新激活的控制器区域将一次性移除内部原版水并建立可恢复 ownership", 1);
+				+ "，重启服务器后生效；开启后新建区域将一次性移除内部原版水并建立可恢复的世界归属", 1);
 	}
 
 	static int transferWalFaultStatus(CommandSourceStack source) {
@@ -359,15 +359,6 @@ final class MmmCommandHandlers {
 	static int checkpointRegion(CommandSourceStack source) {
 		String result = MmmRuntimeRegistry.require(source.getServer()).regionAdministration().checkpointSelected();
 		if (result.contains("失败") || result.startsWith("没有")) return fail(source, result);
-		return succeed(source, result, 1);
-	}
-
-	static int recoverPreviousRegion(CommandSourceStack source, long expectedCheckpoint) {
-		String result = MmmRuntimeRegistry.require(source.getServer()).regionAdministration()
-				.recoverPreviousSelected(expectedCheckpoint);
-		if (result.contains("失败") || result.startsWith("没有") || result.startsWith("拒绝")) {
-			return fail(source, result);
-		}
 		return succeed(source, result, 1);
 	}
 

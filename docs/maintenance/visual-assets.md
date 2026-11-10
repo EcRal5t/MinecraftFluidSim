@@ -4,6 +4,8 @@
 
 ## 素材来源和加工
 
+环境热场新增的绝热块与绝热玻璃目前分别复用原版白色羊毛和玻璃贴图，模型与物品引用完整。后续需要各补一套独立像素纹理：绝热块使用可辨识的隔热板表面，绝热玻璃使用独立边框并保留透明视野。原版金属、木材、石材等继续使用原版外观，新增导热数据无需替换它们的材质。
+
 使用内置图像生成，提示词如下：
 
 > Create a Minecraft mod pixel-art asset source sheet. Layout exactly 2 columns by 3 rows, each panel a separate square with generous margins and no text: top left industrial sensor face with cyan gauge and dark steel frame, top right metallic storage crate front with amber latch; middle left handheld cyan-tipped field probe, middle right metal bucket containing blue liquid; bottom left metal bucket with tan grains, bottom right compact gas canister with cyan pressure gauge. Uniform 16-bit pixel art, sharp square pixels, strong silhouettes, cohesive muted steel/cyan/brass palette, straight orthographic view, not 3D, no text, no shadows outside objects. Each panel separated by flat vivid magenta background.

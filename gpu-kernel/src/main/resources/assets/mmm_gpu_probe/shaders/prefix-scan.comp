@@ -22,6 +22,7 @@ uint checkedAdd(uint a,uint b) {
     return result;
 }
 void main() {
+    if ((errors & 64u) != 0u) return;
     uint workgroupIndex=gl_WorkGroupID.x+gl_WorkGroupID.y*WORKGROUP_ROW_WIDTH;
     if(workgroupIndex>=(params.count+(WORKGROUP_SIZE-1u))/WORKGROUP_SIZE && params.count!=0u)return;
     uint lane=gl_LocalInvocationID.x, elementIndex=workgroupIndex*WORKGROUP_SIZE+lane;

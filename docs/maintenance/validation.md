@@ -55,7 +55,15 @@ Create 源码用于核对标准存储调用链；本项目当前没有 Create 26
 
 `ExternalStructureHandoffValidation` 通过正式碰撞刷新入口执行多片与半砖装拆，核对同格无关遮罩、质量、体积、内能、已接受代次及分片身份。装配后的平移使用生产采集和接受进度入口，以测试侧接受体状态推进到目标，再执行拆解；同时检查提前拆解、半程恢复、缺少提供器、部分世界状态、预算和重复交接。运动接受状态由 host 夹具提供，此入口不执行 GPU 运动求解或 Create 世界事件。
 
-`ExternalStructureThermalHandoffValidation` 检查普通墙热体、筛轴、表面吸附库存及余量的身份交接，核对审计账、内能和旧端口清理；错误目标朝向拒绝，落地后暂时没有热端口的同一墙体继续保留库存。`structure-handoff`、`external-motion`、构建与架构检查已通过，日志为 `build/validation/create-structure-handoff.log` 和 `build/validation/create-structure-handoff-final.log`。实际 Create 生命周期绑定、跨模组存档协调和跨区域库存转移按适配计划继续验证。
+此前 `structure-handoff`、`external-motion`、构建与架构检查的日志为 `build/validation/create-structure-handoff.log` 和 `build/validation/create-structure-handoff-final.log`。共享环境合并后，普通墙热库存保存在 `WorldThermalEnvironment`，结构携带库存使用带归属信息的 `CARRIED` 节点；区域热设备为接触投影。验证须覆盖节点和归属的存档往返、GPU 导出、热库存守恒，以及几何与环境原生候选联合采用。合并验证入口：
+
+```powershell
+./gradlew.bat :fabric:runHostValidation -PhostValidation=environment,structure-handoff,external-motion :gpu-kernel:runGpuEnvironmentProductionValidation :fabric:assemble verifyArchitecture --offline --no-daemon --max-workers=1
+```
+
+实际 Create 生命周期绑定、跨模组存档协调和跨区域库存转移按适配计划继续验证。
+
+环境热分支合并验证已通过：模组构建、GameTest 编译、`environment`、`structure-handoff`、`external-motion`、`sensor-display`、`protocol`、`region-state`、`industrial-port`、GPU 环境生产流程与架构检查。携带节点验证覆盖归属、内能、表面库存及筛轴持久化、GPU 导出、候选丢弃与提交；等待交接还检查跨维度隔离。最终日志为 `build/validation/merge-environment-heat-final.log`、`build/validation/merge-environment-heat-handoff.log`；其他通过的回归记录在 `build/validation/merge-environment-heat.log`。本轮未启动游戏世界。
 
 ### 工业装置
 
@@ -286,6 +294,101 @@ RTX 5070 Ti、Minecraft 26.2、Iris 1.11.2 和 Sodium 0.9.1：使用 `/mmm demo`
 ## 性能和长期场景
 
 完整步计时包含输入、设备执行、提交和必要世界交接；冷初始化、编辑及存档分别计量。比较使用同一硬件、场景、功能及物理时长。场景与当前预算见 [GPU 演示](#gpu-演示完整流程)及[后端参考](../roadmap/performance-and-backends.md)。
+
+<a id="environment-thermal-cost"></a>
+### 环境热场成本研究
+
+[EnvironmentThermalCostProbe](../../solver/src/test/java/mmm/thermal/EnvironmentThermalCostProbe.java)测量方块级热场的 CPU 数组更新成本，服务于[空间选区与环境热场方案](../roadmap/region-and-environment-heat-plan.md)。合成场景采用连续铁/空气层和有限热容面交换，固定邻接预先建立；每次计时包含内能复制、温度计算、全部面热量及后继缓冲区发布。场景参数由探针维护。
+
+```powershell
+javac --release 25 -d build/environment-thermal-cost solver/src/test/java/mmm/thermal/EnvironmentThermalCostProbe.java
+java -cp build/environment-thermal-cost mmm.thermal.EnvironmentThermalCostProbe
+```
+
+2026-11-10，Intel Core i5-13400F、JDK 26.0.2，预热后单次运行结果如下。立方盒尺寸按世界方块计；32³ 方块对应现有 64³／0.5 m 机械域。数组内存为持久原始数组净载荷，构图临时数组与对象开销另计。
+
+| 盒尺寸／外层厚度 | 热格数 | 相邻面数 | 数组 MiB | 构图 ms | 更新 p50 ms | p95 ms | 最大 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 32³／2 格 | 13,888 | 34,704 | 1.059 | 5.052 | 0.0535 | 0.0571 | 0.0821 |
+| 32³／4 格 | 31,232 | 85,824 | 2.501 | 5.839 | 0.1371 | 0.1432 | 0.1560 |
+| 64³／4 格 | 111,104 | 305,472 | 8.899 | 9.846 | 0.5240 | 0.5815 | 0.7930 |
+
+同次三节点水—铁—空气计算的温度变化分别为 −0.000598071 K、+0.000628216 K、+0.0415795 K，总能量存储差为 0 J。该短检查针对同量反号交接与温变方向。上述测量范围为环境外层的 CPU 更新，未包含选区内固定方块、复杂形状空气分量、世界采样、GPU 提交与传输、持久化和主仿真。
+
+#### 独立热响应对照
+
+下列算例用常物性两体的连续时间解析解作为参考，比较实际温度曲线和热账；它不使用生产步进的有限时间离散公式。算例隔离指定接触，不连接其他空气格、热源或远场，并关闭相变、反应和运动。水初温为 350 K，铁初温为 293.15 K。每个热容和面积采用 SI 单位，Minecraft 方块边长为 1 m，求解格长 `h = 0.5 m`。
+
+| 载体 | 数据定义和质量 | 热容及参考内能 |
+|---|---|---|
+| 水 | 密度 1000 kg/m³，导热率 0.598 W/(m·K)；满求解格 0.125 m³、125 kg，80% 装液为 0.1 m³、100 kg | 比热 4184 J/(kg·K)，对应 523000 或 418400 J/K。293.15 K 的材料参考比内能为 0；纯水 H₂O 的物种参考偏移为 −57300 J/mol，摩尔质量为 0.018 kg/mol。按理想量近似，100 kg 水在 293.15 K 时 `U ≈ −318333333.33 J`；350 K 时 `U ≈ −294547293.33 J`。实际组成按整数 μmol 和质量编码计算。 |
+| 铁墙 | 一个完整方块取 7800 kg，导热率 50 W/(m·K) | 比热 500 J/(kg·K)，`C = 3900000 J/K`；293.15 K 的参考比内能为 146575 J/kg，对应 `U = 1143285000 J`。 |
+| 环境空气 | 1 m³ 标准体积、101325 Pa、293.15 K；标准组成 N₂ 0.78958、O₂ 0.21、CO₂ 0.00042 | 质量约 1.19919268 kg。采用气体定义的定容比热 `Cᵥ`，293.15 K 的混合总热容约 865.56655 J/K；三种材料与其物种在此参考温度的参考能均为 0。实际整数库存有量化误差。 |
+
+完整铁墙中心到接触面距离为 0.5 m。对水—墙接触，选取水的自由液面水平、接触墙面竖直且液体沿墙面法向贯穿整格的几何：满格的湿面积为 0.25 m²；80% 装液的水平液面高度为 0.4 m，湿面积为 0.20 m²。这两种几何的液柱中心到墙面距离均为 `h/2 = 0.25 m`；一般斜向或局部 PLIC 几何须按实际湿面积及液柱体积求距离，装液比例不直接指定湿面积。
+
+串联热阻和两体解析解为：
+
+```text
+G = A / (d_iron / k_iron + d_water / k_water)                 [W/K]
+C_eff = C_water C_iron / (C_water + C_iron)                  [J/K]
+Q(t) = C_eff (T_water,0 − T_iron,0)
+       × (1 − exp[−G (1/C_water + 1/C_iron) t])              [J]
+ΔT_water = −Q/C_water,  ΔT_iron = Q/C_iron                    [K]
+```
+
+这里 `d_iron/k_iron + d_water/k_water = 0.4280602007 m²K/W`。正的 `Q` 从水传给铁。若只存在这条接触，以 `t = 0.05 s` 为对照时：
+
+| 几何 | `G` W/K | 解析 `Q` J | 水温变化 K | 铁温变化 K |
+|---|---:|---:|---:|---:|
+| 满水格，湿面积 0.25 m² | 0.5840300023 | 1.660105229 | −3.17419738×10⁻⁶ | +4.25668007×10⁻⁷ |
+| 80% 水，湿面积 0.20 m² | 0.4672240019 | 1.328084184 | −3.17419738×10⁻⁶ | +3.40534406×10⁻⁷ |
+
+固定膜厚和材料时，热导随实际接触面积成正比；一个 0.25 m × 0.25 m 的全湿微面具有 `G = 0.1460075006 W/K`。内部微面及部分墙面应按真实相交面积累计。绝热方块与绝热玻璃的导热率均为 0，因此穿过绝热固体的 `G = 0`。
+
+铁—环境空气接触单独采用 `G = A / (d_iron/k_iron + 1/h_air)`；取 `h_air = 5 W/(m²·K)`、`A = 1 m²` 得 `G = 4.761904762 W/K`。孤立铁墙初温 350 K、空气初温 293.15 K 时，以上同一指数解在 0.5 s 给出 `Q ≈ 135.171106 J`，铁降温约 `3.46593×10⁻⁵ K`，空气升温约 `0.156165 K`。空气温度仍在 300 K 以下，可使用表内同一段 `Cᵥ`。生产 GPU 夹具中的部分接触直接设定 `G = 5 W/K`，其理论值须按该输入另算；其他空气邻面或干气接触同样须纳入总热流。
+
+#### 生产 GPU 的独立理论检查
+
+[GpuEnvironmentTheoryValidation](../../gpu-kernel/src/test/java/mmm/gpu/GpuEnvironmentTheoryValidation.java)通过正式设备候选推进，参照 [ThermalTheoryOracle](../../gpu-kernel/src/test/java/mmm/gpu/ThermalTheoryOracle.java) 的两体指数解、三体容量加权矩阵指数解和串联热阻。解析参照独立于生产离散推进公式。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuEnvironmentTheoryValidation -PgpuProbeDevice=0 --offline --console=plain --max-workers=1
+```
+
+此夹具采用 19.5 kg 薄铁片，体积 0.0025 m³、厚度 0.01 m、热容 9750 J/K，接触面积 0.25 m²；水为满 0.5 m 求解格。它与上表完整铁方块的几何和热容分别计算。2026-11-10 的生产 GPU 结果：
+
+| 检查 | GPU 实测 | 独立理论 | 误差 |
+|---|---:|---:|---:|
+| 水—薄铁片首步平均热流，1 s | 33.98605 W | 33.98817 W | 0.00625% |
+| 水—薄铁片 20 s 累计传热 | 679.31778 J | 679.33899 J | 0.00312% |
+| 薄铁片—有限空气，0.5 s、0.25 m² | 35.487857 J | 35.499544 J | 0.0329% |
+| 异质热容串联稳态 | 27.537171 W | 27.540984 W | 0.01384% |
+
+串联稳态包含两个不同热容节点及两端恒温边界，从解析稳态初始化后运行四个 0.5 s 步，温度漂移为 0 K。面积减半的环境接触传热为 17.743929 J，绝热接触为 0 J。内部单微面面积为 0.0625 m²，20 s 累计传热实测 169.912989 J，解析值 169.914316 J；步长减半使相对误差从 0.00078% 降至 0.00039%。水—铁及水—铁—空气曲线同样检查步长减半后误差下降；所有场景同时核对联合能量账。
+
+环境推进使用全图共同稳定系数，保持不同材料之间的稳态热阻比例。该近似会减小有效时间步，极小热容节点会使整个环境图的瞬态响应变慢；环境温度采用低频粗尺度近似，传热速率检查需保留实际热容与时间步。
+
+环境集成的目标为每主步新增平均 ≤0.5 ms、p95 ≤1 ms，低频环境扩散事件新增成本 p95 ≤1 ms；性能判定保持下节原完整步预算。上方 CPU 数组结果用于热网格算术成本参照，生产 GPU 完整步单独计量。
+
+#### GPU 完整步实测
+
+[GpuEnvironmentMechanicalBenchmark](../../gpu-kernel/src/test/java/mmm/gpu/GpuEnvironmentMechanicalBenchmark.java)使用 64³ 个 0.5 m 求解格、6144 面世界墙、24576 个墙面接触、31232 个环境节点和 85824 条扩散连接。水／油、局部气体、颗粒库存布局、热化学和相变路径启用，实际颗粒为空，外缘为完整墙壳。开放气流的功能检查由 `runGpuEnvironmentProductionValidation` 单独覆盖。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuEnvironmentMechanicalBenchmark -PgpuProbeDevice=0 -PgpuEnvironmentWarmup=10 -PgpuEnvironmentSamples=60 --offline --console=plain --max-workers=1
+```
+
+2026-11-10，RTX 5070 Ti：单个常驻区域先从同一已提交状态计算无共享环境的基线候选并丢弃，再计算和提交环境耦合候选。每 10 步合入一次 0.5 s 环境扩散。预热 10 对后采样 60 对，避免同时保留两个 64³ 区域的显存成本。
+
+| 事件 | 样本数 | 基线均值／p95 ms | 耦合均值／p95 ms | 配对增量均值／p95 ms |
+|---|---:|---:|---:|---:|
+| 普通完整步 | 54 | 54.0107／58.9131 | 53.7501／59.2112 | −0.2606／3.0117 |
+| 合并环境扩散 | 6 | 54.7681／56.0488 | 54.8975／57.0274 | 0.1294／1.5812 |
+
+普通步 CPU 命令录制平均增加 0.1145 ms，新增提交次数为 0。完整步和 GPU 计时存在配对波动，负增量按噪声记录。当前完整步 50 ms 目标、普通步与低频扩散新增 p95 ≤1 ms 目标均未达到；6 个扩散事件是短样本。世界和区域能量账在测量后闭合。以上计时包含正式设备候选、热账和提交，世界采样、冷初始化、扩容导入、存档及绘制另计。
+
+本次联合回归通过 `region-state,containers,ownership,lifecycle,protocol,environment`、`runGpuRegionExpansionValidation`、`verifyArchitecture` 和 `:fabric:build`。GPU 扩容覆盖边缘库存观察、不同布局候选的丢弃与采用、新空气交接，以及旧液体、气体和面动量保持。生产热场检查覆盖共享墙与表面、外部库存编辑、气流携能及拒绝候选；理论任务覆盖热流数值、稳态、面积、绝热和时间步收敛。
 
 ### 完整生产步预算
 

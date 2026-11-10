@@ -34,8 +34,8 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 
 	@Override
 	public RegionIdentity identity(long checkpointGeneration) throws IOException {
-		if (!region.controllerManaged() || !region.solverLoaded()) {
-			throw new IOException("Only a loaded controller region can be checkpointed");
+		if (!region.hasSelectedVolume() || !region.solverLoaded()) {
+			throw new IOException("Only a loaded region can be checkpointed");
 		}
 		if (checkpointGeneration <= region.checkpointGeneration()) {
 			throw new IOException("Checkpoint generation must advance");
@@ -77,16 +77,15 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 		return new BlockPos(value.x(), value.y(), value.z());
 	}
 
-	public static RegionGeometry.ControllerFootprint footprint(FluidRegionFootprint value) {
+	public static RegionGeometry.SelectedVolume footprint(FluidRegionFootprint value) {
 		Objects.requireNonNull(value, "value");
-		return new RegionGeometry.ControllerFootprint(position(value.controllerPosition()),
-				position(value.minimumInterior()), position(value.maximumInterior()), value.interiorBlocks(),
-				value.boundaryBlocks(), value.requiredChunks(), value.kind(), value.atmosphereBlocks(), value.returnedBlocks());
+		return new RegionGeometry.SelectedVolume(position(value.minimumInterior()), position(value.maximumInterior()), value.interiorBlocks(),
+				value.requiredChunks(), value.kind(), value.poolShellBlocks(), value.atmosphereBlocks(), value.returnedBlocks(), value.name());
 	}
 
-	public static FluidRegionFootprint minecraftFootprint(RegionGeometry.ControllerFootprint value) {
-		return new FluidRegionFootprint(blockPosition(value.controllerPosition()), blockPosition(value.minimumInterior()),
-				blockPosition(value.maximumInterior()), value.interiorBlocks(), value.boundaryBlocks(), value.requiredChunks(), value.kind(), value.atmosphereBlocks(), value.returnedBlocks());
+	public static FluidRegionFootprint minecraftFootprint(RegionGeometry.SelectedVolume value) {
+		return new FluidRegionFootprint(blockPosition(value.minimumInterior()),
+				blockPosition(value.maximumInterior()), value.interiorBlocks(), value.poolShellBlocks(), value.requiredChunks(), value.kind(), value.atmosphereBlocks(), value.returnedBlocks(), value.name());
 	}
 
 	public static RegionRuntimeIntent runtimeIntent(FluidRegion.PersistedRuntime value) {

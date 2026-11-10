@@ -54,21 +54,20 @@ public final class IndustrialControlGameTest {
     public void sensorControlsFinitePort(GameTestHelper test) {
         var level=test.getLevel();
         var runtime=MmmRuntimeRegistry.require(level.getServer());
-        var controller=new BlockPos(1,2,2);
+        var controller=new BlockPos(2,2,2);
         var portPosition=new BlockPos(6,2,2);
         var sensorPosition=new BlockPos(6,3,2);
         var boxPosition=new BlockPos(7,2,2);
         var screenPosition=new BlockPos(3,2,2);
         var wallPosition=new BlockPos(2,2,3);
         for(int z=1;z<=4;z++)for(int y=1;y<=4;y++)for(int x=1;x<=6;x++)
-            if(x==1||x==6||y==1||y==4||z==1||z==4)test.setBlock(x,y,z,MmmBlocks.FLUID_BOUNDARY);
+            if(x==1||x==6||y==1||y==4||z==1||z==4)test.setBlock(x,y,z,Blocks.IRON_BLOCK);
         test.setBlock(wallPosition,Blocks.IRON_BLOCK);
-        test.setBlock(controller,MmmBlocks.FLUID_CONTROLLER);
         test.setBlock(portPosition,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST));
         test.setBlock(sensorPosition,MmmBlocks.PROCESS_SENSOR);
         test.setBlock(boxPosition,MmmBlocks.MATERIAL_BOX);
         var player=test.makeMockServerPlayerInLevel();
-        var activation=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
+        var activation=runtime.regionActivation().createSelection(player,test.absolutePos(new BlockPos(2,2,2)),test.absolutePos(new BlockPos(5,3,3)));
         test.assertTrue(activation.succeeded(),"Controller activation failed: "+activation.failure());
         var region=runtime.worldUpdates().regions().selected();
         test.assertTrue(region!=null&&region.solverLoaded(),"Controller did not publish its region");
@@ -225,7 +224,7 @@ public final class IndustrialControlGameTest {
     private static FiniteThermalDeviceState wallAt(FluidRegion region,String fingerprint,BlockPos position) {
         String prefix=position.asLong()+"@";
         return region.finiteThermalDevices(fingerprint).devices().stream()
-                .filter(device->device.providerId().equals(OrdinaryThermalWalls.PROVIDER) && device.objectId().startsWith(prefix))
+                .filter(device->device.providerId().equals(WorldThermalEnvironment.PROVIDER) && device.objectId().startsWith(prefix))
                 .findFirst().orElse(null);
     }
 

@@ -48,9 +48,17 @@ public final class OwnershipCoordinator {
 						+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
 			}
 			failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
+			var retained = ownershipFiles.hasCommitted() ? ownershipFiles.readCommitted() : null;
+			if (retained != null && (!retained.regionId().equals(regionId) || !retained.dimensionId().equals(dimensionId)
+					|| retained.generation() > baseGeneration)) throw new IOException("Existing ownership identity differs");
+			var existing = retained == null ? List.<OwnershipJournal.BlockEntry>of() : retained.ownedBlocks();
+			var positions = new java.util.HashSet<Long>();
+			for (var entry : existing) positions.add(entry.packedPosition());
+			for (var entry : candidates) if (!positions.add(entry.packedPosition()))
+				throw new IOException("New ownership overlaps an existing position");
 			OwnershipJournal wal = new OwnershipJournal(regionId, dimensionId, baseGeneration,
 					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.ACQUIRE, candidates,
-					UUID.randomUUID(), prepared.manifestChecksum(), CrossDomainRecovery.JournalPhase.PREPARED);
+					existing, UUID.randomUUID(), prepared.manifestChecksum(), CrossDomainRecovery.JournalPhase.PREPARED);
 			ownershipFiles.publishWAL(wal);
 			failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
 			ownershipFiles.publishWarning(warning);
@@ -73,7 +81,9 @@ public final class OwnershipCoordinator {
 			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
 			long published = regionFiles.commit(prepared, (point, path) -> { });
 			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
-			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, dimensionId, published, candidates));
+			var owned = new java.util.ArrayList<>(existing);
+			owned.addAll(candidates);
+			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, dimensionId, published, owned));
 			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
 			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
 			world.persist(dimensionId);
@@ -366,8 +376,12 @@ public final class OwnershipCoordinator {
 			FailureInjector failures,
 			OwnershipJournal wal
 	) throws IOException {
-		List<OwnershipJournal.BlockEntry> expected =
-				wal.operation() == OwnershipJournal.Operation.ACQUIRE ? wal.blocks() : wal.retainedBlocks();
+		List<OwnershipJournal.BlockEntry> expected;
+		if (wal.operation() == OwnershipJournal.Operation.ACQUIRE) {
+			var combined = new java.util.ArrayList<>(wal.retainedBlocks());
+			combined.addAll(wal.blocks());
+			expected = List.copyOf(combined);
+		} else expected = wal.retainedBlocks();
 		OwnershipCommitted current = ownershipFiles.hasCommitted() ? ownershipFiles.readCommitted() : null;
 		if (current != null && !current.regionId().equals(wal.regionId())) {
 			throw new IOException("Ownership is LOCKED: committed registry region " + current.regionId()

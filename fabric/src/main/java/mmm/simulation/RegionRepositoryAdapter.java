@@ -9,7 +9,6 @@ import mmm.application.RegionCatalog;
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.HostFluidState;
 import mmm.fluid.FluidDefinitions;
-import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
 import mmm.granular.GranularRegistry;
@@ -17,6 +16,7 @@ import mmm.simulation.ownership.OwnershipCommitted;
 import mmm.simulation.ownership.OwnershipFiles;
 import mmm.simulation.ownership.OwnershipStore;
 import mmm.simulation.persistence.GenerationSequence;
+import mmm.simulation.persistence.EnvironmentThermalStore;
 import mmm.simulation.persistence.RegionCheckpointAssembler;
 import mmm.simulation.persistence.RegionCheckpointRestorer;
 import mmm.simulation.persistence.RegionState;
@@ -41,6 +41,14 @@ import java.util.UUID;
 /** Minecraft repository adapter for checkpoint assembly, generation storage and live restore. */
 final class RegionRepositoryAdapter {
 	private final RegionGenerationStore files;
+    private final EnvironmentThermalStore worldStore;
+    private EnvironmentThermalStore.Snapshot worldSnapshot;
+    private WorldThermalEnvironment environment;
+    private FluidRegionManager manager;
+    private boolean mirroringWorld;
+    private java.util.function.Predicate<UUID> worldCheckpointBarrier = id -> false;
+    private final java.util.Map<UUID,mmm.thermal.EnvironmentThermalState> stagedEnvironment = new java.util.HashMap<>();
+    private final java.util.Set<UUID> externalEnvironmentCandidates = new java.util.HashSet<>();
 	private final OwnershipStore ownershipStore;
 	private final WorldCapabilityProfile profile;
 	private final FluidDefinitions definitions;
@@ -85,6 +93,7 @@ final class RegionRepositoryAdapter {
 					gasRegistry);
 			default -> throw new IllegalArgumentException("Unknown region layout " + profile.regionLayoutId());
 		};
+        worldStore = new EnvironmentThermalStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
 		ownershipStore = new OwnershipStore(worldRoot, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry);
 		this.profile = profile;
 		this.chemicalRegistry = chemicalRegistry;
@@ -99,23 +108,128 @@ final class RegionRepositoryAdapter {
 		this.maximumThermalSubsteps = maximumThermalSubsteps;
 	}
 
+    void worldCheckpointBarrier(java.util.function.Predicate<UUID> barrier) { worldCheckpointBarrier=Objects.requireNonNull(barrier); }
+    void environment(WorldThermalEnvironment environment, FluidRegionManager manager) throws IOException {
+        this.environment=Objects.requireNonNull(environment); this.manager=Objects.requireNonNull(manager);
+        if(worldSnapshot!=null) environment.restore(worldSnapshot.environments());
+        files.commitHook(new RegionGenerationStore.CommitHook() {
+            public void beforeCommit(RegionState target) throws IOException { publishWorldCheckpoint(target,null); }
+            public void beforeRemoval(RemovedRegionManifest removed) throws IOException { publishWorldCheckpoint(null,removed); }
+            public void beforePrepare(UUID id) throws IOException { reconcileWorldMirror(id); }
+            public RegionGenerationStore.CommittedIdentity committed(UUID id) {
+                if(worldSnapshot==null || mirroringWorld)return null;
+                var state=worldSnapshot.regions().get(id);
+                if(state!=null)return new RegionGenerationStore.CommittedIdentity(state.manifest().checkpointGeneration(),state.manifest().checksum());
+                var removed=worldSnapshot.removals().get(id);
+                return removed==null?new RegionGenerationStore.CommittedIdentity(0L,-1L):new RegionGenerationStore.CommittedIdentity(removed.generation(),removed.checksum());
+            }
+        });
+    }
+
+    private void reconcileWorldMirror(UUID id) throws IOException {
+        if(mirroringWorld || worldSnapshot==null)return;
+        var removal=worldSnapshot.removals().get(id);
+        var state=worldSnapshot.regions().get(id);
+        mirroringWorld=true;
+        try {
+            if(removal!=null) files.completeWorldRemoval(id,removal.generation(),removal.checksum());
+            else if(state!=null) {
+                long generation=files.physicalCommittedGeneration(id);
+                if(generation<state.manifest().checkpointGeneration()) files.publish(state);
+                else if(generation!=state.manifest().checkpointGeneration()
+                        || files.physicalCommittedManifestChecksum(id)!=state.manifest().checksum())
+                    throw new IOException("Region mirror differs from world checkpoint "+id);
+            }
+        } finally { mirroringWorld=false; }
+    }
+
+    void checkpointWorld() throws IOException {
+        if(environment!=null)publishWorldCheckpoint(null,null);
+    }
+
+    private void publishWorldCheckpoint(RegionState target, RemovedRegionManifest removal) throws IOException {
+        if(mirroringWorld || environment==null)return;
+        UUID targetId=target!=null?target.manifest().regionId():removal!=null?removal.regionId():null;
+        var regions = new java.util.HashMap<UUID,RegionState>();
+        var removals = new java.util.HashMap<UUID,EnvironmentThermalStore.Removal>();
+        if(worldSnapshot!=null){regions.putAll(worldSnapshot.regions()); removals.putAll(worldSnapshot.removals());}
+        var live = new java.util.ArrayList<FluidRegion>();
+        for(var region:manager.regions()) {
+            if(!region.hasSelectedVolume() || region.id().equals(targetId))continue;
+            if(worldCheckpointBarrier.test(region.id()) || ownershipLockDescription(region)!=null)
+                throw new IOException("Another region has a pending world transaction: "+region.id());
+            if(region.solverLoaded()) {
+                long generation=GenerationSequence.next(region.checkpointGeneration(),"World checkpoint");
+                regions.put(region.id(),capture(region,generation)); live.add(region);
+            } else if(!regions.containsKey(region.id())) regions.put(region.id(),files.read(region.id()));
+        }
+        if(target!=null) { regions.put(targetId,target); removals.remove(targetId); }
+        else if(removal!=null) { regions.remove(targetId); removals.put(targetId,new EnvironmentThermalStore.Removal(removal.targetGeneration(),removal.checksum())); }
+        var environments=new java.util.HashMap<>(environment.capture());
+        var override=stagedEnvironment.get(targetId);
+        if(override!=null) {
+            var base=environments.get(override.dimensionId());
+            if(base==null || override.generation()!=Math.addExact(base.generation(),1L))
+                throw new IOException("Environment candidate is stale before world checkpoint");
+            environments.put(override.dimensionId(),override);
+        }
+        boolean external=externalEnvironmentCandidates.contains(targetId);
+        try(var prepared = override == null || external ? null : environment.prepareCheckpoint(override)) {
+            var candidate=worldStore.prepare(environments,regions,removals);
+            if(prepared!=null && !prepared.isCurrent())throw new IOException("Environment candidate changed before world publication");
+            try { worldStore.commit(candidate); }
+            catch (IOException failure) {
+                if(!worldStore.isPublished(candidate))throw failure;
+                MmmMod.LOGGER.warn("World checkpoint published despite a post-publication failure",failure);
+            }
+            worldSnapshot=candidate.snapshot();
+            if(prepared!=null) environment.adoptCheckpoint(override,prepared);
+        }
+        for(var region:live) {
+            var state=regions.get(region.id());
+            if(!region.recordPublishedCheckpoint(state.manifest().checkpointGeneration()))
+                throw new IOException("World checkpoint was not accepted by region "+region.id());
+        }
+        mirroringWorld=true;
+        try {
+            for(var region:live) files.publish(regions.get(region.id()));
+        } finally { mirroringWorld=false; }
+        stagedEnvironment.remove(targetId); externalEnvironmentCandidates.remove(targetId);
+    }
+
 	OwnershipTransactionCoordinator newOwnershipTransactions() {
 		return new OwnershipTransactionCoordinator(this, files, ownershipStore);
 	}
 
-	mmm.thermal.FiniteThermalDeviceInventory readFiniteDevices(UUID id) throws IOException { return files.readFiniteDevices(id,thermalRegistry); }
+	mmm.thermal.FiniteThermalDeviceInventory readFiniteDevices(UUID id) throws IOException {
+        if(worldSnapshot!=null && worldSnapshot.regions().containsKey(id))
+            return new RegionCheckpointRestorer(worldSnapshot.regions().get(id).checkpoint()).reconstructFiniteThermalDevices(thermalRegistry);
+        return files.readFiniteDevices(id,thermalRegistry);
+    }
 
 	List<String> loadMetadata(FluidRegionManager manager) {
 		List<String> issues = new ArrayList<>();
 		RegionGenerationStore.Discovery discovery;
 		try {
+            worldSnapshot = worldStore.read();
+            if (worldSnapshot != null) for (var entry : worldSnapshot.removals().entrySet())
+                files.completeWorldRemoval(entry.getKey(),entry.getValue().generation(),entry.getValue().checksum());
+            if (worldSnapshot != null) for (var state : worldSnapshot.regions().values()) {
+                long mirror = files.committedGeneration(state.manifest().regionId());
+                if (mirror < state.manifest().checkpointGeneration()) files.publish(state);
+                else if (mirror != state.manifest().checkpointGeneration()
+                        || files.committedManifestChecksum(state.manifest().regionId()) != state.manifest().checksum())
+                    throw new IOException("Region mirror differs from world checkpoint " + state.manifest().regionId());
+            }
 			files.recoverKnownFirstPublicationStaging();
 			discovery = files.discover();
 		} catch (IOException exception) {
 			return List.of("无法恢复或扫描 region-state：" + exception.getMessage());
 		}
 		for (var issue : discovery.issues().entrySet()) issues.add(issue.getKey().getFileName() + " 已锁定：" + issue.getValue());
-		for (RegionManifest manifest : discovery.manifests()) {
+        var manifests = worldSnapshot == null ? discovery.manifests()
+                : worldSnapshot.regions().values().stream().map(RegionState::manifest).toList();
+		for (RegionManifest manifest : manifests) {
 			try {
 				if (manifest.hasChemicalState()) {
 					if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
@@ -161,15 +275,34 @@ final class RegionRepositoryAdapter {
 	}
 
 	long checkpoint(FluidRegion region) throws IOException {
-		if (!region.controllerManaged() || !region.solverLoaded()) throw new IOException("Region has no persistent live solver");
+		if (!region.hasSelectedVolume() || !region.solverLoaded()) throw new IOException("Region has no persistent live solver");
 		String ownershipLock = ownershipLockDescription(region);
 		if (ownershipLock != null) {
 			throw new IOException("Unresolved world ownership state blocks checkpoint: " + ownershipLock);
 		}
 		long generation = GenerationSequence.next(region.checkpointGeneration(), "Region checkpoint");
 		RegionState state = capture(region, generation);
-		return publishAndRecord(region, generation, state.manifest().checksum(),
-				() -> files.publish(state), "Published checkpoint was not accepted by the live region");
+		stageEnvironment(region);
+		try {
+			return publishAndRecord(region, generation, state.manifest().checksum(),
+					() -> files.publish(state), "Published checkpoint was not accepted by the live region");
+		} finally { clearStagedEnvironment(region.id()); }
+	}
+
+	void stageEnvironment(FluidRegion region) {
+		if (region.environmentCandidate() != null) {
+            stagedEnvironment.put(region.id(), region.environmentCandidate());
+            if(region.environmentCandidateExternal())externalEnvironmentCandidates.add(region.id());
+        }
+	}
+	void clearStagedEnvironment(UUID regionId) { stagedEnvironment.remove(regionId); externalEnvironmentCandidates.remove(regionId); }
+
+	boolean worldCheckpointContains(FluidRegion candidate, long generation) {
+		if (worldSnapshot == null) return false;
+		var saved = worldSnapshot.regions().get(candidate.id());
+		return saved != null && saved.manifest().checkpointGeneration() == generation
+				&& saved.manifest().networkGeneration() == candidate.networkGeneration()
+				&& saved.manifest().footprint().equals(MinecraftRegionCheckpointSource.footprint(candidate.footprint()));
 	}
 
 	/**
@@ -188,10 +321,11 @@ final class RegionRepositoryAdapter {
 			published = publisher.publish();
 		} catch (IOException | RuntimeException failure) {
 			try {
-				long durableGeneration = files.committedGeneration(region.id());
+				long durableGeneration = committedGeneration(region.id());
 				if (durableGeneration != generation
-						|| files.committedManifestChecksum(region.id()) != manifestChecksum) throw failure;
+						|| committedManifestChecksum(region.id()) != manifestChecksum) throw failure;
 				published = durableGeneration;
+                clearStagedEnvironment(region.id());
 				MmmMod.LOGGER.warn("Region HEAD {} for region {} committed despite a post-publish exception",
 						published, region.id(), failure);
 			} catch (IOException | RuntimeException inspectionFailure) {
@@ -265,9 +399,13 @@ final class RegionRepositoryAdapter {
 		}
 		String ownershipLock = ownershipLockDescription(region);
 		if (ownershipLock != null) throw new IOException("Unresolved world ownership state blocks staging: " + ownershipLock);
-		RegionGenerationStore.PreparedGeneration prepared = files.prepare(
-				capture(region, targetGeneration), (point, path) -> { });
-		return new StagedCheckpoint(prepared, prepared.manifestChecksum());
+        stageEnvironment(region);
+        try {
+            RegionGenerationStore.PreparedGeneration prepared = files.prepare(capture(region, targetGeneration), (point, path) -> { });
+            return new StagedCheckpoint(prepared, prepared.manifestChecksum());
+        } catch (IOException | RuntimeException failure) {
+            clearStagedEnvironment(region.id()); throw failure;
+        }
 	}
 
 	/** Stages a private lifecycle result from its own complete carrier geometry. */
@@ -294,7 +432,15 @@ final class RegionRepositoryAdapter {
 
 	/** Publishes only HEAD; the caller then applies its already-validated live assignment and records the generation. */
 	long commitStagedLifecycleCheckpoint(StagedCheckpoint staged) throws IOException {
-		return files.commit(staged.prepared(), (point, path) -> { });
+        try { return files.commit(staged.prepared(), (point, path) -> { }); }
+        catch(IOException | RuntimeException failure) {
+            if(committedGeneration(staged.prepared().id())==staged.prepared().generation()
+                    && committedManifestChecksum(staged.prepared().id())==staged.manifestChecksum()) {
+                clearStagedEnvironment(staged.prepared().id());
+                return staged.prepared().generation();
+            }
+            throw failure;
+        }
 	}
 
 	long commitStagedCheckpoint(FluidRegion region, StagedCheckpoint staged) throws IOException {
@@ -304,6 +450,12 @@ final class RegionRepositoryAdapter {
 	}
 
 	void abortStagedCheckpoint(StagedCheckpoint staged) throws IOException {
+        clearStagedEnvironment(staged.prepared().id());
+        if(worldSnapshot!=null) {
+            var committed=worldSnapshot.regions().get(staged.prepared().id());
+            if(committed!=null && committed.manifest().checkpointGeneration()==staged.prepared().generation()
+                    && committed.manifest().checksum()==staged.manifestChecksum())return;
+        }
 		files.abort(staged.prepared());
 	}
 
@@ -311,7 +463,7 @@ final class RegionRepositoryAdapter {
 
 	/** Per-region fail-closed guard used for both loaded stepping and every ordinary checkpoint path. */
 	String ownershipLockDescription(FluidRegion region) {
-		if (!region.controllerManaged()) return null;
+		if (!region.hasSelectedVolume()) return null;
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
 		if (ownershipFiles.isLocked()) return ownershipFiles.lockDescription();
 		if (!ownershipFiles.hasCommitted()) return null;
@@ -368,6 +520,7 @@ final class RegionRepositoryAdapter {
 		try {
 			var pending = pendingRestores.get(region.id());
 			if (pending == null || pending.region != region) {
+                reconcileWorldMirror(region.id());
 				pending = new PendingRestore(region, new SectionRead(region.id()));
 				validateRestoreManifest(region, pending.read.view.manifest());
 				pendingRestores.put(region.id(), pending);
@@ -410,6 +563,7 @@ final class RegionRepositoryAdapter {
 	}
 
 	private RegionState readComplete(UUID regionId) throws IOException {
+        if(worldSnapshot!=null && worldSnapshot.regions().containsKey(regionId))return worldSnapshot.regions().get(regionId);
 		var read = new SectionRead(regionId);
 		read.advance(Integer.MAX_VALUE);
 		return read.complete();
@@ -470,66 +624,15 @@ final class RegionRepositoryAdapter {
 		region.adoptFiniteDeviceCandidate(candidate, targetGeneration);
 	}
 
-	/**
-	 * Operator-only recovery for a HEAD that is locally valid but cannot bind its persisted gas
-	 * topology to its own marker geometry. The inactive generation is fully reconstructed into a
-	 * throwaway solver before HEAD moves. Startup never calls this path and never guesses a fallback.
-	 */
-	long recoverPreviousGeneration(FluidRegion region, long expectedCurrentGeneration) throws IOException {
-		if (!profile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null || gasRegistry == null) {
-			throw new IOException("Previous-generation recovery requires the active thermal/gas registries");
-		}
-		if (!region.controllerManaged() || region.solverLoaded()
-				|| region.lifecycle().state() != FluidRegionLifecycle.State.UNLOADED) {
-			throw new IOException("Previous-generation recovery requires a metadata-only unloaded controller region");
-		}
-		if (!region.paused()) throw new IOException("Previous-generation recovery requires an operator-paused region");
-		if (region.checkpointGeneration() != expectedCurrentGeneration) {
-			throw new IOException("Selected region metadata is not at expected checkpoint " + expectedCurrentGeneration);
-		}
-		String ownershipLock = ownershipLockDescription(region);
-		if (ownershipLock != null) {
-			throw new IOException("Unresolved world ownership state blocks previous-generation recovery: " + ownershipLock);
-		}
-
-		RegionGenerationStore.PreviousGeneration previous = files.readPrevious(region.id(), expectedCurrentGeneration);
-		RegionManifest manifest = previous.state().manifest();
-		if (manifest.layout() != RegionStateLayout.THERMAL) {
-			throw new IOException("Previous slot does not use the current thermal/gas region layout");
-		}
-		validateFeatureShape(manifest);
-		validateRecoveryIdentity(region, manifest);
-		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
-		if (ownershipFiles.hasCommitted()) {
-			OwnershipCommitted committed = ownershipFiles.readCommitted();
-			if (!committed.regionId().equals(region.id())
-					|| !committed.dimensionId().equals(region.dimension().identifier().toString())
-					|| committed.generation() > manifest.checkpointGeneration()) {
-				throw new IOException("Previous checkpoint predates committed world ownership truth");
-			}
-		}
-
-		FluidRegion probe = unloadedRegion(manifest);
-		restoreFeatureGeneration(probe, previous.state());
-		if (!probe.solverLoaded() || !probe.thermalAuditClosed()) {
-			throw new IOException("Previous checkpoint probe did not restore a closed thermal inventory");
-		}
-		if (!probe.releaseSolverAfterCheckpoint(manifest.checkpointGeneration())) {
-			throw new IOException("Previous checkpoint probe could not release its temporary solver");
-		}
-		return files.activatePrevious(previous);
-	}
-
 	private static void validateRecoveryIdentity(FluidRegion region, RegionManifest manifest) throws IOException {
 		var expectedFootprint = MinecraftRegionCheckpointSource.footprint(region.footprint());
 		var actualFootprint = manifest.footprint();
 		if (expectedFootprint.kind() == mmm.model.region.RegionGeometry.RegionKind.POOL
 				&& actualFootprint.kind() == expectedFootprint.kind()
 				&& actualFootprint.returnedBlocks().containsAll(expectedFootprint.returnedBlocks())) {
-			expectedFootprint = new mmm.model.region.RegionGeometry.ControllerFootprint(expectedFootprint.controllerPosition(),
-					expectedFootprint.minimumInterior(), expectedFootprint.maximumInterior(), expectedFootprint.interiorBlocks(),
-					expectedFootprint.boundaryBlocks(), expectedFootprint.requiredChunks(), expectedFootprint.kind(),
-					expectedFootprint.atmosphereBlocks(), actualFootprint.returnedBlocks());
+			expectedFootprint = new mmm.model.region.RegionGeometry.SelectedVolume(expectedFootprint.minimumInterior(), expectedFootprint.maximumInterior(), expectedFootprint.interiorBlocks(),
+					expectedFootprint.requiredChunks(), expectedFootprint.kind(), expectedFootprint.poolShellBlocks(),
+					expectedFootprint.atmosphereBlocks(), actualFootprint.returnedBlocks(), expectedFootprint.name());
 		}
 		if (manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
@@ -537,7 +640,7 @@ final class RegionRepositoryAdapter {
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
 				|| !manifest.solverConfig().equals(region.solverConfig())
 				|| !manifest.footprint().equals(expectedFootprint)) {
-			throw new IOException("Previous checkpoint does not match the admitted controller identity");
+			throw new IOException("Previous checkpoint does not match the admitted region identity");
 		}
 	}
 
@@ -623,7 +726,7 @@ final class RegionRepositoryAdapter {
 		var restorer=new RegionCheckpointRestorer(state.checkpoint());long generation=state.manifest().checkpointGeneration();
 		try {
 			var authoritative=restorer.reconstructAuthoritativeState(definitions);
-			if (authoritative.sealedDomainBoundary() != (region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED))
+			if (authoritative.sealedDomainBoundary())
 				throw new IOException("Saved gas exterior does not match the region kind");
 			if (readView != null) files.verifyReadView(readView);
 			region.restoreAuthoritativeSolver(authoritative,generation);

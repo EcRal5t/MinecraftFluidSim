@@ -161,7 +161,7 @@ job 及其子步数）。`picks` token 提供逐动作耗时与子步数，用�
 - 容器 recovery：`ContainerRecoveryCoordinator`、`CrossDomainRecovery` 与真实文件/世界状态的组合（目前只有 `ContainerApplicationValidation` 与 `ContainerTransferStoreValidation` 的确定性场景）。
 - `MinecraftRegionTick` 的调度与降级：`ensureAvailable`、`unloadForFailure`、`PERFORMANCE_PAUSE` / `NUMERICAL_PAUSE` 的真实触发与恢复、硬超时（`hardOverrunStreak` / `recoveryStreak`）。
 - ownership：`OwnershipTransactionCoordinator`、ownership 锁/committed 状态、removal 与 quarantine。
-- 世界侧：`ServerLevel`、区块加载、`FluidBoundaryScanner` 的真实边界、方块接管/释放。
+- 世界侧：`ServerLevel`、区块加载、选区与碰撞采样的真实边界、方块接管/释放。
 - 多区域：`FluidRegionManager` 预算、多区域 gas/network generation 交互（当前每次只驱动单区域）。
 - 生命周期：`HYDROSTATIC_SLEEP`（需要真正的静默步进序列）；`REDUCED` 仅通过 coldRestart 改步长触及。
 - 客户端/网络：快照发送、渲染、Jade 适配（超出本工具范围）。
@@ -192,4 +192,3 @@ Fuzzer 通过多层断言保证物理仿真与状态转换的确定性：
 - **跨分片边界**：场景 18 与 19 跨越 Section 边界（坐标 `(-2, 64, -2)`），验证跨分片几何与库存完整性；场景 20 与 21 提供喉道与 micro-mask 几何压力测试。
 - **动态世界交互**：`toggleSolid` 动态修改内部碰撞格并将位移计入 escaped sink；`editBoundarySource` 动态修改世界恒温边界场。
 - **事件留痕与覆盖统计**：从运行统计中按场景采集相变、沉积、唤醒与重播种等真实物理事件，输出覆盖分析报告。
-

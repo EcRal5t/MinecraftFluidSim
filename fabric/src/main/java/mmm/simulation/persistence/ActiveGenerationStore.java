@@ -48,6 +48,11 @@ final class ActiveGenerationStore {
 			Path temporary,
 			RegionGenerationStore.FaultInjector injector
 	) throws IOException {
+        writeTemporary(state, temporary, injector, true);
+    }
+
+    void writeTemporary(RegionState state, Path temporary, RegionGenerationStore.FaultInjector injector,
+                        boolean verify) throws IOException {
 		Files.createDirectory(temporary);
 		ArrayList<RegionSectionState> sections = new ArrayList<>(state.sections());
 		sections.sort(Comparator.comparing(RegionSectionState::key));
@@ -62,9 +67,11 @@ final class ActiveGenerationStore {
 		DurableFileOperations.forceFile(manifestPath);
 		DurableFileOperations.forceDirectory(temporary);
 		injector.check(RegionGenerationStore.FaultPoint.AFTER_MANIFEST_WRITE, manifestPath);
-		RegionState verified = readSlot(temporary);
-		verified.validate();
-		validateReconstruction(verified);
+        if (verify) {
+            RegionState verified = readSlot(temporary);
+            verified.validate();
+            validateReconstruction(verified);
+        }
 		injector.check(RegionGenerationStore.FaultPoint.AFTER_TEMP_VALIDATION, temporary);
 	}
 

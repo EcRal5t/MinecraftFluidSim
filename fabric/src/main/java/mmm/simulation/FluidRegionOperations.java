@@ -10,8 +10,7 @@ import mmm.fluid.HostFluidState;
 import mmm.fluid.MaterialRegistry;
 import mmm.fluid.air.GasRegistry;
 import mmm.granular.GranularRegistry;
-import mmm.simulation.controller.FluidBoundaryScanner;
-import mmm.simulation.controller.FluidControllerRegions;
+import mmm.simulation.controller.RegionWorldAvailability;
 import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.simulation.ownership.OwnershipJournal;
 import mmm.thermal.ThermalRegistry;
@@ -75,6 +74,12 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		}
 	}
 
+    void worldCheckpointBarrier(java.util.function.Predicate<UUID> barrier) {
+        if(persistence!=null)persistence.worldCheckpointBarrier(barrier);
+    }
+    void environment(WorldThermalEnvironment environment) throws IOException {
+        if(persistence!=null) persistence.environment(environment,manager);
+    }
 	void advanceTick() { serviceTick++; if (persistence != null) persistence.retainRestores(manager); }
 	void cancelRestore(FluidRegion region) { persistence.cancelRestore(region.id()); }
 	boolean creationLocked() { return creationLocked; }
@@ -84,6 +89,9 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		creationLocked = true;
 	}
 	long checkpoint(FluidRegion region) throws IOException { return persistence.checkpoint(region); }
+	boolean worldCheckpointContains(FluidRegion region, long generation) {
+		return persistence.worldCheckpointContains(region, generation);
+	}
 	/** Persist an operator intent changed while the region has no live solver. */
 	void setUnloadedRunIntent(FluidRegion region, boolean paused) throws IOException {
 		if (region.solverLoaded()) throw new IllegalArgumentException("Region is already loaded");
@@ -112,6 +120,8 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	void requireRemovalQuarantineCapacity(FluidRegion region, long maximumEntries, long maximumBytes) throws IOException {
 		persistence.requireRemovalQuarantineCapacity(region, maximumEntries, maximumBytes);
 	}
+    void stageEnvironment(FluidRegion region) { persistence.stageEnvironment(region); }
+    void clearStagedEnvironment(UUID id) { persistence.clearStagedEnvironment(id); }
 	mmm.simulation.persistence.RegionGenerationStore.PreparedRemoval prepareRemoval(
 			FluidRegion region, long networkGeneration, UUID transactionId, long maximumEntries, long maximumBytes
 	) throws IOException {
@@ -199,6 +209,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			RemovalSender removalSender,
 			boolean inventoryDecrease
 	) {
+		if (region.expansionBlockFailure() != null && !inventoryDecrease) {
+			region.setAvailabilityFailure(region.expansionBlockReason(), region.expansionBlockFailure());
+			return false;
+		}
 		String numericalFailure = null;
 		if (region.chemistryBlockFailure() != null) {
 			numericalFailure = region.chemistryBlockFailure();
@@ -223,7 +237,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
 			return false;
 		}
-		if (!region.controllerManaged()) {
+		if (!region.hasSelectedVolume()) {
 			cancelRestore(region);
 			if (numericalPaused) region.setAvailabilityFailure(
 					RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
@@ -249,18 +263,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			unloadForFailure(level.getServer(), region, admission.reason(), admission.failure(), removalSender);
 			return false;
 		}
-		FluidBoundaryScanner.AvailabilityResult availability = FluidControllerRegions.availability(level, region.footprint());
-        boolean missingWorldChunks=availability.status()==FluidBoundaryScanner.AvailabilityStatus.INCOMPLETE_CHUNKS;
-        if(missingWorldChunks) {
-            String shellFailure=MinecraftGroupAvailability.loadedShellFailure(level,region);
-            if(shellFailure!=null) {
-                region.setAvailabilityFailure(RegionAvailabilityReason.BOUNDARY_OPEN,shellFailure);
-                return false;
-            }
-        } else if (!availability.ready()) {
-            unloadForFailure(level.getServer(),region,RegionAvailabilityReason.BOUNDARY_OPEN,availability.failure(),removalSender);
-            return false;
-        }
+
 		if (!region.solverLoaded()) {
 			String lockedFailure = checkpointFailures.get(region.id());
 			if (lockedFailure != null) {
@@ -281,7 +284,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				region.markCollisionRefreshed();
 				retryAt.remove(region.id());
 				checkpointFailures.remove(region.id());
-				MmmMod.LOGGER.info("Restored controller region {} from checkpoint {} with {} markers",
+				MmmMod.LOGGER.info("Restored region {} from checkpoint {} with {} markers",
 						region.id(), region.checkpointGeneration(), region.liquidRowCount());
 				snapshotSender.send(level, region);
 			} catch (mmm.simulation.persistence.RegionGenerationStore.StaleReadViewException changed) {
@@ -299,7 +302,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
 				checkpointFailures.put(region.id(), message);
 				retryAt.remove(region.id());
-				MmmMod.LOGGER.error("Could not restore controller region {}", region.id(), exception);
+				MmmMod.LOGGER.error("Could not restore region {}", region.id(), exception);
 				return false;
 			}
 		}
@@ -324,7 +327,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
 				checkpointFailures.put(region.id(), message);
 				retryAt.put(region.id(), serviceTick + 100L);
-				MmmMod.LOGGER.error("Could not publish initial checkpoint for controller region {}", region.id(), exception);
+				MmmMod.LOGGER.error("Could not publish initial checkpoint for region {}", region.id(), exception);
 				return false;
 			}
 		}
@@ -368,14 +371,14 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			MinecraftServer server, FluidRegion region, RegionAvailabilityReason reason,
 			String failure, RemovalSender removalSender
 	) {
-		if (!region.controllerManaged()) {
+		if (!region.hasSelectedVolume()) {
 			region.setAvailabilityFailure(reason, failure);
 			return;
 		}
 		cancelRestore(region);
 		String checkpointFailure = checkpointFailures.get(region.id());
 		String displayedFailure = checkpointFailure == null ? failure : failure + "; " + checkpointFailure;
-		if (!displayedFailure.equals(region.availabilityFailure())) MmmMod.LOGGER.warn("Pausing controller region {}: {}", region.id(), failure);
+		if (!displayedFailure.equals(region.availabilityFailure())) MmmMod.LOGGER.warn("Pausing region {}: {}", region.id(), failure);
 		region.setAvailabilityFailure(reason, displayedFailure);
 		if (!region.solverLoaded() || serviceTick < retryAt.getOrDefault(region.id(), 0L)) return;
 		try {
@@ -384,7 +387,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			retryAt.remove(region.id());
 			checkpointFailures.remove(region.id());
 			removalSender.send(server, region);
-			MmmMod.LOGGER.info("Checkpointed and unloaded controller region {} because {}", region.id(), failure);
+			MmmMod.LOGGER.info("Checkpointed and unloaded region {} because {}", region.id(), failure);
 		} catch (IOException | RuntimeException exception) {
 			if (pauseForDeviceLoss(region, exception)) {
 				removalSender.send(server, region);
@@ -394,7 +397,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			checkpointFailures.put(region.id(), message);
 			retryAt.put(region.id(), serviceTick + 100L);
 			region.setAvailabilityFailure(reason, failure + "; " + message);
-			MmmMod.LOGGER.error("Could not checkpoint controller region {}; solver remains paused in memory", region.id(), exception);
+			MmmMod.LOGGER.error("Could not checkpoint region {}; solver remains paused in memory", region.id(), exception);
 		}
 	}
 
@@ -403,7 +406,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		List<String> summaries = new ArrayList<>();
 		for (FluidRegion region : manager.regions()) {
 			summaries.add((region == selected ? "* " : "  ") + region.id() + " "
-					+ region.dimension().identifier() + " " + (region.controllerManaged() ? "controller" : "command")
+					+ region.dimension().identifier() + " " + (region.hasSelectedVolume() ? "controller" : "command")
 					+ " " + region.lifecycle().state() + "/" + (region.paused() ? "paused" : "running")
 					+ " availability=" + region.availabilityDescription()
 					+ " origin=" + region.origin().toShortString() + " grid=" + region.sizeX() + "x" + region.sizeY() + "x" + region.sizeZ()
@@ -430,7 +433,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	@Override public Attempt checkpoint(UUID regionId, long expectedCheckpointGeneration) {
 		FluidRegion region = manager.region(regionId);
 		if (region == null) return new Attempt(CheckpointRegionResult.Status.REGION_NOT_FOUND, 0L, null);
-		if (!region.controllerManaged()) return new Attempt(CheckpointRegionResult.Status.NOT_PERSISTENT,
+		if (!region.hasSelectedVolume()) return new Attempt(CheckpointRegionResult.Status.NOT_PERSISTENT,
 				region.checkpointGeneration(), null);
 		if (region.checkpointGeneration() != expectedCheckpointGeneration) {
 			return new Attempt(CheckpointRegionResult.Status.STALE_GENERATION,
@@ -464,43 +467,29 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		}
 	}
 
-	String recoverPreviousSelected(long expectedCurrentGeneration) {
-		FluidRegion region = manager.selected();
-		if (region == null) return "没有选中区域";
-		if (!region.controllerManaged()) return "开发命令区域没有持久 checkpoint 可恢复";
-		String restoreFailure = checkpointFailures.get(region.id());
-		if (restoreFailure == null || !restoreFailure.startsWith("checkpoint restore failed:")) {
-			return "拒绝恢复上一代：当前区域尚未出现可复核的 checkpoint restore failure";
-		}
-		try {
-			long restored = persistence.recoverPreviousGeneration(region, expectedCurrentGeneration);
-			String restart = "已按 operator 明确指定将 HEAD 从 checkpoint " + expectedCurrentGeneration
-					+ " 原子切回完整 checkpoint " + restored
-					+ "；被拒绝的当前 slot 仍保留，必须退出并重启世界后才能载入上一代";
-			checkpointFailures.put(region.id(), restart);
-			region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, restart);
-			retryAt.remove(region.id());
-			return restart;
-		} catch (IOException | RuntimeException exception) {
-			return "上一代恢复失败，HEAD 未改变：" + exception.getMessage();
-		}
-	}
+    void checkpointWorld() throws IOException { if(persistence!=null)persistence.checkpointWorld(); }
 
 	void checkpointForShutdown(Predicate<FluidRegion> shouldCheckpoint) {
+        if(persistence==null)return;
 		persistence.cancelAllRestores();
+        if(manager.regions().isEmpty()) {
+            try { persistence.checkpointWorld(); }
+            catch(IOException | RuntimeException failure) { MmmMod.LOGGER.error("Could not checkpoint world thermal state during shutdown",failure); }
+            return;
+        }
 		for (FluidRegion region : manager.regions()) {
-			if (!region.controllerManaged() || !region.solverLoaded()) continue;
+			if (!region.hasSelectedVolume() || !region.solverLoaded()) continue;
 			if (!shouldCheckpoint.test(region)) {
-				MmmMod.LOGGER.warn("Skipping shutdown checkpoint for controller region {} because a container transfer WAL is unresolved", region.id());
+				MmmMod.LOGGER.warn("Skipping shutdown checkpoint for region {} because a container transfer WAL is unresolved", region.id());
 				continue;
 			}
 
 			try {
 				long generation = persistence.checkpoint(region);
-				MmmMod.LOGGER.info("Published shutdown checkpoint {} for controller region {}", generation, region.id());
+				MmmMod.LOGGER.info("Published shutdown checkpoint {} for region {}", generation, region.id());
 			} catch (IOException | RuntimeException exception) {
 				if (pauseForDeviceLoss(region, exception)) continue;
-				MmmMod.LOGGER.error("Could not checkpoint controller region {} during shutdown; previous generation remains authoritative",
+				MmmMod.LOGGER.error("Could not checkpoint region {} during shutdown; previous generation remains authoritative",
 						region.id(), exception);
 			}
 		}

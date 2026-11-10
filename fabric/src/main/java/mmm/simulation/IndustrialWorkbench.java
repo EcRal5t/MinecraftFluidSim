@@ -23,7 +23,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 
-/** Builds industrial layouts through the ordinary controller and block entity entry points. */
+/** Builds industrial layouts through spatial selection and block entity entry points. */
 public final class IndustrialWorkbench {
     private IndustrialWorkbench() { }
     public static LiteralArgumentBuilder<CommandSourceStack> node() {
@@ -63,10 +63,10 @@ public final class IndustrialWorkbench {
             }
             for(var wall:layout.walls()) if(blocks.get(wall.position()).is(mmm.block.MmmBlocks.THERMAL_RESERVOIR))
                 ((mmm.block.ThermalReservoirBlockEntity)level.getBlockEntity(wall.position())).setTemperatureK(wall.temperatureK());
-            var result=runtime.regionActivation().activate(player,layout.controller(),false);
+            var result=runtime.regionActivation().createSelection(player,new BlockPos(minX,minY,minZ),new BlockPos(maxX,maxY,maxZ));
             if(!result.succeeded()) {
                 if(result.retainShell())placed.clear();
-                throw new IllegalStateException("控制器启用失败："+result.failure());
+                throw new IllegalStateException("模拟区域启用失败："+result.failure());
             }
         } catch(RuntimeException failure) {
             for(var position:placed) level.setBlock(position,Blocks.AIR.defaultBlockState(),Block.UPDATE_ALL);
@@ -90,8 +90,8 @@ public final class IndustrialWorkbench {
             var region=runtime.industrial().regionAt(level,layout.controller().relative(net.minecraft.core.Direction.SOUTH));
             if(region==null)throw new IllegalStateException("装置区域不可用");
             var registry=runtime.worldRegistries().thermalRegistry();
-            new OrdinaryThermalWalls(registry,new ThermalBoundaryResolver(registry)).refresh(level,region,FluidRegionFactory.CELLS_PER_BLOCK);
-            initializeThermal(region,layout,registry);
+            runtime.environment().refresh(level,region,FluidRegionFactory.CELLS_PER_BLOCK);
+            initializeThermal(region,layout,registry,runtime.environment());
         }
         var held=player.getItemInHand(InteractionHand.MAIN_HAND);
         if(!held.isEmpty()&&held.getCount()==1) {
@@ -109,10 +109,12 @@ public final class IndustrialWorkbench {
                 }
             } catch(IllegalArgumentException ignored) { }
         }
-        return "装置已建立："+scenario+"；控制器位于 "+layout.controller().toShortString();
+        return "装置已建立："+scenario+"；区域起点 "+minimum.toShortString();
     }
-    static void initializeThermal(FluidRegion region,IndustrialLayout layout,mmm.thermal.ThermalRegistry registry) {
-        var inventory=region.finiteThermalDevices(registry.fingerprint());
+    static void initializeThermal(FluidRegion region,IndustrialLayout layout,mmm.thermal.ThermalRegistry registry,
+                                  WorldThermalEnvironment environment) {
+        var inventory=WorldThermalInventories.project(region.finiteThermalDevices(registry.fingerprint()),
+                region.environmentBinding(),environment.current(region.dimension().identifier().toString()));
         var devices=new ArrayList<>(inventory.devices());
         for(var wall:layout.walls()) {
             if(layout.blocks().get(wall.position()).is(mmm.block.MmmBlocks.THERMAL_RESERVOIR))continue;
@@ -135,11 +137,13 @@ public final class IndustrialWorkbench {
         var updated=new mmm.thermal.FiniteThermalDeviceInventory(registry.fingerprint(),devices,
                 new mmm.thermal.FiniteThermalDeviceAudit(audit.initialInventory(),delta.signum()>0?audit.externalSource().add(delta):audit.externalSource(),
                         delta.signum()<0?audit.externalSink().subtract(delta):audit.externalSink(),audit.solverExchange(),audit.roundoffResidual()));
-        region.replaceOrdinaryWallInventory(updated,registry);
+        try(var prepared=environment.prepareDeviceEdit(region.environmentBinding(),updated)) {
+            region.editWorldThermalInventory(updated,registry,prepared);
+        }
     }
     private static int findWall(java.util.List<mmm.thermal.FiniteThermalDeviceState> devices,BlockPos position) {
         String prefix=position.asLong()+"@";
-        for(int i=0;i<devices.size();i++)if(devices.get(i).providerId().equals(OrdinaryThermalWalls.PROVIDER)
+        for(int i=0;i<devices.size();i++)if(devices.get(i).providerId().equals(WorldThermalEnvironment.PROVIDER)
                 && devices.get(i).objectId().startsWith(prefix))return i;
         throw new IllegalStateException("热墙未连接区域："+position.toShortString());
     }

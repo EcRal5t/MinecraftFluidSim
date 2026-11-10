@@ -59,9 +59,14 @@ public final class FluidRegion {
 	private String granularBlockFailure;
 	private String thermalBlockFailure;
 	private String numericalBlockFailure;
+	private String expansionBlockFailure;
+	private RegionAvailabilityReason expansionBlockReason;
 	private String performanceBlockFailure;
 	private ThermalActivity thermalActivity;
 	private FiniteThermalDeviceInventory finiteThermalDevices;
+	private mmm.fluid.EnvironmentBinding environmentBinding;
+	private mmm.thermal.EnvironmentThermalState environmentCandidate;
+	private boolean environmentCandidateExternal;
 	private List<mmm.fluid.FluidStateAccess.DevicePort> finiteThermalPorts = List.of();
 	private List<int[]> activityConnections = List.of();
 	private boolean devicePortsDirty = true;
@@ -91,7 +96,7 @@ public final class FluidRegion {
 
 	void ensureDeviceResident() {
 		if (domain == null || solverBackend == null || solverBackend.unavailableReason() != null) return;
-		try (var prepared = solverBackend.prepareState(null, domain.captureAuthoritativeState(), finiteThermalDevices, finiteThermalPorts)) {
+		try (var prepared = solverBackend.prepareState(null, domain.captureAuthoritativeState(), finiteThermalDevices, finiteThermalPorts, environmentBinding)) {
 			boundaryTemperatures = domain.thermalBoundaryTemperatures();
 			boundaryTemperaturesKnown = true;
 			residentState = prepared.commit();
@@ -142,13 +147,12 @@ public final class FluidRegion {
 		this.footprint = footprint;
 		this.networkGeneration = networkGeneration;
 		this.domain = domain;
-		if (domain != null && footprint != null && footprint.kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED) domain.sealDomainBoundary();
 		if (footprint != null && !origin.equals(footprint.minimumInterior())) {
-			throw new IllegalArgumentException("A controller region origin must equal its minimum interior block");
+			throw new IllegalArgumentException("A region origin must equal its minimum interior block");
 		}
 	}
 
-	/** Creates a metadata-only controller region. No solver or marker arrays are allocated. */
+	/** Creates a metadata-only region. No solver or marker arrays are allocated. */
 	public static FluidRegion unloaded(
 			UUID id,
 			ResourceKey<Level> dimension,
@@ -235,18 +239,26 @@ public final class FluidRegion {
 
 	private void commitHostEdit(long baseGeneration, HostFluidState successor,
 			FiniteThermalDeviceInventory devices, List<mmm.fluid.FluidStateAccess.DevicePort> ports) {
+		commitHostEdit(baseGeneration, successor, devices, ports, null);
+	}
+
+	private void commitHostEdit(long baseGeneration, HostFluidState successor,
+			FiniteThermalDeviceInventory devices, List<mmm.fluid.FluidStateAccess.DevicePort> ports,
+			mmm.fluid.PreparedEnvironmentState environment) {
 		if (!solverLoaded() || solverGeneration != baseGeneration || successor == domain)
 			throw new IllegalStateException("Host edit generation is stale");
 		long next = Math.addExact(baseGeneration, 1L);
 		if (residentState != null) {
 			if (solverBackend == null) throw new IllegalStateException("Region backend is unavailable");
-			try (var prepared = solverBackend.prepareState(residentState, successor.captureAuthoritativeState(), devices, ports)) {
+			try (var prepared = solverBackend.prepareState(residentState, successor.captureAuthoritativeState(), devices, ports, environmentBinding)) {
+				if (environment != null) prepared.attachEnvironment(environment);
 				var committed = prepared.commit();
 				releaseResidentState();
 				residentState = committed;
 				domain = null;
 			}
 		} else {
+			if (environment != null) environment.commit();
 			domain = successor;
 		}
 		finiteThermalDevices = devices;
@@ -262,11 +274,13 @@ public final class FluidRegion {
 		var state = captureHostState();
 		var devices = finiteThermalDevices;
 		var ports = finiteThermalPorts;
+		var environment = environmentBinding;
 		return new mmm.fluid.FluidStateAccess() {
 			public FluidDomainState.Layout layout() { return state.layout(); }
 			public FluidDomainState exportState() { return state; }
 			public FiniteThermalDeviceInventory finiteThermalDevices() { return devices; }
 			public List<DevicePort> finiteThermalPorts() { return ports; }
+			public mmm.fluid.EnvironmentBinding environmentBinding() { return environment; }
 		};
 	}
 	mmm.fluid.FluidDomainState.Layout solverLayout() {
@@ -354,6 +368,7 @@ public final class FluidRegion {
 		return residentState instanceof mmm.fluid.ResidentFluidState device ? device : null;
 	}
 	mmm.fluid.ResidentFluidState.InventorySummary inventorySummary() { var device=deviceState(); return device==null?null:device.inventorySummary(); }
+	int expansionDirections() { var device = deviceState(); return device == null ? 0 : device.expansionDirections(); }
 	boolean hasThermalState() { return solverLoaded() && !solverLayout().thermalRegistryFingerprint().isEmpty(); }
 	boolean hasMaterialState() { return solverLoaded() && !solverLayout().materials().isEmpty(); }
 	boolean hasChemistryState() { return solverLoaded() && !solverLayout().chemicalRegistryFingerprint().isEmpty(); }
@@ -417,6 +432,7 @@ public final class FluidRegion {
 	/** All data tied to a released generation is restored together from its checkpoint. */
 	private void clearLoadedSolverState() {
 		domain = null;
+        environmentBinding = null;
 		finiteThermalDevices = null;
 		finiteThermalPorts = List.of();
 		devicePortsDirty = true;
@@ -429,7 +445,7 @@ public final class FluidRegion {
 
 	/** Discards an unregistered transient region after its final removal has been published. */
 	void discardTransient() {
-		if (controllerManaged()) throw new IllegalStateException("Cannot discard a persistent controller solver");
+		if (hasSelectedVolume()) throw new IllegalStateException("Cannot discard a persistent controller solver");
 		releaseResidentState();
 		domain = null;
 	}
@@ -484,32 +500,42 @@ public final class FluidRegion {
 		commitHostEdit(baseGeneration, candidate);
 	}
 
-	/** Publishes collision geometry and its relocated wall inventories as one generation. */
-	void adoptStructureCandidate(long baseGeneration, HostFluidState candidate, FiniteThermalDeviceInventory inventory) {
+	/** Publishes collision geometry and its shared world thermal successor together. */
+	void adoptStructureCandidate(long baseGeneration, HostFluidState candidate, mmm.fluid.PreparedEnvironmentState environment) {
 		if (!candidate.authoritativeLayout().equals(solverLayout()))
 			throw new IllegalStateException("Structure collision candidate layout changed");
-		var previous = currentFiniteDevices();
-		if (previous == null && inventory != null && !inventory.devices().isEmpty())
-			throw new IllegalArgumentException("Structure handoff introduced finite thermal inventory");
-		if (previous != null && (inventory == null || !previous.thermalRegistryFingerprint().equals(inventory.thermalRegistryFingerprint())
-				|| !previous.audit().equals(inventory.audit()) || !previous.exactInternalEnergy().equals(inventory.exactInternalEnergy())))
-			throw new IllegalArgumentException("Structure handoff changed finite thermal inventory");
-		var identities = new java.util.HashSet<String>();
-		if (inventory != null) for (var device : inventory.devices())
-			if (!device.providerId().equals(ExternalStructureThermalHandoff.PROVIDER))
-				identities.add(device.providerId() + "\0" + device.objectId());
-		var ports = finiteThermalPorts.stream().filter(port -> identities.contains(port.providerId() + "\0" + port.objectId())).toList();
-		candidate.replaceActivityConnections(List.of());
-		commitHostEdit(baseGeneration, candidate, inventory, ports);
+		var inventory=currentFiniteDevices(); var prior=environmentBinding;
+		var retained=new java.util.HashSet<mmm.thermal.EnvironmentThermalState.Key>();
+		for(var node:environment.capture().nodes())retained.add(node.key());
+		var removed=new java.util.HashSet<String>();
+		if(prior!=null) {
+			var refs=prior.devices().stream().filter(ref->{
+				if(retained.contains(ref.node()))return true;
+				removed.add(ref.providerId()+"\0"+ref.objectId()); return false;
+			}).toList();
+			environmentBinding=new mmm.fluid.EnvironmentBinding(prior.dimensionId(),refs,prior.gas());
+		}
+		var ports=finiteThermalPorts.stream().filter(p->!removed.contains(p.providerId()+"\0"+p.objectId())).toList();
+		if(inventory!=null && !removed.isEmpty()) {
+			var sink=mmm.units.SignedDyadic.ZERO;
+			var devices=new java.util.ArrayList<mmm.thermal.FiniteThermalDeviceState>();
+			for(var device:inventory.devices())if(removed.contains(device.providerId()+"\0"+device.objectId()))
+				sink=sink.add(mmm.units.SignedDyadic.of(device.body().internalEnergyJ())); else devices.add(device);
+			var audit=inventory.audit();
+			inventory=new FiniteThermalDeviceInventory(inventory.thermalRegistryFingerprint(),devices,
+					new mmm.thermal.FiniteThermalDeviceAudit(audit.initialInventory(),audit.externalSource(),audit.externalSink().add(sink),audit.solverExchange(),audit.roundoffResidual()));
+		}
+		try { commitHostEdit(baseGeneration, candidate, inventory, ports, environment); }
+		catch(RuntimeException | Error failure) { environmentBinding=prior; throw failure; }
 		devicePortsDirty = true;
-		activityConnections = List.of();
 		worldAvailability = null;
 		groupAvailability = null;
 		wakeForActivity();
 	}
 
 	public FluidRegionFootprint footprint() { return footprint; }
-	public boolean controllerManaged() { return footprint != null; }
+	void rename(String name) { footprint = footprint.withName(name); }
+	public boolean hasSelectedVolume() { return footprint != null; }
 	public long networkGeneration() { return networkGeneration; }
 	public long checkpointGeneration() { return checkpointGeneration; }
 	public int checkpointMarkerCount() { return checkpointMarkerCount; }
@@ -623,6 +649,17 @@ public final class FluidRegion {
 	}
 	String thermalBlockFailure() { return thermalBlockFailure; }
 	String numericalBlockFailure() { return numericalBlockFailure; }
+	String expansionBlockFailure() { return expansionBlockFailure; }
+	RegionAvailabilityReason expansionBlockReason() { return expansionBlockReason; }
+	void blockExpansion(RegionAvailabilityReason reason, String failure) {
+		expansionBlockReason = Objects.requireNonNull(reason);
+		expansionBlockFailure = Objects.requireNonNull(failure);
+		setAvailabilityFailure(reason, failure);
+	}
+	void clearExpansionBlock() {
+		expansionBlockFailure = null;
+		expansionBlockReason = null;
+	}
 	void blockNumerical(String failure) {
 		numericalBlockFailure = Objects.requireNonNull(failure, "failure");
 		setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, failure);
@@ -661,7 +698,7 @@ public final class FluidRegion {
 	boolean hasRemovableThermalDevices() {
 		var devices = currentFiniteDevices();
 		return devices != null && devices.devices().stream()
-				.anyMatch(device -> !device.providerId().equals(OrdinaryThermalWalls.PROVIDER) || !device.surfaces().isEmpty());
+				.anyMatch(device -> !device.providerId().equals(WorldThermalEnvironment.PROVIDER) || !device.surfaces().isEmpty());
 	}
 
 	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
@@ -692,12 +729,31 @@ public final class FluidRegion {
 
 
 
-	void replaceOrdinaryWallInventory(FiniteThermalDeviceInventory inventory, ThermalRegistry registry) {
+	mmm.fluid.EnvironmentBinding environmentBinding() { return environmentBinding; }
+	mmm.thermal.EnvironmentThermalState environmentCandidate() { return environmentCandidate; }
+	void environmentCandidate(mmm.thermal.EnvironmentThermalState value) { environmentCandidate = Objects.requireNonNull(value); }
+	boolean environmentCandidateExternal() { return environmentCandidateExternal; }
+	void environmentCandidateExternal(boolean value) { environmentCandidateExternal = value; }
+	void clearEnvironmentCandidate() { environmentCandidate = null; environmentCandidateExternal = false; }
+
+	void editWorldThermalInventory(FiniteThermalDeviceInventory inventory, ThermalRegistry registry,
+			mmm.fluid.PreparedEnvironmentState environment) {
+		inventory.requireCompatible(registry);
+		commitHostEdit(solverGeneration, beginHostEdit(), inventory, finiteThermalPorts, environment);
+		devicePortsDirty = true;
+		wakeForActivity();
+	}
+
+	void replaceWorldThermalInventory(FiniteThermalDeviceInventory inventory, ThermalRegistry registry,
+			mmm.fluid.EnvironmentBinding binding) {
 		inventory.requireCompatible(registry);
 		var identities = new java.util.HashSet<String>();
 		for (var device : inventory.devices()) identities.add(device.providerId()+"\0"+device.objectId());
 		var ports = finiteThermalPorts.stream().filter(port -> identities.contains(port.providerId()+"\0"+port.objectId())).toList();
-		commitHostEdit(solverGeneration, beginHostEdit(), inventory, ports);
+		var previousBinding = environmentBinding;
+		environmentBinding = binding;
+		try { commitHostEdit(solverGeneration, beginHostEdit(), inventory, ports); }
+		catch (RuntimeException | Error failure) { environmentBinding = previousBinding; throw failure; }
 		finiteThermalPorts = ports;
 		devicePortsDirty = true;
 		wakeForActivity();
@@ -749,9 +805,46 @@ public final class FluidRegion {
 		candidate.stepIntervalTicks = runtime.stepIntervalTicks();
 		candidate.tick = runtime.tick();
 		candidate.finiteThermalDevices = currentFiniteDevices();
+		candidate.environmentBinding = environmentBinding;
 		candidate.finiteThermalPorts = finiteThermalPorts;
 		candidate.lifecycle.initializeLoaded(runtime.resumeState(), operatorPaused, runtime.stepIntervalTicks());
 		return candidate;
+	}
+
+	/** Prepares a new spatial layout with the same region identity and runtime intent. */
+	FluidRegion resizedCandidate(HostFluidState candidateDomain, FluidRegionFootprint candidateFootprint) {
+		Objects.requireNonNull(candidateDomain, "candidateDomain");
+		Objects.requireNonNull(candidateFootprint, "candidateFootprint");
+		PersistedRuntime runtime = persistedRuntime();
+		FluidRegion candidate = new FluidRegion(id, dimension, candidateFootprint.minimumInterior(),
+				candidateDomain.sizeX(), candidateDomain.sizeY(), candidateDomain.sizeZ(), solverConfig,
+				candidateFootprint, Math.incrementExact(networkGeneration), candidateDomain);
+		candidate.checkpointGeneration = checkpointGeneration;
+		candidate.checkpointMarkerCount = checkpointMarkerCount;
+		candidate.checkpointVolume = checkpointVolume;
+		candidate.unloadedResumeState = runtime.resumeState();
+		candidate.entityPhysicsEnabled = runtime.entityPhysicsEnabled();
+		candidate.debugOverlays = runtime.debugOverlays();
+		candidate.stepIntervalTicks = runtime.stepIntervalTicks();
+		candidate.tick = runtime.tick();
+		candidate.finiteThermalDevices = currentFiniteDevices();
+		candidate.lifecycle.initializeLoaded(runtime.resumeState(), runtime.operatorPaused(), runtime.stepIntervalTicks());
+		return candidate;
+	}
+
+	void releaseAfterReplacement() {
+		releaseResidentState();
+		clearLoadedSolverState();
+		committedObservationListener = () -> { };
+	}
+
+	void adoptResizedDevice(mmm.fluid.FluidStateAccess state) {
+		if (!(state instanceof mmm.fluid.ResidentFluidState resident))
+			throw new IllegalStateException("Resized region did not receive resident device state");
+		if (!resident.layout().grid().equals(grid)) throw new IllegalArgumentException("Resized device grid differs");
+		residentState = resident;
+		domain = null;
+		solverGeneration = Math.addExact(solverGeneration, 1L);
 	}
 
 	FluidRegion ownershipCandidate(HostFluidState domain, FluidRegionFootprint footprint) {
@@ -789,7 +882,7 @@ public final class FluidRegion {
 	) {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
 		try {
-			if (!controllerManaged() || !solverLoaded() || publishedGeneration <= checkpointGeneration
+			if (!hasSelectedVolume() || !solverLoaded() || publishedGeneration <= checkpointGeneration
 					|| candidateDomain.sizeX() != sizeX || candidateDomain.sizeY() != sizeY
 					|| candidateDomain.sizeZ() != sizeZ
 					|| !candidateDomain.config().equals(solverConfig)) {
@@ -799,7 +892,7 @@ public final class FluidRegion {
 		} catch (RuntimeException | Error failure) {
 			// HEAD is already durable. Discard the old live generation and reload that HEAD
 			// before accepting another step or checkpoint.
-			if (!controllerManaged() || publishedGeneration <= checkpointGeneration) throw failure;
+			if (!hasSelectedVolume() || publishedGeneration <= checkpointGeneration) throw failure;
 			checkpointGeneration = publishedGeneration;
 			checkpointMarkerCount = candidateDomain.particleCount();
 			checkpointVolume = candidateDomain.totalVolume();
@@ -823,7 +916,7 @@ public final class FluidRegion {
 
 	/** Records a complete durable generation while keeping the live solver allocated. */
 	public boolean recordPublishedCheckpoint(long publishedGeneration) {
-		if (!controllerManaged() || !solverLoaded() || publishedGeneration <= checkpointGeneration) return false;
+		if (!hasSelectedVolume() || !solverLoaded() || publishedGeneration <= checkpointGeneration) return false;
 		checkpointMarkerCount = liquidRowCount();
 		checkpointVolume = (float)liquidVolume();
 		checkpointGeneration = publishedGeneration;
@@ -832,7 +925,7 @@ public final class FluidRegion {
 
 	/** Releases the solver only after the caller has durably published the supplied generation. */
 	public boolean releaseSolverAfterCheckpoint(long publishedGeneration) {
-		if (!controllerManaged() || !solverLoaded() || publishedGeneration <= 0L || publishedGeneration != checkpointGeneration) return false;
+		if (!hasSelectedVolume() || !solverLoaded() || publishedGeneration <= 0L || publishedGeneration != checkpointGeneration) return false;
 		unloadedResumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
 				? FluidRegionLifecycle.State.ACTIVE : lifecycle.state();
 		try {

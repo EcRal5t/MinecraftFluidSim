@@ -185,7 +185,7 @@ public final class FluidNetworkProtocolValidation {
 		UUID otherPlayer = new UUID(41L, 43L);
 		ControllerSummary.Capacity full = ControllerSummary.Capacity.available(8L, 16L);
 		ControllerSummary summary = new ControllerSummary(7L, REGION, DIMENSION.toString(), "a".repeat(64),
-				11L, 13L, new ControllerSummary.Footprint(2, 3, 4, 5, 6, 7, 180L, 4), true,
+				11L, 13L, new ControllerSummary.Footprint("区域", 2, 3, 4, 5, 6, 7, 180L, 4), true,
 				ControllerSummary.OperatorIntent.RUNNING, ControllerSummary.MotionState.REDUCED,
 				ControllerSummary.ThermalState.SLEEP,
 				new ControllerSummary.Availability(RegionAvailabilityReason.CHUNK_MISSING, "required chunk missing"),
@@ -856,4 +856,3 @@ public final class FluidNetworkProtocolValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 }
-

@@ -18,6 +18,30 @@ public interface FluidSolverBackend extends AutoCloseable {
     /** Stages an initialization or a complete host edit before the application publishes it. */
     PreparedFluidState prepareState(FluidStateAccess source, FluidDomainState successor,
             mmm.thermal.FiniteThermalDeviceInventory devices, java.util.List<FluidStateAccess.DevicePort> ports);
+    default PreparedFluidState prepareState(FluidStateAccess source, FluidDomainState successor,
+            mmm.thermal.FiniteThermalDeviceInventory devices, java.util.List<FluidStateAccess.DevicePort> ports,
+            EnvironmentBinding environment) {
+        if (environment != null) throw new UnsupportedOperationException("Environment binding is unavailable");
+        return prepareState(source, successor, devices, ports);
+    }
+    default void configureEnvironment(mmm.thermal.EnvironmentThermalState environment, FluidDefinitions definitions) {
+        throw new UnsupportedOperationException("Environment thermal state is unavailable");
+    }
+    default PreparedEnvironmentState prepareEnvironment(mmm.thermal.EnvironmentThermalState environment, FluidDefinitions definitions) {
+        throw new UnsupportedOperationException("Environment thermal candidates are unavailable");
+    }
+    default mmm.thermal.EnvironmentThermalState captureEnvironment(String dimensionId) {
+        throw new UnsupportedOperationException("Environment thermal state is unavailable");
+    }
+    default void advanceEnvironment(String dimensionId, double durationSeconds) {
+        throw new UnsupportedOperationException("Environment thermal state is unavailable");
+    }
+    default void queueEnvironmentAdvance(String dimensionId, double durationSeconds) {
+        throw new UnsupportedOperationException("Environment thermal scheduling is unavailable");
+    }
+    default void flushEnvironmentAdvance(String dimensionId) {
+        throw new UnsupportedOperationException("Environment thermal scheduling is unavailable");
+    }
     /** Stages a same-generation thermal boundary input without exporting the resident inventory. */
     default PreparedFluidState prepareThermalBoundary(ResidentFluidState source, double[] temperatures) {
         throw new UnsupportedOperationException("Thermal boundary candidates are unavailable");

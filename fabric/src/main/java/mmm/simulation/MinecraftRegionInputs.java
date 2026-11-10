@@ -29,14 +29,15 @@ final class MinecraftRegionInputs {
 	private final MotionHistory motion = new MotionHistory();
 	private final Map<UUID, List<Interaction>> pendingResponses = new HashMap<>();
 	private final ThermalBoundaryResolver thermalBoundaries;
-	private final OrdinaryThermalWalls ordinaryWalls;
+	private WorldThermalEnvironment environment;
+	void environment(WorldThermalEnvironment value) { environment = java.util.Objects.requireNonNull(value); }
 	private MinecraftWorldUpdates worldUpdates;
 	private ExternalMovingStructures externalStructures;
 	void externalStructures(ExternalMovingStructures structures) { externalStructures = java.util.Objects.requireNonNull(structures); }
 	boolean hasPendingWorldMotion(FluidRegion region) { return worldUpdates != null && worldUpdates.hasPendingMotion(region); }
 	void worldUpdates(MinecraftWorldUpdates updates) {
 		worldUpdates = java.util.Objects.requireNonNull(updates);
-		if (ordinaryWalls != null) ordinaryWalls.worldUpdates(updates);
+		if (environment != null) environment.worldUpdates(updates);
 	}
 	private java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> prescribedBodies = (region,tick) -> List.of();
 	void prescribedBodies(java.util.function.BiFunction<FluidRegion,Long,List<MovingBodyFluidCoupling.Request>> source) { prescribedBodies=java.util.Objects.requireNonNull(source); }
@@ -48,7 +49,6 @@ final class MinecraftRegionInputs {
 		this.cellsPerBlock = cellsPerBlock;
 		this.waterDensity = waterDensity;
 		this.thermalBoundaries = thermalRegistry == null ? null : new ThermalBoundaryResolver(thermalRegistry);
-		this.ordinaryWalls = thermalRegistry == null ? null : new OrdinaryThermalWalls(thermalRegistry, thermalBoundaries);
 	}
 
 	boolean boundariesDue(long tick) { return tick % COLLISION_REFRESH_INTERVAL_TICKS == 0L; }
@@ -56,7 +56,7 @@ final class MinecraftRegionInputs {
 
 	FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {
 		FluidRegion.CollisionStats collisions;
-		try { collisions = FluidRegionWorldInteraction.refreshCollisions(level, region, cellsPerBlock, worldUpdates, externalStructures); }
+		try { collisions = FluidRegionWorldInteraction.refreshCollisions(level, region, cellsPerBlock, worldUpdates, externalStructures, environment); }
 		catch(ExternalMovingStructures.InputRejectedException waiting) {
 			region.requireCollisionRefresh();
 			if(externalStructures!=null)externalStructures.rejected(region.id(),waiting.getMessage());
@@ -77,7 +77,7 @@ final class MinecraftRegionInputs {
 
 	boolean refreshThermalBoundary(ServerLevel level, FluidRegion region) {
 		if (thermalBoundaries == null) return false;
-		boolean walls = ordinaryWalls.refresh(level, region, cellsPerBlock);
+		boolean walls = environment != null && environment.refresh(level, region, cellsPerBlock);
 		return thermalBoundaries.refresh(level, region, cellsPerBlock) || walls;
 	}
 

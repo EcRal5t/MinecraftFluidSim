@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import mmm.model.region.RegionGeometry.RegionKind;
-import mmm.simulation.controller.FluidControllerRegions;
+import mmm.simulation.controller.RegionWorldAvailability;
 import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.simulation.ownership.OwnershipJournal;
 import mmm.units.UnitFormat;
@@ -56,12 +56,19 @@ public final class MinecraftPoolOperations {
 	}
 
 	/** null means this hit belongs to another probe function. Ordinary use previews; sneaking confirms. */
+	public boolean hasPendingPreview(ServerPlayer player) { return previews.containsKey(player.getUUID()); }
+	public boolean targetsPoolShell(ServerPlayer player, BlockPos position) {
+		return regions.regions().stream().anyMatch(region -> isPool(region)
+				&& region.dimension().equals(player.level().dimension())
+				&& region.footprint().poolShellBlocks().contains(position.asLong()));
+	}
+
 	public InteractionResult probe(ServerPlayer player, BlockPos hit) {
 		var level=player.level();
 		FluidRegion pool=null;
 		for(var region:regions.regions()) if(isPool(region) && region.dimension().equals(level.dimension())
 				&& (region.footprint().interiorBlocks().contains(hit.asLong())
-				|| region.footprint().boundaryBlocks().contains(hit.asLong()))) {
+				|| region.footprint().poolShellBlocks().contains(hit.asLong()))) {
 			if(pool!=null) return say(player,"此处邻接多个池体，请对准其中一池的池底",false);
 			pool=region;
 		}
@@ -79,7 +86,7 @@ public final class MinecraftPoolOperations {
 						: !pool.id().equals(preview.region())))
 					return say(player,"请先正常右击预览，再潜行右击同一池确认",false);
 				if(pool!=null) return returnWater(player,pool);
-				var current=FluidControllerRegions.scanPool(level,preview.seed(),maximumBlocks());
+				var current=RegionWorldAvailability.scanPool(level,preview.seed(),maximumBlocks());
 				if(!current.succeeded() || !current.footprint().equals(preview.footprint())
 						|| !operations.scanOwnershipPreimage(level,current.footprint()).equals(preview.preimage()))
 					return say(player,"预览后池水或池壁发生变化，请重新预览",false);
@@ -94,7 +101,7 @@ public final class MinecraftPoolOperations {
 				return say(player,"当前可归还 "+blocks+" 个完整水块；现有液体 "+UnitFormat.volume(pool.liquidVolume() * Math.pow(pool.solverConfig().cellSize(), 3))
 						+"。温度、混合物、零头和仍在流动的水会保留。10秒内潜行右击确认；确认按当时库存执行，随后暂停池体供装取。",true);
 			}
-			var scan=FluidControllerRegions.scanPool(level,hit,maximumBlocks());
+			var scan=RegionWorldAvailability.scanPool(level,hit,maximumBlocks());
 			if(!scan.succeeded()) return say(player,"无法接管：需要已加载、池底池壁完整、水平水面的静水小池。"+scan.failure(),false);
 			var admission=regions.previewAdd(FluidRegionFactory.grid(scan.footprint()).cellCount());
 			if(!admission.accepted()) return say(player,admission.failure(),false);

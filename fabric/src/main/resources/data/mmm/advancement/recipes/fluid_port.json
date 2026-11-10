@@ -6,7 +6,7 @@
       "conditions": {
         "items": [
           {
-            "items": "mmm:fluid_boundary"
+            "items": "minecraft:iron_block"
           }
         ]
       }

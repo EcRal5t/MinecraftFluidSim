@@ -41,6 +41,7 @@ final class MinecraftRegionTick {
 	private final FluidSnapshotPublisher snapshots;
 	private final WorldCapabilityProfile profile;
 	private final int maximumPhaseOperationsPerStep;
+	private final RegionExpansion expansion;
 	private java.util.function.Consumer<FluidRegion> activityConnections = region -> { };
 	void activityConnections(java.util.function.Consumer<FluidRegion> connections) { activityConnections = Objects.requireNonNull(connections); }
 	private java.util.function.BiPredicate<ServerLevel,FluidRegion> farmlandHydration = (level,region) -> true;
@@ -53,12 +54,14 @@ final class MinecraftRegionTick {
 			MinecraftRegionInputs inputs,
 			FluidSnapshotPublisher snapshots,
 			WorldCapabilityProfile profile,
-			int maximumPhaseOperationsPerStep
+			int maximumPhaseOperationsPerStep,
+			RegionExpansion expansion
 	) {
 		this.useCase = new RegionTickUseCase(Objects.requireNonNull(application, "Region application"), POLICY);
 		this.inputs = Objects.requireNonNull(inputs, "Minecraft region inputs");
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.profile = Objects.requireNonNull(profile, "World capability profile");
+		this.expansion = Objects.requireNonNull(expansion, "Region expansion");
 		if (maximumPhaseOperationsPerStep < 0) {
 			throw new IllegalArgumentException("Phase-operation budget must be non-negative");
 		}
@@ -70,6 +73,7 @@ final class MinecraftRegionTick {
 
 	/** A manual motion step uses the same world observations and accepted entity response as a tick. */
 	void manualStep(ServerLevel level, FluidRegion region, MinecraftMotionExecutor motion) {
+		if (expansion.handle(level, region)) throw new IllegalStateException("区域扩容已处理，请重新执行单步");
 		inputs.discardEntityResponse(region);
 		try {
 			if (region.collisionRefreshRequired() || inputs.externalHandoffsDue(region)) refreshRegionInputs(level, region);
@@ -134,6 +138,10 @@ final class MinecraftRegionTick {
 			return;
 		}
 		boolean motionStepDue = tickPlan.axis() == RegionTickUseCase.Axis.MOTION;
+		if (motionStepDue && expansion.handle(level, region)) {
+			inputs.discardEntityResponse(region);
+			return;
+		}
 		ThermalAuditLedger thermalBefore = profile.hasCapability(WorldCapability.THERMAL)
 				? region.thermalAudit() : null;
 		FluidDomainContracts.ThermalAxisStats completedThermalAxis = null;

@@ -316,15 +316,16 @@ double catalystMultiplier(int cell,int supportMask,int ruleIndex) {
     for(int port=0;port<int(words[headerWord(H_PORT_COUNTS)]);port++){
         if(int(words[headerWord(H_PORT_CELL)+port])!=cell)continue;
         int device=int(words[headerWord(H_PORT_DEVICE)+port]),direction=int(words[headerWord(H_PORT_DIRECTION)+port]);
-        int axis=direction/2,side=direction&1,a=(axis+1)%3,b=(axis+2)%3;double area=0.0LF;
-        for(int i=0;i<2;i++)for(int j=0;j<2;j++){
-            int bit=(side<<axis)|(i<<a)|(j<<b);if((eligible&(1<<bit))==0)continue;
+        int axis=direction/2,side=direction&1,a=(axis+1)%3,b=(axis+2)%3,code=int(words[headerWord(H_PORT_INTERNAL_MASK)+port]),faceMask=code&255;bool internal=(code&256)!=0;double area=0.0LF;
+        for(int bit=0;bit<8;bit++){
+            if(internal ? (faceMask&(1<<bit))==0 : ((bit>>axis)&1)!=side || (faceMask!=0&&(faceMask&(1<<bit))==0))continue;
+            int i=(bit>>a)&1,j=(bit>>b)&1;if((eligible&(1<<bit))==0)continue;
             dvec2 lo=dvec2(.5LF*double(i),.5LF*double(j)),hi=lo+dvec2(.5LF);
-            if(fill<1.0LF&&!plicContactRect(plane,axis,double(side),true,lo,hi))continue;
+            if(fill<1.0LF&&!plicContactRect(plane,axis,internal?.5LF:double(side),true,lo,hi))continue;
             area+=max(0.0LF,hi.x-lo.x)*max(0.0LF,hi.y-lo.y);
         }
         area*=porosity;
-        if(headerWord(H_SCREEN_FACES)>=0){int face=gridFace(cell,direction);if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;
+        if(!internal&&headerWord(H_SCREEN_FACES)>=0){int face=gridFace(cell,direction);if(face>=0){int screen=headerWord(H_SCREEN_FACES)+4*face;
             if(readDouble(screen)>0.0LF)area*=1.0LF-clamp(readDouble(screen+2),0.0LF,1.0LF);}}
         for(int i=0;i<count;i++){int at=headerWord(H_CATALYSTS)+6*i;
             if(int(words[at])==device&&int(words[at+1])==direction&&int(words[at+2])==ruleIndex)

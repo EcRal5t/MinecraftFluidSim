@@ -146,9 +146,9 @@ final class DemoTankOperations {
             return "移除演示水箱需要管理员权限";
         String error = check(player.level(), region);
         if (error != null) return error;
-        BlockPos controller = region.footprint().controllerPosition();
+        BlockPos controller = region.footprint().minimumInterior();
         if (player.distanceToSqr(controller.getX() + .5, controller.getY() + .5, controller.getZ() + .5) > 64.0)
-            return "玩家距离演示控制器过远";
+            return "玩家距离演示区域过远";
         error = clear(player.level(), region);
         if (error != null) return error;
         var removed = lifecycle.removeDemo(player, region);
@@ -177,13 +177,11 @@ final class DemoTankOperations {
         if (!startup.authoritativeWritesReady()) return "世界存档尚未准备好";
         if (availability.hasPending(region.id()) || operations.ownershipLockDescription(region) != null)
             return "演示水箱存在未完成的事务";
-        if (!level.getBlockState(region.footprint().controllerPosition()).is(MmmBlocks.FLUID_CONTROLLER))
-            return "演示控制器已改变";
         return null;
     }
 
     private static int[] portCell(ServerLevel level, FluidRegion region) {
-        for (long packed : region.footprint().boundaryBlocks()) {
+        for (long packed : region.footprint().interiorBlocks()) {
             BlockPos position = BlockPos.of(packed);
             var state = level.getBlockState(position);
             if (!state.is(MmmBlocks.FLUID_PORT)) continue;

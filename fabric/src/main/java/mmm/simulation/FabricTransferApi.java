@@ -106,7 +106,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(actor.state().generation()!=request.expectedActorGeneration()) return result(TransferStatus.STALE_ACTOR,"Actor generation changed");
 			var region=regions.region(request.regionId());
 			if(region==null || !region.dimension().identifier().toString().equals(request.dimensionId())) return result(TransferStatus.NO_REGION,"Requested region is absent");
-			if(!region.controllerManaged() || !region.solverLoaded() || region.availabilityFailure()!=null || availability.hasPending(region.id())
+			if(!region.hasSelectedVolume() || !region.solverLoaded() || region.availabilityFailure()!=null || availability.hasPending(region.id())
 					|| region.hasPendingPhaseMotionWork(region.activityForBodies(region.entityBodyState().bodies()))) return result(TransferStatus.UNAVAILABLE,"Region is unloaded, locked, or has pending mechanical work");
 			if(!actor.binding().address().dimensionId().equals(request.dimensionId())) return result(TransferStatus.INVALID_REQUEST,"Actor and region dimensions differ");
 			var target=portTarget(actor,region,request);

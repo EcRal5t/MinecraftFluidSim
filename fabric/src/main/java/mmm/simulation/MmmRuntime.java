@@ -38,6 +38,7 @@ public final class MmmRuntime {
 	private final IndustrialOperations industrial;
 	private final MinecraftWorldUpdates worldUpdates;
 	private final ExternalMovingStructures externalStructures;
+	private final WorldThermalEnvironment environment;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -66,7 +67,8 @@ public final class MmmRuntime {
 			mmm.api.transfer.MmmTransferApi transfers,
 			mmm.fluid.FluidSolverBackend solverBackend,
 			MinecraftProcessOperations processes, IndustrialOperations industrial, MinecraftWorldUpdates worldUpdates,
-			ExternalMovingStructures externalStructures
+			ExternalMovingStructures externalStructures,
+			WorldThermalEnvironment environment
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
@@ -96,10 +98,12 @@ public final class MmmRuntime {
 		this.industrial = Objects.requireNonNull(industrial);
 		this.worldUpdates=worldUpdates;
 		this.externalStructures=Objects.requireNonNull(externalStructures);
+		this.environment=environment;
 	}
 
 	public MinecraftWorldUpdates worldUpdates() { return worldUpdates; }
 	public mmm.api.motion.MovingStructureApi movingStructures() { return externalStructures; }
+	public WorldThermalEnvironment environment() { return environment; }
 	public IndustrialOperations industrial() { return industrial; }
 	public MinecraftProcessOperations processes() { return processes; }
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
@@ -130,6 +134,10 @@ public final class MmmRuntime {
 		processes.tick(server);
 		simulationLoop.tick(server);
 	}
+
+    public void checkpointWorld(MinecraftServer server) {
+        if(!closed && worldRecoveryCompleted) simulationLoop.checkpointWorld(server);
+    }
 
 	public boolean isLifecycleManagedBlock(
 			net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos position
@@ -168,6 +176,7 @@ public final class MmmRuntime {
 		if (closed) return;
 		closed = true;
 		try {
+            if(environment!=null) for(var level:server.getAllLevels()) environment.refreshDirty(level);
 			simulationLoop.checkpointForShutdown();
 			simulationLoop.restoreTakeover(server);
 		} finally {

@@ -2,7 +2,7 @@
 
 本文按完整职责链组织当前模型、数据归属和代码索引。开发时阅读本文及[当前实施计划](../roadmap/solver-consolidation-plan.md)，按改动范围查阅[验证指南](../maintenance/validation.md)。稳定公式和字段详见各专题；待办由实施计划维护，验证方法与预算由验证指南维护。
 
-当前支持最多四个闭壳控制器或有界静水池区域。默认格长为 0.5 m；液体采用单元有限体积与 MAC 动量，气体采用逐格组分与内能，液气共用 MAC 运动和局部有限压缩状态方程，颗粒采用活动代表粒子与床层。固定碰撞每个求解单元保留一个连通开放空间，隔墙以求解网格解析。
+当前支持最多四个空间选区或有界静水池区域。默认格长为 0.5 m；液体采用单元有限体积与 MAC 动量，气体采用逐格组分与内能，液气共用 MAC 运动和局部有限压缩状态方程，颗粒采用活动代表粒子与床层。固定碰撞每个求解单元保留一个连通开放空间，隔墙以求解网格解析。
 
 ## 模块职责
 
@@ -37,7 +37,7 @@
 
 固定拓扑由 `VulkanSpatialGrid` 编码为独立只读设备数据，创建域时上传，液体、气体、颗粒、热学及观察内核共同引用。热路径直接读取六邻格和面端点，任意坐标通过驻留块哈希查找。压力多重网格一次生成各层父子格映射，系数随当前状态更新。颗粒床层按实际驻留的竖向列存储；缺块处保留明确的几何隔断。块决定存储，物理连通和设备接触决定共同推进或暂停的范围。0.5 m／1 m 动态叶格的守恒表示和几何成本见[两级空间分辨率](fluid-solver.md#两级空间分辨率)。
 
-控制器和水池按实际空间占地登记、采样碰撞与检查世界区块。驻留块内位于容器外的单元按固体处理。资源计费使用驻留单元总数，长窄通道可跨越多个块；每区域和服务器总量继续受配置预算约束。所有块共享一个候选和区域 HEAD，完整 checkpoint 保存块成员与空间地址，恢复时重建紧凑索引。
+空间选区和水池按实际空间占地登记、采样碰撞与检查世界区块。区域内固体及开放空间由实际碰撞形状决定。资源计费使用驻留单元总数，长窄通道可跨越多个块；每区域和服务器总量继续受配置预算约束。所有块共享一个候选和区域 HEAD，完整 checkpoint 保存块成员与空间地址，恢复时重建紧凑索引。
 
 入口：[SpatialGrid](../../model/src/main/java/mmm/spatial/SpatialGrid.java)、[VulkanSpatialGrid](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSpatialGrid.java)、[spatial-grid.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/spatial-grid.glsl)、[FluidRegionFactory.grid](../../fabric/src/main/java/mmm/simulation/FluidRegionFactory.java)、[PhysicalActivityGraph](../../solver/src/main/java/mmm/fluid/PhysicalActivityGraph.java)。跨块完整步验证入口为 `runGpuSpatialDomainValidation`。
 
@@ -117,7 +117,13 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
 5. 日常查询与展示读取设备观察；checkpoint 和宿主编辑显式导出所需代次。
 
-普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。工业装置的世界建造与工艺验证共用同一方块标签、墙库存、端口与初始化规则；预热、冷却和表面装填按实际设备内能记入外部源汇。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
+固定世界方块与域外有限空气由维度共享热场持有。原版方块标签选择材料，未配置方块采用默认石材；铁、铜、金、木材、玻璃及绝热材料复用世界热学定义。每个固体按实际占据体积保存质量与内能，同格空气按微盒连通分量保存实际组成、质量与内能。区域设备行引用唯一世界节点，多个区域可共同加热同一面墙。
+
+空间选区由探针两角确认，碰撞与容器独立。液体或颗粒接近边缘时，既有 GPU 观察输出六方向标志；运行入口先做预算、区块与重叠预检，再按 8³ 计算块生成更大候选，搬迁库存、气体、动量、几何及待处理任务。环境空气交给新气格、原版水接管及区域布局沿同一候选和世界发布记录采用。
+
+环境扩散每 10 个服务器 tick 排队，优先加入该维度下一次成功的区域 GPU 提交；无区域步时独立推进。区域墙接触随实际接受步长执行，失败候选同时丢弃区域和环境更改。静态拓扑驻留设备，正常步只复制可变库存及账本；墙投影未失效时复用已有值。环境远场为 293.15 K，有限空气可积热，远场实际收支单独记账。
+
+有限换热器保留自身物品库存；普通世界墙、筛表面装填与吸附物由共享环境持有。预热和装填先从当前世界代刷新投影，再共同准备区域与世界编辑。checkpoint 通过唯一世界 HEAD 发布环境、全部区域和删除标记；区域双槽镜像在恢复时追平同一组数据。
 
 物料箱的九个槽保存玩家放入的实际容器，空槽保持为空；液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和容器后态提交；取样组成来自接触格，出料要求对应物相的容器。内置端口直接使用共同容器事务，不占用公共外部 actor 注册额度。满箱和断料保持配置等待，暂停与卸载保留运行意图，到期供料唤醒休眠区域。持单个容器交换当前槽，空手取回，潜行空手切槽，探针打开选槽面板。容器离开箱体时移除箱内事务身份；未决交接保护对应槽位和箱体拆除。
 
@@ -148,7 +154,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java)、[MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)：世界服务、设备和 tick。
 - [PhysicalActivityGraph](../../solver/src/main/java/mmm/fluid/PhysicalActivityGraph.java)、[VulkanLiquidWorkspace](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidWorkspace.java)：同代物理分组和设备活动输入。
 - [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftWorldUpdates](../../fabric/src/main/java/mmm/simulation/MinecraftWorldUpdates.java)：区块可用性、世界碰撞、活塞运动和实体输入。
-- [OrdinaryThermalWalls](../../fabric/src/main/java/mmm/simulation/OrdinaryThermalWalls.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
+- [WorldThermalEnvironment](../../fabric/src/main/java/mmm/simulation/WorldThermalEnvironment.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
 - [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、取样及驱动配置恢复。
 - [IndustrialOperations](../../fabric/src/main/java/mmm/simulation/IndustrialOperations.java)、[IndustrialDialogs](../../fabric/src/main/java/mmm/simulation/IndustrialDialogs.java)：物料箱、端口调度、阀门占容、传感器与原生交互面板。
 - [MaterialBoxItemStorage](../../fabric/src/main/java/mmm/simulation/MaterialBoxItemStorage.java)：九槽实际容器的 Fabric 自动化入口，完整物品组件、嵌套事务回滚和箱体占用；区域交接继续走持久容器事务。契约见[外部 API](external-api.md#fabric-物料箱自动化)。
@@ -227,7 +233,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="client"></a>
 ## 查询与展示
 
-区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。登录、切换维度及复活时向玩家补发当前维度的已加载区域快照，暂停和休眠区域也参与补发。查询不改变设备代。容器与接口使用实际接受量及同代库存，比较器按固定开放容量展示液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
+区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。登录、切换维度及复活时向玩家补发当前维度的已加载区域快照，暂停和休眠区域也参与补发。查询不改变设备代。容器与接口使用实际接受量及同代库存，传感器按测量范围内的固定开放容量计算液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
 
 ### 样品分析与工艺曲线
 
@@ -244,7 +250,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="gameplay"></a>
 ## 游戏入口
 
-控制器、外壳和接口建立区域；桶、发射器、气体源、换热器和耕地通过区域事务交接库存。演示复用相同初始化、调度与提交流程；原版静水池接管与归还使用世界归属日志。命令见[命令速查](../maintenance/commands.md)，后续玩法见[产品路线](../roadmap/product-roadmap.md)。
+探针选区建立区域；桶、接口、发射器、气体源、换热器和耕地通过区域事务交接库存。演示复用相同初始化、调度与提交流程；原版静水池接管与归还使用世界归属日志。命令见[命令速查](../maintenance/commands.md)，后续玩法见[产品路线](../roadmap/product-roadmap.md)。
+
+区域创建与环境热场的完整方案见[空间选区与环境热场](../roadmap/region-and-environment-heat-plan.md)，涵盖空间选择、范围增长及世界坐标热库存；实施状态由当前计划维护。
 
 <a id="performance"></a>
 <a id="diagnosis"></a>

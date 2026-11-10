@@ -25,6 +25,7 @@ import net.minecraft.resources.ResourceKey;
 /** Host-level fixed/moving structure handoff with source-world evidence. */
 public final class ExternalStructureHandoffValidation {
     private static final String DIMENSION="test:handoff";
+    private static final String SECOND_DIMENSION="test:other_handoff";
     private static final String PROVIDER="test:structure";
     private static final UUID STRUCTURE=UUID.fromString("00000000-0000-0000-0000-000000000201");
     private static final UUID ENTITY=UUID.fromString("00000000-0000-0000-0000-000000000202");
@@ -36,11 +37,13 @@ public final class ExternalStructureHandoffValidation {
     private static final class Source implements MovingStructureApi.Provider {
         Structure structure;
         Handoff handoff;
+        boolean otherDimension;
+        boolean hideOther;
         @Override public List<Structure> sample(String dimension) {
-            return DIMENSION.equals(dimension) && structure!=null ? List.of(structure) : List.of();
+            return (DIMENSION.equals(dimension) || otherDimension && SECOND_DIMENSION.equals(dimension)) && structure!=null ? List.of(structure) : List.of();
         }
         @Override public List<Handoff> handoffs(String dimension) {
-            return DIMENSION.equals(dimension) && handoff!=null ? List.of(handoff) : List.of();
+            return (DIMENSION.equals(dimension) || otherDimension && !hideOther && SECOND_DIMENSION.equals(dimension)) && handoff!=null ? List.of(handoff) : List.of();
         }
         void set(HandoffKind kind,long revision,List<Piece> pieces,List<FixedBlock> blocks) {
             structure=new Structure(STRUCTURE,ENTITY,revision,ANCHOR,ANCHOR,.05,pieces,false);
@@ -60,9 +63,13 @@ public final class ExternalStructureHandoffValidation {
         restartAndMissingProvider();
         movementAndRestoredProgress();
         completeBodyBudget();
+        pendingThermalPositionsRespectDimensions();
         System.out.println("ExternalStructureHandoffValidation passed");
     }
     private static Fixture fixture(int maskAtFirst,int maskAtSecond) {
+        return fixture(maskAtFirst,maskAtSecond,DIMENSION);
+    }
+    private static Fixture fixture(int maskAtFirst,int maskAtSecond,String dimensionId) {
         var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-4f,.002f);
         var definitions=mmm.fluid.TestFluidDefinitions.load();
         var host=new HostFluidState(8,8,8,config,definitions);
@@ -72,10 +79,28 @@ public final class ExternalStructureHandoffValidation {
         if(maskAtSecond!=0)host.setSolidMicroMask(4,2,2,maskAtSecond);
         host.setVolume(1,1,1,.4f);host.sealDomainBoundary();
         host.bindGasRegistry(definitions.gas());host.bindThermal(definitions.thermal(),fluids,300);
-        var dimension=ResourceKey.create(Registries.DIMENSION,Identifier.parse(DIMENSION));
+        var dimension=ResourceKey.create(Registries.DIMENSION,Identifier.parse(dimensionId));
         var region=new FluidRegion(UUID.randomUUID(),dimension,new BlockPos(10,64,-4),host);
         var bridge=new ExternalMovingStructures(() -> true);var source=new Source();bridge.register(PROVIDER,source);
         return new Fixture(region,bridge,source);
+    }
+    private static void pendingThermalPositionsRespectDimensions() {
+        var first=fixture(3,0); var second=fixture(3,0,SECOND_DIMENSION);
+        first.source.otherDimension=true;
+        first.source.set(HandoffKind.ASSEMBLE,1,MICROS,List.of(BLOCK));
+        apply(first,observed(first,0,0),block->true,block->"minecraft:air");
+        check(first.bridge.pendingThermalPositions(DIMENSION).isEmpty(),"completed first dimension stayed frozen");
+        check(first.bridge.pendingThermalPositions(SECOND_DIMENSION).contains(new BlockPos(11,65,-3)),
+                "completion in another dimension suppressed pending handoff");
+        try {
+            first.bridge.prepareHandoffs(second.region,observed(second,0,0),block->false,block->"minecraft:air");
+            throw new AssertionError("unavailable second dimension was accepted");
+        } catch(ExternalMovingStructures.InputRejectedException expected) { }
+        first.source.hideOther=true;
+        check(first.bridge.pendingThermalPositions(SECOND_DIMENSION).contains(new BlockPos(11,65,-3)),"waiting handoff was lost");
+        check(first.bridge.pendingThermalPositions(DIMENSION).isEmpty(),"waiting handoff froze another dimension");
+        first.bridge.regionRemoved(second.region);
+        check(first.bridge.pendingThermalPositions(SECOND_DIMENSION).isEmpty(),"removed region retained pending thermal positions");
     }
     private static CollisionField observed(Fixture f,int first,int second) {
         byte[] masks=f.region.fixedGeometry().copyMasks();

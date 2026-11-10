@@ -14,7 +14,7 @@ public final class ContainerItemMapper {
 
 	public static ContainerTransferJournal.ItemFingerprint fingerprint(ItemStack stack) {
 		if (stack.getCount() != 1) {
-			throw new IllegalArgumentException("控制器容器事务一次只接受 1 个物品；堆叠桶保持不变");
+			throw new IllegalArgumentException("区域容器事务一次只接受 1 个物品；堆叠桶保持不变");
 		}
 		if (stack.is(Items.BUCKET)) return withThermal(stack, snapshot(ContainerTransferJournal.ItemKind.BUCKET));
 		if (stack.is(Items.WATER_BUCKET)) {

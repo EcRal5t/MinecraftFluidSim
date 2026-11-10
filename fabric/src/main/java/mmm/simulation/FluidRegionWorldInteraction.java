@@ -28,6 +28,11 @@ final class FluidRegionWorldInteraction {
 
 	static FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region, int cellsPerBlock,
 			MinecraftWorldUpdates updates, ExternalMovingStructures external) {
+		return refreshCollisions(level,region,cellsPerBlock,updates,external,null);
+	}
+
+	static FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region, int cellsPerBlock,
+			MinecraftWorldUpdates updates, ExternalMovingStructures external, WorldThermalEnvironment environment) {
 		BlockPos origin = region.origin();
         var members = new java.util.HashSet<CollisionRegion.Block>();
         if (region.footprint() != null) {
@@ -49,34 +54,30 @@ final class FluidRegionWorldInteraction {
                 block->MinecraftGroupAvailability.loaded(level,new BlockPos(block.x(),block.y(),block.z())),
                 block->net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(
                         level.getBlockState(new BlockPos(block.x(),block.y(),block.z())).getBlock()).toString());
-        if(plan!=null && plan.inventory()!=null)try {
-            for(var completed:plan.completed())ExternalStructureThermalHandoff.validateRestoredScreenAxes(
-                    plan.inventory(),completed.handoff(),block->{
-                        var state=level.getBlockState(new BlockPos(block.x(),block.y(),block.z()));
-                        return state.is(mmm.block.MmmBlocks.SCREEN)?state.getValue(mmm.block.ScreenBlock.FACING).getAxis().name():null;
-                    });
-        } catch(IllegalArgumentException mismatch) {
-            throw new ExternalMovingStructures.InputRejectedException(mismatch.getMessage(),mismatch);
-        }
-        return applyCapturedCollisions(region,field,cellsPerBlock,updates,screens,external,plan);
+        return applyCapturedCollisions(region,field,cellsPerBlock,updates,screens,external,plan,environment,block->{
+            var state=level.getBlockState(new BlockPos(block.x(),block.y(),block.z()));
+            return state.is(mmm.block.MmmBlocks.SCREEN)?state.getValue(mmm.block.ScreenBlock.FACING).getAxis().name():null;
+        });
     }
 
 	/** Applies one captured field on a private successor; failures leave the live solver untouched. */
 	static FluidRegion.CollisionStats applyCapturedCollisions(
 			FluidRegion region, CollisionField collisionField, int cellsPerBlock
-	) { return applyCapturedCollisions(region,collisionField,cellsPerBlock,null,null,null,null); }
+	) { return applyCapturedCollisions(region,collisionField,cellsPerBlock,null,null,null,null,null,block->null); }
 
 	static FluidRegion.CollisionStats applyCapturedCollisions(FluidRegion region, CollisionField field, int cellsPerBlock,
 			ExternalMovingStructures external,
 			java.util.function.Predicate<mmm.api.motion.MovingStructureApi.FixedBlock> available,
 			java.util.function.Function<mmm.api.motion.MovingStructureApi.FixedBlock,String> blockIdAt) {
 		var plan=external.prepareHandoffs(region,field,available,blockIdAt);
-		return applyCapturedCollisions(region,field,cellsPerBlock,null,null,external,plan);
+		return applyCapturedCollisions(region,field,cellsPerBlock,null,null,external,plan,null,block->null);
 	}
 
     private static FluidRegion.CollisionStats applyCapturedCollisions(FluidRegion region, CollisionField collisionField,
                                                                        int cellsPerBlock, MinecraftWorldUpdates updates, List<mmm.fluid.ScreenFace> screens,
-                                                                       ExternalMovingStructures external, ExternalMovingStructures.HandoffPlan plan) {
+                                                                       ExternalMovingStructures external, ExternalMovingStructures.HandoffPlan plan,
+                                                                       WorldThermalEnvironment environment,
+                                                                       java.util.function.Function<mmm.api.motion.MovingStructureApi.FixedBlock,String> axisAt) {
 		if (cellsPerBlock <= 0 || region.sizeX() % cellsPerBlock != 0
 				|| region.sizeY() % cellsPerBlock != 0 || region.sizeZ() % cellsPerBlock != 0
 				|| collisionField.sizeX() != region.sizeX() || collisionField.sizeY() != region.sizeY()
@@ -95,12 +96,14 @@ final class FluidRegionWorldInteraction {
         var allEdits = new ArrayList<FluidDomainContracts.CollisionEdit>();
         for (var edits : editsByBlock.values()) allEdits.addAll(edits);
 
-        return applyPlans(region, allEdits, updates,screens,external,plan);
+        return applyPlans(region, allEdits, updates,screens,external,plan,environment,axisAt);
     }
 
     private static FluidRegion.CollisionStats applyPlans(FluidRegion region, List<FluidDomainContracts.CollisionEdit> edits,
                                                          MinecraftWorldUpdates updates,List<mmm.fluid.ScreenFace> screens,
-                                                         ExternalMovingStructures external, ExternalMovingStructures.HandoffPlan plan) {
+                                                         ExternalMovingStructures external, ExternalMovingStructures.HandoffPlan plan,
+                                                         WorldThermalEnvironment environment,
+                                                         java.util.function.Function<mmm.api.motion.MovingStructureApi.FixedBlock,String> axisAt) {
         var previous = region.entityBodyState();
         var source = updates == null ? previous : new mmm.fluid.EntityBodyState(updates.sourceBodies(region));
         if(plan!=null) {
@@ -113,14 +116,14 @@ final class FluidRegionWorldInteraction {
         boolean handoff = !source.equals(previous);
         var oldScreens=region.fixedGeometry().screens();
         boolean screenChange=screens!=null&&!oldScreens.equals(screens);
-        boolean inventoryChange=plan!=null && plan.inventory()!=null && !plan.inventory().equals(
-                region.finiteThermalDevices(plan.inventory().thermalRegistryFingerprint()));
-        if (edits.isEmpty() && !handoff && !screenChange && !inventoryChange) {
-            if(external!=null)external.handoffsAccepted(region,plan);
-            return FluidRegion.CollisionStats.EMPTY;
-        }
         long baseGeneration = region.solverGeneration();
-        try {
+        try (var thermal=environment==null || plan==null || plan.completed().isEmpty()?null:
+                environment.prepareStructureHandoff(region,plan.completed(),axisAt)) {
+            if (edits.isEmpty() && !handoff && !screenChange && thermal==null) {
+                if(external!=null)external.handoffsAccepted(region,plan);
+                if(environment!=null && plan!=null && !plan.completed().isEmpty())environment.markDirty(region.dimension().identifier().toString());
+                return FluidRegion.CollisionStats.EMPTY;
+            }
             HostFluidState domain = region.beginHostEdit();
             var remaining = new ArrayList<>(edits);
             var handoffEdits = new ArrayList<FluidDomainContracts.CollisionEdit>();
@@ -141,9 +144,11 @@ final class FluidRegionWorldInteraction {
                 for(var screen:oldScreens)domain.removeScreenFace(screen.face());
                 for(var screen:screens)domain.setScreenFace(screen.face(),screen.poreDiameter(),screen.openFraction());
             }
-            if(inventoryChange)region.adoptStructureCandidate(baseGeneration,domain,plan.inventory());
+            if(thermal!=null)region.adoptStructureCandidate(baseGeneration,domain,thermal);
             else region.adoptCollisionCandidate(baseGeneration, domain);
+            if(thermal!=null)environment.structureHandoffAccepted(region.dimension().identifier().toString());
             if(external!=null)external.handoffsAccepted(region,plan);
+            if(environment!=null && plan!=null && !plan.completed().isEmpty())environment.markDirty(region.dimension().identifier().toString());
             return new FluidRegion.CollisionStats(edits.size()+(screenChange?1:0), displaced, 0.0F, false);
         } catch (GasTopologyBlockedException blocked) {
             if(plan!=null && !plan.completed().isEmpty())throw new ExternalMovingStructures.InputRejectedException(

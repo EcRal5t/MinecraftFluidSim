@@ -30,6 +30,9 @@ final class ExternalMovingStructures implements MovingStructureApi {
 	private final Set<UUID> orphanRegions = new HashSet<>();
 	private final Map<Key,Handoff> completedHandoffs = new HashMap<>();
 	private final Map<Key,Handoff> waitingHandoffs = new HashMap<>();
+	private final Map<UUID,String> regionDimensions = new HashMap<>();
+	private WorldThermalEnvironment environment;
+	void environment(WorldThermalEnvironment value) { environment=value; }
 
 	ExternalMovingStructures(MinecraftServer server) { this(server::isSameThread); }
 	ExternalMovingStructures(java.util.function.BooleanSupplier serverThread) { this.serverThread = serverThread; }
@@ -63,7 +66,26 @@ final class ExternalMovingStructures implements MovingStructureApi {
 			Set<UUID> excludedEntities, boolean advancing) { }
 	record CompletedHandoff(String provider, Handoff handoff) { }
 	record HandoffPlan(List<mmm.fluid.FluidDomainContracts.CollisionEdit> edits, EntityBodyState bodies,
-			mmm.thermal.FiniteThermalDeviceInventory inventory, List<CompletedHandoff> completed) { }
+			List<CompletedHandoff> completed) { }
+
+	/** Returns null while a provider is unavailable, preserving the current world snapshot. */
+	Set<net.minecraft.core.BlockPos> pendingThermalPositions(String dimension) {
+		var result=new HashSet<net.minecraft.core.BlockPos>();
+		try {
+			for(var provider:providers.entrySet()) {
+				var pending=new ArrayList<Handoff>(provider.getValue().handoffs(dimension));
+				waitingHandoffs.forEach((key,value)-> { if(key.provider.equals(provider.getKey()) && dimension.equals(regionDimensions.get(key.region)))
+					for(var block:value.blocks())result.add(new net.minecraft.core.BlockPos(block.x(),block.y(),block.z())); });
+				for(var handoff:pending) {
+					boolean done=completedHandoffs.entrySet().stream().anyMatch(e->e.getKey().provider.equals(provider.getKey())
+							&& dimension.equals(regionDimensions.get(e.getKey().region))
+							&& e.getKey().structure.equals(handoff.structure().id()) && sameHandoff(e.getValue(),handoff));
+					if(!done)for(var block:handoff.blocks())result.add(new net.minecraft.core.BlockPos(block.x(),block.y(),block.z()));
+				}
+			}
+			return result;
+		} catch(RuntimeException unavailable) { return null; }
+	}
 
 	boolean handoffsDue(FluidRegion region) {
 		if(waitingHandoffs.keySet().stream().anyMatch(key->key.region.equals(region.id())))return true;
@@ -80,12 +102,12 @@ final class ExternalMovingStructures implements MovingStructureApi {
 	/** Pure preparation: ordinary collision refresh must wait until every advertised handoff agrees. */
 	HandoffPlan prepareHandoffs(FluidRegion region, mmm.world.CollisionField observed,
 			java.util.function.Predicate<FixedBlock> available, java.util.function.Function<FixedBlock,String> blockIdAt) {
+		regionDimensions.put(region.id(),region.dimension().identifier().toString());
 		var bodies=new LinkedHashMap<UUID,MovingBodyFluidCoupling.Request>();
 		for(var body:region.entityBodyState().bodies())bodies.put(body.bodyId(),body);
 		var edits=new ArrayList<mmm.fluid.FluidDomainContracts.CollisionEdit>();
 		var edited=new HashSet<Integer>(); var claimed=new HashSet<UUID>();
 		var completed=new ArrayList<CompletedHandoff>();
-		var inventory=region.hasThermalState()?region.finiteThermalDevices(region.solverLayout().thermalRegistryFingerprint()):null;
 		for(var provider:providers.entrySet()) {
 			String id=provider.getKey();
 			try {
@@ -151,10 +173,8 @@ final class ExternalMovingStructures implements MovingStructureApi {
 					}
 					if(bodies.size()>MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP)
 						throw new IllegalArgumentException("Handoff exceeds the complete region body budget");
-					if(inventory!=null && !replay) {
-						if(handoff.kind()==HandoffKind.ASSEMBLE)ExternalStructureGeometry.requireWholeThermalBlocks(region,handoff,owned,inventory);
-						inventory=ExternalStructureThermalHandoff.plan(inventory,id,handoff);
-					}
+					if(environment!=null && handoff.kind()==HandoffKind.ASSEMBLE && !replay)
+						ExternalStructureGeometry.requireWholeThermalBlocks(region,handoff,owned,environment);
 					completed.add(new CompletedHandoff(id,handoff));
 				}
 			} catch(RuntimeException failure) {
@@ -164,10 +184,11 @@ final class ExternalMovingStructures implements MovingStructureApi {
 		}
 		for(var body:region.entityBodyState().bodies())if(external(body.bodyId()) && !claimed.contains(body.bodyId()))
 			throw new InputRejectedException("Saved external structure awaits its provider before world refresh");
-		return new HandoffPlan(List.copyOf(edits),new EntityBodyState(List.copyOf(bodies.values())),inventory,List.copyOf(completed));
+		return new HandoffPlan(List.copyOf(edits),new EntityBodyState(List.copyOf(bodies.values())),List.copyOf(completed));
 	}
 
 	void handoffsAccepted(FluidRegion region,HandoffPlan plan) {
+		regionDimensions.put(region.id(),region.dimension().identifier().toString());
 		for(var item:plan.completed()) {
 			var frame=item.handoff().structure(); var key=new Key(item.provider(),region.id(),frame.id());
 			completedHandoffs.put(key,item.handoff());
@@ -220,8 +241,7 @@ final class ExternalMovingStructures implements MovingStructureApi {
 							&& frame.revision()<=lifecycle.structure().revision())continue;
 					if (frame.retired() && !outside(region, frame, frame.target()))
 						throw new IllegalArgumentException("Retired structure must end outside the region");
-					if(frame.retired() && region.hasThermalState() && ExternalStructureThermalHandoff.hasCarried(
-							region.finiteThermalDevices(region.solverLayout().thermalRegistryFingerprint()),providerId,frame.id()))
+					if(frame.retired() && environment!=null && environment.hasCarried(region.dimension().identifier().toString(),providerId,frame.id()))
 						throw new IllegalArgumentException("Carried thermal walls require disassembly in their owning region");
 					if (!structures.add(frame.id())) throw new IllegalArgumentException("Duplicate structure identity");
 					if (frame.entityId() != null) excluded.add(frame.entityId());
@@ -343,6 +363,7 @@ final class ExternalMovingStructures implements MovingStructureApi {
 		retiredRevisions.keySet().removeIf(key -> key.region.equals(id));
 		completedHandoffs.keySet().removeIf(key -> key.region.equals(id));
 		waitingHandoffs.keySet().removeIf(key -> key.region.equals(id));
+		regionDimensions.remove(id);
 	}
 	private Map<UUID, Progress> progress(String provider, UUID region) {
 		return progress(provider, region, segments);

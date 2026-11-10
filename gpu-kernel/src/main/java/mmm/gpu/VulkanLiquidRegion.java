@@ -38,6 +38,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
     int requestedBodyCapacity,requestedBodyEntries;
     double requestCellSize=1;
     RequestInputs activeInputs;
+    VulkanWorldEnvironment.Pending activeEnvironment;
     private final List<Growth> growths=Boolean.getBoolean("mmm.gpuMechanicalGrowths")?new ArrayList<>():null;
     record Growth(long generation,String stage,int[] before,int[] after,int[] required) { }
     synchronized List<Growth> growthDiagnostics(){return growths==null?List.of():List.copyOf(growths);}
@@ -386,7 +387,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
         boolean gasFlowActive(){var t=layout.transport;if(t==null||t.gas==null||!mechanicalObservation)return false;
             var c=t.gas.transport.column(VulkanLocalGasTransport.Field.PRIMAL_MASS);var b=read(c.offset(),c.bytes());
             for(int i=0;i<c.count();i++)if(b.getLong(8*i)!=0)return true;return false;}
-        ThermalPosting thermalPosting(){var t=layout.transport;var zero=mmm.units.SignedDyadic.ZERO;return new ThermalPosting(dyadic(t.sourcePosting.result()),dyadic(t.sinkPosting.result()),dyadic(t.mechanicalPosting.result()),t.thermal==null?zero:dyadic(t.thermal.reservoir().result()),t.devices==null?zero:dyadic(t.devices.state.column(VulkanThermalDeviceLayout.Field.FLUID_EXCHANGE)),dyadic(t.roundoff.result()));}
+        ThermalPosting thermalPosting(){return thermalPosting(false);}
+        ThermalPosting thermalPosting(boolean environmentGas){var t=layout.transport;var zero=mmm.units.SignedDyadic.ZERO;var finite=t.devices==null?zero:dyadic(t.devices.state.column(VulkanThermalDeviceLayout.Field.FLUID_EXCHANGE));if(environmentGas)finite=finite.add(dyadic(t.environmentPosting.result()));return new ThermalPosting(dyadic(t.sourcePosting.result()),dyadic(t.sinkPosting.result()),dyadic(t.mechanicalPosting.result()),t.thermal==null?zero:dyadic(t.thermal.reservoir().result()),finite,dyadic(t.roundoff.result()));}
         private mmm.units.SignedDyadic dyadic(VulkanLiquidStateLayout.Column c){var b=read(c.offset(),c.bytes());int sign=b.getInt(0),count=b.getInt(8);var n=java.math.BigInteger.ZERO;for(int i=count-1;i>=0;i--)n=n.shiftLeft(32).add(java.math.BigInteger.valueOf(Integer.toUnsignedLong(b.getInt(16+4*i))));return sign==0?mmm.units.SignedDyadic.ZERO:new mmm.units.SignedDyadic(sign<0?n.negate():n,b.getInt(4));}
         private ByteBuffer read(long offset,long length){var b=ByteBuffer.allocate(Math.toIntExact(length)).order(ByteOrder.LITTLE_ENDIAN);storage.read(capture,offset,b);return b.flip();}
         @Override public void close(){capture.close();}
@@ -403,6 +405,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         mmm.units.SignedDyadic importRoundoff(){return importedRoundoff==null?mmm.units.SignedDyadic.ZERO:importedRoundoff;}
         Capture captureState(){synchronized(VulkanLiquidRegion.this){if(closed)throw new IllegalStateException("Prepared region is closed");return new Capture(result.candidate.captureCompleted(),result.workspace,result.geometryValid,result.gasNodesValid,result.mechanicalObservation,inputs,result.lastLeafDuration);}}
         int substeps(){return result.substeps;}
+        boolean canCommit(){synchronized(VulkanLiquidRegion.this){return !closed&&result.candidate.canCommit();}}
         long commit(){synchronized(VulkanLiquidRegion.this){if(closed)throw new IllegalStateException("Prepared region is closed");long generation=result.candidate.commit(source.capture);workspace=result.workspace;currentGeometryValid=result.geometryValid;currentGasNodesValid=result.gasNodesValid;currentMechanicalObservation=result.mechanicalObservation;currentInputs=inputs;
             if(result.mechanicalObservation){
                 observationDuration=result.lastLeafDuration;previousMechanicalLeafDuration=result.lastLeafDuration;previousMechanicalSubsteps=result.substeps;
@@ -635,6 +638,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         if(depth<plannedDepth)return splitBodyInterval(capture,source,sourceGeometryValid,parameters,requestGeneration,ordinal,depth,plannedDepth,previous,spent,allocated,sourceBodies,targetBodies,originalSource,originalTarget,start,end,requestDuration);
         if(parameters!=null)requestCellSize=parameters.cellSize();
         VulkanLiquidWorkspace target=bodyWorkspace(source,sourceBodies,targetBodies,allocated);
+        if(activeEnvironment!=null)activeEnvironment.beginLeaf(depth);
         while(true){
             target.sourceBodyState=sourceBodies;
             target.targetBodyState=targetBodies;
@@ -655,9 +659,10 @@ final class VulkanLiquidRegion implements AutoCloseable {
             catch(MotionTimeRefinement finer){
                 candidate.close();
                 if(parameters==null||depth>=mmm.fluid.FluidStepBudget.MAXIMUM_TIME_REFINEMENTS)throw finer;
+                if(activeEnvironment!=null)activeEnvironment.retryLeaf(depth);
                 return splitBodyInterval(capture,source,sourceGeometryValid,parameters,requestGeneration,ordinal,depth,plannedDepth,previous,spent,allocated,sourceBodies,targetBodies,originalSource,originalTarget,start,end,requestDuration);
             }catch(RuntimeException|Error failure){candidate.close();throw failure;}
-            candidate.close();VulkanLiquidWorkspace larger=reactionGrowth!=null?target.growReactions(reactionGrowth):granularRequired!=null?target.growGranular(granularRequired):thermalRequired>0||thermalBathRequired>0?target.growThermalContacts(thermalRequired,thermalBathRequired):contactRequired>0?target.growContacts(contactRequired):target.grow(required);allocated.add(larger);
+            candidate.close();if(activeEnvironment!=null)activeEnvironment.retryLeaf(depth);VulkanLiquidWorkspace larger=reactionGrowth!=null?target.growReactions(reactionGrowth):granularRequired!=null?target.growGranular(granularRequired):thermalRequired>0||thermalBathRequired>0?target.growThermalContacts(thermalRequired,thermalBathRequired):contactRequired>0?target.growContacts(contactRequired):target.grow(required);allocated.add(larger);
             if(growths!=null)growths.add(new Growth(requestGeneration,target.capacityStage,target.capacities(),larger.capacities(),reactionGrowth!=null?new int[]{reactionGrowth.species,reactionGrowth.limbs,reactionGrowth.particles,reactionGrowth.deposits,reactionGrowth.solidSpecies,reactionGrowth.coherentGroups,reactionGrowth.coherentSpecies}:granularRequired!=null?granularRequired:thermalRequired>0||thermalBathRequired>0?new int[]{thermalRequired,thermalBathRequired}:contactRequired>0?new int[]{contactRequired}:required.clone()));
             target=larger;
         }

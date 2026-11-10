@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer WorldSource { uint source[]; };
+layout(binding=1,std430) buffer Region { uint region[]; };
+layout(binding=2,std430) buffer WorldCandidate { uint world[]; };
+layout(binding=3,std430) readonly buffer Indices { uint indices[]; };
+layout(push_constant) uniform Push { int stage;int count;int walls;int surfaces;int air;int before;int after;int unused; } p;
+void main(){
+ int id=int(gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*65535u*128u);if(id>=p.count)return;
+ if(id<p.walls){
+  int e=int(indices[2*id]),r=int(indices[2*id+1]);
+  if(p.stage==0){world[p.before+2*id]=region[r];world[p.before+2*id+1]=region[r+1];world[p.after+2*id]=source[e];world[p.after+2*id+1]=source[e+1];region[r]=source[e];region[r+1]=source[e+1];}
+  else{world[p.before+2*id]=source[e];world[p.before+2*id+1]=source[e+1];world[p.after+2*id]=region[r];world[p.after+2*id+1]=region[r+1];world[e]=region[r];world[e+1]=region[r+1];}
+ }else if(id<p.walls+p.surfaces){
+  int e=int(indices[2*id]),r=int(indices[2*id+1]);
+  if(p.stage==0){region[r]=source[e];region[r+1]=source[e+1];}else{world[e]=region[r];world[e+1]=region[r+1];}
+ }else{
+  int i=id-p.walls-p.surfaces,e=int(indices[2*(p.walls+p.surfaces)+i]),row=p.walls+i;
+  world[p.before+2*row]=source[e];world[p.before+2*row+1]=source[e+1];world[p.after+2*row]=world[e];world[p.after+2*row+1]=world[e+1];
+ }
+}

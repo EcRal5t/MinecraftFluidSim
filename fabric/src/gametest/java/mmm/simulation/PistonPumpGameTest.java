@@ -23,7 +23,7 @@ public final class PistonPumpGameTest {
         var level=test.getLevel();
         var runtime=MmmRuntimeRegistry.require(level.getServer());
         var manager=runtime.worldUpdates().regions();
-        var controller=new BlockPos(1,2,4);
+        var controller=new BlockPos(2,2,2);
         var portPos=new BlockPos(4,2,1);
         var boxPos=new BlockPos(4,2,0);
         var fillingPortPos=new BlockPos(4,4,4);
@@ -37,12 +37,11 @@ public final class PistonPumpGameTest {
         var inletPower=new BlockPos(4,3,3);
         var outletPower=new BlockPos(4,3,5);
         for(int x=1;x<=7;x++)for(int y=1;y<=4;y++)for(int z=1;z<=7;z++)
-            if(x==1||x==7||y==1||y==4||z==1||z==7)test.setBlock(x,y,z,MmmBlocks.FLUID_BOUNDARY);
+            if(x==1||x==7||y==1||y==4||z==1||z==7)test.setBlock(x,y,z,Blocks.IRON_BLOCK);
         for(int y=2;y<=3;y++)for(int z=2;z<=6;z++) {
             test.setBlock(3,y,z,Blocks.STONE);
             test.setBlock(5,y,z,Blocks.STONE);
         }
-        test.setBlock(controller,MmmBlocks.FLUID_CONTROLLER);
         test.setBlock(portPos,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.NORTH));
         test.setBlock(boxPos,MmmBlocks.MATERIAL_BOX);
         test.setBlock(fillingPortPos,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.UP));
@@ -55,7 +54,7 @@ public final class PistonPumpGameTest {
         test.setBlock(4,3,5,Blocks.STONE);
         test.setBlock(drive,Blocks.STONE);
         var player=test.makeMockServerPlayerInLevel();
-        var activation=runtime.regionActivation().activate(player,test.absolutePos(controller),false);
+        var activation=runtime.regionActivation().createSelection(player,test.absolutePos(new BlockPos(2,2,2)),test.absolutePos(new BlockPos(6,3,6)));
         test.assertTrue(activation.succeeded(),"Pump controller activation failed: "+activation.failure());
         var region=manager.selected();
         test.assertTrue(region!=null&&region.solverLoaded(),"Pump region did not load");

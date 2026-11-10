@@ -1,117 +1,73 @@
 package mmm.simulation;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Objects;
-import mmm.api.motion.MovingStructureApi.FixedBlock;
-import mmm.api.motion.MovingStructureApi.Handoff;
-import mmm.api.motion.MovingStructureApi.HandoffKind;
-import mmm.thermal.FiniteThermalDeviceInventory;
-import mmm.thermal.FiniteThermalDeviceState;
-import net.minecraft.core.BlockPos;
+import java.util.*;
+import java.util.function.Function;
+import mmm.api.motion.MovingStructureApi.*;
+import mmm.thermal.EnvironmentThermalState;
+import mmm.thermal.EnvironmentThermalState.*;
 
-/** Relocates ordinary-wall heat inventory with a structure without an external heat exchange. */
+/** Moves world-owned solid inventories between fixed positions and a structure. */
 final class ExternalStructureThermalHandoff {
-	static final String PROVIDER = "mmm:external_structure_wall";
-	private ExternalStructureThermalHandoff() { }
-
-	static boolean hasCarried(FiniteThermalDeviceInventory inventory, String provider, java.util.UUID structureId) {
-		Objects.requireNonNull(inventory, "Thermal device inventory");
-		mmm.api.StableId.require(provider, 128, "structure provider");
-		Objects.requireNonNull(structureId, "Structure identity");
-		String prefix = structurePrefix(provider, structureId);
-		return inventory.devices().stream().anyMatch(device -> device.providerId().equals(PROVIDER)
-				&& device.objectId().startsWith(prefix));
-	}
-
-	static FiniteThermalDeviceInventory plan(FiniteThermalDeviceInventory previous, String provider, Handoff handoff) {
-		Objects.requireNonNull(previous, "Thermal device inventory");
-		mmm.api.StableId.require(provider, 128, "structure provider");
-		if (handoff == null || handoff.kind() == null || handoff.structure() == null || handoff.structure().id() == null)
-			throw new IllegalArgumentException("Thermal handoff identity is missing");
-		String structure = structurePrefix(provider, handoff.structure().id());
-		var devices = new ArrayList<>(previous.devices());
-		var keys = new HashSet<String>();
-		var positions = new HashSet<Long>();
-		var expectedKeys = new HashSet<String>();
-		for (FixedBlock block : handoff.blocks()) {
-			if (block == null || block.key() == null || block.key().isEmpty() || block.blockId() == null || block.blockId().isEmpty())
-				throw new IllegalArgumentException("Thermal handoff block identity is missing");
-			long position = BlockPos.asLong(block.x(), block.y(), block.z());
-			if (!keys.add(block.key()) || !positions.add(position))
-				throw new IllegalArgumentException("Duplicate thermal handoff block");
-			String keyPrefix = structure + encode(block.key()) + "|";
-			expectedKeys.add(keyPrefix);
-			String identity = keyPrefix + encode(block.blockId()) + "|";
-			if (handoff.kind() == HandoffKind.ASSEMBLE) {
-				if (devices.stream().anyMatch(d -> d.providerId().equals(PROVIDER) && d.objectId().startsWith(keyPrefix)))
-					throw new IllegalArgumentException("Structure already owns this thermal wall");
-				String fixedPrefix = position + "@";
-				var matches = devices.stream().filter(d -> d.providerId().equals(OrdinaryThermalWalls.PROVIDER)
-						&& d.objectId().startsWith(fixedPrefix)).toList();
-				if (matches.size() > 1) throw new IllegalArgumentException("Multiple thermal walls occupy the same position");
-				if (matches.isEmpty()) continue;
-				var wall = matches.getFirst();
-				String[] parts = wall.objectId().split("@", -1);
-				if ((parts.length != 2 && parts.length != 3) || !parts[1].equals(block.blockId())
-						|| parts.length == 3 && !List.of("X", "Y", "Z").contains(parts[2]))
-					throw new IllegalArgumentException("Fixed thermal wall identity does not match the structure block");
-				devices.remove(wall);
-				devices.add(relocate(wall, PROVIDER, identity + (parts.length == 3 ? parts[2] : "-")));
-			} else {
-				var matches = devices.stream().filter(d -> d.providerId().equals(PROVIDER)
-						&& d.objectId().startsWith(keyPrefix)).toList();
-				if (matches.size() > 1) throw new IllegalArgumentException("Multiple carried walls share a block identity");
-				if (matches.isEmpty()) continue;
-				var wall = matches.getFirst();
-				if (!wall.objectId().startsWith(identity)) throw new IllegalArgumentException("Carried wall block identity changed");
-				String axis = wall.objectId().substring(identity.length());
-				if (!List.of("-", "X", "Y", "Z").contains(axis)) throw new IllegalArgumentException("Carried wall face axis is invalid");
-				String fixedPrefix = position + "@";
-				if (devices.stream().anyMatch(d -> d.providerId().equals(OrdinaryThermalWalls.PROVIDER)
-						&& d.objectId().startsWith(fixedPrefix)))
-					throw new IllegalArgumentException("Target already has a fixed thermal wall");
-				devices.remove(wall);
-				devices.add(relocate(wall, OrdinaryThermalWalls.PROVIDER,
-						fixedPrefix + block.blockId() + (axis.equals("-") ? "" : "@" + axis)));
-			}
-		}
-		if (handoff.kind() == HandoffKind.DISASSEMBLE) {
-			for (var device : devices) if (device.providerId().equals(PROVIDER) && device.objectId().startsWith(structure)
-					&& expectedKeys.stream().noneMatch(device.objectId()::startsWith))
-				throw new IllegalArgumentException("Handoff omitted a carried thermal wall");
-		}
-		return new FiniteThermalDeviceInventory(previous.thermalRegistryFingerprint(), devices, previous.audit());
-	}
-
-	/** Checks restored screen axes against the actual target block states. */
-	static void validateRestoredScreenAxes(FiniteThermalDeviceInventory inventory, Handoff handoff,
-			java.util.function.Function<FixedBlock, String> axisAt) {
-		Objects.requireNonNull(inventory, "Thermal device inventory");
-		Objects.requireNonNull(handoff, "Thermal handoff");
-		Objects.requireNonNull(axisAt, "Target screen axis lookup");
-		if (handoff.kind() != HandoffKind.DISASSEMBLE) return;
-		for (var block : handoff.blocks()) {
-			String prefix = BlockPos.asLong(block.x(), block.y(), block.z()) + "@" + block.blockId() + "@";
-			for (var device : inventory.devices()) {
-				if (!device.providerId().equals(OrdinaryThermalWalls.PROVIDER) || !device.objectId().startsWith(prefix)) continue;
-				String savedAxis = device.objectId().substring(prefix.length());
-				if (!List.of("X", "Y", "Z").contains(savedAxis) || !savedAxis.equals(axisAt.apply(block)))
-					throw new IllegalArgumentException("Restored thermal screen axis does not match the target block");
-			}
-		}
-	}
-
-	private static FiniteThermalDeviceState relocate(FiniteThermalDeviceState wall, String provider, String object) {
-		return new FiniteThermalDeviceState(provider, object, wall.deviceTypeId(), wall.body(), wall.surfaces());
-	}
-	private static String encode(String value) {
-		return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
-	}
-	private static String structurePrefix(String provider, java.util.UUID structureId) {
-		return "wall|" + encode(provider) + "|" + structureId + "|";
-	}
+    private ExternalStructureThermalHandoff() { }
+    private static String encode(String value) { return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8)); }
+    private static String prefix(String provider, UUID structure) { return encode(provider)+"|"+structure+"|"; }
+    private static String blockPrefix(String provider, UUID structure, FixedBlock block) { return prefix(provider,structure)+encode(block.key())+"|"; }
+    private static Key carriedKey(String owner) {
+        UUID hash=UUID.nameUUIDFromBytes(owner.getBytes(StandardCharsets.UTF_8));
+        return new Key((int)(hash.getMostSignificantBits()>>>32),(int)hash.getMostSignificantBits(),
+                (int)(hash.getLeastSignificantBits()>>>32),Kind.CARRIED,(int)(hash.getLeastSignificantBits()&0x7fffffff));
+    }
+    static boolean hasCarried(EnvironmentThermalState state, String provider, UUID structure) {
+        String prefix=prefix(provider,structure);
+        return state.nodes().stream().anyMatch(n->n.key().kind()==Kind.CARRIED && n.owner().startsWith(prefix));
+    }
+    static EnvironmentThermalState plan(EnvironmentThermalState state, List<ExternalMovingStructures.CompletedHandoff> handoffs,
+                                        Function<FixedBlock,String> axisAt) {
+        var nodes=new ArrayList<>(state.nodes());
+        var removed=new HashSet<Key>();
+        for(var entry:handoffs) {
+            var handoff=entry.handoff(); var structure=handoff.structure().id();
+            var keys=new HashSet<String>(); var positions=new HashSet<Key>(); var expected=new HashSet<String>();
+            for(var block:handoff.blocks()) {
+                var fixed=new Key(block.x(),block.y(),block.z(),Kind.SOLID,0);
+                if(!keys.add(block.key()) || !positions.add(fixed))throw new IllegalArgumentException("Duplicate thermal handoff block");
+                String blockPrefix=blockPrefix(entry.provider(),structure,block); expected.add(blockPrefix);
+                var matches=nodes.stream().filter(n->n.key().kind()==Kind.CARRIED && n.owner().startsWith(blockPrefix)).toList();
+                if(matches.size()>1)throw new IllegalArgumentException("Duplicate carried thermal inventory");
+                var solid=nodes.stream().filter(n->n.key().equals(fixed)).findFirst().orElse(null);
+                if(handoff.kind()==HandoffKind.ASSEMBLE) {
+                    if(!matches.isEmpty()) { if(solid!=null)throw new IllegalArgumentException("Fixed and carried inventory overlap"); continue; }
+                    if(solid==null)continue;
+                    String axis=solid.owner().isEmpty()?axisAt.apply(block):solid.owner();
+                    String owner=blockPrefix+encode(block.blockId())+"|"+(axis==null?"-":axis);
+                    Key target=carriedKey(owner);
+                    if(nodes.stream().anyMatch(n->n.key().equals(target)))throw new IllegalArgumentException("Carried thermal identity collision");
+                    nodes.remove(solid); removed.add(fixed); nodes.add(move(solid,target,owner));
+                } else {
+                    if(matches.isEmpty())continue;
+                    var carried=matches.getFirst(); String axis=axisAt.apply(block);
+                    String owner=blockPrefix+encode(block.blockId())+"|"+(axis==null?"-":axis);
+                    if(!carried.owner().equals(owner))throw new IllegalArgumentException("Carried thermal block identity or screen axis changed");
+                    if(solid!=null)throw new IllegalArgumentException("Target already has a fixed thermal inventory");
+                    nodes.remove(carried); nodes.add(move(carried,fixed,axis==null?"":axis));
+                }
+            }
+            if(handoff.kind()==HandoffKind.DISASSEMBLE)for(var node:nodes)
+                if(node.key().kind()==Kind.CARRIED && node.owner().startsWith(prefix(entry.provider(),structure))
+                        && expected.stream().noneMatch(node.owner()::startsWith))throw new IllegalArgumentException("Handoff omitted a carried thermal inventory");
+        }
+        var indexes=new HashMap<Key,Integer>(); for(int i=0;i<nodes.size();i++)indexes.put(nodes.get(i).key(),i);
+        var contacts=new ArrayList<Contact>();
+        for(var contact:state.contacts()) {
+            var a=state.nodes().get(contact.a()).key(); var b=contact.b()<0?null:state.nodes().get(contact.b()).key();
+            if(removed.contains(a) || b!=null && removed.contains(b))continue;
+            Integer ai=indexes.get(a),bi=b==null?null:indexes.get(b);
+            if(ai!=null && (b==null || bi!=null))contacts.add(new Contact(ai,b==null?-1:bi,contact.conductanceWPerK(),contact.farTemperatureK()));
+        }
+        return new EnvironmentThermalState(state.dimensionId(),state.generation(),state.registryFingerprint(),nodes,contacts,state.audit());
+    }
+    private static Node move(Node node,Key key,String owner) {
+        return new Node(key,node.materialId(),node.massUnits(),node.volumeCubicMetres(),node.gas(),node.internalEnergyJ(),node.surfaces(),owner);
+    }
 }

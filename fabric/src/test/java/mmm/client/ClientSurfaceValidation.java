@@ -142,7 +142,7 @@ public final class ClientSurfaceValidation {
 				mmm.network.DemoPreset.WATER, region, true, null), dimension), "Demo could not retry after failure");
 		var capacity = mmm.controller.ControllerSummary.Capacity.available(0, 16);
 		var summary = new mmm.controller.ControllerSummary(7, region, dimension, "a".repeat(64), 1, 1,
-				new mmm.controller.ControllerSummary.Footprint(1, 1, 1, 2, 2, 2, 8, 1), true,
+				new mmm.controller.ControllerSummary.Footprint("区域", 1, 1, 1, 2, 2, 2, 8, 1), true,
 				mmm.controller.ControllerSummary.OperatorIntent.PAUSED, mmm.controller.ControllerSummary.MotionState.ACTIVE,
 				mmm.controller.ControllerSummary.ThermalState.ACTIVE, new mmm.controller.ControllerSummary.Availability(null, null),
 				new mmm.controller.ControllerSummary.Usage(capacity, capacity, capacity, capacity, capacity, capacity),
@@ -189,4 +189,3 @@ public final class ClientSurfaceValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 }
-

@@ -43,7 +43,7 @@ public final class MinecraftDebugFixtures {
 		void bindTensionCapabilityState(HostFluidState domain, int angleDegrees);
 
 		/** Activates or re-selects a controller; returns null on success or the failure text. */
-		ControllerActivation activateController(ServerPlayer player, BlockPos controllerPosition);
+		ControllerActivation activateController(ServerPlayer player, BlockPos minimum, BlockPos maximum);
 	}
 
 	record ControllerActivation(String failure, boolean retainShell) { }
@@ -104,10 +104,10 @@ public final class MinecraftDebugFixtures {
 		try {
 			for (BlockPos position : layout.shell()) {
 				BlockState state = position.equals(layout.controller())
-						? MmmBlocks.FLUID_CONTROLLER.defaultBlockState()
+						? Blocks.IRON_BLOCK.defaultBlockState()
 						: position.equals(layout.port()) ? MmmBlocks.FLUID_PORT.defaultBlockState()
 								.setValue(FluidPortBlock.FACING, layout.portOutward())
-						: MmmBlocks.FLUID_BOUNDARY.defaultBlockState();
+						: Blocks.GLASS.defaultBlockState();
 				if (!level.setBlock(position, state, Block.UPDATE_ALL)) {
 					throw new IllegalStateException("无法放置壳块 " + position.toShortString());
 				}
@@ -115,23 +115,23 @@ public final class MinecraftDebugFixtures {
 			}
 		} catch (RuntimeException failure) {
 			rollbackControllerDemoBlocks(level, placed);
-			lastFailure = "快速控制器已回滚：" + failure.getMessage();
+			lastFailure = "演示容器已回滚：" + failure.getMessage();
 			return null;
 		}
 
 		ControllerActivation activation;
 		try {
-			activation = runtime.activateController(player, layout.controller());
+			activation = runtime.activateController(player, layout.minimum(), layout.minimum().offset(3, 3, 3));
 		} catch (RuntimeException failure) {
 			// An unchecked activation failure may have reached persistent region-state. Keep the
 			// visible shell so recovery never has to guess whether removing it is safe.
-			lastFailure = "快速控制器激活异常；为保护可能已发布的 region-state，壳体已保留："
+			lastFailure = "演示区域创建异常；为保护可能已发布的 region-state，壳体已保留："
 					+ failure.getMessage();
 			return null;
 		}
 		if (activation.failure() != null) {
 			if (!activation.retainShell()) rollbackControllerDemoBlocks(level, placed);
-			lastFailure = (activation.retainShell() ? "快速控制器壳体已保留，等待恢复：" : "快速控制器已回滚：")
+			lastFailure = (activation.retainShell() ? "演示容器已保留，等待恢复：" : "演示容器已回滚：")
 					+ activation.failure();
 			return null;
 		}
@@ -176,7 +176,7 @@ public final class MinecraftDebugFixtures {
 	private static void rollbackControllerDemoBlocks(ServerLevel level, List<BlockPos> placed) {
 		for (int index = placed.size() - 1; index >= 0; index--) {
 			BlockPos position = placed.get(index);
-			if (MmmBlocks.isBoundary(level.getBlockState(position))) {
+			if (level.getBlockState(position).isCollisionShapeFullBlock(level, position)) {
 				level.setBlock(position, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 			}
 		}
@@ -293,8 +293,8 @@ public final class MinecraftDebugFixtures {
 	/** Prepares one candidate and either publishes it or restores the previous selection and scaffold. */
 	private boolean runTransient(ServerLevel level, BlockPos origin, TransientKind kind, TransientWork work) {
 		FluidRegion previous = regions.selected();
-		FluidRegion replaced = previous != null && !previous.controllerManaged() ? previous
-				: regions.regions().stream().filter(region -> !region.controllerManaged()).findFirst().orElse(null);
+		FluidRegion replaced = previous != null && !previous.hasSelectedVolume() ? previous
+				: regions.regions().stream().filter(region -> !region.hasSelectedVolume()).findFirst().orElse(null);
 		boolean replacing = replaced != null;
 		if (takeover.pendingBlockCount() > 0) {
 			lastFailure = "请先使用 /mmm remove 完成现有水体接管的恢复";

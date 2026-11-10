@@ -84,7 +84,7 @@ public final class MinecraftProcessOperations {
             var level=server.getLevel(region.dimension());var position=net.minecraft.core.BlockPos.of(drive.anchor());
             if(level!=null&&MinecraftGroupAvailability.loaded(level,position)
                     &&(!level.getBlockState(position).is(mmm.block.MmmBlocks.MECHANICAL_DRIVER)
-                    ||region.footprint()==null||!region.footprint().boundaryBlocks().contains(drive.anchor()))){
+                    ||region.footprint()==null||!region.footprint().containsInterior(position))){
                 drives.remove(entry.getKey());changed=true;
             }
         }

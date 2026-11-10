@@ -167,6 +167,8 @@ void split(int cell){
 }
 uint64_t incoming(int fieldId,int cell,int component,int side){return quantity(field(fieldId)+2*componentPart(cell,component,side));}
 void gather(int cell){
+    putDouble(field(F_ENV_OLD_ENERGY)+2*cell,0.0LF);putDouble(field(F_ENV_NEW_ENERGY)+2*cell,0.0LF);
+    putDouble(field(F_ENV_OLD_SINK)+2*cell,0.0LF);putDouble(field(F_ENV_NEW_SINK)+2*cell,0.0LF);
     int components=headerWord(1),stride=headerWord(2);ivec3 size=ivec3(headerWord(60),headerWord(61),headerWord(62));uint64_t targetMass=uint64_t(0),outMass=uint64_t(0);
     double externalIn=0.0LF,externalOut=0.0LF,ambientTemperature=readDouble(p.header+10);
     for(int component=0;component<components;component++){

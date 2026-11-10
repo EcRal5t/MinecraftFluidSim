@@ -92,6 +92,27 @@ public final class RegionCatalog<T> {
 				current.reservedCells());
 	}
 
+	/** Preflights a changed spatial reservation for the same registered owner. */
+	public AdmissionResult previewUpdate(T value, Descriptor descriptor) {
+		Objects.requireNonNull(value, "value");
+		Objects.requireNonNull(descriptor, "descriptor");
+		Entry<T> previous = entries.get(descriptor.regionId());
+		if (previous == null || previous.value() != value)
+			return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID, "region is no longer registered");
+		BudgetUsage current = usage();
+		AdmissionResult admission = evaluate(descriptor.reservedCells(), current.regionCount(),
+				current.reservedCells() - previous.descriptor().reservedCells());
+		return admission.accepted() ? evaluatePlacement(descriptor, value) : admission;
+	}
+
+	/** Publishes a previously prepared owner and its new reservation under the same identity. */
+	public AdmissionResult update(T previous, T next, Descriptor descriptor) {
+		Objects.requireNonNull(next, "next");
+		AdmissionResult admission = previewUpdate(previous, descriptor);
+		if (admission.accepted()) entries.put(descriptor.regionId(), new Entry<>(next, descriptor));
+		return admission;
+	}
+
 	public AdmissionResult replaceSelected(T value, Descriptor descriptor) {
 		Objects.requireNonNull(value, "value");
 		Objects.requireNonNull(descriptor, "descriptor");

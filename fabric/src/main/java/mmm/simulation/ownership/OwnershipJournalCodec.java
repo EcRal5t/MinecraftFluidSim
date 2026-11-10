@@ -103,7 +103,7 @@ final class OwnershipJournalCodec {
 			blocks.add(new OwnershipJournal.BlockEntry(position, state));
 		}
 		var retained = new ArrayList<OwnershipJournal.BlockEntry>();
-		if (operation == OwnershipJournal.Operation.RETURN_WATER) {
+		if (operation == OwnershipJournal.Operation.RETURN_WATER || operation == OwnershipJournal.Operation.ACQUIRE) {
 			requireType(root, "RetainedBlocks", Tag.TAG_LIST);
 			for (var raw : root.getListOrEmpty("RetainedBlocks")) {
 				if (!(raw instanceof CompoundTag block)) throw new IOException("Invalid retained ownership block");

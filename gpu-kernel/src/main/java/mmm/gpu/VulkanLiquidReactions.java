@@ -36,7 +36,7 @@ final class VulkanLiquidReactions implements AutoCloseable {
         INITIAL_ENERGIES(41),
         ACTIVITY_CELLS(42), PROGRESS(43), PENDING_INDEX(44), FINITE_RULE_COUNT(45),
         CATALYST_COUNT(46), CATALYSTS(47), PORT_COUNTS(48), PORT_DEVICE(49), PORT_CELL(50), PORT_DIRECTION(51),
-        PLIC_PLANES(52), PLIC_CELLS(53), FIXED_MASKS(54), SCREEN_FACES(55);
+        PLIC_PLANES(52), PLIC_CELLS(53), FIXED_MASKS(54), SCREEN_FACES(55), PORT_INTERNAL_MASK(56);
         final int word;
         Header(int word) {
             this.word = word;
@@ -97,6 +97,7 @@ final class VulkanLiquidReactions implements AutoCloseable {
             h[Header.PORT_COUNTS.word] = surface==null?-1:surface.devices().word(VulkanThermalDeviceLayout.Field.COUNTS)+1;
             if(surface!=null){var d=surface.devices();h[Header.PORT_DEVICE.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_DEVICE);
                 h[Header.PORT_CELL.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_CELL);h[Header.PORT_DIRECTION.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_DIRECTION);
+                h[Header.PORT_INTERNAL_MASK.word]=d.word(VulkanThermalDeviceLayout.Field.PORT_INTERNAL_MASK);
                 h[Header.PLIC_PLANES.word]=surface.plicPlanesWord();h[Header.PLIC_CELLS.word]=surface.plicCellsWord();
                 h[Header.FIXED_MASKS.word]=surface.fixedMasksWord();h[Header.SCREEN_FACES.word]=surface.screenFacesWord();}
             for (var f : VulkanLiquidStateLayout.Field.values())

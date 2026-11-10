@@ -79,7 +79,7 @@ public final class FarmlandMoistureOperations {
 		if(level==writingLevel && position.equals(writingPosition) && state.equals(writingState)) return true;
 		if(scanFailed && (state.is(Blocks.FARMLAND) || level.getBlockState(position).is(Blocks.FARMLAND))) {
 			for(var region:regions.regions()) {
-				if(!region.controllerManaged() || !region.dimension().equals(level.dimension())) continue;
+				if(!region.hasSelectedVolume() || !region.dimension().equals(level.dimension())) continue;
 				var min=region.footprint().minimumInterior(); var max=region.footprint().maximumInterior();
 				if(position.getX()>=min.getX()-1 && position.getX()<=max.getX()+1
 						&& position.getY()>=min.getY()-1 && position.getY()<=max.getY()
@@ -97,7 +97,7 @@ public final class FarmlandMoistureOperations {
 	/** false retains the region at its transaction barrier; operator pause never replenishes soil. */
 	public boolean tickAvailable(ServerLevel level,FluidRegion region) {
 		if(hasPending(region.id())) return false;
-		if(region.paused() || !region.controllerManaged() || !region.solverLoaded()) return true;
+		if(region.paused() || !region.hasSelectedVolume() || !region.solverLoaded()) return true;
 		var scan=scans.computeIfAbsent(region.id(),ignored->new Scan(region.footprint()));
 		long tick=level.getGameTime(); if(tick<scan.nextTick) return true; scan.nextTick=tick+20;
 		int count = scan.positions.size();
