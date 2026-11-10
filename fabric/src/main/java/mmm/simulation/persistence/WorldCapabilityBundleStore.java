@@ -58,7 +58,7 @@ public final class WorldCapabilityBundleStore {
 	private static final String POLICY_FILE = "server.properties";
 	/** Durable inventories and configuration interpreted by the committed world definitions. */
 	private static final Set<String> AUTHORITY_ROOTS = Set.of(
-			"container-transfer", "public-transfer", "device-transfer", "ownership", "region-state",
+			"container-transfer", "public-transfer", "device-transfer", "ownership", "region-state", "world-thermal",
 			"processes.properties", "processes.properties.tmp", "demo-workbench.nbt", "demo-workbench.nbt.tmp");
 	/** Domains this store may create or read without proving authority. */
 	private static final Set<String> NON_AUTHORITY_ROOTS = Set.of(

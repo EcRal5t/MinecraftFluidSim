@@ -90,10 +90,23 @@ public final class ShellFluidQueryValidation {
 			var layout = ControllerDemoLayout.at(new BlockPos(16, 64, 16), facing);
 			Set<Long> shell = new HashSet<>();
 			for (var block : layout.shell()) shell.add(block.asLong());
-            var footprint = FluidRegionFootprint.box(layout.minimum(), layout.minimum().offset(3, 3, 3));
+            var footprint = FluidRegionFootprint.box(layout.minimum(), layout.maximum());
             var domain = new HostFluidState(8, 8, 8, new FluidSolverConfig(.5F, 9.81F, .05F, 240, 1e-4F, .002F), mmm.fluid.TestFluidDefinitions.load());
             var region = new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(), domain, footprint);
             require(DemoWorkbench.matchesTank(region, layout, dimension.identifier().toString()), "Demo selection mismatch");
+            require(footprint.interiorBlocks().size() == 64 && shell.size() == 56,
+                    "Demo selection must include the shell and its eight open interior blocks");
+            var manager = new FluidRegionManager(new mmm.application.RegionCatalog.Limits(2, 65536, 131072));
+            require(manager.addAndSelect(region).accepted(), "Demo selection was not admitted");
+            var tanks = new DemoTankOperations(null, null, manager, null, null, null, null);
+            tanks.register(region);
+            var smallFootprint = FluidRegionFootprint.box(layout.minimum().offset(8, 0, 0), layout.minimum().offset(9, 1, 1));
+            var smallRegion = new FluidRegion(UUID.randomUUID(), dimension, smallFootprint.minimumInterior(),
+                    new HostFluidState(4, 4, 4, new FluidSolverConfig(.5F, 9.81F, .05F, 240, 1e-4F, .002F), mmm.fluid.TestFluidDefinitions.load()), smallFootprint);
+            require(manager.add(smallRegion).accepted(), "Small test region was not admitted");
+            boolean rejected = false;
+            try { tanks.register(smallRegion); } catch (IllegalArgumentException expected) { rejected = true; }
+            require(rejected, "Tank registration accepted a 2-block selection");
 
 			var inward = layout.portOutward().getOpposite();
 			var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension,

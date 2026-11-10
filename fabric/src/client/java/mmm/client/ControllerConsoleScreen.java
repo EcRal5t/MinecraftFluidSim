@@ -27,6 +27,7 @@ public final class ControllerConsoleScreen extends Screen {
 	private List<Component> rows = List.of();
 	private final List<Button> serverActions = new ArrayList<>();
 	private int scroll;
+	private boolean details;
 	private final Request request;
 	static final class Request {
 		private final java.util.UUID region;
@@ -53,32 +54,44 @@ public final class ControllerConsoleScreen extends Screen {
 
 	@Override
 	protected void init() {
-		rows = rows(summary, failure);
+		rows = details ? rows(summary, failure) : List.of();
+        int tabWidth = Math.min(110, Math.max(1, (width - 38) / 2));
+        int tabLeft = (width - tabWidth * 2 - 6) / 2;
+        Button dashboard = IndustrialUi.button(Component.translatable("screen.mmm.controller.dashboard"), button -> {
+            details = false; scroll = 0; rebuildWidgets();
+        }).bounds(tabLeft, 32, tabWidth, 20).selected(!details).build();
+        dashboard.active = details;
+        addRenderableWidget(dashboard);
+        Button detailTab = IndustrialUi.button(Component.translatable("screen.mmm.controller.details"), button -> {
+            details = true; scroll = 0; rebuildWidgets();
+        }).bounds(tabLeft + tabWidth + 6, 32, tabWidth, 20).selected(details).build();
+        detailTab.active = !details;
+        addRenderableWidget(detailTab);
 		serverActions.clear();
 		int buttonWidth = Math.min(92, Math.max(1, (width - 36) / 3));
 		int gap = 6;
 		int total = buttonWidth * 3 + gap * 2;
 		int left = (width - total) / 2;
 		int y = height - 30;
-		addServerAction(Button.builder(Component.translatable("screen.mmm.controller.select"),
+		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller.select"),
 				button -> send(ControllerConsoleAction.SELECT)).bounds(left, y, buttonWidth, 20).build());
 		Component runAction = Component.translatable(summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
 				? "screen.mmm.controller.resume" : "screen.mmm.controller.pause");
-		Button pause = Button.builder(runAction, button -> send(
+		Button pause = IndustrialUi.button(runAction, button -> send(
 				summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
 						? ControllerConsoleAction.RESUME : ControllerConsoleAction.PAUSE))
 				.bounds(left + buttonWidth + gap, y, buttonWidth, 20).build();
 		addServerAction(pause);
-		addServerAction(Button.builder(Component.translatable("screen.mmm.controller.refresh"),
+		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller.refresh"),
 				button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
 				.bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
 
-		int lifecycleWidth = Math.min(76, Math.max(1, (width - 24) / 4));
+		int lifecycleWidth = Math.min(76, Math.max(1, (width - 32 - 3 * gap) / 4));
 		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
 		int lifecycleLeft = (width - lifecycleTotal) / 2;
 		int lifecycleY = height - 54;
 		int displayWidth = Math.min(200, Math.max(1, width - 24));
-		addServerAction(Button.builder(Component.translatable("screen.mmm.display.open"),
+		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.display.open"),
 				button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
 				.bounds((width - displayWidth) / 2, height - 78, displayWidth, 20).build());
 		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
@@ -91,7 +104,7 @@ public final class ControllerConsoleScreen extends Screen {
 	}
 
 	private void addLifecycleButton(int x, int y, int width, String label, LifecycleOperation operation) {
-		addServerAction(Button.builder(Component.translatable("screen.mmm.controller." + label),
+		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller." + label),
 				button -> {
 					disableServerActions();
 					ClientPlayNetworking.send(LifecycleOperationRequestPayload.preview(
@@ -113,6 +126,7 @@ public final class ControllerConsoleScreen extends Screen {
 	boolean inDimension(String dimension) { return summary.dimensionId().equals(dimension); }
 	ControllerConsoleScreen updated(ControllerSummary next, String failure) {
 		var screen = new ControllerConsoleScreen(next, failure);
+		screen.details = details;
 		screen.scroll = failure == null ? scroll : 0;
 		return screen;
 	}
@@ -126,28 +140,103 @@ public final class ControllerConsoleScreen extends Screen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
-		List<FormattedCharSequence> lines = wrappedRows();
-		int visible = visibleLines();
-		scroll = Math.min(scroll, Math.max(0, lines.size() - visible));
-		for (int i = scroll; i < Math.min(lines.size(), scroll + visible); i++) {
-			graphics.text(font, lines.get(i), 16, 36 + (i - scroll) * 12, 0xffd8d8d8, false);
-		}
-		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 100, 0xffa0a0a0, false);
-	}
+		IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        IndustrialUi.brand(graphics, 13, 11, 16);
+        graphics.centeredText(font, title, width / 2, 14, IndustrialUi.TEXT);
+        if (!details) {
+            renderDashboard(graphics);
+            return;
+        }
+        List<FormattedCharSequence> lines = wrappedRows();
+        int visible = detailVisibleLines();
+        scroll = Math.min(scroll, Math.max(0, lines.size() - visible));
+        for (int i = scroll; i < Math.min(lines.size(), scroll + visible); i++)
+            graphics.text(font, lines.get(i), 20, 58 + (i - scroll) * 12, IndustrialUi.TEXT, false);
+        IndustrialUi.scrollbar(graphics, width - 17, 58, Math.max(1, visible * 12), scroll, visible, lines.size());
+    }
 
-	private List<FormattedCharSequence> wrappedRows() {
-		List<FormattedCharSequence> lines = new ArrayList<>();
-		for (Component row : rows) lines.addAll(font.split(row, Math.max(1, width - 32)));
-		return lines;
-	}
-	private int visibleLines() { return Math.max(1, (height - 128) / 12); }
-	@Override public boolean mouseScrolled(double x, double y, double horizontal, double vertical) {
-		int maximum = Math.max(0, wrappedRows().size() - visibleLines());
-		scroll = Math.max(0, Math.min(maximum, scroll - (int) Math.signum(vertical) * 3));
-		return true;
-	}
+    private record DashboardCard(IndustrialUi.Icon icon, Component label, String value, String secondary) { }
+
+    private List<DashboardCard> dashboardCards() {
+        var inventory = summary.inventory();
+        if (!inventory.live()) return List.of(new DashboardCard(IndustrialUi.Icon.WARNING,
+                Component.translatable("screen.mmm.controller.inventory"),
+                Component.translatable("screen.mmm.controller.inventory_unloaded").getString(), ""));
+        var range = inventory.temperatureRange();
+        return List.of(
+                new DashboardCard(IndustrialUi.Icon.LIQUID, Component.translatable("screen.mmm.controller.liquid"),
+                        UnitFormat.volume(inventory.liquidVolumeCubicMetres()), decimal(inventory.liquidMassKilograms()) + " kg"),
+                new DashboardCard(IndustrialUi.Icon.GAS, Component.translatable("screen.mmm.controller.gas"),
+                        UnitFormat.volumeNanos(inventory.gasStandardVolumeNanos()), decimal(inventory.gasMassKilograms()) + " kg"),
+                new DashboardCard(IndustrialUi.Icon.SOLID, Component.translatable("screen.mmm.controller.granular"),
+                        UnitFormat.solidVolume(inventory.granularSolidVolumeSvq()), decimal(inventory.granularMassKilograms()) + " kg"),
+                new DashboardCard(IndustrialUi.Icon.SOLID, Component.translatable("screen.mmm.controller.coherent"),
+                        UnitFormat.solidVolume(inventory.coherentSolidVolumeSvq()), decimal(inventory.coherentMassKilograms()) + " kg"),
+                new DashboardCard(IndustrialUi.Icon.TEMPERATURE, Component.translatable("screen.mmm.controller.temperature"),
+                        range.available() ? decimal(range.minimumK()) + " – " + decimal(range.maximumK()) + " K" : "—", ""),
+                new DashboardCard(IndustrialUi.Icon.POWER, Component.translatable("screen.mmm.controller.energy"),
+                        inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—", ""));
+    }
+    private int dashboardColumns() { return width >= 360 && height >= 230 ? 2 : 1; }
+    private int dashboardCardHeight() { return height >= 230 ? 46 : 36; }
+    private int dashboardVisibleRows() { return Math.max(1, (height - 142) / dashboardCardHeight()); }
+    private int dashboardTotalRows() { return 1 + (dashboardCards().size() + dashboardColumns() - 1) / dashboardColumns(); }
+    private void renderDashboard(GuiGraphicsExtractor graphics) {
+        var cards = dashboardCards();
+        int columns = dashboardColumns(), cardHeight = dashboardCardHeight();
+        int visible = dashboardVisibleRows(), total = dashboardTotalRows();
+        scroll = Math.min(scroll, Math.max(0, total - visible));
+        int left = 15, gap = 5, contentWidth = Math.max(1, width - 37);
+        int cardWidth = Math.max(1, (contentWidth - gap * (columns - 1)) / columns);
+        for (int row = scroll; row < Math.min(total, scroll + visible); row++) {
+            int y = 58 + (row - scroll) * cardHeight;
+            if (row == 0) {
+                IndustrialUi.panel(graphics, left, y, contentWidth, cardHeight - 3);
+                IndustrialUi.icon(graphics, !summary.availability().ready() || failure != null ? IndustrialUi.Icon.WARNING
+                        : summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED ? IndustrialUi.Icon.PAUSE : IndustrialUi.Icon.PLAY,
+                        left + 5, y + 6, 16);
+                Component status = failure != null ? Component.literal(failure) : Component.empty()
+                        .append(localized("operator", summary.operatorIntent())).append(" · ")
+                        .append(summary.availability().ready() ? common("ready") : localized("availability", summary.availability().reason()));
+                var statusLines = font.split(status, Math.max(1, contentWidth - 28));
+                for (int i = 0; i < Math.min(statusLines.size(), (cardHeight - 8) / 11); i++)
+                    graphics.text(font, statusLines.get(i), left + 25, y + 5 + i * 11,
+                            !summary.availability().ready() || failure != null ? IndustrialUi.AMBER : IndustrialUi.TEXT, false);
+            } else {
+                for (int col = 0; col < columns; col++) {
+                    int index = (row - 1) * columns + col;
+                    if (index >= cards.size()) break;
+                    DashboardCard card = cards.get(index);
+                    int x = left + col * (cardWidth + gap);
+                    IndustrialUi.panel(graphics, x, y, cardWidth, cardHeight - 3);
+                    IndustrialUi.icon(graphics, card.icon(), x + 5, y + 5, 16);
+                    graphics.enableScissor(x + 24, y + 3, x + cardWidth - 3, y + cardHeight - 4);
+                    graphics.text(font, card.label(), x + 25, y + 5, IndustrialUi.MUTED, false);
+                    var valueLines = font.split(Component.literal(card.value()), Math.max(1, cardWidth - 30));
+                    for (int i = 0; i < Math.min(valueLines.size(), cardHeight >= 46 ? 2 : 1); i++)
+                        graphics.text(font, valueLines.get(i), x + 25, y + 17 + i * 11, IndustrialUi.TEXT, false);
+                    if (cardHeight >= 46 && valueLines.size() <= 1 && !card.secondary().isEmpty())
+                        graphics.text(font, card.secondary(), x + 25, y + 29, IndustrialUi.CYAN, false);
+                    graphics.disableScissor();
+                }
+            }
+        }
+        IndustrialUi.scrollbar(graphics, width - 17, 58, visible * cardHeight - 3, scroll, visible, total);
+    }
+    private List<FormattedCharSequence> wrappedRows() {
+        List<FormattedCharSequence> lines = new ArrayList<>();
+        for (Component row : rows) lines.addAll(font.split(row, Math.max(1, width - 42)));
+        return lines;
+    }
+    private int detailVisibleLines() { return Math.max(1, (height - 142) / 12); }
+    @Override public boolean mouseScrolled(double x, double y, double horizontal, double vertical) {
+        int maximum = details ? Math.max(0, wrappedRows().size() - detailVisibleLines())
+                : Math.max(0, dashboardTotalRows() - dashboardVisibleRows());
+        scroll = Math.max(0, Math.min(maximum, scroll - (int)Math.signum(vertical) * (details ? 3 : 1)));
+        return true;
+    }
 
 	private static List<Component> rows(ControllerSummary value, String failure) {
 		ArrayList<Component> result = new ArrayList<>();

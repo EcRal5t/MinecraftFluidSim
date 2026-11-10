@@ -21,23 +21,23 @@ final class QuickStartScreen extends Screen {
 	protected void init() {
 		int buttonWidth = Math.min(70, Math.max(1, (width - 30) / 4));
 		int gap = 6, left = (width - buttonWidth * 4 - gap * 3) / 2;
-		Button previous = Button.builder(Component.translatable("screen.mmm.quick_start.previous"), button -> {
+		Button previous = IndustrialUi.button(Component.translatable("screen.mmm.quick_start.previous"), button -> {
 			page--;
 			scroll = 0;
 			rebuildWidgets();
 		}).bounds(left, height - 30, buttonWidth, 20).build();
 		previous.active = page > 0;
 		addRenderableWidget(previous);
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.quick_start.close"), button -> {
+		addRenderableWidget(IndustrialUi.button(Component.translatable("screen.mmm.quick_start.close"), button -> {
 			if (minecraft != null) minecraft.setScreenAndShow(null);
 		}).bounds(left + buttonWidth + gap, height - 30, buttonWidth, 20).build());
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.quick_start.demos"), button -> {
+		addRenderableWidget(IndustrialUi.button(Component.translatable("screen.mmm.quick_start.demos"), button -> {
 			if (minecraft == null || minecraft.getConnection() == null) return;
 			var connection = minecraft.getConnection();
 			minecraft.setScreenAndShow(null);
 			connection.sendCommand("mmm demos");
 		}).bounds(left + (buttonWidth + gap) * 2, height - 30, buttonWidth, 20).build());
-		Button next = Button.builder(Component.translatable("screen.mmm.quick_start.next"), button -> {
+		Button next = IndustrialUi.button(Component.translatable("screen.mmm.quick_start.next"), button -> {
 			page++;
 			scroll = 0;
 			rebuildWidgets();
@@ -48,7 +48,11 @@ final class QuickStartScreen extends Screen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        if (font.width(title) < width - 160) IndustrialUi.wordmark(graphics, 13, 11, 16);
+        else IndustrialUi.brand(graphics, 13, 11, 16);
 		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		graphics.centeredText(font, Component.translatable("screen.mmm.quick_start.page", page + 1,
 				STEP_COUNT / STEPS_PER_PAGE), width / 2, 27, 0xff9a9a9a);

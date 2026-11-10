@@ -34,6 +34,16 @@ public final class SampleAnalysisValidation {
         var before = stack.copy();
         var sample = SampleAnalysis.analyze(stack, world);
         String text = String.join("\n", sample.lines());
+        require(sample.phase() == SampleAnalysisPayload.Phase.LIQUID, "incorrect sample phase");
+        require(sample.fractions().size() == 2, "missing composition fractions");
+        require(sample.fractions().stream().anyMatch(f -> Math.abs(f.value() - .8846153846) < 1e-6)
+                && sample.fractions().stream().anyMatch(f -> Math.abs(f.value() - .1153846154) < 1e-6), "incorrect visual fractions");
+        require(sample.fractions().stream().allMatch(f -> sample.lines().get(f.line()).startsWith("质量分数：")),
+                "fraction metadata points to the wrong report line");
+        try {
+            new SampleAnalysisPayload(SampleAnalysisPayload.Phase.GAS, List.of("x"), List.of(new SampleAnalysisPayload.Fraction(1, .5)));
+            throw new AssertionError("out-of-range fraction line accepted");
+        } catch (IllegalArgumentException expected) { }
         require(text.contains("320.00 K"), "temperature did not use saved internal energy: " + text);
         require(text.contains("88.462% · 摩尔分数：75.000%"), "ethanol fractions use incorrect denominators: " + text);
         require(text.contains("11.538% · 摩尔分数：25.000%"), "water fractions use incorrect denominators: " + text);
@@ -46,7 +56,7 @@ public final class SampleAnalysisValidation {
         } finally { buffer.release(); }
         var oversized = new FriendlyByteBuf(Unpooled.buffer());
         try {
-            oversized.writeUUID(new java.util.UUID(0,0)); oversized.writeUtf("minecraft:overworld"); oversized.writeVarInt(2049);
+            oversized.writeUUID(new java.util.UUID(0,0)); oversized.writeUtf("minecraft:overworld"); oversized.writeVarInt(0); oversized.writeVarInt(2049);
             try { SampleAnalysisPayload.CODEC.decode(oversized); throw new AssertionError("oversized packet accepted"); }
             catch (IllegalArgumentException expected) { }
         } finally { oversized.release(); }

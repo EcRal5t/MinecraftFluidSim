@@ -57,7 +57,7 @@ public final class SampleAnalysis {
                 || player.pick(5.0, 1.0F, false).getType()!=HitResult.Type.MISS) return null;
         var world=MmmRuntimeRegistry.require(player.level().getServer()).worldRegistries();
         var result=analyze(player.getItemInHand(request.hand()),world);
-        return new SampleAnalysisPayload(request.session(),request.dimension(),result.lines());
+        return new SampleAnalysisPayload(request.session(),request.dimension(),result.phase(),result.lines(),result.fractions());
     }
     public static boolean supported(ItemStack stack) {
         return stack.getItem() instanceof MaterialBucketItem || stack.getItem() instanceof GranularContainerItem
@@ -66,14 +66,17 @@ public final class SampleAnalysis {
     }
     static SampleAnalysisPayload analyze(ItemStack stack, CommittedWorldRegistries world) {
         var lines = new ArrayList<String>();
+        var fractions = new ArrayList<SampleAnalysisPayload.Fraction>();
+        SampleAnalysisPayload.Phase phase;
         var species = new TreeMap<String, Long>();
         var portions = new ArrayList<ThermalStateFunction.InventoryPortion>();
         var chemistry = world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null;
         double volume = 0, mass = 0, energy = Double.NaN, temperature = Double.NaN;
         boolean completeSpecies = true, gas = false;
         if (stack.getItem() instanceof GasContainerItem) {
+            phase = SampleAnalysisPayload.Phase.GAS;
             var contents = GasContainerItem.contents(stack);
-            if (contents == null) return new SampleAnalysisPayload(List.of("空气体容器"));
+            if (contents == null) return new SampleAnalysisPayload(phase, List.of("空气体容器"), List.of());
             requireProfile(stack, world);
             if (!contents.gasRegistryFingerprint().equals(world.gasRegistry().fingerprint())
                     || !contents.chemicalRegistryFingerprint().equals(chemistry == null ? "" : chemistry.fingerprint()))
@@ -89,8 +92,9 @@ public final class SampleAnalysis {
             }
             temperature = new GasThermalModel(world.thermalRegistry(), world.gasRegistry()).state(contents.inventory(), energy).temperatureK();
         } else if (stack.getItem() instanceof GranularContainerItem) {
+            phase = SampleAnalysisPayload.Phase.SOLID;
             var contents = ContainerItemStacks.granularContents(stack, world.granularRegistry(), chemistry);
-            if (contents == null) return new SampleAnalysisPayload(List.of("空颗粒容器"));
+            if (contents == null) return new SampleAnalysisPayload(phase, List.of("空颗粒容器"), List.of());
             requireProfile(stack, world);
             volume = (double) contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER;
             mass = contents.totalMass();
@@ -104,6 +108,7 @@ public final class SampleAnalysis {
             }
             if (heat != null) { heat.validateRegistryFingerprint(world.thermalRegistry().fingerprint()); energy = heat.internalEnergy(); temperature = new ThermalStateFunction(world.thermalRegistry()).stateForInventory(portions, energy).temperatureK(); }
         } else {
+            phase = SampleAnalysisPayload.Phase.LIQUID;
             var heat = ContainerItemStacks.thermalContents(stack);
             if (stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
                 requireProfile(stack, world);
@@ -124,7 +129,7 @@ public final class SampleAnalysis {
                     mixture = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", nanos,
                             Mass.fromKilograms(nanos * 1e-9 * world.resolveMaterial("mmm:water").referenceDensity()))));
                 } else if (mixture != null) requireProfile(stack, world);
-                if (mixture == null) return new SampleAnalysisPayload(List.of("空液体容器"));
+                if (mixture == null) return new SampleAnalysisPayload(phase, List.of("空液体容器"), List.of());
                 volume = mixture.totalVolumeNanos() * 1e-9; mass = Mass.kilograms(mixture.totalMassUnits());
                 for (var c : mixture.components()) lines.add("液体 " + c.materialId() + " · " + UnitFormat.volumeNanos(c.volumeNanos()) + " · " + number(c.mass()) + " kg");
                 completeSpecies = false;
@@ -154,12 +159,19 @@ public final class SampleAnalysis {
                 if (chemistry != null) {
                     double speciesMass = mol * chemistry.species(chemistry.speciesHandle(entry.getKey())).molarMassKgPerMol().toDouble();
                     lines.add("质量分数：" + number(100 * speciesMass / mass) + "%" + (completeSpecies ? " · 摩尔分数：" + number(100 * mol / totalMoles) + "%" : ""));
-                } else if (completeSpecies) lines.add("摩尔分数：" + number(100 * mol / totalMoles) + "%");
+                    addFraction(fractions, lines.size() - 1, speciesMass / mass);
+                } else if (completeSpecies) {
+                    lines.add("摩尔分数：" + number(100 * mol / totalMoles) + "%");
+                    addFraction(fractions, lines.size() - 1, mol / totalMoles);
+                }
                 if (!gas && volume > 0) lines.add((stack.getItem() instanceof GranularContainerItem ? "固体体积浓度：" : "样品总体积浓度：") + number(mol / volume) + " mol/m³");
                 if (gas && volume > 0) lines.add("标准体积浓度：" + number(mol / volume) + " mol/m³");
             }
         }
-        return new SampleAnalysisPayload(lines);
+        return new SampleAnalysisPayload(phase, lines, fractions);
+    }
+    private static void addFraction(List<SampleAnalysisPayload.Fraction> fractions, int line, double value) {
+        if (Double.isFinite(value)) fractions.add(new SampleAnalysisPayload.Fraction(line, Math.max(0, Math.min(1, value))));
     }
     private static void requireProfile(ItemStack stack, CommittedWorldRegistries world) {
         if (!world.acceptsActualContainerProfile(stack)) throw new IllegalArgumentException("容器所属世界定义不同");

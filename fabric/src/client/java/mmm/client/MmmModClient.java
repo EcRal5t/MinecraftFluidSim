@@ -30,6 +30,7 @@ public final class MmmModClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		InsulatingGlassModel.register();
 		FluidDisplaySettings.INSTANCE.load();
+		MmmDebugPanel.register();
 		SampleAnalysisScreen.register();
 		ProcessTrendClient.register();
 		UseItemCallback.EVENT.register((player, level, hand) -> {

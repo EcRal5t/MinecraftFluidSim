@@ -28,10 +28,10 @@ final class FluidDisplayScreen extends Screen {
 		int left = (width - (3 * column + 12)) / 2;
 		for (FluidDisplaySettings.Mode mode : FluidDisplaySettings.Mode.values()) {
 			Component name = mode == view.mode() ? Component.literal("• ").append(modeName(mode)) : modeName(mode);
-			addRenderableWidget(Button.builder(name, button -> {
+			addRenderableWidget(IndustrialUi.button(name, button -> {
 				FluidDisplaySettings.INSTANCE.setMode(mode);
 				rebuildWidgets();
-			}).bounds(left + mode.ordinal() * (column + 6), 46, column, 20).build());
+            }).bounds(left + mode.ordinal() * (column + 6), 46, column, 20).selected(mode == view.mode()).build());
 		}
 		minimum = new EditBox(font, left, 104, column, 20, Component.translatable("screen.mmm.display.minimum"));
 		maximum = new EditBox(font, left + column + 6, 104, column, 20, Component.translatable("screen.mmm.display.maximum"));
@@ -41,10 +41,10 @@ final class FluidDisplayScreen extends Screen {
 		maximum.setResponder(ignored -> updateApply());
 		addRenderableWidget(minimum);
 		addRenderableWidget(maximum);
-		apply = addRenderableWidget(Button.builder(Component.translatable("screen.mmm.display.apply"), button ->
+		apply = addRenderableWidget(IndustrialUi.button(Component.translatable("screen.mmm.display.apply"), button ->
 				FluidDisplaySettings.INSTANCE.setTemperatureRange(number(minimum), number(maximum)))
 				.bounds(left + 2 * (column + 6), 104, column, 20).build());
-		addRenderableWidget(Button.builder(Component.translatable("gui.done"), button -> onClose())
+		addRenderableWidget(IndustrialUi.button(Component.translatable("gui.done"), button -> onClose())
 				.bounds(width / 2 - 50, height - 30, 100, 20).build());
 		updateApply();
 	}
@@ -68,7 +68,10 @@ final class FluidDisplayScreen extends Screen {
 	@Override public boolean isPauseScreen() { return false; }
 
 	@Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        IndustrialUi.brand(graphics, 13, 11, 16);
 		FluidDisplaySettings.View view = FluidDisplaySettings.INSTANCE.view();
 		graphics.centeredText(font, title, width / 2, 12, 0xffffffff);
 		if (view.mode() == FluidDisplaySettings.Mode.TEMPERATURE)

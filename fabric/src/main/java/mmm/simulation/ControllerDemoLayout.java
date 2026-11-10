@@ -8,9 +8,13 @@ import java.util.List;
 /** The complete occupied volume and shell used by the controller debug command. */
 public record ControllerDemoLayout(BlockPos minimum, BlockPos controller, BlockPos port,
                                    Direction portOutward, List<BlockPos> occupied, List<BlockPos> shell) {
+    public static final int OUTER_SIZE = 4;
+
+    public BlockPos maximum() { return minimum.offset(OUTER_SIZE - 1, OUTER_SIZE - 1, OUTER_SIZE - 1); }
+
     public static ControllerDemoLayout at(BlockPos player, Direction facing) {
         if (facing.getAxis() == Direction.Axis.Y) throw new IllegalArgumentException("Controller direction must be horizontal");
-        int outer = 4;
+        int outer = OUTER_SIZE;
         BlockPos near = player.relative(facing, 4).above(1);
         BlockPos minimum, controller;
         if (facing.getAxis() == Direction.Axis.X) {

@@ -32,6 +32,7 @@ public final class FluidProtocolServer {
 	private FluidProtocolServer() { }
 
 	public static void register() {
+        PayloadTypeRegistry.clientboundPlay().register(DebugDiagnosticPayload.TYPE, DebugDiagnosticPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(PipeSnapshotPayload.TYPE,PipeSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(DemoWorkbenchPayload.TYPE, DemoWorkbenchPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(DemoActionPayload.TYPE, DemoActionPayload.CODEC);

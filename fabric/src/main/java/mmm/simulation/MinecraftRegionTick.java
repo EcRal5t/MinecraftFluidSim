@@ -250,9 +250,9 @@ final class MinecraftRegionTick {
 		region.blockCollision("collision-edit-blocked PAUSED：" + detail);
 		MmmMod.LOGGER.error("Region {} could not reconcile a Minecraft collision edit with authoritative inventory and is paused",
 				region.id(), blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+		mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 				"物质、运动与力学无法把方块碰撞编辑与物质账本联合提交，区域已安全暂停：" + detail
-						+ "；世界方块优先，区域代次保持可恢复，请查看 /mmm status"));
+						+ "；世界方块优先，区域代次保持可恢复，请查看 /mmm status");
 		snapshots.sendToLevel(level, region);
 	}
 
@@ -260,8 +260,8 @@ final class MinecraftRegionTick {
 		region.blockThermal(failure);
 		MmmMod.LOGGER.error("Region {} rejected a thermal logical step and is paused: {}",
 				region.id(), failure, blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
-				"物质、运动与力学热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /mmm status"));
+		mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
+				"物质、运动与力学热学步骤被安全拒绝，区域已暂停：" + failure + "；请查看 /mmm status");
 		snapshots.sendToLevel(level, region);
 	}
 
@@ -272,9 +272,9 @@ final class MinecraftRegionTick {
 		region.blockNumerical(failure);
 		MmmMod.LOGGER.error("Region {} rejected an unconverged pressure candidate and is paused",
 				region.id(), blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+		mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 				"物质、运动与力学压力求解未收敛，本次候选未提交，区域已安全暂停："
-						+ blocked.getMessage() + "；请查看 /mmm status"));
+						+ blocked.getMessage() + "；请查看 /mmm status");
 		snapshots.sendToLevel(level, region);
 	}
 
@@ -285,9 +285,9 @@ final class MinecraftRegionTick {
 		region.blockNumerical(failure);
 		MmmMod.LOGGER.error("Region {} rejected a gas-topology candidate and is paused",
 				region.id(), blocked);
-		for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+		mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 				"物质、运动与力学气体拓扑账本无法闭合，本次候选未提交，区域已安全暂停："
-						+ blocked.getMessage() + "；请查看 /mmm status"));
+						+ blocked.getMessage() + "；请查看 /mmm status");
 		snapshots.sendToLevel(level, region);
 	}
 
@@ -303,9 +303,9 @@ final class MinecraftRegionTick {
 			region.blockNumerical(detail);
 			MmmMod.LOGGER.error("Region {} could not freeze a complete live step base and is paused",
 					region.id(), rejected);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+			mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 					"物质、运动与力学无法冻结完整在线真值；区域未修改并已安全暂停："
-							+ rejected.getMessage() + "；请查看 /mmm status"));
+							+ rejected.getMessage() + "；请查看 /mmm status");
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
@@ -314,9 +314,9 @@ final class MinecraftRegionTick {
 			region.blockNumerical(detail);
 			MmmMod.LOGGER.error("Region {} rejected an unmaterializable private backend handoff and is paused",
 					region.id(), rejected);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+			mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 					"物质、运动与力学无法从冻结真值构造私有候选；在线区域未修改并已安全暂停："
-							+ rejected.getMessage() + "；请查看 /mmm status"));
+							+ rejected.getMessage() + "；请查看 /mmm status");
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
@@ -329,9 +329,9 @@ final class MinecraftRegionTick {
 			region.blockNumerical(detail);
 			MmmMod.LOGGER.error("Region {} rejected an incomplete private backend candidate and is paused",
 					region.id(), rejected);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+			mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 					"物质、运动与力学私有候选执行失败；在线区域未修改并已安全暂停："
-							+ rejected.getMessage() + "；请查看 /mmm status"));
+							+ rejected.getMessage() + "；请查看 /mmm status");
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
@@ -360,9 +360,9 @@ final class MinecraftRegionTick {
 			region.blockChemistry(detail);
 			MmmMod.LOGGER.error("Region {} exhausted a frozen chemistry budget; the complete candidate was rejected and the region is paused",
 					region.id(), budget);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+			mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 					"物质、运动与力学化学步骤已整体拒绝，区域被安全暂停：" + budget.getMessage()
-							+ "；候选未提交，请查看 /mmm status"));
+							+ "；候选未提交，请查看 /mmm status");
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
@@ -371,9 +371,9 @@ final class MinecraftRegionTick {
 			region.blockGranular(detail);
 			MmmMod.LOGGER.error("Region {} rejected a granular phase-transfer candidate and is paused",
 					region.id(), blocked);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+			mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 					"物质、运动与力学固液相转移被安全暂停：" + blocked.getMessage()
-							+ "；候选未提交，请查看 /mmm status"));
+							+ "；候选未提交，请查看 /mmm status");
 			snapshots.sendToLevel(level, region);
 			return true;
 		}
@@ -381,9 +381,9 @@ final class MinecraftRegionTick {
 			region.blockGranular("granular-validity-blocked PAUSED：" + invalid.getMessage());
 			MmmMod.LOGGER.error("Region {} exceeded a frozen granular mechanics validity range and is paused",
 					region.id(), invalid);
-			for (ServerPlayer player : level.players()) player.sendSystemMessage(Component.literal(
+			mmm.network.DebugDiagnostics.operators(level, "region:" + region.id(),
 					"物质、运动与力学颗粒力学超出定义有效范围，区域被安全暂停：" + invalid.getMessage()
-							+ "；候选未提交，请查看 /mmm status"));
+							+ "；候选未提交，请查看 /mmm status");
 			snapshots.sendToLevel(level, region);
 			return true;
 		}

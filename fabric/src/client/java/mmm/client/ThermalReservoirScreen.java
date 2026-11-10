@@ -35,7 +35,7 @@ public final class ThermalReservoirScreen extends Screen {
 		temperature.setHint(Component.translatable("screen.mmm.thermal_reservoir.temperature"));
 		temperature.setResponder(ignored -> updateApplyState());
 		addRenderableWidget(temperature);
-		apply = Button.builder(Component.translatable("screen.mmm.thermal_reservoir.apply"), button -> submit())
+		apply = IndustrialUi.button(Component.translatable("screen.mmm.thermal_reservoir.apply"), button -> submit())
 				.bounds(center - 80, 116, 160, 20).build();
 		addRenderableWidget(apply);
 		updateApplyState();
@@ -76,7 +76,10 @@ public final class ThermalReservoirScreen extends Screen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(graphics, 9, 9, width - 18);
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        IndustrialUi.brand(graphics, 13, 11, 16);
 		graphics.centeredText(font, title, width / 2, 20, 0xffffffff);
 		graphics.centeredText(font, Component.translatable("screen.mmm.thermal_reservoir.position",
 				summary.blockX(), summary.blockY(), summary.blockZ()), width / 2, 42, 0xffd8d8d8);
