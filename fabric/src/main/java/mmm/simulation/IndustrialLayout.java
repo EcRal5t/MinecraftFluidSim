@@ -30,13 +30,15 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
                          boolean below, BlockPos first, BlockPos second) { }
     public record Wall(BlockPos position, double temperatureK) { }
     public record Coating(BlockPos position, Direction face, String materialId, double loadingKg) { }
-    public record Tray(BlockPos gasOpening, BlockPos downpipe, BlockPos seal, BlockPos pool, BlockPos inlet) { }
+    public record Tray(BlockPos gasOpening, BlockPos downpipe, BlockPos seal, BlockPos pool, BlockPos inlet, Direction inletOutward) { }
     private static List<Tray> trays(BlockPos min) {
         var result=new ArrayList<Tray>();
         for(int stage=0;stage<3;stage++) {
             int floor=3+3*stage,gasX=stage%2==0?2:5,downX=stage%2==0?5:2;
+            var outward=stage==0?Direction.EAST:Direction.WEST;
+            var inlet=stage==0?min.offset(7,floor+1,3):min.offset(0,floor+1,stage==1?3:4);
             result.add(new Tray(min.offset(gasX,floor,2),min.offset(downX,floor,5),
-                    min.offset(downX,stage==0?1:floor-2,5),min.offset(3,floor+1,4),min.offset(0,floor+1,gasX==2?4:3)));
+                    min.offset(downX,stage==0?1:floor-2,5),min.offset(3,floor+1,4),inlet,outward));
         }
         return List.copyOf(result);
     }
@@ -164,8 +166,8 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
                 pipeWalls.add(min.offset(gasX==2?3:4,floor+1,2));
                 pipeWalls.add(min.offset(gasX,floor+1,3));
                 for(int x=2;x<=5;x++)for(int z=2;z<=5;z++)open.add(min.offset(x,floor+2,z));
-                open.add(tray.inlet().relative(Direction.EAST));
-                addPort(blocks,ports,tray.inlet(),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
+                open.add(tray.inlet().relative(tray.inletOutward().getOpposite()));
+                addPort(blocks,ports,tray.inlet(),tray.inletOutward(),FluidPortBlockEntity.Mode.INPUT);
                 var port=ports.removeLast();ports.add(new Port(port.position(),port.outward(),port.mode(),port.phase(),1_000_000_000L,false));
             }
         } else {
