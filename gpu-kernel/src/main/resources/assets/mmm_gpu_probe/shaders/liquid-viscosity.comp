@@ -116,18 +116,20 @@ double harmonic(double a, double b) {
 }
 // Evaluate each liquid carrier at its own temperature, then volume-average the
 // stresses represented by this cell's shared velocity. Carrier stocks remain distinct.
-void prepareCell(int c) {
-    writeDoubleField(FIELD_SOURCE_CELL_HEAT, c, 0.0);
-    writeDoubleField(FIELD_SOURCE_CELL_WORK, c, 0.0);
+void prepareCell(int c, bool refresh) {
     writeDoubleField(FIELD_MU, c, 0.0);
     writeIntField(FIELD_EXTRAPOLATED, c, 0);
-    for (int axis = 0; axis < 3; axis++) {
-        writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + axis, 0.0);
-        writeDoubleField(FIELD_CELL_FIXED_IMPULSE, 3 * c + axis, 0.0);
-        writeDoubleField(FIELD_STRESS_HEAT, 3 * c + axis, 0.0);
-        writeDoubleField(FIELD_STRESS_HEAT, 3 * cellCount() + 3 * c + axis, 0.0);
+    if (!refresh) {
+        writeDoubleField(FIELD_SOURCE_CELL_HEAT, c, 0.0);
+        writeDoubleField(FIELD_SOURCE_CELL_WORK, c, 0.0);
+        for (int axis = 0; axis < 3; axis++) {
+            writeDoubleField(FIELD_WALL_CONDUCTANCE, 3 * c + axis, 0.0);
+            writeDoubleField(FIELD_CELL_FIXED_IMPULSE, 3 * c + axis, 0.0);
+            writeDoubleField(FIELD_STRESS_HEAT, 3 * c + axis, 0.0);
+            writeDoubleField(FIELD_STRESS_HEAT, 3 * cellCount() + 3 * c + axis, 0.0);
+        }
     }
-    if (!liquidGeometry(c))
+    if (!refresh && !liquidGeometry(c))
         return;
 
     int first = int(source[stockField(STOCK_CELL_OFFSETS) + c]);
@@ -144,7 +146,7 @@ void prepareCell(int c) {
             atomicOr(errors, INVALID_VISCOSITY_ERROR);
             return;
         }
-        double temperature = candidateDouble(headerWord(H_TEMPERATURE) + 2 * row);
+        double temperature = candidateDouble((refresh ? p.reserved : headerWord(H_TEMPERATURE)) + 2 * row);
         int begin = readIntField(FIELD_MATERIAL_OFFSETS, material);
         int end = readIntField(FIELD_MATERIAL_OFFSETS, material + 1);
         int segment = begin;
@@ -512,7 +514,9 @@ void main() {
     if (id >= p.count || errors != 0u)
         return;
     if (p.stage == STAGE_PREPARE_CELLS)
-        prepareCell(id);
+        prepareCell(id, false);
+    else if (p.stage == STAGE_REFRESH_MATERIAL)
+        prepareCell(id, true);
     else if (p.stage == STAGE_PREPARE_FACES)
         prepareFace(id);
     else if (p.stage == STAGE_GATHER_HEAT)

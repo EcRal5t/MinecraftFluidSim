@@ -24,7 +24,8 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         PREPARE_FACE_SCALE,
         SCALE_STRAINS,
         APPLY_FACES,
-        APPLY_STRAIN_HEAT
+        APPLY_STRAIN_HEAT,
+        REFRESH_MATERIAL
     }
 
     /** Header words shared with the viscosity shader. */
@@ -49,6 +50,12 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         for (var field : Field.values())
             definitions.append("#define FIELD_").append(field.name()).append(' ').append(field.ordinal()).append('\n');
         return definitions.toString();
+    }
+    static String convectionShaderLayout() {
+        return "#define VISC_H_CONTACT_FACE_OFFSETS " + Header.CONTACT_FACE_OFFSETS.ordinal() + "\n"
+                + "#define VISC_H_CONTACT_AREA_OVER_DISTANCE " + Header.CONTACT_AREA_OVER_DISTANCE.ordinal() + "\n"
+                + "#define VISC_H_CONTACT_VELOCITIES " + Header.CONTACT_VELOCITIES.ordinal() + "\n"
+                + "#define VISC_H_CONTACT_CAPACITY " + Header.CONTACT_CAPACITY.ordinal() + "\n";
     }
     record Tables(int[] offsets,double[] segments,int aqueousMaterial,int waterSpecies,int sodiumSpecies,int chlorideSpecies,int saltSpecies,int ethanolSpecies,double ethanolMolarMass,double waterMolarMass,double ethanolViscosity,mmm.chemistry.ChemicalPhaseDefinition.ViscosityCorrection correction) {
         Tables(int[] offsets,double[] segments){this(offsets,segments,-1,-1,-1,-1,-1,-1,0,0,0,null);}
@@ -166,7 +173,9 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     VulkanLiquidViscosity(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),32);}
     void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(source,candidate,errors));}
     private void bind(VkCommandBuffer command){try(var stack=stackPush()){bindings.bind(command,stack);}}
-    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize){bind(command);stage(command,layout,Stage.PREPARE_CELLS.ordinal(),layout.source.cellCount(),cellSize,0);}
+    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize,int temperatureWord){
+        bind(command);stage(command,layout,Stage.REFRESH_MATERIAL.ordinal(),layout.source.cellCount(),cellSize,0,temperatureWord);
+    }
     /** Apply all viscous stresses with shared, finite face impulses. */
     void record(VkCommandBuffer command,Layout layout,double cellSize,double duration){
         prepareFields(command,layout,cellSize,duration);
@@ -185,9 +194,12 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         stage(command,layout,Stage.COMPILE_CELL_STRAIN.ordinal(),Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double h,double dt){
+        stage(command,layout,stage,count,h,dt,0);
+    }
+    private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double h,double dt,int temperatureWord){
         if(count==0)return;int groups=(count+127)/128;
         try(var stack=stackPush()){
-            var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(0).putInt(count).putDouble(h).putDouble(dt).flip();
+            var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(temperatureWord).putInt(count).putDouble(h).putDouble(dt).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
             vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

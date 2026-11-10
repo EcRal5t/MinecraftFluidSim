@@ -35,6 +35,25 @@ final class VulkanLiquidThermalStages {
         if (transport.devices != null) region.kernels.liquidThermalKernel.record(command, transport.devices.thermal);
     }
 
+    VulkanRegionStorage.ComputeCommands prepareConvection(VulkanRegionStorage.ComputeCommands transportCommands) {
+        return (command,input,output,errors,staging,stack) -> {
+            transportCommands.record(command,input,output,errors,staging,stack);
+            recordConvection(command,output,errors,stack);
+        };
+    }
+
+    void recordConvection(org.lwjgl.vulkan.VkCommandBuffer command, GpuBuffer output, GpuBuffer errors, org.lwjgl.system.MemoryStack stack) {
+        workspace.writeHeaders(command, output, List.of(new HeaderWrite(transport.viscosity.header().offset(),
+                transport.viscosity.headerBytes())), stack);
+        var arena = new FlipKernelBindings.BufferRange(output);
+        var errorBuffer = new FlipKernelBindings.BufferRange(errors);
+        region.kernels.liquidThermalKernel.rebindRanges(arena, errorBuffer);
+        region.kernels.liquidThermalKernel.record(command, transport.liquidThermal);
+        region.kernels.viscosityKernel.rebindRanges(arena, arena, errorBuffer);
+        region.kernels.viscosityKernel.recordMaterial(command, transport.viscosity, region.requestCellSize,
+                Math.toIntExact(transport.liquidThermal.temperatures().offset() / 4));
+    }
+
     int executeReactions(VulkanRegionStorage.Candidate candidate, VulkanGasThermodynamics.Layout sourceEOS,
                          VulkanGasGeometry.Layout previousGeometry, double duration) {
         var activity = candidate.continueBatch((command,input,output,errors,staging,stack)-> {
@@ -115,7 +134,8 @@ final class VulkanLiquidThermalStages {
 
         int error = region.kernels.thermalKernel.execute(candidate, thermal, duration,
                 source.transport.devices == null ? null : source.transport.devices.state,
-                transport.devices == null ? null : transport.devices.settlement, false);
+                transport.devices == null ? null : transport.devices.settlement, false,
+                (command,input,output,errors,staging,stack) -> recordConvection(command,output,errors,stack), null);
         if (error != 0) return error;
         boolean react=transport.reactions != null && (region.activeInputs == null || !region.activeInputs.pendingPhaseSettlementOnly());
         if (react) {

@@ -64,10 +64,14 @@ public final class GpuThermalContactsBenchmark {
             cursor[0]=devices.endOffset();var dr=column(cursor,1,8,a);var ds=column(cursor,1,8,a);
             var deviceThermal=VulkanLiquidThermodynamics.layout(devices,VulkanLiquidThermodynamics.tables(materials.subList(6,7)),word(dr),word(ds),1,cursor[0],a);
             var settlement=devices.settlement(deviceThermal.endOffset(),a);
-            cursor[0]=settlement.endOffset();var bath=column(cursor,6*cells,8,a);long sourceEnd=cursor[0];
+            cursor[0]=settlement.endOffset();var bath=column(cursor,6*cells,8,a);
+            var mu=column(cursor,cells,8,a);var expansion=column(cursor,2,8,a);var reference=column(cursor,2,8,a);long sourceEnd=cursor[0];
+            var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material()));
+            var constitutive=mmm.fluid.TestFluidDefinitions.load().material();
+            var forceTables=VulkanLiquidForces.tables(fluids,constitutive);
             var input=new VulkanThermalContacts.Inputs(liquid,liquidThermal,gas,gasThermal,gasGeometry,solid,solidThermal,coherent,coherentThermal,devices,deviceThermal,word(geometry.masks()),word(bath),-1,h);
             var mapping=new VulkanThermalContacts.Materials(new int[]{0,1},new int[]{2,3},new int[]{4},new int[]{5},new int[]{6},materials.stream().mapToDouble(ThermalMaterialDefinition::conductivityWPerMeterK).toArray());
-            var tables=VulkanThermalConduction.Tables.fromMaterials(materials);Tail tail=tail(input,mapping,tables,1,0,sourceEnd,a);
+            var tables=VulkanThermalConduction.Tables.fromMaterials(materials);Tail tail=tail(input,mapping,tables,1,0,sourceEnd,a,mu,expansion,reference);
             var initial=ByteBuffer.allocate(Math.toIntExact(tail.bytes())).order(ByteOrder.LITTLE_ENDIAN);liquid.importState(initial,inventory,fixture.momentum());totals.initializeHeader(initial);gasGeometry.initializeHeader(initial);gasThermal.initializeHeaderAndTables(initial);
             liquidThermal.initializeHeaderAndTables(initial);solidThermal.initializeHeaderAndTables(initial);coherentThermal.initializeHeaderAndTables(initial);deviceThermal.initializeHeaderAndTables(initial);settlement.initializeHeaders(initial);devices.importState(initial,deviceInitial);initial.putDouble(Math.toIntExact(dr.offset()),385*293.15);
             initial.putDouble(Math.toIntExact(lr.offset()),4200*293.15).putDouble(Math.toIntExact(lr.offset()+8),4200*293.15).putDouble(Math.toIntExact(sr.offset()),800*293.15).putDouble(Math.toIntExact(cr.offset()),450*293.15);
@@ -79,6 +83,22 @@ public final class GpuThermalContactsBenchmark {
             double coherentEnergy=coherentGroups.get(coherentIndex).internalEnergy();coherent.importState(initial,coherentGroups);
             for(int c=0;c<cells;c++){initial.putInt(Math.toIntExact(geometry.masks().offset()+4L*c),fixture.fixed().mask(c));
                 for(int direction=0;direction<6;direction++)initial.putDouble(Math.toIntExact(bath.offset()+8L*(6*c+direction)),liquid.grid().x(c)==0&&direction==0?330:Double.NaN);}
+            for(int material=0;material<2;material++) {
+                initial.putDouble(Math.toIntExact(expansion.offset()+8L*material),forceTables.expansionCoefficients()[material]);
+                initial.putDouble(Math.toIntExact(reference.offset()+8L*material),forceTables.referenceTemperatures()[material]);
+            }
+            var offsets=inventory.cellOffsets();var materialRows=inventory.materials();var volumes=inventory.volumes();
+            var masses=inventory.massUnits();var energies=inventory.energyBits();
+            for(int cell=0;cell<cells;cell++) {
+                double weighted=0,volume=0;
+                for(int row=offsets[cell];row<offsets[cell+1];row++) {
+                    double v=volumes.valueAt(row).toDouble(),massKg=mmm.units.Mass.kilograms(masses[row]);
+                    if(v<=0 || massKg<=0)continue;
+                    double temperature=Double.longBitsToDouble(energies[row])/(massKg*4200);
+                    weighted+=v*constitutive.dynamicViscosityExtendingAt(fluids.material(materialRows[row]).id(),temperature);volume+=v;
+                }
+                initial.putDouble(Math.toIntExact(mu.offset()+8L*cell),volume>0?weighted/volume:0);
+            }
             tail.conduction().initializeHeaderAndTables(initial);tail.contacts().initializeHeaderAndTables(initial);
             try(var storage=new VulkanRegionStorage(context,tail.bytes(),1024*1024,liquid.grid())){
                 storage.initialize(initial,0);prepareSolids(storage,coherentGeometryKernel,granularGeometryKernel,coherentGeometry,granularGeometry,geometry.occupied(),h);
@@ -94,9 +114,11 @@ public final class GpuThermalContactsBenchmark {
                             if(required[4]<=tail.conduction().contacts&&required[5]<=tail.conduction().baths)throw new IllegalStateException("Thermal capacity requirement did not grow");
                             int edges=required[4]>tail.conduction().contacts?Math.multiplyExact(required[4],2):tail.conduction().contacts;
                             int baths=required[5]>tail.conduction().baths?Math.multiplyExact(required[5],2):tail.conduction().baths;
-                            tail=tail(input,mapping,tables,edges,baths,sourceEnd,a);upload=true;growth++;
+                            tail=tail(input,mapping,tables,edges,baths,sourceEnd,a,mu,expansion,reference);upload=true;growth++;
                         }
-                    }upload=false;if(step>=warm)elapsed[step-warm]=System.nanoTime()-start;
+                    }upload=false;
+                    if(step==0)verifyConvectionContact(storage,tail,inventory,initial,mu,forceTables,materials,deviceInitial.ports(),c1,c4,counts,h);
+                    if(step>=warm)elapsed[step-warm]=System.nanoTime()-start;
                 }
                 var after=storage.metrics();Arrays.sort(elapsed);System.out.println("Device: "+context.deviceName());
                 System.out.printf("grid=%d gas_nodes=%d owners_terms_samples_contacts=%s growths=%d bath_capacity=%d median_ms=%.3f max_ms=%.3f gpu_ms=%.3f upload_B=%d readback_B=%d device_MiB=%.1f%n",grid,nodes,Arrays.toString(counts),growth,tail.conduction().baths,elapsed[samples/2]*1e-6,elapsed[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,(after.uploadBytes()-before.uploadBytes())/samples,(after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.);
@@ -116,8 +138,6 @@ public final class GpuThermalContactsBenchmark {
                     }
                     System.out.printf("device_U_before=%.9g after=%.9g generation=%d exact_audit_closed=true%n",deviceInitialU,finalBody.internalEnergyJ(),finalBody.generation());}
             }
-            var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material(),mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:oil").material()));
-            var constitutive=mmm.fluid.TestFluidDefinitions.load().material();
             var mechanical=new VulkanLiquidRegion.MechanicalDefinitions(2*cells,0,8*cells,8,-40,new int[]{0,1},new long[]{0},
                     new double[]{4200*293.15,4200*293.15},new double[]{0,0},1,liquidThermal.tables(),VulkanLiquidViscosity.tables(fluids,constitutive),
                     VulkanLiquidForces.tables(fluids,constitutive),VulkanSurfaceTension.tables(fluids),true);
@@ -130,7 +150,7 @@ public final class GpuThermalContactsBenchmark {
             var coherentConfig=new VulkanCoherentStateLayout.Configuration(coherent.definitions(),coherentGroups,coherentThermal.tables(),new double[]{450*293.15},new double[]{0},1);
             var deviceConfig=new VulkanThermalDeviceLayout.Configuration(devices.definitions(),deviceInitial,deviceThermal.tables(),new double[]{385*293.15});
             double[] baths=new double[6*cells];for(int i=0;i<baths.length;i++)baths[i]=initial.getDouble(Math.toIntExact(bath.offset()+8L*i));
-            var thermalConfig=new VulkanRegionThermal.Configuration(tables,mapping,h,baths,1);
+            var thermalConfig=new VulkanRegionThermal.Configuration(tables,mapping,h,9.81,baths,1);
             try(var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);var multigrid=new VulkanPressureMultigrid(context);
                 var region=new VulkanLiquidRegion(context,liquidGeometry,projection,pressure,multigrid,inventory,fixture.momentum(),fixture.fixed(),fixture.occupied(),mechanical,gasConfig,granularConfig,thermalConfig,coherentConfig,deviceConfig)){
                 var audit=mmm.thermal.ThermalAuditLedger.initialized(mmm.units.SignedDyadic.sum(Arrays.stream(inventory.energyBits()).mapToDouble(Double::longBitsToDouble).toArray())
@@ -182,7 +202,62 @@ public final class GpuThermalContactsBenchmark {
             int error=candidate.finishBatch((command,in,out,errors,staging,stack)->{conduction.recordGraphFinish(command,t.conduction(),dt);contacts.recordPublish(command,t.contacts());input.device().recordSettle(command,input.device(),settlement,ledger,out);});if(error!=0)throw new IllegalStateException("Thermal finish error="+error);candidate.commit();return required;
         }
     }
-    private static Tail tail(VulkanThermalContacts.Inputs input,VulkanThermalContacts.Materials materials,VulkanThermalConduction.Tables tables,int edges,int baths,long base,long a){var c=VulkanThermalConduction.layout(input.owners(),input.terms(),edges,tables,base,a,baths);var s=VulkanThermalContacts.layout(input,materials,c,c.endOffset(),a);return new Tail(c,s,s.endOffset());}
+    private static void verifyConvectionContact(VulkanRegionStorage storage,Tail tail,mmm.inventory.DeviceLiquidInventory inventory,
+                                                 ByteBuffer initial,VulkanLiquidStateLayout.Column mu,VulkanLiquidForces.Tables forces,
+                                                 List<ThermalMaterialDefinition> materials,List<VulkanThermalDeviceLayout.Port> ports,
+                                                 int firstCell,int secondCell,int[] counts,double h) {
+        try(var capture=storage.capture()) {
+            var c=tail.conduction();var s=tail.contacts();
+            var a=readColumn(storage,capture,c.column(VulkanThermalConduction.Field.CONTACT_A));
+            var b=readColumn(storage,capture,c.column(VulkanThermalConduction.Field.CONTACT_B));
+            var conductance=readColumn(storage,capture,c.column(VulkanThermalConduction.Field.CONTACT_G));
+            var flux=readColumn(storage,capture,c.column(VulkanThermalConduction.Field.FLUX));
+            var degree=readColumn(storage,capture,c.column(VulkanThermalConduction.Field.DEGREE));
+            var temperatures=readColumn(storage,capture,c.column(VulkanThermalConduction.Field.OWNER_INITIAL_T));
+            var kinds=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.OWNER_KIND));
+            var indices=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.OWNER_INDEX));
+            var sampleOwners=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.SAMPLE_OWNER));
+            var sampleCells=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.SAMPLE_CELL));
+            var sampleMasks=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.SAMPLE_MASK));
+            var fractions=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.SAMPLE_FRACTION));
+            var coverage=readColumn(storage,capture,s.column(VulkanThermalContacts.Field.COVERAGE));
+            for(int edge=0;edge<counts[3];edge++) {
+                int x=a.getInt(4*edge),y=b.getInt(4*edge);if(y<0)continue;
+                int liquid=kinds.getInt(4*x)==0 && kinds.getInt(4*y)==4?x:kinds.getInt(4*y)==0 && kinds.getInt(4*x)==4?y:-1;
+                if(liquid<0)continue;
+                int point=-1,cell=-1;
+                for(int i=0;i<counts[2];i++)if(sampleOwners.getInt(4*i)==liquid){point=i;cell=sampleCells.getInt(4*i);break;}
+                if(point<0 || (cell!=firstCell && cell!=secondCell))continue;
+                int port=cell==firstCell?0:1,side=port,row=indices.getInt(4*liquid),material=inventory.materials()[row];
+                int mask=sampleMasks.getInt(4*point);double fraction=fractions.getDouble(8*point),area=0;
+                for(int bit=0;bit<8;bit++)if((bit&1)==side && (mask&(1<<bit))!=0)
+                    area+=coverage.getDouble(8*(8*s.cells+24*port+bit))*fraction;
+                if(!(area>0))continue;
+                double volume=inventory.volumes().valueAt(row).toDouble(),mass=mmm.units.Mass.kilograms(inventory.massUnits()[row]);
+                double rho=mass/(volume*h*h*h),temp=temperatures.getDouble(8*liquid),wall=temperatures.getDouble(8*(liquid==x?y:x));
+                double k=materials.get(material).conductivityWPerMeterK(),cp=materials.get(material).specificHeatAt(temp),viscosity=initial.getDouble(Math.toIntExact(mu.offset()+8L*cell));
+                double beta=forces.expansionCoefficients()[material]/(1+forces.expansionCoefficients()[material]*(temp-forces.referenceTemperatures()[material]));
+                double pr=viscosity*cp/k,ra=s.gravity*Math.abs(wall-temp)*beta*h*h*h*rho*rho*cp/(viscosity*k);
+                double nu=Math.pow(.825+.387*Math.pow(ra,1.0/6)/Math.pow(1+Math.pow(.492/pr,9.0/16),8.0/27),2);
+                double conductive=Math.min(.5*h,.5*h*volume/area),film=Math.min(conductive,h/Math.max(1,nu));
+                var wallPort=ports.get(port);
+                double expectedG=h*h*area/(wallPort.wallThickness()/wallPort.wallConductivity()+film/k),actualG=conductance.getDouble(8*edge);
+                double expectedQ=expectedG*(temperatures.getDouble(8*y)-temperatures.getDouble(8*x))*.05/
+                        (1+.05*(degree.getDouble(8*x)+degree.getDouble(8*y)));
+                double actualQ=flux.getDouble(8*edge);
+                if(Math.abs(actualG-expectedG)>Math.max(1e-10,expectedG*2e-5)
+                        || Math.abs(actualQ-expectedQ)>Math.max(1e-10,Math.abs(expectedQ)*2e-5))
+                    throw new AssertionError("Convection contact differs from independent reference: G="+actualG+"/"+expectedG+" Q="+actualQ+"/"+expectedQ);
+                System.out.printf("convection_reference G=%.9g expected_G=%.9g Q=%.9g expected_Q=%.9g%n",actualG,expectedG,actualQ,expectedQ);
+                return;
+            }
+            throw new AssertionError("No liquid/finite-wall contact for convection reference");
+        }
+    }
+    private static ByteBuffer readColumn(VulkanRegionStorage storage,VulkanRegionStorage.Capture capture,VulkanLiquidStateLayout.Column column){
+        var data=ByteBuffer.allocate(Math.toIntExact(column.bytes())).order(ByteOrder.LITTLE_ENDIAN);storage.read(capture,column.offset(),data);return data.flip();
+    }
+    private static Tail tail(VulkanThermalContacts.Inputs input,VulkanThermalContacts.Materials materials,VulkanThermalConduction.Tables tables,int edges,int baths,long base,long a,VulkanLiquidStateLayout.Column mu,VulkanLiquidStateLayout.Column expansion,VulkanLiquidStateLayout.Column reference){var c=VulkanThermalConduction.layout(input.owners(),input.terms(),edges,tables,base,a,baths);var s=VulkanThermalContacts.layout(input,materials,c,c.endOffset(),a);s.bindConvection(word(mu),word(expansion),word(reference),9.81,-1);return new Tail(c,s,s.endOffset());}
     private static ThermalMaterialDefinition material(String id,ThermalMaterialDefinition.CarrierKind kind,String carrier,double cp,double k){return new ThermalMaterialDefinition("mmm:contacts_"+id,kind,carrier,293.15,cp*293.15,k,List.of(new ThermalMaterialDefinition.CaloricSegment(100,1500,cp)));}
     private static int word(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}
     private static VulkanLiquidStateLayout.Column column(long[] cursor,int count,int width,long a){long start=(cursor[0]+a-1)&-a;var c=new VulkanLiquidStateLayout.Column(start,count,width);cursor[0]=start+c.bindingBytes();return c;}

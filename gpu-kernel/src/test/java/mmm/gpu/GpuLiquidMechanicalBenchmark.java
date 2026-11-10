@@ -76,7 +76,7 @@ public final class GpuLiquidMechanicalBenchmark {
                 granularThermal.clear();if(granularConfig!=null)for(var id:granularConfig.initial().definitions().materialIds())granularThermal.add(production.thermal().material(production.thermal().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.GRANULAR,id)));
             }
             var coherentThermal=production==null?java.util.List.<mmm.thermal.ThermalMaterialDefinition>of():production.data().coherent().definitions().phaseIds().stream().map(id->production.thermal().material(production.thermal().materialHandle(id))).toList();
-            thermalConfig=VulkanRegionThermal.Configuration.fromMaterials(liquidThermal,gasThermal,granularThermal,coherentThermal,h,bath,Math.max(1,8*cells));
+            thermalConfig=VulkanRegionThermal.Configuration.fromMaterials(liquidThermal,gasThermal,granularThermal,coherentThermal,h,9.81,bath,Math.max(1,8*cells));
         }
         try(var region=new VulkanLiquidRegion(context,geometry,projection,pressure,multigrid,fixture.inventory(),fixture.momentum(),
                 fixture.fixed(),fixture.occupied(),definitions,gasConfig,granularConfig,thermalConfig,

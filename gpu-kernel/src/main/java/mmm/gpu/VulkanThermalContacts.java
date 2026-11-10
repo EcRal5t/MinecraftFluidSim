@@ -97,7 +97,8 @@ final class VulkanThermalContacts implements AutoCloseable {
         PLIC_CELLS(149), SCREEN_FACES(150),
         CONDUCTION_HEADER(151),
         ACTIVITY_CELLS(152), LIQUID_SPECIES_OFFSETS(153), LIQUID_SPECIES_HANDLES(154),
-        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158), LIQUID_CALORIC(LIQUID_CALORIC_WORD);
+        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158), LIQUID_CALORIC(LIQUID_CALORIC_WORD),
+        CONVECTION_VISCOSITY(160), CONVECTION_EXPANSION(161), CONVECTION_REFERENCE(162), CONVECTION_VISCOSITY_HEADER(163), CONVECTION_GRAVITY(164);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -110,7 +111,7 @@ final class VulkanThermalContacts implements AutoCloseable {
 
     private static final int WORK_FIELDS = 48;
     private static String shaderLayout() {
-        return headerDefines() + VulkanLiquidThermodynamics.shaderLayout() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values())
+        return headerDefines() + VulkanLiquidThermodynamics.shaderLayout() + VulkanLiquidViscosity.convectionShaderLayout() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values())
             + "#define CONDUCTION_FIELDS " + VulkanThermalConduction.WORK_FIELDS + "\n"
             + VulkanShaderLayout.fields("CONDUCTION_", VulkanThermalConduction.Field.values());
     }
@@ -185,12 +186,18 @@ final class VulkanThermalContacts implements AutoCloseable {
         final int width;Field(int width){this.width=width;}}
     static final class Layout{
         final Inputs input;final Materials materials;final VulkanThermalConduction.Layout conduction;
-        int wallGeometryWord=-1;
+        int wallGeometryWord=-1,viscosityWord=-1,expansionWord=-1,expansionReferenceWord=-1,viscosityHeaderWord=-1;
+        double gravity;
+        void bindConvection(int viscosityWord,int expansionWord,int referenceTemperatureWord,double gravity,int viscosityHeaderWord) {
+            if(viscosityWord<0||expansionWord<0||referenceTemperatureWord<0||!Double.isFinite(gravity))
+                throw new IllegalArgumentException("Invalid liquid convection inputs");
+            this.viscosityWord=viscosityWord;this.expansionWord=expansionWord;this.expansionReferenceWord=referenceTemperatureWord;this.gravity=gravity;this.viscosityHeaderWord=viscosityHeaderWord;
+        }
         final int owners,samples,cells;final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
         Layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long a){
             this.input=input;this.materials=materials;this.conduction=conduction;owners=input.owners();samples=input.samples();cells=input.liquid().cellCount();
             if(base<Math.max(input.endOffset(),conduction.endOffset())||a<8||(a&(a-1))!=0||materials.conductivity().length!=conduction.tables.materials())throw new IllegalArgumentException("Invalid thermal contacts layout");
-            long[] cursor={base};header=allocate(cursor,160,4,a);
+            long[] cursor={base};header=allocate(cursor,166,4,a);
             for(Field f:Field.values()){
                 int n=switch(f){                    case FACE_FACTORS->Math.multiplyExact(15,cells);case MF_DISPATCH->3;
                     case MF_POW,BATH_COUNTS->samples;case BATH_OFFSETS->samples+1;case BATH_G,BATH_T->conduction.baths;
@@ -206,7 +213,9 @@ final class VulkanThermalContacts implements AutoCloseable {
         VulkanLiquidStateLayout.Column column(Field f){return columns.get(f);}int word(Field f){return Math.toIntExact(column(f).offset()/4);}
         int headerWord(){return Math.toIntExact(header.offset()/4);}long endOffset(){return endOffset;}
         ByteBuffer headerBytes(){
-            int[] d=new int[160];var l=input.liquid();var g=input.gas();var s=input.granular();
+            int[] d=new int[166];var l=input.liquid();var g=input.gas();var s=input.granular();
+            d[Header.CONVECTION_VISCOSITY.word]=viscosityWord;d[Header.CONVECTION_EXPANSION.word]=expansionWord;d[Header.CONVECTION_REFERENCE.word]=expansionReferenceWord;
+            d[Header.CONVECTION_VISCOSITY_HEADER.word]=viscosityHeaderWord;
             d[Header.LIQUID_CAPACITY.word]=l.stockCapacity();d[Header.GAS_CAPACITY.word]=g==null?0:g.nodeCapacity();d[Header.PARTICLE_CAPACITY.word]=s==null?0:s.particleCapacity();d[Header.DEPOSIT_CAPACITY.word]=s==null?0:s.depositCapacity();
             d[Header.CELL_COUNT.word]=cells;d[Header.SIZE_X.word]=l.sizeX();d[Header.SIZE_Y.word]=l.sizeY();d[Header.SIZE_Z.word]=l.sizeZ();d[Header.SAMPLE_CAPACITY.word]=samples;d[Header.OWNER_CAPACITY.word]=owners;d[Header.FIXED_MASKS.word]=input.fixedMasksWord();d[Header.BATH_TEMPERATURES.word]=input.bathTemperaturesWord();d[Header.FACES.word]=input.facesWord();
             d[Header.LIQUID_COUNTS.word]=lw(l,VulkanLiquidStateLayout.Field.COUNTS);d[Header.GAS_COUNTS.word]=g==null?-1:gw(g,VulkanGasStateLayout.Field.COUNTS);d[Header.GRANULAR_COUNTS.word]=s==null?-1:s.word(VulkanGranularStateLayout.Field.COUNTS);
@@ -236,7 +245,7 @@ final class VulkanThermalContacts implements AutoCloseable {
             for(Field f:Field.values())d[WORK_FIELDS+f.ordinal()]=word(f);
             var fields=new VulkanThermalConduction.Field[]{VulkanThermalConduction.Field.COUNTS,VulkanThermalConduction.Field.OWNER_ENERGY,VulkanThermalConduction.Field.OWNER_INITIAL_T,VulkanThermalConduction.Field.TERM_OFFSETS,VulkanThermalConduction.Field.TERM_MATERIAL,VulkanThermalConduction.Field.TERM_MASS,VulkanThermalConduction.Field.CONTACT_A,VulkanThermalConduction.Field.CONTACT_B,VulkanThermalConduction.Field.CONTACT_G,VulkanThermalConduction.Field.CONTACT_BATH_T};
             for(int i=0;i<fields.length;i++)d[Header.CONDUCTION_COUNTS.word+i]=conduction.word(fields[i]);d[Header.CONDUCTION_OWNER_CAPACITY.word]=conduction.owners;d[Header.CONDUCTION_TERM_CAPACITY.word]=conduction.terms;d[Header.CONDUCTION_CONTACT_CAPACITY.word]=conduction.contacts;
-            var out=ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<d.length;i++)out.putInt(4*i,d[i]);out.putDouble(4 * Header.CELL_SIZE.word,input.cellSize());return out;
+            var out=ByteBuffer.allocateDirect(4*d.length).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<d.length;i++)out.putInt(4*i,d[i]);out.putDouble(4 * Header.CELL_SIZE.word,input.cellSize());out.putDouble(4*Header.CONVECTION_GRAVITY.word,gravity);return out;
         }
         void initializeHeaderAndTables(ByteBuffer out){out.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());for(var chunk:tableChunks())out.duplicate().position(Math.toIntExact(chunk.offset())).put(chunk.bytes().duplicate());}
         List<VulkanGasThermodynamics.TableChunk> tableChunks(){

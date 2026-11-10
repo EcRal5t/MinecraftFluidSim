@@ -148,6 +148,63 @@ ivec3 shape(){return gridShape();}
 ivec3 xyz(int cell){return gridPosition(cell);}
 int neighbor(int cell,int axis,int side){return gridNeighbor(cell,2*axis+side);}
 int macFace(int cell,int axis,int side){return gridFace(cell,2*axis+side);}
+double wallVelocityForFace(int face){
+ int header=headerWord(H_CONVECTION_VISCOSITY_HEADER);if(header<0)return 0.0LF;
+ int offsets=int(words[header+VISC_H_CONTACT_FACE_OFFSETS]);if(offsets<0)return 0.0LF;
+ int first=int(words[offsets+face]),last=int(words[offsets+face+1]),capacity=int(words[header+VISC_H_CONTACT_CAPACITY]);
+ if(first<0||last<first||last>capacity){reportInvalid();return 0.0LF;}
+ int weights=int(words[header+VISC_H_CONTACT_AREA_OVER_DISTANCE]),velocities=int(words[header+VISC_H_CONTACT_VELOCITIES]);
+ double total=0.0LF,weighted=0.0LF;
+ for(int i=first;i<last;i++){double weight=readDouble(weights+2*i);total+=weight;weighted+=weight*readDouble(velocities+2*i);}
+ return total>0.0LF?weighted/total:0.0LF;
+}
+// Subgrid wall convection uses the same carrier inventory, caloric segments and
+// mixed cell viscosity as the mechanical solver. Churchill-Chu natural convection:
+// doi:10.1016/0017-9310(75)90243-4. Flat-plate forced flow, NASA/TM-2008-215149.
+// The solver cell is the characteristic length; its film distance is the conductive limit.
+double liquidWallFilm(int point,int axis,int side,double wallTemperature,double distance){
+ int owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),row=int(words[workField(FIELD_OWNER_INDEX)+owner]);
+ int cell=int(words[workField(FIELD_SAMPLE_CELL)+point]),material=int(words[headerWord(H_LIQUID_MATERIALS)+row]);
+ int caloric=headerWord(H_LIQUID_CALORIC),begin=int(words[int(words[caloric+CAL_SEGMENT_OFFSETS])+material]);
+ int end=int(words[int(words[caloric+CAL_SEGMENT_OFFSETS])+material+1]),segment=begin;
+ double temperature=readDouble(headerWord(H_LIQUID_TEMPERATURE)+2*row);
+ while(segment+1<end && temperature>=readDouble(int(words[caloric+CAL_SEGMENT_UPPER])+2*segment))segment++;
+ double cp=readDouble(int(words[caloric+CAL_SEGMENT_CAPACITY])+2*segment);
+ double h=cellSize(),volume=readDouble(headerWord(H_LIQUID_VOLUMES)+2*row)*h*h*h;
+ double mass=double(readQuantity(headerWord(H_LIQUID_MASS)+2*row))*1e-10LF,rho=mass/volume;
+ double mu=readDouble(headerWord(H_CONVECTION_VISCOSITY)+2*cell);
+ double beta=readDouble(headerWord(H_CONVECTION_EXPANSION)+2*material);
+ double reference=readDouble(headerWord(H_CONVECTION_REFERENCE)+2*material);
+ beta=beta/(1.0LF+beta*(temperature-reference));
+ double k=readDouble(workField(FIELD_OWNER_K)+2*owner);
+ if(!(isFinite(rho)&&rho>0.0LF&&isFinite(mu)&&mu>0.0LF&&isFinite(beta)&&beta>=0.0LF&&cp>0.0LF&&k>0.0LF&&distance>0.0LF)){
+  reportInvalid();return distance;
+ }
+ double speed2=0.0LF;
+ if(headerWord(H_FACES)>=0)for(int tangent=0;tangent<3;tangent++)if(tangent!=axis){
+  int a=macFace(cell,tangent,0),b=macFace(cell,tangent,1);
+  double velocity=.5LF*(readDouble(headerWord(H_FACES)+8*a+2)-wallVelocityForFace(a)
+                       +readDouble(headerWord(H_FACES)+8*b+2)-wallVelocityForFace(b));
+  speed2+=velocity*velocity;
+ }
+ double gravity=readDouble(p.header+H_CONVECTION_GRAVITY),delta=wallTemperature-temperature;
+ double driving=axis==1?max(0.0LF,(side==0?1.0LF:-1.0LF)*gravity*delta):gravity*abs(delta);
+ double pr=mu*cp/k,rayleigh=driving*beta*h*h*h*rho*rho*cp/(mu*k);
+ double natural=0.0LF;
+ if(rayleigh>0.0LF){
+  double shape=double(pow(float(1.0LF+double(pow(float(.492LF/pr),9.0/16.0))),8.0/27.0));
+  double n=.825LF+.387LF*double(pow(float(rayleigh),1.0/6.0))/shape;natural=n*n;
+ }
+ double reynolds=rho*sqrt(speed2)*h/mu;
+ double forced=0.0LF;
+ if(reynolds>0.0LF){
+  double thermal=double(pow(float(pr),1.0/3.0)),critical=500000.0LF;
+  if(reynolds<=critical)forced=.664LF*sqrt(reynolds)*thermal;
+  else forced=(.664LF*sqrt(critical)+.037LF*(double(pow(float(reynolds),.8))-double(pow(float(critical),.8))))*thermal;
+ }
+ double combined=double(pow(float(natural*natural*natural+forced*forced*forced),1.0/3.0));
+ return min(distance,h/max(combined,1.0LF));
+}
 double wetPort(int cell,int bit,int axis,int side){
  if(headerWord(H_PLIC_PLANES)<0)return .25LF;
  double fill=readDouble(headerWord(H_PLIC_CELLS)+8*cell+6);
@@ -219,7 +276,12 @@ double bathConductance(int point,int axis,int side){
   double wet=wetPort(cell,bit,axis,side),physical=fam==0?wet*porosity:fam==1?(.25LF-wet)*porosity:.25LF*min(1.0LF,covered);
   area+=physical*(fp/covered);
  }
- return 2.0LF*readDouble(workField(FIELD_OWNER_K)+2*owner)*cellSize()*area;
+ double k=readDouble(workField(FIELD_OWNER_K)+2*owner),distance=.5LF*cellSize();
+ if(fam==0 && area>0.0LF && k>0.0LF){
+  double temperature=readDouble(headerWord(H_BATH_TEMPERATURES)+2*(6*cell+2*axis+side));
+  distance=liquidWallFilm(point,axis,side,temperature,distance);
+ }
+ return k*cellSize()*cellSize()*area/distance;
 }
 double deviceConductance(int point,int port){
  int mask=int(words[workField(FIELD_SAMPLE_MASK)+point]),owner=int(words[workField(FIELD_SAMPLE_OWNER)+point]),fam=family(owner);
@@ -245,6 +307,8 @@ double deviceConductance(int point,int port){
    double volume=.125LF*double(bitCount(uint(mask)))*fp;
    film=min(.5LF*cellSize(),.5LF*cellSize()*volume/area);
   }
+  int device=int(words[headerWord(H_PORT_DEVICE)+port]);
+  film=liquidWallFilm(point,axis,side,readDouble(headerWord(H_DEVICE_TEMPERATURE)+2*device),film);
  }
  precise double conductance=seriesConductance(cellSize()*cellSize()*area,readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port),readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port),k,film);return conductance;
 }

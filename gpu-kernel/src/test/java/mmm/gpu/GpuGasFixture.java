@@ -24,7 +24,8 @@ final class GpuGasFixture {
     record Geometry(VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column occupied,
                             VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column planes,
                             VulkanLiquidStateLayout.Column micro,VulkanLiquidStateLayout.Column faces,
-                            VulkanLiquidStateLayout.Column fluxes,VulkanLiquidStateLayout.Column walls,VulkanMixtureState.Layout mixture,long endOffset) { }
+                            VulkanLiquidStateLayout.Column fluxes,VulkanLiquidStateLayout.Column walls,VulkanLiquidStateLayout.Column screens,
+                            VulkanMixtureState.Layout mixture,long endOffset) { }
     record FixtureGas(GasRegistry gas,ThermalRegistry thermal,VulkanGasStateLayout.Definitions definitions) { }
     private record SeedRequest(double volume,double temperature) { }
     private record Seed(GasInventory inventory,double energy) { }
@@ -108,16 +109,18 @@ final class GpuGasFixture {
         long[] cursor={state.bytes()};var masks=column(cursor,cells,4,alignment);var occupied=column(cursor,cells,8,alignment);
         var totals=column(cursor,4*cells,8,alignment);var planes=column(cursor,4*cells,8,alignment);var micro=column(cursor,8*cells,8,alignment);
         var face=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);var walls=column(cursor,12*cells,8,alignment);
+        var screens=column(cursor,2*faces,8,alignment);
         var mixture=VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,word(totals),4,word(totals)+2,4,word(totals)+4,4,null,.5),cursor[0],alignment);
-        return new Geometry(masks,occupied,totals,planes,micro,face,flux,walls,mixture,mixture.endOffset());
+        return new Geometry(masks,occupied,totals,planes,micro,face,flux,walls,screens,mixture,mixture.endOffset());
     }
     static List<FlipKernelBindings.BufferRange> geometryRanges(VulkanLiquidStateLayout state,Geometry geometry,GpuBuffer buffer,GpuBuffer errors) {
-        var ranges=new ArrayList<FlipKernelBindings.BufferRange>(14);
+        var ranges=new ArrayList<FlipKernelBindings.BufferRange>(VulkanLiquidGeometry.Binding.values().length);
         ranges.addAll(state.ranges(buffer,VulkanLiquidStateLayout.Field.CELL_OFFSETS,VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES,VulkanLiquidStateLayout.Field.MASS_UNITS));
         ranges.add(range(buffer,geometry.masks()));ranges.add(range(buffer,geometry.occupied()));
         ranges.addAll(state.ranges(buffer,VulkanLiquidStateLayout.Field.MOMENTUM_X,VulkanLiquidStateLayout.Field.MOMENTUM_Y,VulkanLiquidStateLayout.Field.MOMENTUM_Z));
         ranges.add(range(buffer,geometry.cells()));ranges.add(range(buffer,geometry.planes()));ranges.add(range(buffer,geometry.micro()));ranges.add(range(buffer,geometry.faces()));
-        ranges.add(new FlipKernelBindings.BufferRange(errors));ranges.add(range(buffer,geometry.fluxes()));ranges.add(range(buffer,geometry.walls()));return ranges;
+        ranges.add(new FlipKernelBindings.BufferRange(errors));ranges.add(range(buffer,geometry.fluxes()));ranges.add(range(buffer,geometry.walls()));
+        ranges.add(range(buffer,geometry.screens()));ranges.add(range(buffer,geometry.occupied()));ranges.add(range(buffer,geometry.occupied()));return ranges;
     }
     private static FlipKernelBindings.BufferRange range(GpuBuffer buffer,VulkanLiquidStateLayout.Column column) {return new FlipKernelBindings.BufferRange(buffer,column.offset(),column.bindingBytes());}
     private static int word(VulkanLiquidStateLayout.Column column){return Math.toIntExact(column.offset()/4);}

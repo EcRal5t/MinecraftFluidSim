@@ -252,7 +252,7 @@ final class VulkanFluidStateCodec {
                 Arrays.fill(bath, Double.NaN);
             }
             heat = VulkanRegionThermal.Configuration.fromMaterials(liquidMaterials, gasMaterials, granularMaterials,
-                coherentMaterials, deviceMaterials, template.config().cellSize(), bath, 1);
+                coherentMaterials, deviceMaterials, template.config().cellSize(), template.config().gravity(), bath, 1);
         }
         VulkanRegionReactions.Configuration reactions = null;
         if (reactionDefinitions != null) {

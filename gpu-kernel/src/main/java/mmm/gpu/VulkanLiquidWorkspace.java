@@ -445,7 +445,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                                 if(error==0&&transport.thermal!=null){capacityStage="thermal contacts/conduction";
                                     error=region.kernels.thermalKernel.execute(candidate,transport.thermal,requestDuration,
                                             source.transport.devices==null?null:source.transport.devices.state,transport.devices==null?null:transport.devices.settlement,false,
-                                            finishTransport,thermalFinishes?finishLedgers:null,
+                                            thermalStages.prepareConvection(finishTransport),thermalFinishes?finishLedgers:null,
                                             thermalFinishes?(migrating?headerBytes(stableHeaders):0):-1);
                                 }
                                 traceStage("thermal-contacts-conduction",stageMark);
@@ -712,7 +712,10 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         word(geometry.get(GeometryField.FIXED_MASKS)),bathTemperatures.count()==0?-1:word(bathTemperatures),word(geometry.get(GeometryField.FACES)),region.thermalConfiguration.cellSize(),word(activityCells),
                         word(geometry.get(GeometryField.PLANES)),word(geometry.get(GeometryField.CELLS)),word(geometry.get(GeometryField.SCREEN_FACES)));
                 thermal=VulkanRegionThermal.layout(inputs,region.thermalConfiguration,thermalContactCapacity,thermalBathCapacity,tail[0],liquid.alignment());
-                thermal.contacts().wallGeometryWord=word(geometry.get(GeometryField.WALL_GEOMETRY));thermalBase=thermal.endOffset();}
+                thermal.contacts().wallGeometryWord=word(geometry.get(GeometryField.WALL_GEOMETRY));
+                thermal.contacts().bindConvection(word(viscosity.column(VulkanLiquidViscosity.Field.MU)),
+                        word(forces.expansionCoefficients()),word(forces.referenceTemperatures()),region.thermalConfiguration.gravity(),word(viscosity.header()));
+                thermalBase=thermal.endOffset();}
             VulkanRegionReactions.SolidInputs solidReactions=null;
             if(region.reactionConfiguration!=null&&granular!=null){
                 var phaseTransitions=new VulkanGranularTransitions.Layout(granular.state,granular.geometry,geometry.get(GeometryField.CELLS),geometry.get(GeometryField.FACES),liquid,

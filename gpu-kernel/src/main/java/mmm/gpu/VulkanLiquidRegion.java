@@ -448,7 +448,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(error!=0)throw new IllegalStateException("Thermal boundary candidate failed: status="+error);
             var prepared=new Prepared(pin,new PreparedInterval(workspace,candidate,source.geometryValid,source.gasNodesValid,false,0,0,mmm.world.MovingBodyFluidCoupling.Result.NONE),allocated);
             prepared.updatedHeat=new VulkanRegionThermal.Configuration(thermalConfiguration.tables(),thermalConfiguration.materials(),
-                    thermalConfiguration.cellSize(),values,thermalConfiguration.contactCapacity());
+                    thermalConfiguration.cellSize(),thermalConfiguration.gravity(),values,thermalConfiguration.contactCapacity());
             return prepared;
         }catch(RuntimeException|Error failure){candidate.close();pin.close();throw failure;}
     }
@@ -542,7 +542,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 ||!sameDefinition(device.thermal(),deviceConfiguration.thermal())||!sameDefinition(device.materialReferences(),deviceConfiguration.materialReferences())))return false;
         var heat=data.heat();
         if((heat==null)!=(t.thermal==null))return false;
-        if(heat!=null&&(heat.cellSize()!=thermalConfiguration.cellSize()||heat.bathTemperatures().length!=thermalConfiguration.bathTemperatures().length
+        if(heat!=null&&(heat.cellSize()!=thermalConfiguration.cellSize()||heat.gravity()!=thermalConfiguration.gravity()||heat.bathTemperatures().length!=thermalConfiguration.bathTemperatures().length
                 ||!sameDefinition(heat.tables(),thermalConfiguration.tables())||!sameDefinition(heat.materials(),thermalConfiguration.materials())))return false;
         var reactions=enabledReactions(data.reactions());
         if((reactions==null)!=(t.reactions==null))return false;

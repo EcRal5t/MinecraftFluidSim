@@ -8,10 +8,10 @@ import mmm.thermal.ThermalMaterialDefinition;
 /** Conduction within the mechanical candidate, after all inventory transport and mechanical work. */
 final class VulkanRegionThermal implements AutoCloseable {
     record Configuration(VulkanThermalConduction.Tables tables,VulkanThermalContacts.Materials materials,
-                         double cellSize,double[] bathTemperatures,int contactCapacity) {
+                         double cellSize,double gravity,double[] bathTemperatures,int contactCapacity) {
         Configuration {
             bathTemperatures=bathTemperatures.clone();
-            if(tables==null||materials==null||!(Double.isFinite(cellSize)&&cellSize>0)||contactCapacity<1)
+            if(tables==null||materials==null||!(Double.isFinite(cellSize)&&cellSize>0)||!(Double.isFinite(gravity)&&gravity>=0)||contactCapacity<1)
                 throw new IllegalArgumentException("Invalid region thermal configuration");
             for(double t:bathTemperatures)if(!Double.isNaN(t)&&!(Double.isFinite(t)&&t>0))
                 throw new IllegalArgumentException("Invalid thermal bath temperature");
@@ -19,17 +19,17 @@ final class VulkanRegionThermal implements AutoCloseable {
         /** Each list follows its inventory's immutable material handles. */
         static Configuration fromMaterials(List<ThermalMaterialDefinition> liquid,List<ThermalMaterialDefinition> gas,
                 List<ThermalMaterialDefinition> granular,List<ThermalMaterialDefinition> coherent,
-                double cellSize,double[] bathTemperatures,int contactCapacity) {
-            return fromMaterials(liquid,gas,granular,coherent,List.of(),cellSize,bathTemperatures,contactCapacity);
+                double cellSize,double gravity,double[] bathTemperatures,int contactCapacity) {
+            return fromMaterials(liquid,gas,granular,coherent,List.of(),cellSize,gravity,bathTemperatures,contactCapacity);
         }
         static Configuration fromMaterials(List<ThermalMaterialDefinition> liquid,List<ThermalMaterialDefinition> gas,
                 List<ThermalMaterialDefinition> granular,List<ThermalMaterialDefinition> coherent,List<ThermalMaterialDefinition> devices,
-                double cellSize,double[] bathTemperatures,int contactCapacity) {
+                double cellSize,double gravity,double[] bathTemperatures,int contactCapacity) {
             var all=new ArrayList<ThermalMaterialDefinition>();
             int[] l=append(all,liquid),g=append(all,gas),p=append(all,granular),c=append(all,coherent),d=append(all,devices);
             return new Configuration(VulkanThermalConduction.Tables.fromMaterials(all),
                     new VulkanThermalContacts.Materials(l,g,p,c,d,all.stream().mapToDouble(ThermalMaterialDefinition::conductivityWPerMeterK).toArray()),
-                    cellSize,bathTemperatures,contactCapacity);
+                    cellSize,gravity,bathTemperatures,contactCapacity);
         }
         private static int[] append(List<ThermalMaterialDefinition> all,List<ThermalMaterialDefinition> values){
             int[] map=new int[values.size()];for(int i=0;i<map.length;i++){map[i]=all.size();all.add(values.get(i));}return map;
@@ -69,6 +69,8 @@ final class VulkanRegionThermal implements AutoCloseable {
                 i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.facesWord(),i.cellSize(),i.activityCellWord(),i.plicPlanesWord(),i.plicCellsWord(),i.screenFacesWord());
         var contacts=VulkanThermalContacts.layout(input,layout.contacts().materials,layout.conduction(),layout.contacts().header.offset(),alignment);
         contacts.wallGeometryWord=layout.contacts().wallGeometryWord;
+        contacts.bindConvection(layout.contacts().viscosityWord,layout.contacts().expansionWord,
+                layout.contacts().expansionReferenceWord,layout.contacts().gravity,layout.contacts().viscosityHeaderWord);
         return new Layout(input,layout.conduction(),contacts,layout.reservoir(),layout.roundoff(),layout.endOffset());
     }
     static String describeError(int status) {
