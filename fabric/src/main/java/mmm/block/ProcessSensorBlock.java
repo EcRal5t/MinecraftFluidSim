@@ -16,6 +16,8 @@ public final class ProcessSensorBlock extends Block implements EntityBlock {
     ProcessSensorBlock(Properties properties){super(properties);registerDefaultState(stateDefinition.any().setValue(FACING,Direction.NORTH));}
     @Override protected void createBlockStateDefinition(net.minecraft.world.level.block.state.StateDefinition.Builder<Block,BlockState> builder){builder.add(FACING);}
     @Override public BlockState getStateForPlacement(net.minecraft.world.item.context.BlockPlaceContext context){return defaultBlockState().setValue(FACING,context.getNearestLookingDirection().getOpposite());}
+    @Override protected BlockState rotate(BlockState state,net.minecraft.world.level.block.Rotation rotation){return state.setValue(FACING,rotation.rotate(state.getValue(FACING)));}
+    @Override protected BlockState mirror(BlockState state,net.minecraft.world.level.block.Mirror mirror){return rotate(state,mirror.getRotation(state.getValue(FACING)));}
     @Override public BlockEntity newBlockEntity(BlockPos pos,BlockState state){return new ProcessSensorBlockEntity(pos,state);}
     @Override public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level,BlockState state,BlockEntityType<T> type){
         return level.isClientSide()?null:(world,pos,current,entity)->mmm.simulation.MmmRuntimeRegistry.require(((net.minecraft.server.level.ServerLevel)world).getServer()).industrial().tickSensor((net.minecraft.server.level.ServerLevel)world,(ProcessSensorBlockEntity)entity);
@@ -24,8 +26,7 @@ public final class ProcessSensorBlock extends Block implements EntityBlock {
     @Override protected int getSignal(BlockState state,BlockGetter level,BlockPos pos,Direction side){return level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor?sensor.output():0;}
     @Override protected net.minecraft.world.InteractionResult useWithoutItem(BlockState state,Level level,BlockPos pos,net.minecraft.world.entity.player.Player player,net.minecraft.world.phys.BlockHitResult hit){
         if(!level.isClientSide()&&level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor){
-            if(player.isShiftKeyDown()) mmm.network.ProcessTrendNetwork.open((net.minecraft.server.level.ServerPlayer)player,sensor);
-            else player.sendSystemMessage(net.minecraft.network.chat.Component.literal(sensor.measure().label()+" · "+sensor.reading()+" · "+sensor.output()));
+            if(!player.isShiftKeyDown()) player.sendSystemMessage(net.minecraft.network.chat.Component.literal(sensor.measure().label()+" · "+sensor.reading()+" · "+sensor.output()));
         }
         return net.minecraft.world.InteractionResult.SUCCESS;
     }

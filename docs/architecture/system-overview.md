@@ -119,7 +119,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。工业装置的世界建造与工艺验证共用同一方块标签、墙库存、端口与初始化规则；预热、冷却和表面装填按实际设备内能记入外部源汇。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
 
-物料箱保存九个有限批次，液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和回执提交；取样组成来自接触格。空批次接收对应物相，兼容批次合并组成与内能，满箱和断料保持配置等待。暂停与卸载保留运行意图，到期供料唤醒休眠区域。物料箱面板选择批次，手持实际容器点击交换所选批次。
+物料箱的九个槽保存玩家放入的实际容器，空槽保持为空；液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和回执提交；取样组成来自接触格，出料要求对应物相的容器。满箱和断料保持配置等待，暂停与卸载保留运行意图，到期供料唤醒休眠区域。持单个容器交换当前槽，空手取回，潜行空手切槽，探针打开选槽面板。容器离开箱体时移除箱内事务身份；未决交接保护对应槽位和箱体拆除。
+
+接口 `FACING` 指向外侧连接面，`mode` 方块状态由已保存的运行配置派生，配置后和加载后的首个 tick 同步给模型。传感器仪表朝向 `FACING`，默认测点位于反方向；模型随六向放置、旋转和镜像保持同一含义。配方、配方书解锁与获取顺序见[生存模式入门](../gameplay/survival-progression.md)，贴图与模型来源见[工业展示素材](../maintenance/visual-assets.md)。
 
 阀门闸板沿流向贯穿方块，五档开度改变通流截面；方块碰撞与显示共享该几何，固定碰撞编辑负责占容和物料交接。红石信号的目标开度在碰撞事务成功后提交；区域暂不可用或占容受阻时，方块按当前信号继续尝试，直至动作完成或信号改变。
 
@@ -226,12 +228,13 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 容器分析从手持物品的实际载荷生成服务端只读摘要，沿匹配的世界定义把组成与内能换算为展示数量。液体浓度以样品总体积计算，气体体积与浓度注明标准态；完整物种库存提供摩尔分数。客户端支持滚动和两份样品并排比较，基准在维度切换与断线时清除。分析保持区域与物品库存，使用时无需区域回读。
 
-传感器在原有观测完成后追加有界会话记录。区域在成功机械步或独立热步后累计仿真时长；暂停、测点不可用和物理组缺失使曲线断开，暂停时的手动步留下独立观测点。配置和区域实例改变后清空旧序列。界面按需读取已保存读数，关闭、换维或测点卸载后停止请求；记录随方块实体会话释放。
+传感器在原有观测完成后追加有界会话记录。区域在成功机械步或独立热步后累计仿真时长；暂停、测点不可用和物理组缺失使曲线断开，暂停时的手动步留下独立观测点。配置和区域实例改变后清空旧序列。样品和曲线均由客户端发起打开请求，以会话标识与维度匹配回复；曲线按递增请求序号接收更新。关闭、换维或测点卸载后停止请求，旧会话回复丢弃；记录随方块实体会话释放。显示模式和样品基准由各客户端独立保存。
 
 - [SampleAnalysis](../../fabric/src/main/java/mmm/simulation/SampleAnalysis.java)、[SampleAnalysisPayload](../../fabric/src/main/java/mmm/network/SampleAnalysisPayload.java)、[SampleAnalysisScreen](../../fabric/src/client/java/mmm/client/SampleAnalysisScreen.java)：载荷分析、展示摘要与比较界面。
 - [ProcessTrendHistory](../../fabric/src/main/java/mmm/network/ProcessTrendHistory.java)、[ProcessTrendNetwork](../../fabric/src/main/java/mmm/network/ProcessTrendNetwork.java)、[ProcessTrendScreen](../../fabric/src/client/java/mmm/client/ProcessTrendScreen.java)：测点记录、只读请求与曲线。
+- [ObservationOpen](../../fabric/src/client/java/mmm/client/ObservationOpen.java)：打开请求、维度与回复序号的会话匹配。
 - [FluidRenderBatch](../../fabric/src/client/java/mmm/client/FluidRenderBatch.java)、[FluidRenderTiming](../../fabric/src/client/java/mmm/client/FluidRenderTiming.java)：持久绘制数据、透明排序与异步 GPU 计时。
-- 验证入口：`protocol` 中的 `ClientSurfaceValidation`、`SampleAnalysisValidation`、`SampleComparisonValidation` 与 `ProcessTrendHistoryValidation`。
+- 验证入口：`protocol` 中的 `ClientSurfaceValidation`、`SampleAnalysisValidation`、`SampleComparisonValidation`、`ObservationOpenValidation` 与 `ProcessTrendHistoryValidation`；专服请求处理见 `MultiplayerObservationGameTest`。
 
 <a id="gameplay"></a>
 ## 游戏入口

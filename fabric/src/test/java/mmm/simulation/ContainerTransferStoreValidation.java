@@ -168,6 +168,10 @@ public final class ContainerTransferStoreValidation {
 		check(recovery.hasPending(region) && wal.read(operation)!=null && writes[0]==1 && events[0]==0
 				&& receipts.entry(operation).state()==mmm.simulation.persistence.PublicTransferReceiptStore.State.PENDING,
 				"Receipt I/O failure deleted WAL, repeated inventory writes, or published completion");
+		var emptySlotAddress = new ContainerTransferActor.BlockInventory(address.dimensionId(),1,2,3,0);
+		var anotherSlot = new ContainerTransferActor.BlockInventory(address.dimensionId(),1,2,3,1);
+		check(recovery.hasPending(new UUID(0,0),emptySlotAddress) && !recovery.hasPending(new UUID(0,0),anotherSlot),
+				"Pending recovery did not protect the exact box slot without a current item identity");
 		recovery.retryTransaction(operation);
 		check(!recovery.hasPending(region) && writes[0]==1 && events[0]==1,"Receipt retry did not finish exactly one inventory commit");
 		var restarted=new mmm.simulation.persistence.PublicTransferReceiptStore(root);

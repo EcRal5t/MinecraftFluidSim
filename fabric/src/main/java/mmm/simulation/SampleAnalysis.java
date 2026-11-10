@@ -10,6 +10,7 @@ import mmm.fluid.air.GasRegistry;
 import mmm.granular.SolidVolume;
 import mmm.item.*;
 import mmm.network.SampleAnalysisPayload;
+import mmm.network.SampleAnalysisRequest;
 import mmm.thermal.GasThermalModel;
 import mmm.thermal.ThermalMaterialDefinition.CarrierKind;
 import mmm.thermal.ThermalStateFunction;
@@ -31,25 +32,34 @@ import net.minecraft.world.phys.HitResult;
 public final class SampleAnalysis {
     private SampleAnalysis() { }
     public static void register() {
-        PayloadTypeRegistry.clientboundPlay().register(SampleAnalysisPayload.TYPE, SampleAnalysisPayload.CODEC);
-        UseItemCallback.EVENT.register((player, level, hand) -> {
-            if (!player.isShiftKeyDown() || !supported(player.getItemInHand(hand))
-                    || player.pick(5.0, 1.0F, false).getType() != HitResult.Type.MISS) return InteractionResult.PASS;
-            if (player instanceof ServerPlayer serverPlayer) {
-                try {
-                    var world = MmmRuntimeRegistry.require(serverPlayer.level().getServer()).worldRegistries();
-                    if (ServerPlayNetworking.canSend(serverPlayer, SampleAnalysisPayload.TYPE))
-                        ServerPlayNetworking.send(serverPlayer, analyze(player.getItemInHand(hand), world));
-                    else serverPlayer.sendSystemMessage(Component.literal("样品分析界面不可用"));
-                } catch (IllegalArgumentException | IllegalStateException failure) {
-                    serverPlayer.sendSystemMessage(Component.literal("样品分析失败：" + failure.getMessage()));
-                }
-                return InteractionResult.SUCCESS_SERVER;
-            }
-            return InteractionResult.SUCCESS;
+        UseItemCallback.EVENT.register((player,level,hand) -> {
+            if (!level.isClientSide() && player.isShiftKeyDown() && supported(player.getItemInHand(hand))
+                    && player.pick(5.0,1.0F,false).getType()==HitResult.Type.MISS) return InteractionResult.SUCCESS_SERVER;
+            return InteractionResult.PASS;
         });
+        PayloadTypeRegistry.clientboundPlay().register(SampleAnalysisPayload.TYPE, SampleAnalysisPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(SampleAnalysisRequest.TYPE, SampleAnalysisRequest.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(SampleAnalysisRequest.TYPE, (request,context) ->
+            context.server().execute(() -> {
+                var player=context.player();
+                try {
+                    var result=response(player,request);
+                    if (result!=null && ServerPlayNetworking.canSend(player,SampleAnalysisPayload.TYPE))
+                        ServerPlayNetworking.send(player,result);
+                } catch (IllegalArgumentException | IllegalStateException failure) {
+                    player.sendSystemMessage(Component.literal("样品分析失败："+failure.getMessage()));
+                }
+            }));
     }
-    private static boolean supported(ItemStack stack) {
+    static SampleAnalysisPayload response(ServerPlayer player,SampleAnalysisRequest request) {
+        if (!player.level().dimension().identifier().toString().equals(request.dimension())
+                || !player.isShiftKeyDown() || !supported(player.getItemInHand(request.hand()))
+                || player.pick(5.0, 1.0F, false).getType()!=HitResult.Type.MISS) return null;
+        var world=MmmRuntimeRegistry.require(player.level().getServer()).worldRegistries();
+        var result=analyze(player.getItemInHand(request.hand()),world);
+        return new SampleAnalysisPayload(request.session(),request.dimension(),result.lines());
+    }
+    public static boolean supported(ItemStack stack) {
         return stack.getItem() instanceof MaterialBucketItem || stack.getItem() instanceof GranularContainerItem
                 || stack.getItem() instanceof GasContainerItem || stack.getItem() instanceof PartialWaterBucketItem
                 || stack.is(Items.WATER_BUCKET);

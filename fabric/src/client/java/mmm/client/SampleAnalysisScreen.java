@@ -3,6 +3,11 @@ package mmm.client;
 import java.util.ArrayList;
 import java.util.List;
 import mmm.network.SampleAnalysisPayload;
+import mmm.network.SampleAnalysisRequest;
+import mmm.simulation.SampleAnalysis;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.phys.HitResult;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -16,6 +21,7 @@ import net.minecraft.util.FormattedCharSequence;
 /** Scrollable view of the current sample and an optional locally retained baseline. */
 public final class SampleAnalysisScreen extends Screen {
     private static final SampleComparison comparison = new SampleComparison();
+    private static final ObservationOpen pending = new ObservationOpen();
     private final SampleAnalysisPayload sample;
     private int offset;
     private SampleAnalysisScreen(SampleAnalysisPayload sample) {
@@ -23,15 +29,28 @@ public final class SampleAnalysisScreen extends Screen {
         this.sample = sample;
     }
     public static void register() {
+        UseItemCallback.EVENT.register((player, level, hand) -> {
+            if (!level.isClientSide() || !player.isShiftKeyDown() || !SampleAnalysis.supported(player.getItemInHand(hand))
+                    || player.pick(5.0,1.0F,false).getType()!=HitResult.Type.MISS
+                    || !ClientPlayNetworking.canSend(SampleAnalysisRequest.TYPE)) return InteractionResult.PASS;
+            String dimension=level.dimension().identifier().toString();
+            ClientPlayNetworking.send(new SampleAnalysisRequest(pending.start(dimension),dimension,hand));
+            return InteractionResult.SUCCESS;
+        });
         ClientPlayNetworking.registerGlobalReceiver(SampleAnalysisPayload.TYPE, (payload, context) ->
                 context.client().execute(() -> {
-                    var level = context.client().level;
-                    comparison.observeDimension(level == null ? null : level.dimension().identifier().toString());
-                    context.client().setScreenAndShow(new SampleAnalysisScreen(payload));
+                    var client=context.client(); var level=client.level;
+                    if(level==null || client.gui.screen()!=null) return;
+                    String dimension=level.dimension().identifier().toString();
+                    if(!dimension.equals(payload.dimension()) || !pending.accept(payload.session(),dimension)) return;
+                    comparison.observeDimension(dimension);
+                    client.setScreenAndShow(new SampleAnalysisScreen(payload));
                 }));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> comparison.observeDimension(null));
-        ClientTickEvents.END_CLIENT_TICK.register(client -> comparison.observeDimension(
-                client.level == null ? null : client.level.dimension().identifier().toString()));
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> { comparison.observeDimension(null); pending.clear(); });
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            String dimension=client.level == null ? null : client.level.dimension().identifier().toString();
+            comparison.observeDimension(dimension); pending.update(dimension,client.gui.screen()!=null);
+        });
     }
     @Override protected void init() {
         int buttonWidth = Math.min(140, (width - 24) / 2);
@@ -61,6 +80,9 @@ public final class SampleAnalysisScreen extends Screen {
         return true;
     }
     @Override public boolean isPauseScreen() { return false; }
+    @Override public void tick() {
+        if(minecraft.level==null || !sample.dimension().equals(minecraft.level.dimension().identifier().toString())) onClose();
+    }
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
         graphics.centeredText(font, title, width / 2, 8, 0xffffffff);

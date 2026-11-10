@@ -8,7 +8,10 @@ import net.minecraft.world.level.storage.ValueOutput;
 
 /** Online transfer settings; the adjacent material box owns the transferred batches. */
 public final class FluidPortBlockEntity extends BlockEntity {
-    public enum Mode { STOPPED, INPUT, OUTPUT }
+    public enum Mode implements net.minecraft.util.StringRepresentable {
+        STOPPED, INPUT, OUTPUT;
+        @Override public String getSerializedName(){return name().toLowerCase(java.util.Locale.ROOT);}
+    }
     public enum Phase { LIQUID, SOLID, GAS }
     private Mode mode=Mode.STOPPED;
     private Phase phase=Phase.LIQUID;
@@ -25,7 +28,14 @@ public final class FluidPortBlockEntity extends BlockEntity {
     public void configure(Mode mode,Phase phase,long rate,boolean redstone){
         if(rate<=0||rate>1_000_000_000L)throw new IllegalArgumentException("速率范围为 0—1000 L/s");
         this.mode=mode;this.phase=phase;this.nanosPerSecond=rate;this.redstone=redstone;
-        status=mode==Mode.STOPPED?"停止":"等待运行";setChanged();
+        status=mode==Mode.STOPPED?"停止":"等待运行";setChanged();syncDisplayState();
+    }
+    /** Publishes the saved transfer mode to block models, including the first tick after loading. */
+    public void syncDisplayState(){
+        if(level==null||level.isClientSide())return;
+        var state=getBlockState();
+        if(state.getValue(FluidPortBlock.MODE)!=mode)
+            level.setBlock(worldPosition,state.setValue(FluidPortBlock.MODE,mode),net.minecraft.world.level.block.Block.UPDATE_CLIENTS);
     }
     @Override protected void loadAdditional(ValueInput input){
         super.loadAdditional(input);mode=Mode.valueOf(input.getStringOr("mode","STOPPED"));phase=Phase.valueOf(input.getStringOr("phase","LIQUID"));

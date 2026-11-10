@@ -31,14 +31,23 @@ public final class IndustrialOperations {
     public InteractionResult useBox(ServerPlayer player,InteractionHand hand,BlockPos position){
         var box=(MaterialBoxBlockEntity)player.level().getBlockEntity(position);
         var held=player.getItemInHand(hand);
-        if(held.isEmpty()){
-            if(player.isShiftKeyDown())box.selectNext();
-            IndustrialDialogs.box(player,box);
+        if(held.isEmpty() && player.isShiftKeyDown()) {
+            box.selectNext();
+            player.sendSystemMessage(Component.literal("物料箱批次 " + (box.selected()+1) + " · " + describe(box.getItem(box.selected()))));
             return InteractionResult.SUCCESS;
         }
-        var actor=actor(player.level(),position,box.selected(),box.getItem(box.selected()));
-        if(recovery.hasPending(new UUID(0,0),actor)){
+        var current=box.getItem(box.selected());
+        if(recovery.hasPending(new UUID(0,0),slotActor(player.level(),position,box.selected()))){
             player.sendSystemMessage(Component.literal("物料交接恢复中"));return InteractionResult.SUCCESS;
+        }
+        if(held.isEmpty()) {
+            if(current.isEmpty()) player.sendSystemMessage(Component.literal("该批次为空"));
+            else {
+                var result=box.removeItemNoUpdate(box.selected());
+                result.remove(MmmComponents.TRANSFER_ACTOR);
+                player.setItemInHand(hand,result); player.getInventory().setChanged();
+            }
+            return InteractionResult.SUCCESS;
         }
         if(held.getCount()!=1)return InteractionResult.PASS;
         try { ContainerItemMapper.fingerprint(held); }
@@ -47,13 +56,13 @@ public final class IndustrialOperations {
         var stored=held.copy();
         if(stored.is(net.minecraft.world.item.Items.WATER_BUCKET)&&ContainerItemStacks.thermalContents(stored)==null)
             world.attachLiquidThermalContents(stored,mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K);
-        var previous=box.getItem(box.selected()).copy();previous.remove(MmmComponents.TRANSFER_ACTOR);
+        var previous=box.getItem(box.selected()).copy();if(!previous.isEmpty())previous.remove(MmmComponents.TRANSFER_ACTOR);
         box.setItem(box.selected(),MaterialBoxBlockEntity.newBatch(stored));player.setItemInHand(hand,previous);
         player.getInventory().setChanged();return InteractionResult.SUCCESS;
     }
     public boolean boxTransferPending(ServerLevel level,MaterialBoxBlockEntity box){
         for(int slot=0;slot<box.getContainerSize();slot++)
-            if(recovery.hasPending(new UUID(0,0),actor(level,box.getBlockPos(),slot,box.getItem(slot))))return true;
+            if(recovery.hasPending(new UUID(0,0),slotActor(level,box.getBlockPos(),slot)))return true;
         return false;
     }
     public void usePort(ServerPlayer player,BlockPos position){
@@ -190,14 +199,11 @@ public final class IndustrialOperations {
         boolean insert=port.mode()==FluidPortBlockEntity.Mode.INPUT;
         for(int offset=0;offset<box.getContainerSize();offset++){
             int slot=(box.selected()+offset)%box.getContainerSize();var item=box.getItem(slot);
+            if(item.isEmpty())continue;
             if(recovery.hasPending(target.region().id(),actor(level,boxPosition,slot,item))){port.status("物料交接恢复中");return;}
-            boolean empty=MaterialBucketItem.isEmptyMaterialBucket(item)||GranularContainerItem.isEmpty(item)||GasContainerItem.isEmpty(item);
-            if(empty&&!insert){
-                var desired=switch(port.phase()){case LIQUID->MmmItems.MATERIAL_BUCKET;case SOLID->MmmItems.GRANULAR_CONTAINER;case GAS->MmmItems.GAS_CONTAINER;};
-                if(!item.is(desired)){item=MaterialBoxBlockEntity.newBatch(new ItemStack(desired));box.setItem(slot,item);}
-            }
             boolean solid=item.getItem() instanceof GranularContainerItem,gas=item.getItem() instanceof GasContainerItem;
             if(gas!=(port.phase()==FluidPortBlockEntity.Phase.GAS)||solid!=(port.phase()==FluidPortBlockEntity.Phase.SOLID))continue;
+            if(!insert && !(item.getItem() instanceof MaterialBucketItem || solid || gas))continue;
             var kind=MinecraftContainerTransferOperations.classify(item);
             boolean filled=kind==MinecraftContainerTransferOperations.TransferKind.POUR||kind==MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR||kind==MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR||kind==MinecraftContainerTransferOperations.TransferKind.GAS_POUR;
             if(insert&&!filled)continue;
@@ -224,11 +230,15 @@ public final class IndustrialOperations {
         long phase=Math.floorMod(tick,20);
         return (phase+1)*perSecond/20-phase*perSecond/20;
     }
+    private static ContainerTransferActor.BlockInventory slotActor(ServerLevel level,BlockPos position,int slot){
+        return new ContainerTransferActor.BlockInventory(level.dimension().identifier().toString(),position.getX(),position.getY(),position.getZ(),slot);
+    }
     private static ContainerTransferActor.BlockInventory actor(ServerLevel level,BlockPos position,int slot,ItemStack item){
         var identity=TransferActorState.decode(item.get(MmmComponents.TRANSFER_ACTOR));
         return new ContainerTransferActor.BlockInventory(level.dimension().identifier().toString(),position.getX(),position.getY(),position.getZ(),slot,identity.instanceId(),identity.generation());
     }
     static String describe(ItemStack item){
+        if(item.isEmpty())return "空槽";
         if(item.getItem() instanceof GasContainerItem){var contents=GasContainerItem.contents(item);return contents==null?"空气体批次":mmm.units.UnitFormat.volumeNanos(contents.inventory().standardVolumeNanos())+" · 标准体积";}
         if(item.getItem() instanceof GranularContainerItem){var contents=GranularContainerItem.unvalidatedContents(item);return contents==null?"空颗粒批次":mmm.units.UnitFormat.solidVolume(contents.totalSolidVolumeSvq());}
         long volume=MaterialBucketItem.volume(item);if(item.is(net.minecraft.world.item.Items.WATER_BUCKET))volume=1_000_000_000L;

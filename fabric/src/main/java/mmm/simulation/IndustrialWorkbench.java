@@ -76,10 +76,7 @@ public final class IndustrialWorkbench {
             level.setBlock(port.box(),mmm.block.MmmBlocks.MATERIAL_BOX.defaultBlockState(),Block.UPDATE_ALL);
             var block=(FluidPortBlockEntity)level.getBlockEntity(port.position());
             block.configure(port.mode(),port.phase(),port.rate(),port.redstone());
-            var box=(MaterialBoxBlockEntity)level.getBlockEntity(port.box());
-            var item=port.phase()==FluidPortBlockEntity.Phase.GAS?MmmItems.GAS_CONTAINER:
-                    port.phase()==FluidPortBlockEntity.Phase.SOLID?MmmItems.GRANULAR_CONTAINER:MmmItems.MATERIAL_BUCKET;
-            for(int slot=0;slot<box.getContainerSize();slot++)box.setItem(slot,MaterialBoxBlockEntity.newBatch(new ItemStack(item)));
+
         }
         for(var screen:layout.screens()) {
             var block=(ScreenBlockEntity)level.getBlockEntity(screen.position());

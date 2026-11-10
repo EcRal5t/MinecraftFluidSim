@@ -25,6 +25,31 @@ import net.minecraft.world.level.block.Blocks;
 
 /** Real sensor redstone, finite box transfers and block-entity settings. */
 public final class IndustrialControlGameTest {
+    @GameTest(structure="mmm_gametest:piston",maxTicks=20)
+    public void portAppearanceTracksSettings(GameTestHelper test) {
+        var position=new BlockPos(2,2,2);
+        var level=test.getLevel();
+        test.setBlock(position,MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST));
+        var port=test.getBlockEntity(position,FluidPortBlockEntity.class);
+        for(var mode:FluidPortBlockEntity.Mode.values()) {
+            port.configure(mode,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,false);
+            var state=level.getBlockState(test.absolutePos(position));
+            test.assertTrue(state.getValue(FluidPortBlock.MODE)==mode && state.getValue(FluidPortBlock.FACING)==Direction.EAST,
+                    "Port model must follow its transfer mode and preserve its connection direction");
+        }
+        var restored=(FluidPortBlockEntity)BlockEntity.loadStatic(test.absolutePos(position),
+                MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.EAST),
+                port.saveWithFullMetadata(level.registryAccess()),level.registryAccess());
+        test.assertTrue(restored!=null,"Port settings must load");
+        level.setBlock(test.absolutePos(position),restored.getBlockState(),net.minecraft.world.level.block.Block.UPDATE_ALL);
+        level.setBlockEntity(restored);
+        test.runAfterDelay(2,()->{
+            test.assertTrue(level.getBlockState(test.absolutePos(position)).getValue(FluidPortBlock.MODE)==FluidPortBlockEntity.Mode.OUTPUT,
+                    "Loaded port must publish its saved mode on the first tick");
+            test.succeed();
+        });
+    }
+
     @GameTest(structure="mmm_gametest:piston",maxTicks=1200)
     public void sensorControlsFinitePort(GameTestHelper test) {
         var level=test.getLevel();
@@ -93,8 +118,10 @@ public final class IndustrialControlGameTest {
                 sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 port.configure(FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,true);
                 for(int i=0;i<box.getContainerSize();i++)box.setItem(i,MaterialBoxBlockEntity.newBatch(new ItemStack(Items.WATER_BUCKET)));
+                box.setItem(0,MaterialBoxBlockEntity.newBatch(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER)));
                 stage[0]=4;
             } else if(stage[0]==4 && sensor.output()==15 && port.status().equals("等待可用批次或接触物料")) {
+                test.assertTrue(box.getItem(0).is(mmm.item.MmmItems.GAS_CONTAINER),"Port changed an incompatible real container");
                 box.setItem(0,MaterialBoxBlockEntity.newBatch(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET)));
                 stage[0]=5;
             } else if(stage[0]==5 && port.status().equals("运行")) {
@@ -109,7 +136,8 @@ public final class IndustrialControlGameTest {
             } else if(stage[0]==7 && matchesScreen(region,test.absolutePos(screenPosition),level,.0005,.4)) {
                 test.setBlock(screenPosition,Blocks.AIR);
                 stage[0]=8;
-            } else if(stage[0]==8 && region.fixedGeometry().screens().isEmpty() && wallAt(region,thermal.fingerprint(),wall)!=null) {
+            } else if(stage[0]==8 && region.fixedGeometry().screens().isEmpty() && wallAt(region,thermal.fingerprint(),wall)!=null
+                    && !region.hasPendingPhaseMotionWork()) {
                 region.setPaused(true);
                 long generation=region.solverGeneration();
                 var candidate=region.beginHostEdit();

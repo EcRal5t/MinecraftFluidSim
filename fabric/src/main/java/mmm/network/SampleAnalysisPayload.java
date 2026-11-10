@@ -8,7 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
 /** Bounded, server-authored display snapshot of one held container. */
-public record SampleAnalysisPayload(List<String> lines) implements CustomPacketPayload {
+public record SampleAnalysisPayload(java.util.UUID session, String dimension, List<String> lines) implements CustomPacketPayload {
     private static final int MAX_LINES = 2048;
     private static final int MAX_LINE_LENGTH = 256;
     public static final Type<SampleAnalysisPayload> TYPE = new Type<>(MmmMod.id("sample_analysis"));
@@ -19,16 +19,19 @@ public record SampleAnalysisPayload(List<String> lines) implements CustomPacketP
         if (lines.size() > MAX_LINES || lines.stream().anyMatch(s -> s == null || s.length() > MAX_LINE_LENGTH))
             throw new IllegalArgumentException("Sample analysis exceeds packet limits");
     }
+    public SampleAnalysisPayload(List<String> lines) { this(new java.util.UUID(0,0), "", lines); }
     @Override public Type<SampleAnalysisPayload> type() { return TYPE; }
     private static void encode(FriendlyByteBuf buf, SampleAnalysisPayload payload) {
+        buf.writeUUID(payload.session); buf.writeUtf(payload.dimension,256);
         buf.writeVarInt(payload.lines.size());
         for (String line : payload.lines) buf.writeUtf(line, MAX_LINE_LENGTH);
     }
     private static SampleAnalysisPayload decode(FriendlyByteBuf buf) {
+        var session=buf.readUUID(); var dimension=buf.readUtf(256);
         int count = buf.readVarInt();
         if (count < 0 || count > MAX_LINES) throw new IllegalArgumentException("Invalid sample line count");
         var lines = new ArrayList<String>(count);
         for (int i = 0; i < count; i++) lines.add(buf.readUtf(MAX_LINE_LENGTH));
-        return new SampleAnalysisPayload(lines);
+        return new SampleAnalysisPayload(session,dimension,lines);
     }
 }

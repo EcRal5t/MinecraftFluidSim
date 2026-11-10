@@ -14,21 +14,17 @@ public final class ProcessTrendNetwork {
         ServerPlayNetworking.registerGlobalReceiver(ProcessTrendRequest.TYPE, (request, context) ->
             context.server().execute(() -> reply(context.player(), request)));
     }
-    public static void open(ServerPlayer player, ProcessSensorBlockEntity sensor) { send(player,sensor,true); }
     private static void reply(ServerPlayer player, ProcessTrendRequest request) {
-        var pos=request.position(); var level=player.level();
-        if (!level.dimension().identifier().toString().equals(request.dimension())) return;
-        if (!level.hasChunkAt(pos) || player.distanceToSqr(pos.getX()+.5,pos.getY()+.5,pos.getZ()+.5)>64
-                || !(level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor)) {
-            if(ServerPlayNetworking.canSend(player,ProcessTrendPayload.TYPE))
-                ServerPlayNetworking.send(player,new ProcessTrendPayload(pos,level.dimension().identifier().toString(),"","不可用",false,false,List.of()));
-            return;
-        }
-        send(player,sensor,false);
+        var result=response(player,request);
+        if(result!=null && ServerPlayNetworking.canSend(player,ProcessTrendPayload.TYPE)) ServerPlayNetworking.send(player,result);
     }
-    private static void send(ServerPlayer player,ProcessSensorBlockEntity sensor,boolean open) {
-        if(ServerPlayNetworking.canSend(player,ProcessTrendPayload.TYPE))
-            ServerPlayNetworking.send(player,new ProcessTrendPayload(sensor.getBlockPos(),player.level().dimension().identifier().toString(),
-                sensor.measure().label(),sensor.history().status(),open,true,sensor.history().points()));
+    public static ProcessTrendPayload response(ServerPlayer player, ProcessTrendRequest request) {
+        var pos=request.position(); var level=player.level();
+        if (!level.dimension().identifier().toString().equals(request.dimension())) return null;
+        if (!level.hasChunkAt(pos) || player.distanceToSqr(pos.getX()+.5,pos.getY()+.5,pos.getZ()+.5)>64
+                || !(level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor))
+            return new ProcessTrendPayload(pos,request.dimension(),request.session(),request.sequence(),"","不可用",request.open(),false,List.of());
+        return new ProcessTrendPayload(pos,request.dimension(),request.session(),request.sequence(),
+                sensor.measure().label(),sensor.history().status(),request.open(),true,sensor.history().points());
     }
 }

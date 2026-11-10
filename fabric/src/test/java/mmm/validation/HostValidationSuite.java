@@ -26,6 +26,7 @@ public final class HostValidationSuite {
             mmm.network.FluidNetworkProtocolValidation.main(new String[0]);
             mmm.simulation.SampleAnalysisValidation.main(new String[0]);
             mmm.client.SampleComparisonValidation.main(new String[0]);
+            mmm.client.ObservationOpenValidation.main(new String[0]);
             mmm.network.ProcessTrendHistoryValidation.main(new String[0]);
             mmm.client.ClientSurfaceValidation.main(new String[0]);
             mmm.simulation.CommittedEventHubValidation.main(new String[0]);

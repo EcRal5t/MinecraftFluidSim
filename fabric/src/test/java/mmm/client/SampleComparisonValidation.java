@@ -7,9 +7,12 @@ public final class SampleComparisonValidation {
     private SampleComparisonValidation() { }
     public static void main(String[] args) {
         var state = new SampleComparison();
+        var other = new SampleComparison();
         var sample = new SampleAnalysisPayload(List.of("sample"));
         state.observeDimension("minecraft:overworld");
         state.save(sample);
+        other.observeDimension("minecraft:overworld");
+        if (other.baseline() != null) throw new AssertionError("baseline crossed clients");
         state.observeDimension("minecraft:overworld");
         if (state.baseline() != sample) throw new AssertionError("baseline lost in same dimension");
         state.observeDimension("minecraft:the_nether");

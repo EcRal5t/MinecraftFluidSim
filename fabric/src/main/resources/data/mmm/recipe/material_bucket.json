@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:bucket",
+    "minecraft:lapis_lazuli"
+  ],
+  "result": {
+    "id": "mmm:material_bucket",
+    "count": 1
+  }
+}

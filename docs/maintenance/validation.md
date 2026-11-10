@@ -45,7 +45,19 @@ uv run pytool/distillation_reference.py
 
 工艺效能按明确工况评价。上述蒸馏比较包含启动产物，匹配的液体体积回收比例约为累计投料的 0.0889%；回流量统计窗口为正式运行段。数据驱动脚本在无非凝气、101.325 kPa、每次完全平衡并冷凝的条件下，给出乙醇摩尔分数 39.92%、59.11%、76.08%、87.59% 的四次接触参照。实际塔层为池面接触，有限冷壁与气相排放共同影响分离。当前金属隔墙短窗口的冷侧平均升温约 0.00325 K，以 60 K 入口温差计算的温升有效度约 0.00542%。后续工艺评价同时记录回收率、各层组成、冷热流量、有限墙内能和同一时间窗口内的热耗。平衡级与回流条件参照 [LearnChemE](https://learncheme.com/quiz-yourself/interactive-self-study-modules/mccabe-thiele-diagrams/mccabe-thiele-diagrams-summary/)。
 
-GameTest 在实际服务器中运行传感器红石控制、箱端口装取、方块实体设置恢复、筛的放置转向拆除、原版活塞运动与双阀泵送。测试世界位于 `fabric/build/gametest/world`，独立于玩家存档。GPU 场景与游戏服务器串行运行。
+GameTest 在实际服务器中运行传感器红石控制、箱端口装取、方块实体设置恢复、筛的放置转向拆除、原版活塞运动与双阀泵送。默认测试世界位于 `fabric/build/gametest/world`，独立于玩家存档。重复测试可用 `-PgameTestRunDir=build/gametest-<本轮名称>` 选择全新目录，避免已有区域占用测试世界的区域额度。路径相对于 `fabric` 模块；GPU 场景与游戏服务器串行运行。
+
+定向运行时，将 `fabric-api.gametest.filter` 设为完整测试资源 ID。下面的命令使用新的测试目录，结束后恢复原有环境变量：
+
+```powershell
+$previousGameTestOptions = $env:JAVA_TOOL_OPTIONS
+try {
+    $env:JAVA_TOOL_OPTIONS = "$previousGameTestOptions -Dfabric-api.gametest.filter=mmm_gametest:industrial_control_game_test_sensor_controls_finite_port".Trim()
+    ./gradlew.bat :fabric:runGameTest '-PgameTestRunDir=build/gametest-sensor-example' --offline --no-daemon --max-workers=1
+} finally {
+    $env:JAVA_TOOL_OPTIONS = $previousGameTestOptions
+}
+```
 
 ### 演示选择器与场景参数
 
@@ -212,6 +224,18 @@ RTX 5070 Ti、Minecraft 26.2、Iris 1.11.2 和 Sodium 0.9.1：使用 `/mmm demo`
 `protocol` 覆盖容器分析的质量／摩尔分数与浓度分母、已保存内能推导温度、只读库存、消息长度限制和基准生命周期；同时覆盖传感器历史的容量、暂停、手动步进、不可用断线及区域重建。
 
 实机潜行持水桶对空气使用后打开样品面板，保存基准后正常显示双栏比较。油水演示外壳安装液位传感器，潜行空手右键显示暂停状态和 1.00 s 样本；执行 `/mmm step 2` 后显示 1.10 s 新样本，两次暂停观察之间保留断线。关闭面板、退出世界均正常完成。
+
+多人观察以 `protocol` 和专服 `MultiplayerObservationGameTest.independentObservers` 覆盖会话、请求序号、基准、维度与距离校验。两个模拟玩家读取同一测点，回复保持各自会话标识；关闭、断线和换维的客户端状态由独立状态用例覆盖。范围和证据见[多人观察验证](multiplayer-observation.md)。
+
+### 工业外观与生存获取
+
+工业资源检查纹理引用、物品透明通道及接口六朝向的停止／进料／出料模型。专服 `IndustrialControlGameTest.portAppearanceTracksSettings` 检查接口配置和加载后的标记同步；`SurvivalProgressionGameTest` 使用真实配方管理器检查 15 个配方匹配、产物和配方书触发，并覆盖容器槽存取、保存恢复、拆除掉落和生存工具开采。素材来源见[工业展示素材](visual-assets.md)，玩家操作见[生存模式入门](../gameplay/survival-progression.md)。
+
+定向服务器验证使用测试资源 ID 与独立目录，命令见上方工业装置验证。
+
+完整构建、`protocol` 和 `verifyArchitecture` 通过，日志位于 `build/validation/industrial-survival-build.log`。配方及解锁、接口标记、多人观察、真实容器槽、拆除掉落、生存开采和传感器控制流程均通过专服测试；`containers` 的库存、交接及故障恢复用例通过，包含空槽地址的未决事务锁定。
+
+双阀泵送仍有独立待修复项：当前分支与修改前基线 `ba04fdc9` 在各自全新世界运行 `PistonPumpGameTest.pumpsAcrossCheckpoint`，均在进料后的液体反应阶段触发 `status=67108864`，区域暂停后用例超时。日志为 `build/validation/industrial-pump-clean-gametest.log` 和 `build/validation/pump-baseline.log`；后续沿物理候选的液气传质状态检查处理。
 
 <a id="流体显色模式"></a>
 ### 流体显色模式

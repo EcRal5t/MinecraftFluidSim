@@ -46,7 +46,7 @@ public final class SampleAnalysisValidation {
         } finally { buffer.release(); }
         var oversized = new FriendlyByteBuf(Unpooled.buffer());
         try {
-            oversized.writeVarInt(2049);
+            oversized.writeUUID(new java.util.UUID(0,0)); oversized.writeUtf("minecraft:overworld"); oversized.writeVarInt(2049);
             try { SampleAnalysisPayload.CODEC.decode(oversized); throw new AssertionError("oversized packet accepted"); }
             catch (IllegalArgumentException expected) { }
         } finally { oversized.release(); }

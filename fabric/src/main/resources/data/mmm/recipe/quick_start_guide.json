@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:book",
+    "minecraft:glass_pane"
+  ],
+  "result": {
+    "id": "mmm:quick_start_guide",
+    "count": 1
+  }
+}

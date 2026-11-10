@@ -44,7 +44,7 @@ loom {
             server()
             source sourceSets.gametest
             name 'MMM Game Test'
-            runDir 'build/gametest'
+            runDir (project.findProperty('gameTestRunDir') ?: 'build/gametest')
             vmArg '-Dfabric-api.gametest'
             vmArg '--enable-native-access=ALL-UNNAMED'
             vmArg '-Xmx2g'

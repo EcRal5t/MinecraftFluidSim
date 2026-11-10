@@ -12,10 +12,15 @@ import net.minecraft.network.chat.Component;
 public final class ProcessTrendScreen extends Screen {
     private ProcessTrendPayload data;
     private int ticks;
+    private long sequence, appliedSequence;
     public ProcessTrendScreen(ProcessTrendPayload data) { super(Component.literal("工艺曲线")); this.data=data; }
-    public void accept(ProcessTrendPayload next) { data=next; }
+    public void accept(ProcessTrendPayload next) {
+        if(ObservationOpen.newerReply(data.session(),sequence,appliedSequence,next.session(),next.sequence())) {
+            appliedSequence=next.sequence(); data=next;
+        }
+    }
     public boolean matches(ProcessTrendPayload next, String dimension) {
-        return data.position().equals(next.position()) && data.dimension().equals(dimension) && dimension.equals(next.dimension());
+        return data.session().equals(next.session()) && data.position().equals(next.position()) && data.dimension().equals(dimension) && dimension.equals(next.dimension());
     }
     @Override public boolean isPauseScreen() { return false; }
     @Override public void tick() {
@@ -23,7 +28,7 @@ public final class ProcessTrendScreen extends Screen {
             onClose(); return;
         }
         if (data.available() && ++ticks % 10 == 0 && minecraft.player != null && ClientPlayNetworking.canSend(ProcessTrendRequest.TYPE))
-            ClientPlayNetworking.send(new ProcessTrendRequest(data.position(),data.dimension()));
+            ClientPlayNetworking.send(new ProcessTrendRequest(data.position(),data.dimension(),data.session(),++sequence,false));
     }
     @Override public void extractRenderState(GuiGraphicsExtractor g,int mouseX,int mouseY,float partialTick) {
         super.extractRenderState(g,mouseX,mouseY,partialTick);

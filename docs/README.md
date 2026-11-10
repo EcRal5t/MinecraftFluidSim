@@ -15,6 +15,8 @@
 
 | 需要查什么 | 文档 |
 |---|---|
+| 生存模式配方、工具获取与入门操作 | [生存模式入门](gameplay/survival-progression.md) |
+| 工业方块与工具像素素材、方向标记与制作来源 | [工业展示素材](maintenance/visual-assets.md) |
 | 后端字段、MAC、PLIC、压力、速度传递与碰撞离散 | [流体离散参考](architecture/fluid-solver.md) |
 | 材料定义、质量、黏度与混合物换算 | [材料参考](architecture/material-state.md) |
 | 气腔几何、库存分配、状态方程与有限孔流 | [气体参考](architecture/gas-state.md) |

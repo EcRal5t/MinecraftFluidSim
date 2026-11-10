@@ -40,6 +40,7 @@ public final class FluidNetworkProtocolValidation {
 	private FluidNetworkProtocolValidation() { }
 
 	public static void main(String[] args) {
+		validateObservationCodecs();
 		validateNegotiationMatrix();
 		validateQueryAvailabilityReason();
 		validateConfigurationCodecs();
@@ -53,6 +54,22 @@ public final class FluidNetworkProtocolValidation {
 		validateThermalSnapshot();
 		System.out.println("Fluid network protocol validation passed");
 	}
+
+	private static void validateObservationCodecs() {
+        UUID session=UUID.randomUUID(); var position=new BlockPos(1,2,3); String dimension="minecraft:overworld";
+        var trendRequest=new ProcessTrendRequest(position,dimension,session,7,false);
+        var trend=new ProcessTrendPayload(position,dimension,session,7,"液位","运行中",false,true,
+                List.of(new ProcessTrendHistory.Point(.05,2,false),new ProcessTrendHistory.Point(.1,3,true)));
+        var sampleRequest=new SampleAnalysisRequest(session,dimension,net.minecraft.world.InteractionHand.MAIN_HAND);
+        var sample=new SampleAnalysisPayload(session,dimension,List.of("水"));
+        var buffer=new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            ProcessTrendRequest.CODEC.encode(buffer,trendRequest); require(trendRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"trend request codec");
+            ProcessTrendPayload.CODEC.encode(buffer,trend); require(trend.equals(ProcessTrendPayload.CODEC.decode(buffer)),"trend response codec");
+            SampleAnalysisRequest.CODEC.encode(buffer,sampleRequest); require(sampleRequest.equals(SampleAnalysisRequest.CODEC.decode(buffer)),"sample request codec");
+            SampleAnalysisPayload.CODEC.encode(buffer,sample); require(sample.equals(SampleAnalysisPayload.CODEC.decode(buffer)),"sample response codec");
+        } finally { buffer.release(); }
+    }
 
 	private static void validateDemoWorkbenchCodecs() {
 		UUID player = new UUID(97, 101), session = new UUID(103, 107), otherPlayer = new UUID(109, 113);
