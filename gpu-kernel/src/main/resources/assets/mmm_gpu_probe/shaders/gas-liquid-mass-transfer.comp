@@ -1100,7 +1100,9 @@ void momentum(int id) {
     writeDouble(workField(FIELD_FACE_HEAT)+4*id,heatA);
     writeDouble(workField(FIELD_FACE_HEAT)+4*id+2,heatB);
 }
-double liquidHeatCapacity(int c,int lr,int material) {
+double liquidHeatWeight(int lr,int material,bool heating) {
+    if(phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr)<=0l)return 0.0LF;
+    if(!heating)return max(0.0LF,phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER),lr)-liquidCold(lr,material));
     double capacity;liquidRowTemperature(lr,material,capacity);return capacity;
 }
 double gasHeatCapacity(int c) {
@@ -1114,39 +1116,31 @@ void cellHeat(int c) {
         heat+=readDouble(workField(FIELD_FACE_HEAT)+4*cellFace(c,axis,side)+2*(side==0?1:0));
     if(heat==0.0LF)return;
     if(!isFinite(heat)){reportInvalid();return;}
-    int materials=headerWord(H_MATERIAL_COUNT);double gasCapacity=gasHeatCapacity(c),gasDelta=0.0LF;
-    double gasMargin=gasCapacity>0.0LF?max(0.0LF,readDouble(gasField(GAS_INTERNAL_ENERGY)+2*c)-gasCold(c)):0.0LF;
-    double ownerCapacity=gasCapacity;for(int m=0;m<materials;m++)ownerCapacity+=liquidHeatCapacity(c,row(c,m),m);
-    double remaining=heat;
-    for(int round=0;round<materials+2 && remaining!=0.0LF;round++){
-        double sum=0.0LF;int lastLiquid=-1;
-        bool gasEligible=gasCapacity>0.0LF && (remaining>0.0LF || gasMargin+gasDelta>0.0LF);
+    int materials=headerWord(H_MATERIAL_COUNT),lastLiquid=-1;
+    bool heating=heat>0.0LF,hasOwner=readQuantity(workField(FIELD_GAS_NANOS)+2*c)>0l;
+    double gasWeight=hasOwner?(heating?gasHeatCapacity(c):max(0.0LF,readDouble(gasField(GAS_INTERNAL_ENERGY)+2*c)-gasCold(c))):0.0LF;
+    double sum=gasWeight,gasDelta=0.0LF,remaining=heat;
+    for(int m=0;m<materials;m++){
+        int lr=row(c,m);hasOwner=hasOwner || phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr)>0l;
+        double weight=liquidHeatWeight(lr,m,heating);
+        sum+=weight;if(weight>0.0LF)lastLiquid=m;
+    }
+    // Heating follows heat capacity; cooling removes the same fraction of each phase's available sensible energy.
+    if(sum>0.0LF){
+        if(!heating && -heat>sum){reportInvalid();return;}
         for(int m=0;m<materials;m++){
-            int lr=row(c,m);double capacity=liquidHeatCapacity(c,lr,m);
-            if(capacity>0.0LF && (remaining>0.0LF || phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER),lr)>liquidCold(lr,m))){sum+=capacity;lastLiquid=m;}
+            int lr=row(c,m);double weight=liquidHeatWeight(lr,m,heating);
+            if(weight<=0.0LF)continue;
+            double share=gasWeight==0.0LF && m==lastLiquid?remaining:heat*(weight/sum);
+            if(!heating)share=max(share,-weight);
+            int energy=phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_ENERGY)+2*lr;
+            writeDouble(energy,readDouble(energy)+share);remaining-=share;
         }
-        if(gasEligible)sum+=gasCapacity;
-        if(sum<=0.0LF)break;
-        double requested=remaining;
-        for(int m=0;m<materials;m++){
-            int lr=row(c,m);double capacity=liquidHeatCapacity(c,lr,m);
-            double energy=phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER),lr);
-            double margin=capacity>0.0LF?max(0.0LF,energy-liquidCold(lr,m)):0.0LF;
-            if(capacity<=0.0LF || (requested<0.0LF && margin<=0.0LF))continue;
-            double share=!gasEligible && m==lastLiquid?remaining:requested*capacity/sum;
-            if(share<0.0LF)share=max(share,-margin);
-            writeDouble(phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_ENERGY)+2*lr,energy+share);
-            remaining-=share;
-        }
-        if(gasEligible){
-            double share=remaining;
-            if(share<0.0LF)share=max(share,-max(0.0LF,gasMargin+gasDelta));
-            gasDelta+=share;remaining-=share;
-        }
+        if(gasWeight>0.0LF){gasDelta=heating?remaining:max(remaining,-gasWeight);remaining-=gasDelta;}
     }
     if(gasDelta!=0.0LF){writeDouble(workField(FIELD_GAS_TRANSFER)+2*c,gasDelta);words[workField(FIELD_GAS_TRANSFER_TARGET)+c]=uint(c);}
     if(remaining!=0.0LF){
-        if(ownerCapacity>0.0LF){reportInvalid();return;}
+        if(hasOwner){reportInvalid();return;}
         int device=int(words[workField(FIELD_SURFACE_RECEIVER)+c]);
         if(device>=0){int at=workField(FIELD_WALL_RESERVATION)+2*device;int64_t raw=atomicAdd(longs[at/2],0l);
             for(;;){double old=packDouble2x32(uvec2(uint(raw),uint(uint64_t(raw)>>32))),next=old+remaining;
