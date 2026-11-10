@@ -210,7 +210,11 @@ final class FluidWorldTargetResolver {
 				double volume=host.volume(cell[0],cell[1],cell[2]);
 				double room=gasInput?host.cellGasVolume(cell[0],cell[1],cell[2]):host.cellCondensedRoom(cell[0],cell[1],cell[2]);
 				if(room<=0)continue;
-				if(solidInput ? volume>bestVolume || volume==bestVolume && room>bestRoom : room>bestRoom)
+				if(quantity instanceof mmm.api.transfer.TransferQuantity.Liquid && host.unitScale().cubicMeters(room)<1e-9)continue;
+				boolean preferred=solidInput ? volume>bestVolume || volume==bestVolume && room>bestRoom
+						: gasInput ? room>bestRoom
+						: best==null || cell[1]<best[1] || cell[1]==best[1] && room>bestRoom;
+				if(preferred)
 					{best=cell;bestVolume=volume;bestRoom=room;}
 				continue;
 			}

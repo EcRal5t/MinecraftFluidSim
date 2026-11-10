@@ -151,12 +151,14 @@ public final class IndustrialOperations {
         double sum=0,weight=0;var host=sensor.measure()==ProcessSensorBlockEntity.Measure.PRESSURE?region.hostSnapshot():null;
         for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
             int cell=region.grid().cell(x,y,z);if(cell<0||!region.groupAvailable(cell))continue;
+            double openVolume=Integer.bitCount((~region.solidMicroMask(x,y,z))&255)*h*h*h/8;
+            if(openVolume==0)continue;
             var liquid=region.observeCellInventory(x,y,z);
             switch(sensor.measure()){
                 case LEVEL->{sum+=liquid==null?0:liquid.liquidVolumeCubicMetres();weight+=Integer.bitCount((~region.solidMicroMask(x,y,z))&255)*h*h*h/8;}
                 case LIQUID_TEMPERATURE->{if(liquid!=null&&liquid.temperatureKelvin().isPresent()){sum+=liquid.temperatureKelvin().getAsDouble()*liquid.liquidMassKilograms();weight+=liquid.liquidMassKilograms();}}
                 case GAS_TEMPERATURE->{var carriers=region.observeCellCarriers(x,y,z);var gas=carriers==null?null:carriers.gas();if(gas!=null){double mass=gas.components().stream().mapToDouble(mmm.fluid.CellCarrierInventoryView.ComponentAmount::massKilograms).sum();sum+=gas.temperatureKelvin()*mass;weight+=mass;}}
-                case PRESSURE->{sum+=host.pressure(x,y,z)+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA;weight++;}
+                case PRESSURE->{sum+=(host.pressure(x,y,z)+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA)*openVolume;weight+=openVolume;}
                 case FLOW->throw new IllegalStateException("Flow is sampled from accepted faces");
             }
         }

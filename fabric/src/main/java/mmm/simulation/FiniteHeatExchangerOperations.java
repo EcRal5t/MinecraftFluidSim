@@ -35,7 +35,7 @@ import net.minecraft.world.item.context.UseOnContext;
 
 /** Region HEAD owns installed bodies; a typed WAL converges the world slot and item save domains. */
 public final class FiniteHeatExchangerOperations {
-	private static final String PROVIDER = "mmm:finite_heat_exchanger";
+	static final String PROVIDER = "mmm:finite_heat_exchanger";
 	private static final String DELIVERY_TAG = "mmm_device_delivery:";
 	public enum FaultPoint { NONE, AFTER_PREPARED, AFTER_COMMIT_READY, AFTER_HEAD, AFTER_WORLD, AFTER_ITEM, AFTER_PERSIST }
 	private final MinecraftServer server;
@@ -159,6 +159,13 @@ public final class FiniteHeatExchangerOperations {
 	public FaultPoint fault() { return fault; }
 	public void setFault(FaultPoint value) { fault=java.util.Objects.requireNonNull(value); }
 
+    static FiniteThermalDeviceState newDevice(ThermalRegistry registry,BlockPos position,double temperature) {
+        var definition=registry.finiteDevice(PROVIDER);
+        double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(
+                registry.materialHandle(definition.thermalMaterialId()),definition.bodyMassKilograms(),Map.of(),temperature);
+        return new FiniteThermalDeviceState(PROVIDER,Long.toString(position.asLong()),PROVIDER,
+                new FiniteThermalBodyState(0,registry.fingerprint(),definition.thermalMaterialId(),definition.bodyMassUnits(),energy));
+    }
 	private InteractionResult install(ServerPlayer player,InteractionHand hand,BlockPos position) {
 		ServerLevel level=player.level();
 		try {
@@ -175,12 +182,7 @@ public final class FiniteHeatExchangerOperations {
 			if (encoded==null) {
 				if (!ItemStack.isSameItemSameComponents(source,new ItemStack(MmmBlocks.FINITE_HEAT_EXCHANGER)))
 					throw new IllegalArgumentException("空设备物品组件不完整");
-				var definition=registry.finiteDevice(PROVIDER);
-				double energy=new ThermalStateFunction(registry).internalEnergyAtTemperature(
-						registry.materialHandle(definition.thermalMaterialId()),definition.bodyMassKilograms(),
-						Map.of(),definition.initialTemperatureK());
-				body=new FiniteThermalDeviceState(PROVIDER,Long.toString(position.asLong()),PROVIDER,
-						new FiniteThermalBodyState(0,registry.fingerprint(),definition.thermalMaterialId(),definition.bodyMassUnits(),energy));
+				body=newDevice(registry,position,registry.finiteDevice(PROVIDER).initialTemperatureK());
 			} else {
 				body=FiniteThermalDeviceItemCodec.decode(encoded);
 				if (!PROVIDER.equals(body.providerId()) || !PROVIDER.equals(body.deviceTypeId())
@@ -450,7 +452,7 @@ public final class FiniteHeatExchangerOperations {
 		region.replaceDevicePorts(devicePorts,connections);
 	}
 
-	private List<FluidDomainContracts.ThermalPortRequest> ports(FluidRegion region,BlockPos position,
+	static List<FluidDomainContracts.ThermalPortRequest> ports(FluidRegion region,BlockPos position,
 			FiniteThermalDeviceDefinition definition,ThermalRegistry registry) {
 		var requests=new ArrayList<FluidDomainContracts.ThermalPortRequest>();
 		double h=region.solverConfig().cellSize();

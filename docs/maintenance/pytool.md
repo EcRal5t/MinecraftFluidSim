@@ -27,8 +27,8 @@
   - 运行方式：`uv run pytool/water_melting_curve.py`
 
 - **[distillation_reference.py](../../pytool/distillation_reference.py)**
-  - 用途：读取生产物性，计算水—乙醇理想气液平衡及逐级完全冷凝参照
-  - 运行方式：`uv run pytool/distillation_reference.py [--pressure-pa 101325] [--contacts 4] [--ethanol-volume-fraction 0.5]`
+  - 用途：读取生产物性，计算水—乙醇理想气液平衡、逐级完全冷凝与有限批次 Rayleigh 蒸馏切割参照
+  - 运行方式：`uv run pytool/distillation_reference.py [--pressure-pa 101325] [--contacts 4] [--ethanol-volume-fraction 0.5] [--feed-volume-litres 100] [--cut-volume-fraction 0.2]`
 
 `arch_baseline.py` 的输出反映运行时的源码。架构重整完成时的数字保存在 [历史基线](../archive/maintenance/architecture-baseline.md)。`unused_imports.py` 的结果供人工核对，Java 编译仍负责检查类型和依赖。
 

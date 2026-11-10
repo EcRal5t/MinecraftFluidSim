@@ -43,9 +43,19 @@ public final class IndustrialWorkbench {
         }));
     }
     public static String build(ServerPlayer player, IndustrialLayout.Scenario scenario) {
-        var level=player.level();var runtime=MmmRuntimeRegistry.require(level.getServer());
         var minimum=player.blockPosition().relative(player.getDirection(),6).above(2);
-        var layout=IndustrialLayout.at(minimum,scenario);var blocks=layout.blocks();
+        var layouts=scenario==IndustrialLayout.Scenario.DISTILLATION
+                ?java.util.List.of(IndustrialLayout.at(minimum,IndustrialLayout.Scenario.DISTILLATION_SINGLE),
+                        IndustrialLayout.at(minimum.offset(8,0,0),IndustrialLayout.Scenario.DISTILLATION_SINGLE))
+                :java.util.List.of(IndustrialLayout.at(minimum,scenario));
+        for(var layout:layouts)requireBuildSpace(player.level(),layout);
+        var controllers=new ArrayList<String>();
+        for(var layout:layouts){buildUnit(player,layout);controllers.add(layout.controller().toShortString());}
+        return "装置已建立："+scenario+"；控制器位于 "+String.join("、",controllers)
+                +(layouts.size()==2?"；将第一台收集的馏分桶移入第二台进料箱":"");
+    }
+    private static void requireBuildSpace(net.minecraft.server.level.ServerLevel level,IndustrialLayout layout) {
+        var blocks=layout.blocks();
         int minX=blocks.keySet().stream().mapToInt(BlockPos::getX).min().orElseThrow(),maxX=blocks.keySet().stream().mapToInt(BlockPos::getX).max().orElseThrow();
         int minY=blocks.keySet().stream().mapToInt(BlockPos::getY).min().orElseThrow(),maxY=blocks.keySet().stream().mapToInt(BlockPos::getY).max().orElseThrow();
         int minZ=blocks.keySet().stream().mapToInt(BlockPos::getZ).min().orElseThrow(),maxZ=blocks.keySet().stream().mapToInt(BlockPos::getZ).max().orElseThrow();
@@ -54,6 +64,9 @@ public final class IndustrialWorkbench {
             if(!level.hasChunkAt(p)||!level.isInWorldBounds(p)||!level.isInsideBuildHeight(p)||!level.isEmptyBlock(p))
                 throw new IllegalStateException("请在已加载的空地建造："+p.toShortString());
         }
+    }
+    private static void buildUnit(ServerPlayer player,IndustrialLayout layout) {
+        var level=player.level();var runtime=MmmRuntimeRegistry.require(level.getServer());var blocks=layout.blocks();
         var placed=new ArrayList<BlockPos>();
         try {
             for(var entry:blocks.entrySet()) {
@@ -95,6 +108,8 @@ public final class IndustrialWorkbench {
             var registry=runtime.worldRegistries().thermalRegistry();
             new OrdinaryThermalWalls(registry,new ThermalBoundaryResolver(registry)).refresh(level,region,FluidRegionFactory.CELLS_PER_BLOCK);
             initializeThermal(region,layout,registry);
+            for(var wall:layout.walls())if(blocks.get(wall.position()).is(mmm.block.MmmBlocks.FINITE_HEAT_EXCHANGER))
+                ((mmm.block.FiniteHeatExchangerBlockEntity)level.getBlockEntity(wall.position())).bind(region.id(),Long.toString(wall.position().asLong()));
         }
         var held=player.getItemInHand(InteractionHand.MAIN_HAND);
         if(!held.isEmpty()&&held.getCount()==1) {
@@ -112,13 +127,14 @@ public final class IndustrialWorkbench {
                 }
             } catch(IllegalArgumentException ignored) { }
         }
-        return "装置已建立："+scenario+"；控制器位于 "+layout.controller().toShortString();
     }
     static void initializeThermal(FluidRegion region,IndustrialLayout layout,mmm.thermal.ThermalRegistry registry) {
         var inventory=region.finiteThermalDevices(registry.fingerprint());
+        for(var wall:layout.walls())if(layout.blocks().get(wall.position()).is(mmm.block.MmmBlocks.FINITE_HEAT_EXCHANGER))
+            inventory=inventory.insertExternal(FiniteHeatExchangerOperations.newDevice(registry,wall.position(),wall.temperatureK()));
         var devices=new ArrayList<>(inventory.devices());
         for(var wall:layout.walls()) {
-            if(layout.blocks().get(wall.position()).is(mmm.block.MmmBlocks.THERMAL_RESERVOIR))continue;
+            if(layout.blocks().get(wall.position()).is(mmm.block.MmmBlocks.THERMAL_RESERVOIR)||layout.blocks().get(wall.position()).is(mmm.block.MmmBlocks.FINITE_HEAT_EXCHANGER))continue;
             int i=findWall(devices,wall.position());var device=devices.get(i);var body=device.body();
             double energy=mmm.thermal.SurfaceThermalState.energyAtTemperature(registry,device,wall.temperatureK());
             devices.set(i,new mmm.thermal.FiniteThermalDeviceState(device.providerId(),device.objectId(),device.deviceTypeId(),

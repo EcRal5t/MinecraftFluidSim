@@ -251,7 +251,9 @@ final class GpuControllerFixture {
         var attached=new java.util.ArrayList<mmm.fluid.FluidStateAccess.DevicePort>();
         var connections=new java.util.ArrayList<int[]>();
         for(var device:region.finiteThermalDevices(registry.fingerprint()).devices()) {
-            var ports=OrdinaryThermalWalls.ports(region,device,registry);
+            var ports=device.providerId().equals(FiniteHeatExchangerOperations.PROVIDER)
+                    ?FiniteHeatExchangerOperations.ports(region,BlockPos.of(Long.parseLong(device.objectId())),registry.finiteDevice(device.deviceTypeId()),registry)
+                    :OrdinaryThermalWalls.ports(region,device,registry);
             attached.addAll(ports.stream().map(port->new mmm.fluid.FluidStateAccess.DevicePort(device.providerId(),device.objectId(),port)).toList());
             connections.add(ports.stream().mapToInt(port->region.grid().cell(port.cellX(),port.cellY(),port.cellZ())).distinct().toArray());
         }
