@@ -1102,7 +1102,8 @@ public final class GpuProcessFlowsValidation {
                         if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(priming[stage])){priming[stage]=ethanolSolution(world,380,1);supplied=Math.addExact(supplied,chemicalMass(priming[stage],world));suppliedVolume=Math.addExact(suppliedVolume,1_000_000_000L);}
                         var inlet=trayGeometry.get(stage).inlet();
                         var configured=layout.ports().stream().filter(port->port.position().equals(inlet)).findFirst().orElseThrow();
-                        int[] port=industrialPortCell(region,configured);long quota=IndustrialOperations.tickQuota(configured.rate(),tick);
+                        int[] port=industrialPortCell(region,configured);
+                        long quota=IndustrialOperations.tickQuota(filling?configured.rate():layout.ports().get(2).rate(),tick);
                         var block=region.origin().offset(port[0]/2,port[1]/2,port[2]/2);
                         if(FluidWorldTargetResolver.transferCell(region,block,configured.outward(),new mmm.api.transfer.TransferQuantity.Liquid(quota,OptionalDouble.empty()),false)!=null)
                             priming[stage]=fixture.transferBox(priming[stage],port,configured.outward(),false,quota);

@@ -146,7 +146,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、取样及驱动配置恢复。
 - [IndustrialOperations](../../fabric/src/main/java/mmm/simulation/IndustrialOperations.java)、[IndustrialDialogs](../../fabric/src/main/java/mmm/simulation/IndustrialDialogs.java)：物料箱、端口调度、阀门占容、传感器与原生交互面板。
 - [MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)、[GasContents](../../model/src/main/java/mmm/transfer/GasContents.java)：有限批次与气体载荷。
-- [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)、[IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：共享三维方块布局、有限墙初始化与工艺验证。
+- [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)、[IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：共享三维方块布局、有限墙初始化与工艺验证；离线夹具按正式碰撞采样入口生成微盒占据。
 - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交；[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 的 `manualStep` 负责原生单步输入和实体响应，失败采用共同暂停分类。
 - [FluidRegion](../../fabric/src/main/java/mmm/simulation/FluidRegion.java)：已提交代、`hostSnapshot`、`beginHostEdit/commitHostEdit` 和设备候选采用。
 - [VulkanFluidSolverBackend](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidSolverBackend.java)、[VulkanFluidStateCodec](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidStateCodec.java)：设备请求、导入与导出。
@@ -156,7 +156,11 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 设备准备同代固定几何、相占据与物性，以共享有限应变冲量结算黏性，再计算力和一个有界批次的半隐式共同压力。上风开放微盒与液面平面裁剪普通面扫掠需求，两相按有限驻留时间接受出流，共同面速度由实际接受量确定。运动体的压力、反冲与外功使用源态共同压力；目标姿态关闭孔容时，沿源开放面的连通关系将库存直接重映射至仍有孔容的格。液气质量、组分、携带内能、动量与耗散热使用同一组路由，局部状态方程和气体压缩功按后继库存与目标孔容结算。无可达接收空间时保留已提交状态与世界刷新请求。
 
-液体输运按来源温度、各份实际质量与组成分配携带内能；液体热容由载体材料曲线和质量决定。导热、反应和相变按完整请求时长执行，热与传质共用输运后的接触几何。导热按载体的有限热容和接触热导计算成对热量，两端使用相同接受量，有限墙与流体共用这一规则；高刚性接触会减慢趋近平衡的速度。机械能结算后交接目标面数据，使扩散的面惯量与动量保持同代。阶段间更新组成、温度和局部状态方程，提交前统一重建相形状。相转换共用液相候选行，按精确库存接受完整物种批次并为残余物种保留实际质量和体积，各算子保存实际物料及能量账；气液接触将局部提案与实际交换合并录制。独立热步使用同一候选与提交协议，相变产生的待位移状态交给后续力学处理。算法和尺度限制见[流体求解](fluid-solver.md)、[气体](gas-state.md)和[热学](thermal-state.md)。
+液体输运按来源温度、各份实际质量与组成分配携带内能；液体热容由载体材料曲线和质量决定。导热、反应和相变按完整请求时长执行，共用输运后的接触几何。导热以载体有限热容和接触热导计算成对热量，流体与有限墙的两端使用同一接受量；高刚性接触会减慢趋近平衡的速度。
+
+相转换共用液相候选行，按精确库存接受完整物种批次，为残余物种保留实际质量和体积，并保存实际物料和能量账。气液接触合并录制局部提案与交换，每批依据已接受库存计算共同压力，湿面与干壁复用同一状态方程。各阶段更新组成、温度和局部热力学状态，提交前统一重建相形状。
+
+机械能结算后交接目标面数据，使扩散的面惯量与动量保持同代。独立热步沿用同一候选与提交协议，相变产生的待位移状态交给后续力学处理。算法与尺度见[流体求解](fluid-solver.md)、[气体](gas-state.md)和[热学](thermal-state.md)。
 
 固定表面附着在有限墙的指定面，表面材料、装填量、吸附物与分数量子进度随设备库存和物品事务交接。气体接触按实际开放面积、有限位点和局部分压交换物种，实际质量、动量与内能进入共同候选；墙与涂层、吸附物共享总内能和温度。催化表面按液体实际接触面积等比例改变已有反应的正逆速率，继续使用共同的反应物竞争与热结算。筛面接触使用筛实体面积，普通墙使用实际接触面。
 
@@ -180,7 +184,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [FixedSurfaceState](../../model/src/main/java/mmm/thermal/FixedSurfaceState.java)、[SurfaceMaterialDefinition](../../model/src/main/java/mmm/thermal/SurfaceMaterialDefinition.java)、[SurfaceThermalState](../../model/src/main/java/mmm/thermal/SurfaceThermalState.java)：固定表面库存、数据定义与有限墙温度；[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java) 结算实际吸附与解吸，[VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java) 应用接触催化。
 - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidThermodynamics.java)、[liquid-caloric-state.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-caloric-state.glsl)：载体分段热容和温度反演，供库存与扩散携能共用。
 - [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasThermodynamics.java)、[gas-thermodynamics.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp)：气体组成物性和分段温度反演；组成改变时完整求值，纯内能变化复用当前热容段，跨段时执行相同的完整求值。
-- [VulkanLiquidDiffusion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidDiffusion.java)、[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java)：同相扩散，以及 Henry 与多挥发组分共用的有限速率气液交换。
+- [VulkanLiquidDiffusion](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidDiffusion.java)、[VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpu/VulkanGasLiquidMassTransfer.java)：同相扩散，以及 Henry 与多挥发组分共用的有限速率气液交换；[mixture-pressure-eos.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/mixture-pressure-eos.glsl) 统一局部混合状态和相变接受批次的压力求值。
 - [VulkanSolidLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanSolidLiquidReactions.java)、[VulkanCondensedPhaseChange](../../gpu-kernel/src/main/java/mmm/gpu/VulkanCondensedPhaseChange.java)：颗粒溶解析出和凝固融化，沿同一库存、动量和内能候选提交。
 - [ChemicalReaction](../../model/src/main/java/mmm/chemistry/ChemicalReaction.java)、[ChemicalRegistry](../../model/src/main/java/mmm/chemistry/ChemicalRegistry.java)、[VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanLiquidReactions.java)：计量定义、温度相关正逆动力学、共同反应物竞争与内能结算。`runGpuLiquidReactionsValidation` 覆盖快速反应、竞争、可逆平衡、温度反馈和小量进度恢复。
 - [VulkanShaderLayout](../../gpu-kernel/src/main/java/mmm/gpu/VulkanShaderLayout.java) 与各阶段的 `Header/Field`：从宿主布局声明生成 shader 字段常量。

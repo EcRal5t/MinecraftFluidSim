@@ -122,12 +122,12 @@ final class GpuControllerFixture {
         var host=region.editableHost();int scale=FluidRegionFactory.CELLS_PER_BLOCK;var origin=region.origin();
         for(var entry:layout.blocks().entrySet()) {
             var position=entry.getKey();var state=entry.getValue();
-            boolean iron=state.is(net.minecraft.world.level.block.Blocks.IRON_BLOCK)||state.is(net.minecraft.world.level.block.Blocks.STONE),valve=state.is(mmm.block.MmmBlocks.VALVE);
-            if(!iron&&!valve)continue;
+            var shape=state.getCollisionShape(net.minecraft.world.level.EmptyBlockGetter.INSTANCE,position);
+            byte[] masks=MinecraftCollisionWorldPort.sampleBlockMasks(shape,scale);
             for(int z=0;z<scale;z++)for(int y=0;y<scale;y++)for(int x=0;x<scale;x++) {
                 int cx=(position.getX()-origin.getX())*scale+x,cy=(position.getY()-origin.getY())*scale+y,cz=(position.getZ()-origin.getZ())*scale+z;
                 if(region.grid().cell(cx,cy,cz)<0)continue;
-                int mask=iron?255:FluidRegionWorldInteraction.sampleCutCellMask(mmm.block.ValveBlock.shutter(state),x,y,z,scale,1e-7);
+                int mask=masks[(z*scale+y)*scale+x]&255;
                 host.setSolidMicroMask(cx,cy,cz,mask);
             }
         }
