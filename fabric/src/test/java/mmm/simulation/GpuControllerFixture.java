@@ -187,7 +187,7 @@ final class GpuControllerFixture {
 		initializeContainerDefaults();
 		componentsInitialized = true;
 	}
-	private static synchronized void initializeIndustrialBlocks() {
+	static synchronized void initializeIndustrialBlocks() {
 		if(industrialBlocksInitialized)return;
 		try {
 			registerOffline(net.minecraft.core.registries.BuiltInRegistries.BLOCK, true, () -> {
@@ -196,7 +196,7 @@ final class GpuControllerFixture {
 					catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
 				}); } catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
 			});
-			initializeContainerDefaults();initializeThermalWallTags();industrialBlocksInitialized=true;
+			initializeContainerDefaults();if(!Boolean.getBoolean("mmm.validation.fabricStorage"))initializeThermalWallTags();industrialBlocksInitialized=true;
 		} catch(ReflectiveOperationException failure) { throw new IllegalStateException("Cannot initialize offline industrial blocks",failure); }
 	}
 	private static void initializeThermalWallTags() {
@@ -285,6 +285,11 @@ final class GpuControllerFixture {
 			} catch (ReflectiveOperationException cleanup) { failure.addSuppressed(cleanup); }
 			throw failure;
 		}
+		if (Boolean.getBoolean("mmm.validation.fabricStorage")) {
+			holders.set(registry, originalHolders);
+			frozen.setBoolean(registry, originalFrozen);
+			return;
+		}
 		try {
 			tags.set(registry, emptyTags);
 			registry.freeze();
@@ -343,35 +348,47 @@ final class GpuControllerFixture {
 		Direction outward=cell[0]==0?Direction.WEST:cell[0]==region.sizeX()-1?Direction.EAST:cell[2]==0?Direction.NORTH:cell[2]==region.sizeZ()-1?Direction.SOUTH:cell[1]==0?Direction.DOWN:Direction.UP;
 		return transferBox(batch,cell,outward,extract,maximum);
     }
+    record BoxAttempt(IndustrialOperations.PortTransfer result, Actor actor, ContainerRecoveryCoordinator recovery,
+                      MinecraftContainerTransactionAdapter adapter, ContainerTransferActor.BlockInventory identity, int[] cell) { }
     ItemStack transferBox(ItemStack batch, int[] cell, Direction outward, boolean extract, long maximum) throws IOException {
-		if(maximum<=0)return batch;
-		var quantity=batch.getItem() instanceof mmm.item.GasContainerItem?new mmm.api.transfer.TransferQuantity.Gas(maximum,0)
-				:batch.getItem() instanceof mmm.item.GranularContainerItem?new mmm.api.transfer.TransferQuantity.Granular(maximum)
-				:new mmm.api.transfer.TransferQuantity.Liquid(maximum,java.util.OptionalDouble.empty());
-		int scale=FluidRegionFactory.CELLS_PER_BLOCK;var interior=region.origin().offset(cell[0]/scale,cell[1]/scale,cell[2]/scale);
-		cell=FluidWorldTargetResolver.transferCell(region,interior,outward,quantity,extract);
-		if(cell==null)return batch;
-        var before=mmm.block.MaterialBoxBlockEntity.newBatch(batch);
+        var attempt=transferBoxAttempt(batch,cell,outward,extract,maximum,mmm.application.ContainerTransferCoordinator.FaultPoint.NONE,false);
+        if(attempt==null || attempt.result().transaction()==null) return batch;
+        var transaction=attempt.result().transaction();
+        if(transaction.status()==mmm.application.ContainerTransferUseCase.Status.NOT_TRANSFERRED)return batch;
+        if(transaction.status()!=mmm.application.ContainerTransferUseCase.Status.COMMITTED || attempt.result().pending())
+            throw new IllegalStateException("Box transfer "+transaction.status()+": "+attempt.result().diagnostic());
+        return attempt.actor().current.copy();
+    }
+    BoxAttempt transferBoxAttempt(ItemStack batch,int[] cell,Direction outward,boolean extract,long maximum,
+            mmm.application.ContainerTransferCoordinator.FaultPoint fault,boolean failBeforeSave) throws IOException {
+        return transferBoxAttempt(batch,cell,outward,extract,maximum,fault,failBeforeSave,null);
+    }
+    BoxAttempt transferBoxAttempt(ItemStack batch,int[] cell,Direction outward,boolean extract,long maximum,
+            mmm.application.ContainerTransferCoordinator.FaultPoint fault,boolean failBeforeSave,int[] saves) throws IOException {
+        if(maximum<=0)return null;
+        var quantity=batch.getItem() instanceof mmm.item.GasContainerItem?new mmm.api.transfer.TransferQuantity.Gas(maximum,0)
+                :batch.getItem() instanceof mmm.item.GranularContainerItem?new mmm.api.transfer.TransferQuantity.Granular(maximum)
+                :new mmm.api.transfer.TransferQuantity.Liquid(maximum,java.util.OptionalDouble.empty());
+        int scale=FluidRegionFactory.CELLS_PER_BLOCK;var interior=region.origin().offset(cell[0]/scale,cell[1]/scale,cell[2]/scale);
+        cell=FluidWorldTargetResolver.transferCell(region,interior,outward,quantity,extract);
+        if(cell==null)return null;
+        var before=batch.get(mmm.item.MmmComponents.TRANSFER_ACTOR)==null
+                ?mmm.block.MaterialBoxBlockEntity.newBatch(batch):batch.copy();
         var state=mmm.transfer.TransferActorState.decode(before.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
         var identity=new ContainerTransferActor.BlockInventory(region.dimension().identifier().toString(),
                 region.origin().getX()-1,region.origin().getY(),region.origin().getZ(),0,state.instanceId(),state.generation());
         var boxActor=new Actor(actor.path.resolveSibling("controller-fixture-box.txt"),actor.operations,actor.manager,world,identity);
-        boxActor.current=before.copy();boxActor.persist();
+        boxActor.current=before.copy();
         var boxRecovery=new ContainerRecoveryCoordinator(journal,boxActor,Map.of(),Set.of());
         var adapter=new MinecraftContainerTransactionAdapter(actor.manager,actor.operations,boxRecovery,
                 world.profile().profileFingerprint(),world.thermalRegistryFingerprint());
-        var resolution=MinecraftContainerTransferPlan.resolveDirected(adapter,world,region,cell,before,extract);
-        if(!resolution.resolved())return batch;
-        var plan=resolution.plan();long requested=Math.min(maximum,plan.requestedAmount());
-        var result=adapter.executeForRegion(region,identity,before,plan.sourceStack(),
-                extract?ContainerTransferJournal.Operation.EXTRACT:ContainerTransferJournal.Operation.INSERT,
-                plan.resourceKind(),requested,plan.baseAmount(),plan::executeExact,(raw,old)->raw,null);
-        if(result.status()==mmm.application.ContainerTransferUseCase.Status.NOT_TRANSFERRED)return batch;
-        if(result.status()!=mmm.application.ContainerTransferUseCase.Status.COMMITTED)
-            throw new IllegalStateException("Box transfer "+result.status()+": "+result.outcome().message());
-        boxActor.current=result.outcome().stack().copy();adapter.completeCommitted(result.transactionId());
-        if(boxRecovery.hasPending(region.id()))throw new IllegalStateException("box transaction remains pending");
-        return boxActor.current;
+        adapter.setFault(fault);
+        var result=IndustrialOperations.transferBatch(adapter,boxRecovery,world,region,cell,before,identity,extract,maximum,()->{
+            if(saves!=null)saves[0]++;
+            if(failBeforeSave)throw new IOException("Injected before-save failure");
+            boxActor.persist();
+        });
+        return new BoxAttempt(result,boxActor,boxRecovery,adapter,identity,cell);
     }
 
     void ventGas() throws IOException {
@@ -488,13 +505,14 @@ final class GpuControllerFixture {
         public long committedGeneration(UUID id) throws IOException { return operations.committedGeneration(id); }
         public long committedManifestChecksum(UUID id) throws IOException { return operations.committedManifestChecksum(id); }
         public CrossDomainRecovery.ExternalTruth classifyActor(ContainerTransferJournal journal) {
-            var value = ContainerItemMapper.fingerprint(current);
-            if (value.equals(journal.beforeItem())) return CrossDomainRecovery.ExternalTruth.BEFORE;
-            if (value.equals(journal.afterItem())) return CrossDomainRecovery.ExternalTruth.AFTER;
-            return CrossDomainRecovery.ExternalTruth.THIRD;
+            var state=journal.actor() instanceof ContainerTransferActor.BlockInventory block && block.inventoryId()!=null
+                    ?mmm.transfer.TransferActorState.decode(current.get(mmm.item.MmmComponents.TRANSFER_ACTOR)):null;
+            return MinecraftContainerActorAdapter.classifyInventory(ContainerItemMapper.fingerprint(current),state,journal,false);
         }
         public ContainerRecoveryCoordinator.Convergence applyAfterItem(ContainerTransferJournal journal) {
-            current = ContainerItemMapper.toStack(journal.afterItem());
+            current = ContainerItemMapper.toStack(journal.afterItem(),current);
+            if(journal.actor() instanceof ContainerTransferActor.BlockInventory block)
+                MinecraftContainerActorAdapter.attachAfterGeneration(current,block);
             return ContainerRecoveryCoordinator.Convergence.APPLIED;
         }
         public void persistAfterItem(ContainerTransferActor ignored) throws IOException { persist(); }

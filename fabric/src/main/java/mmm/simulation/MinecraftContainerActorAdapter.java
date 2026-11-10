@@ -100,7 +100,7 @@ final class MinecraftContainerActorAdapter {
 				&& !(matches(current, journal.afterItem()) && matchesGeneration(current,actor,true))) {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
-		player.setItemInHand(hand, ContainerItemMapper.toStack(journal.afterItem()));
+		player.setItemInHand(hand, ContainerItemMapper.toStack(journal.afterItem(), current));
 		player.getInventory().setChanged();
 		return ContainerRecoveryCoordinator.Convergence.APPLIED;
 	}
@@ -117,12 +117,13 @@ final class MinecraftContainerActorAdapter {
 				|| actor.slot() >= dispenser.getContainerSize()) {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
+		if (!IndustrialOperations.inventoryAvailable(dispenser)) return ContainerRecoveryCoordinator.Convergence.UNAVAILABLE;
 		ItemStack current = dispenser.getItem(actor.slot());
 		if (!(matches(current, journal.beforeItem()) && matchesGeneration(current,actor,false))
 				&& !(matches(current, journal.afterItem()) && matchesGeneration(current,actor,true))) {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
-		ItemStack after=ContainerItemMapper.toStack(journal.afterItem());
+		ItemStack after=ContainerItemMapper.toStack(journal.afterItem(), current);
 		attachAfterGeneration(after,actor);
 		dispenser.setItem(actor.slot(), after);
 		dispenser.setChanged();
@@ -149,6 +150,7 @@ final class MinecraftContainerActorAdapter {
 				if (owner == null || !owner.hasChunkAt(position)) yield null;
 				if (!(owner.getBlockEntity(position) instanceof net.minecraft.world.Container inventory)
 						|| dispenser.slot() >= inventory.getContainerSize()) yield ItemStack.EMPTY;
+				if (!IndustrialOperations.inventoryAvailable(inventory)) yield null;
 				yield inventory.getItem(dispenser.slot());
 			}
 		};

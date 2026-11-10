@@ -69,6 +69,26 @@ public final class ContainerItemMapper {
 		return stack;
 	}
 
+	/**
+	 * Rebuilds the journal inventory while retaining metadata from the actual container.
+	 * Recovery verifies the current fingerprint before using this method; the journal owns
+	 * inventory, thermal state, profile and actor identity, while other components remain on the item.
+	 */
+	public static ItemStack toStack(ContainerTransferJournal.ItemFingerprint snapshot, ItemStack current) {
+		ItemStack result = toStack(snapshot);
+		result.applyComponents(current.getComponentsPatch().forget(ContainerItemMapper::containerStateComponent));
+		return result;
+	}
+
+	private static boolean containerStateComponent(net.minecraft.core.component.DataComponentType<?> type) {
+		return type == MmmComponents.WATER_VOLUME || type == MmmComponents.FLUID_VOLUME
+				|| type == MmmComponents.MATERIAL_ID || type == MmmComponents.FLUID_MASS_UNITS
+				|| type == MmmComponents.MIXTURE_COMPONENTS || type == MmmComponents.CHEMICAL_CONTENTS
+				|| type == MmmComponents.GRANULAR_CONTENTS || type == MmmComponents.GAS_CONTENTS
+				|| type == MmmComponents.THERMAL_CONTENTS || type == MmmComponents.PROFILE_FINGERPRINT
+				|| type == MmmComponents.CREATIVE_SOURCE || type == MmmComponents.TRANSFER_ACTOR;
+	}
+
 	private static ContainerTransferJournal.ItemFingerprint materialFingerprint(ItemStack stack) {
 		if (MaterialBucketItem.isEmptyMaterialBucket(stack)) {
 			return withThermal(stack, snapshot(ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET));

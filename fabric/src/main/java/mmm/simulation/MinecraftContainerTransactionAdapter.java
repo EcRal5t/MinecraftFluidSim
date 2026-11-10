@@ -166,7 +166,7 @@ final class MinecraftContainerTransactionAdapter {
 				actor, before, source, operation, resourceKind, requestedAmount, baseAmount, publicOperationId));
 		ItemStack after;
 		try {
-			after = ContainerItemMapper.toStack(result.afterItem());
+			after = ContainerItemMapper.toStack(result.afterItem(), beforeStack);
 		} catch (RuntimeException invalidResult) {
 			return failed(operation, beforeStack,
 					"容器事务返回无法重建的 after item：" + invalidResult.getMessage(), result.transactionId());

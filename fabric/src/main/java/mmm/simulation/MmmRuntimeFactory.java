@@ -188,7 +188,7 @@ public final class MmmRuntimeFactory {
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes, new IndustrialOperations(targets,worldRegistries,transferApi,containerRecovery,availability,phaseWorkBarrier),worldUpdates);
+				worldRegistries, committedEvents, startup,transferApi, solverBackend, processes, new IndustrialOperations(startup,targets,worldRegistries,containerTransactions,containerRecovery,availability,phaseWorkBarrier,snapshots),worldUpdates);
 		} catch (RuntimeException | Error failure) {
 			try { solverBackend.close(); }
 			catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }

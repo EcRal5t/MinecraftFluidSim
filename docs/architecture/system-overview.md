@@ -119,7 +119,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 普通完整方块墙按方块位置与材料保存有限质量和内能，石、金属和玻璃的材料、接触参数及方块标签由数据包配置。墙的多个接触面共享同一载体，添加和移除按完整内能结算环境源汇。控制器创建时扫描相邻封闭空间，将共墙两侧纳入同一区域；两侧接触使用唯一墙库存与共同提交。已独立登记的区域保持各自归属，共墙登记冲突会报告位置；当前区域成员在创建时确定。显式温度源继续使用自身定义。普通墙和有限换热器共用设备库存、热接触、导热及存档。工业装置的世界建造与工艺验证共用同一方块标签、墙库存、端口与初始化规则；预热、冷却和表面装填按实际设备内能记入外部源汇。空区域解除归属和移除时，普通固定墙的完整热库存与账本随终态 checkpoint 归档；可取回设备需先拆卸。
 
-物料箱的九个槽保存玩家放入的实际容器，空槽保持为空；液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和回执提交；取样组成来自接触格，出料要求对应物相的容器。满箱和断料保持配置等待，暂停与卸载保留运行意图，到期供料唤醒休眠区域。持单个容器交换当前槽，空手取回，潜行空手切槽，探针打开选槽面板。容器离开箱体时移除箱内事务身份；未决交接保护对应槽位和箱体拆除。
+物料箱的九个槽保存玩家放入的实际容器，空槽保持为空；液体、颗粒与气体共用正式容器载荷及持久身份。容器接口连接外侧物料箱和内侧实际接触格，按设置的在线速率与红石信号执行计划、WAL、HEAD 和容器后态提交；取样组成来自接触格，出料要求对应物相的容器。内置端口直接使用共同容器事务，不占用公共外部 actor 注册额度。满箱和断料保持配置等待，暂停与卸载保留运行意图，到期供料唤醒休眠区域。持单个容器交换当前槽，空手取回，潜行空手切槽，探针打开选槽面板。容器离开箱体时移除箱内事务身份；未决交接保护对应槽位和箱体拆除。
 
 接口 `FACING` 指向外侧连接面，`mode` 方块状态由已保存的运行配置派生，配置后和加载后的首个 tick 同步给模型。传感器仪表朝向 `FACING`，默认测点位于反方向；模型随六向放置、旋转和镜像保持同一含义。配方、配方书解锁与获取顺序见[生存模式入门](../gameplay/survival-progression.md)，贴图与模型来源见[工业展示素材](../maintenance/visual-assets.md)。
 
@@ -147,6 +147,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [OrdinaryThermalWalls](../../fabric/src/main/java/mmm/simulation/OrdinaryThermalWalls.java)、[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)：普通墙库存、真实接触与有限设备。
 - [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、取样及驱动配置恢复。
 - [IndustrialOperations](../../fabric/src/main/java/mmm/simulation/IndustrialOperations.java)、[IndustrialDialogs](../../fabric/src/main/java/mmm/simulation/IndustrialDialogs.java)：物料箱、端口调度、阀门占容、传感器与原生交互面板。
+- [MaterialBoxItemStorage](../../fabric/src/main/java/mmm/simulation/MaterialBoxItemStorage.java)：九槽实际容器的 Fabric 自动化入口，完整物品组件、嵌套事务回滚和箱体占用；区域交接继续走持久容器事务。契约见[外部 API](external-api.md#fabric-物料箱自动化)。
 - [MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)、[GasContents](../../model/src/main/java/mmm/transfer/GasContents.java)：有限批次与气体载荷。
 - [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)、[IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：共享三维方块布局、有限墙初始化与工艺验证；离线夹具按正式碰撞采样入口生成微盒占据。
 - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交；[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 的 `manualStep` 负责原生单步输入和实体响应，失败采用共同暂停分类。

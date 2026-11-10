@@ -37,6 +37,7 @@ public final class MmmMod implements ModInitializer {
 		FluidProtocolServer.register();
 		mmm.simulation.SampleAnalysis.register();
 		mmm.network.ProcessTrendNetwork.register();
+		mmm.simulation.MaterialBoxItemStorage.register();
 		MmmCommands.register();
 		ServerLifecycleEvents.SERVER_STARTING.register(MmmRuntimeRegistry::start);
 		net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {

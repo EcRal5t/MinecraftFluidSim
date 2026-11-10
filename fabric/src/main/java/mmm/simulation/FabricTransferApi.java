@@ -231,7 +231,11 @@ final class FabricTransferApi implements MmmTransferApi {
 		var address=resolve(ref);if(!address.equals(binding.address())) throw new StaleActor("Persistent actor address cannot be rebound");
 		var level=level(address.dimensionId());var inventory=inventory(level,address);
 		if(inventory==null) {
-			if(level!=null && level.hasChunkAt(new BlockPos(address.blockX(),address.blockY(),address.blockZ()))) throw new StaleActor("Dispenser actor no longer exists");
+			var position=new BlockPos(address.blockX(),address.blockY(),address.blockZ());
+			if(level!=null && level.hasChunkAt(position)
+					&& level.getBlockEntity(position) instanceof mmm.block.MaterialBoxBlockEntity box && box.transferBusy())
+				throw new IllegalStateException("Material box transaction is in progress");
+			if(level!=null && level.hasChunkAt(position)) throw new StaleActor("Dispenser actor no longer exists");
 			throw new IllegalStateException("Dispenser actor is not loaded");
 		}
 		var item=inventory.getItem(address.slot());
@@ -245,7 +249,8 @@ final class FabricTransferApi implements MmmTransferApi {
 	}
 	private static net.minecraft.world.Container inventory(ServerLevel level,BlockInventoryAddress address) {
 		var position=new BlockPos(address.blockX(),address.blockY(),address.blockZ());
-		return level!=null && level.hasChunkAt(position) && level.getBlockEntity(position) instanceof net.minecraft.world.Container inventory?inventory:null;
+		return level!=null && level.hasChunkAt(position) && level.getBlockEntity(position) instanceof net.minecraft.world.Container inventory
+				&& IndustrialOperations.inventoryAvailable(inventory)?inventory:null;
 	}
 	private ServerLevel level(String dimension) {
 		for(var level:server.getAllLevels()) if(level.dimension().identifier().toString().equals(dimension)) return level;

@@ -17,6 +17,24 @@
 
 游戏内使用 `/mmm plant <场景>` 建造工业装置，物料箱和端口完成持续进出料，探针配置阀门、筛与测点。规定运动沿 `/mmm process drive <秒数>` 和机械驱动器执行；`/mmm process sample` 读取局部库存，`/mmm process stop` 停止驱动。区域状态使用 `/mmm regions checkpoint` 保存。
 
+### Fabric 物品自动化
+
+物料箱事务用例通过 Fabric Knot 加载实际数据组件和事务补丁，只初始化测试所需注册表，不启动客户端、服务器或世界。运行时依赖 Fabric mixin，使用独立任务：
+
+```powershell
+./gradlew.bat :fabric:runMaterialBoxStorageValidation --offline --no-daemon --max-workers=1
+```
+
+已覆盖九槽容量、六面及无方向 provider、缺失方块实体、三相容器完整载荷、默认水桶与含热水桶、内部身份隔离、嵌套提交和回滚、模拟跨箱搬运、槽位锁及失效视图。容器后态重建另检查自定义名称、显式删除组件、旧库存字段清除和恢复幂等。普通破坏与爆炸的前置保护已核对 Minecraft 调用顺序，世界事件场景留待服务器集成验证。
+
+Create 源码用于核对标准存储调用链；本项目当前没有 Create 26.2 依赖。上述结果覆盖 Fabric 接入基础，实际 Create 漏斗、机械臂和其他绑定按 [Create 适配计划](../roadmap/create-compatibility-plan.md) 验收。
+
+内置端口使用独立的 `industrial-port` 逻辑场景：先填满 1024 个公共 actor 注册名额，再通过生产 `transferBatch` 执行实际有限批次，检查配额、换批身份、提交前存盘失败及 HEAD 后故障恢复。另以 1 μmol 化学样品和 1 nL 配额检查可解析但无法分割的请求：保存回调为零，体积、质量、内能、HEAD 和 WAL 均保持不变。该入口不启动游戏世界或推进泵场景。
+
+```powershell
+./gradlew.bat :fabric:runHostValidation -PhostValidation=industrial-port --offline --no-daemon --max-workers=1
+```
+
 ### 工业装置
 
 工业流程使用 `IndustrialLayout` 的方块布局和生产容器事务。箱、端口、筛、热墙及表面材料加载正式数据，逐步输出来自已提交库存。端口额度按在线 tick 计算，离线夹具与游戏入口共用配额和实际接触格选择。

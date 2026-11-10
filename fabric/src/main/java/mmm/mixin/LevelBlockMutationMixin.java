@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** Pending soil slots retain their saved state while HEAD recovery owns their transition. */
+/** Protects world objects during their pending inventory and ownership transactions. */
 @Mixin(Level.class)
 public abstract class LevelBlockMutationMixin {
 	@Inject(method="setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;II)Z",at=@At("HEAD"),cancellable=true)
@@ -18,9 +18,19 @@ public abstract class LevelBlockMutationMixin {
 			CallbackInfoReturnable<Boolean> callback) {
 		if((Object)this instanceof ServerLevel level) {
 			var runtime=MmmRuntimeRegistry.find(level.getServer());
+			if (!state.is(mmm.block.MmmBlocks.MATERIAL_BOX)
+					&& !mmm.simulation.IndustrialOperations.allowsBoxRemoval(level,position)) {
+				callback.setReturnValue(false); return;
+			}
 			if(runtime!=null && (!runtime.farmlandMoisture().allowsBlockChange(level,position,state)
 					|| !runtime.pools().allowsBlockChange(level,position,state))) callback.setReturnValue(false);
 		}
+	}
+	@Inject(method="destroyBlock(Lnet/minecraft/core/BlockPos;ZLnet/minecraft/world/entity/Entity;I)Z",at=@At("HEAD"),cancellable=true)
+	private void mmm$protectBoxBeforeDrops(BlockPos position,boolean drops,net.minecraft.world.entity.Entity source,int recursion,
+			CallbackInfoReturnable<Boolean> callback) {
+		if((Object)this instanceof ServerLevel level && !mmm.simulation.IndustrialOperations.allowsBoxRemoval(level,position))
+			callback.setReturnValue(false);
 	}
 	@Inject(method="setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;II)Z",at=@At("RETURN"))
 	private void mmm$recordWorldChange(BlockPos position,BlockState state,int flags,int recursion,

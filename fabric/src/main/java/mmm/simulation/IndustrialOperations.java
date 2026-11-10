@@ -17,20 +17,24 @@ import net.minecraft.world.item.ItemStack;
 
 /** World block operations sharing the production region and durable inventory transfer entry points. */
 public final class IndustrialOperations {
+    private final WorldStartupCoordinator.Result startup;
     private final FluidWorldTargetResolver targets;
     private final CommittedWorldRegistries world;
-    private final MmmTransferApi transfers;
+    private final MinecraftContainerTransactionAdapter transactions;
+    private final FluidSnapshotPublisher snapshots;
     private final mmm.application.ContainerRecoveryCoordinator recovery;
     private final MinecraftRegionAvailability availability;
     private final MinecraftPendingPhaseWorkBarrier phaseWork;
-    IndustrialOperations(FluidWorldTargetResolver targets,CommittedWorldRegistries world,MmmTransferApi transfers,
-            mmm.application.ContainerRecoveryCoordinator recovery,MinecraftRegionAvailability availability,MinecraftPendingPhaseWorkBarrier phaseWork){
-        this.targets=targets;this.world=world;this.transfers=transfers;this.recovery=recovery;this.availability=availability;this.phaseWork=phaseWork;
+    IndustrialOperations(WorldStartupCoordinator.Result startup,FluidWorldTargetResolver targets,CommittedWorldRegistries world,MinecraftContainerTransactionAdapter transactions,
+            mmm.application.ContainerRecoveryCoordinator recovery,MinecraftRegionAvailability availability,MinecraftPendingPhaseWorkBarrier phaseWork,
+            FluidSnapshotPublisher snapshots){
+        this.startup=startup;this.targets=targets;this.world=world;this.transactions=transactions;this.recovery=recovery;this.availability=availability;this.phaseWork=phaseWork;this.snapshots=snapshots;
     }
     FluidRegion regionAt(ServerLevel level,BlockPos position){return targets.regionAtBlock(level,position);}
     public InteractionResult useBox(ServerPlayer player,InteractionHand hand,BlockPos position){
         var box=(MaterialBoxBlockEntity)player.level().getBlockEntity(position);
         var held=player.getItemInHand(hand);
+        if(box.transferBusy()){player.sendSystemMessage(Component.literal("物料箱正在交接"));return InteractionResult.SUCCESS;}
         if(held.isEmpty() && player.isShiftKeyDown()) {
             box.selectNext();
             player.sendSystemMessage(Component.literal("物料箱批次 " + (box.selected()+1) + " · " + describe(box.getItem(box.selected()))));
@@ -50,17 +54,14 @@ public final class IndustrialOperations {
             return InteractionResult.SUCCESS;
         }
         if(held.getCount()!=1)return InteractionResult.PASS;
-        try { ContainerItemMapper.fingerprint(held); }
-        catch(IllegalArgumentException unsupported){return InteractionResult.PASS;}
-        if(held.getItem() instanceof CreativeSourceItem)return InteractionResult.PASS;
+        if(!MaterialBoxItemStorage.supported(held))return InteractionResult.PASS;
         var stored=held.copy();
-        if(stored.is(net.minecraft.world.item.Items.WATER_BUCKET)&&ContainerItemStacks.thermalContents(stored)==null)
-            world.attachLiquidThermalContents(stored,mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K);
         var previous=box.getItem(box.selected()).copy();if(!previous.isEmpty())previous.remove(MmmComponents.TRANSFER_ACTOR);
         box.setItem(box.selected(),MaterialBoxBlockEntity.newBatch(stored));player.setItemInHand(hand,previous);
         player.getInventory().setChanged();return InteractionResult.SUCCESS;
     }
     public boolean boxTransferPending(ServerLevel level,MaterialBoxBlockEntity box){
+        if(box.transferBusy())return true;
         for(int slot=0;slot<box.getContainerSize();slot++)
             if(recovery.hasPending(new UUID(0,0),slotActor(level,box.getBlockPos(),slot)))return true;
         return false;
@@ -82,6 +83,7 @@ public final class IndustrialOperations {
     public String configure(ServerPlayer player,BlockPos position,String settings){
         if(!player.level().mayInteract(player,position))return "该位置无法编辑";
         var args=settings.trim().split("\\s+");var entity=player.level().getBlockEntity(position);
+        if(entity instanceof MaterialBoxBlockEntity box && box.transferBusy())return "物料箱正在交接";
         try {
             if(args[0].equals("box")&&args.length==2&&entity instanceof MaterialBoxBlockEntity box){box.select(Integer.parseInt(args[1]));return "已选择批次 "+(box.selected()+1);}
             if(args[0].equals("port")&&args.length==5&&entity instanceof FluidPortBlockEntity port){
@@ -190,10 +192,12 @@ public final class IndustrialOperations {
     }
     public void tickPort(ServerLevel level,FluidPortBlockEntity port){
         if(port.mode()==FluidPortBlockEntity.Mode.STOPPED)return;
+        if(!startup.authoritativeWritesReady()){port.status("世界暂不可写");return;}
         var position=port.getBlockPos();var outward=port.getBlockState().getValue(FluidPortBlock.FACING);
         if(port.redstone()&&!level.hasNeighborSignal(position)){port.status("等待红石");return;}
         var boxPosition=position.relative(outward);
         if(!level.hasChunkAt(boxPosition)||!(level.getBlockEntity(boxPosition) instanceof MaterialBoxBlockEntity box)){port.status("等待物料箱");return;}
+        if(box.transferBusy()){port.status("物料箱正在交接");return;}
         var target=targets.transferTargetAtBlock(level,position,outward.getOpposite());
         if(target==null||target.region().paused()||!target.region().solverLoaded()||!availability.ensure(level,target.region())||!phaseWork.settle(level,target.region())){port.status("等待区域");return;}
         boolean insert=port.mode()==FluidPortBlockEntity.Mode.INPUT;
@@ -207,28 +211,84 @@ public final class IndustrialOperations {
             var kind=MinecraftContainerTransferOperations.classify(item);
             boolean filled=kind==MinecraftContainerTransferOperations.TransferKind.POUR||kind==MinecraftContainerTransferOperations.TransferKind.MATERIAL_POUR||kind==MinecraftContainerTransferOperations.TransferKind.GRANULAR_POUR||kind==MinecraftContainerTransferOperations.TransferKind.GAS_POUR;
             if(insert&&!filled)continue;
-            var state=TransferActorState.decode(item.get(MmmComponents.TRANSFER_ACTOR));
-            var address=new BlockInventoryAddress(level.dimension().identifier().toString(),boxPosition.getX(),boxPosition.getY(),boxPosition.getZ(),slot);
-            var ref=address.actorRef(state.instanceId().toString());
-            var registered=transfers.registerActor(ref);
-            if(registered.status()!=TransferStatus.OK){port.status(registered.detail());return;}
             long rate=solid?Math.round(port.nanosPerSecond()*1e-9*mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER):port.nanosPerSecond();
             long amount=tickQuota(rate,level.getGameTime());if(amount==0)return;
             TransferQuantity quantity=solid?new TransferQuantity.Granular(amount):gas?new TransferQuantity.Gas(amount,0):new TransferQuantity.Liquid(amount,OptionalDouble.empty());
-            var inside=target.interiorBlock();
-            var request=new TransferRequest(UUID.randomUUID(),ref,state.generation(),target.region().id(),level.dimension().identifier().toString(),inside.getX()+.5,inside.getY()+.5,inside.getZ()+.5,
-                    insert?TransferRequest.Direction.INSERT:TransferRequest.Direction.EXTRACT,quantity);
-            var planned=transfers.plan(request);
-            if(planned.status()==TransferStatus.NOT_TRANSFERRED)continue;
-            if(planned.status()!=TransferStatus.OK){port.status(planned.detail());continue;}
-            var result=transfers.commit(planned.plan().planId());
-            port.status(result.status()==TransferStatus.COMMITTED?"运行":result.detail());return;
+            int[] cell=target.cell(quantity,!insert);
+            if(cell==null)continue;
+            var actor=actor(level,boxPosition,slot,item);
+            try {
+                var result=transferBatch(transactions,recovery,world,target.region(),cell,item.copy(),actor,!insert,amount,
+                        () -> new MinecraftContainerActorAdapter().persistAfterItem(level.getServer(),actor));
+                if(result.pending()){port.status("物料交接恢复中");return;}
+                if(result.transaction()!=null && result.transaction().status()==mmm.application.ContainerTransferUseCase.Status.COMMITTED){
+                    port.status("运行");snapshots.sendToLevel(level,target.region());return;
+                }
+                if(result.transaction()!=null && result.transaction().status()!=mmm.application.ContainerTransferUseCase.Status.NOT_TRANSFERRED){
+                    port.status(result.diagnostic());return;
+                }
+            } catch(java.io.IOException | RuntimeException failure) {
+                mmm.MmmMod.LOGGER.error("Material box transfer failed",failure);
+                port.status(recovery.hasPending(target.region().id(),actor) ? "物料交接恢复中" : "物料交接失败：" + failure.getMessage());return;
+            }
+
         }
         port.status(insert?"等待供料":"等待可用批次或接触物料");
+    }
+    @FunctionalInterface interface BeforeSave { void save() throws java.io.IOException; }
+    record PortTransfer(MinecraftContainerTransactionAdapter.Result transaction,String diagnostic,boolean pending) { }
+    /** One bounded internal port transfer using the shared durable container coordinator. */
+    static PortTransfer transferBatch(MinecraftContainerTransactionAdapter transactions,
+            mmm.application.ContainerRecoveryCoordinator recovery,CommittedWorldRegistries world,FluidRegion region,
+            int[] cell,ItemStack before,ContainerTransferActor.BlockInventory actor,boolean extract,long maximum,
+            BeforeSave beforeSave) throws java.io.IOException {
+        if(recovery.hasPending(region.id(),actor))return new PortTransfer(null,"物料交接恢复中",true);
+        if(!actor.dimensionId().equals(region.dimension().identifier().toString()))
+            throw new IllegalArgumentException("物料箱与区域不在同一维度");
+        if(maximum<=0)return new PortTransfer(null,"本次额度为空",false);
+        var resolution=MinecraftContainerTransferPlan.resolveDirected(transactions,world,region,cell,before,extract);
+        if(!resolution.resolved())return new PortTransfer(null,resolution.diagnostic(),false);
+        var plan=resolution.plan();
+        long requested=Math.min(maximum,plan.requestedAmount());
+        if(requested<=0)return new PortTransfer(null,"容器没有可用空间",false);
+        var candidate=region.lifecycleCandidate(region.beginHostEdit(),region.paused());
+        var preview=plan.executeExact(candidate,requested,plan.baseAmount());
+        if(preview==null || !preview.transferred())return new PortTransfer(null,"没有可交接的库存",false);
+        if(preview.resourceAmount()<=0 || preview.resourceAmount()>requested)
+            throw new IllegalStateException("物料预演返回无效数量");
+        var expected=ContainerItemMapper.fingerprint(world.bindActualContainerProfile(preview.stack()));
+        var expectedEnergy=preview.thermalEnergy();
+        long expectedAmount=preview.resourceAmount();
+        beforeSave.save();
+        var result=transactions.executeForRegion(region,actor,before,plan.sourceStack(),
+                extract?mmm.transfer.ContainerTransferJournal.Operation.EXTRACT:mmm.transfer.ContainerTransferJournal.Operation.INSERT,
+                plan.resourceKind(),requested,plan.baseAmount(),(actualCandidate,limit,base)->{
+                    var actual=plan.executeExact(actualCandidate,limit,base);
+                    if(actual==null || !actual.transferred() || actual.resourceAmount()!=expectedAmount
+                            || !expected.equals(ContainerItemMapper.fingerprint(world.bindActualContainerProfile(actual.stack())))
+                            || !java.util.Objects.equals(expectedEnergy,actual.thermalEnergy()))
+                        throw new IllegalStateException("实际物料交接与预演不一致");
+                    return actual;
+                },(raw,old)->raw,null);
+        if(result.status()==mmm.application.ContainerTransferUseCase.Status.COMMITTED)
+            transactions.completeCommitted(result.transactionId());
+        return new PortTransfer(result,result.outcome().message(),recovery.hasPending(region.id(),actor));
     }
     static long tickQuota(long perSecond,long tick) {
         long phase=Math.floorMod(tick,20);
         return (phase+1)*perSecond/20-phase*perSecond/20;
+    }
+    public static boolean allowsBoxRemoval(ServerLevel level,BlockPos position) {
+        if(!level.hasChunkAt(position) || !(level.getBlockEntity(position) instanceof MaterialBoxBlockEntity box))return true;
+        if(box.transferBusy())return false;
+        var runtime=MmmRuntimeRegistry.find(level.getServer());
+        return runtime==null || !runtime.industrial().boxTransferPending(level,box);
+    }
+    static boolean inventoryAvailable(net.minecraft.world.Container inventory) {
+        return !(inventory instanceof MaterialBoxBlockEntity box) || !box.transferBusy();
+    }
+    boolean mayAutomateBoxSlot(ServerLevel level,MaterialBoxBlockEntity box,int slot) {
+        return !recovery.hasPending(new UUID(0,0),slotActor(level,box.getBlockPos(),slot));
     }
     private static ContainerTransferActor.BlockInventory slotActor(ServerLevel level,BlockPos position,int slot){
         return new ContainerTransferActor.BlockInventory(level.dimension().identifier().toString(),position.getX(),position.getY(),position.getZ(),slot);

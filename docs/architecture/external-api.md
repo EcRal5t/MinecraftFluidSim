@@ -163,6 +163,18 @@ Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `Containe
 
 当前通知覆盖容器提交完成。checkpoint、世界归属、相变与安全暂停事件仍待设计。
 
+## Fabric 物料箱自动化
+
+物料箱通过 `ItemStorage.SIDED` 显式提供九槽 `SlottedStorage<ItemVariant>`，六个面和无方向查询共用同一存储实例。每槽保存一只实际容器，外部可模拟、插入和提取整只容器；所有物料、组分、内能及其他物品组件随容器保留。普通水桶在首次区域交接时沿共同转移路径准备热载荷，入箱和取回保持原有可见物品组件。
+
+箱内 `TRANSFER_ACTOR` 不进入外部 `ItemVariant`，每次重新入箱建立新的容器身份。未决 WAL 按槽地址拒绝搬运；开放中的 Fabric 事务占用箱体，暂停玩家换料、端口、公共转移、恢复和拆除。嵌套回滚恢复槽位及其身份，外层结束释放占用，最终提交标记方块实体待保存。
+
+该接口只移动物品，不执行区域库存提交。Fabric 的进程内事务由调用方决定提交或回滚，世界按正常存档保存物品；区域交接仍使用下面的持久 WAL、HEAD 和回执协议。Create 漏斗等标准 Fabric 调用方可复用此入口，真实 Create 版本绑定与其他能力见 [Create 适配计划](../roadmap/create-compatibility-plan.md)。
+
+入口：[MaterialBoxItemStorage](../../fabric/src/main/java/mmm/simulation/MaterialBoxItemStorage.java)、[MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)。
+
+内置端口通过 `IndustrialOperations.transferBatch` 直接执行共同容器事务，先保存真实物品前态，再提交区域及物品后态；不为每次换桶登记公共 actor。外部 `MmmTransferApi` 继续维护独立的注册、计划与回执。容器后态由 WAL 库存重建，并继承当前已核对物品的非库存组件，名称及其他辅助数据在交接和恢复时保留。
+
 ## 受控转移
 
 `MmmTransferApi` 在服务器主线程执行。接入方每次服务器启动注册稳定 provider ID，其解析器将 `ActorRef(providerId, objectId)` 解析为 `BlockInventoryAddress`。解析器返回当前可用的维度、方块坐标和槽位，遵守无加载、无库存修改的查询规则。

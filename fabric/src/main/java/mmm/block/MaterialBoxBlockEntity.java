@@ -15,6 +15,8 @@ import net.minecraft.world.level.storage.ValueOutput;
 public final class MaterialBoxBlockEntity extends BlockEntity implements Container {
     private final ItemStack[] batches = new ItemStack[9];
     private int selected;
+    private boolean transferBusy;
+    private final mmm.simulation.MaterialBoxItemStorage itemStorage = new mmm.simulation.MaterialBoxItemStorage(this);
 
     public MaterialBoxBlockEntity(BlockPos position, BlockState state) {
         super(MmmBlocks.MATERIAL_BOX_ENTITY, position, state);
@@ -25,9 +27,32 @@ public final class MaterialBoxBlockEntity extends BlockEntity implements Contain
         batch.set(MmmComponents.TRANSFER_ACTOR,new TransferActorState(java.util.UUID.randomUUID(),0).encode());
         return batch;
     }
-    public void select(int slot){if(slot<0||slot>=batches.length)throw new IllegalArgumentException("批次范围为 1—9");selected=slot;setChanged();}
+    public mmm.simulation.MaterialBoxItemStorage itemStorage() { return itemStorage; }
+    public boolean transferBusy() { return transferBusy; }
+    public void beginStorageTransfer() {
+        if(transferBusy) throw new IllegalStateException("物料箱正在交接");
+        transferBusy=true;
+    }
+    public void endStorageTransfer() { transferBusy=false; }
+    public ItemStack[] snapshotStorage() {
+        var snapshot=new ItemStack[batches.length];
+        for(int i=0;i<batches.length;i++) snapshot[i]=batches[i].copy();
+        return snapshot;
+    }
+    public void restoreStorage(ItemStack[] snapshot) {
+        if(!transferBusy) throw new IllegalStateException("物料箱没有物品事务");
+        for(int i=0;i<batches.length;i++) batches[i]=snapshot[i].copy();
+    }
+    public void setStorageSlot(int slot,ItemStack item) {
+        if(!transferBusy) throw new IllegalStateException("物料箱没有物品事务");
+        batches[slot]=item;
+    }
+    private void requireAvailable() {
+        if(transferBusy) throw new IllegalStateException("物料箱正在交接");
+    }
+    public void select(int slot){requireAvailable();if(slot<0||slot>=batches.length)throw new IllegalArgumentException("批次范围为 1—9");selected=slot;setChanged();}
     public int selected() { return selected; }
-    public void selectNext() { selected=(selected+1)%batches.length;setChanged(); }
+    public void selectNext() { requireAvailable();selected=(selected+1)%batches.length;setChanged(); }
     @Override public int getContainerSize() { return batches.length; }
     @Override public boolean isEmpty() {
         for(var item:batches) if(!item.isEmpty()) return false;
@@ -36,13 +61,14 @@ public final class MaterialBoxBlockEntity extends BlockEntity implements Contain
     @Override public ItemStack getItem(int slot) { return batches[slot]; }
     @Override public ItemStack removeItem(int slot,int amount) { return amount>0?removeItemNoUpdate(slot):ItemStack.EMPTY; }
     @Override public ItemStack removeItemNoUpdate(int slot) {
-        var result=batches[slot];batches[slot]=ItemStack.EMPTY;setChanged();return result;
+        requireAvailable();var result=batches[slot];batches[slot]=ItemStack.EMPTY;setChanged();return result;
     }
-    @Override public void setItem(int slot,ItemStack item) { batches[slot]=item;setChanged(); }
+    @Override public void setItem(int slot,ItemStack item) { requireAvailable();batches[slot]=item;setChanged(); }
     @Override public boolean stillValid(Player player) { return Container.stillValidBlockEntity(this,player); }
     @Override public boolean canPlaceItem(int slot,ItemStack item) { return false; }
     @Override public boolean canTakeItem(Container target,int slot,ItemStack item) { return false; }
     @Override public void clearContent() {
+        requireAvailable();
         java.util.Arrays.fill(batches, ItemStack.EMPTY);
         setChanged();
     }
