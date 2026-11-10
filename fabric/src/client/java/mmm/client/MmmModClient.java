@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class MmmModClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		InsulatingGlassModel.register();
 		FluidDisplaySettings.INSTANCE.load();
 		SampleAnalysisScreen.register();
 		ProcessTrendClient.register();

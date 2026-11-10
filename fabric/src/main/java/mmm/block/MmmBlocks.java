@@ -9,6 +9,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
+import net.minecraft.world.level.block.TransparentBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
@@ -20,7 +21,7 @@ import java.util.function.Function;
 /** Material blocks and simulation devices. */
 public final class MmmBlocks {
 	public static final Block INSULATION = register("insulation", Block::new);
-	public static final Block INSULATING_GLASS = register("insulating_glass", Block::new);
+	public static final Block INSULATING_GLASS = register("insulating_glass", TransparentBlock::new);
 	public static final Block FLUID_PORT = register("fluid_port", FluidPortBlock::new);
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
 	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
