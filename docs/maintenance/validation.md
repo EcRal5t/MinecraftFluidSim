@@ -28,22 +28,31 @@
 
 `industrial` 负责有限批次进出料、气体载荷与恢复，`industrial_valve` 负责真实开口和接受面流量；筛分、结晶、隔墙换热、蒸馏、吸附再生和催化分别由对应场景连续推进。蒸馏两阶段可分别用 `industrial_distillation_single` 和 `industrial_distillation_reflux` 运行，前者比较单级冷壁与暖壁，后者比较三层回流与关闭回流。各流程自带所需运行时长，按本轮改动选择受影响场景。
 
-日常蒸馏定位使用 `industrial_distillation_probe` 或 `industrial_distillation_closed_probe`，分别观察开启和关闭回流。`gpuProcessSteps` 在短诊断中表示从首次 tick 开始的总步数，包含预装；结束后结算完整物料与能量并标记 `process_diagnostic_complete`。输出包含实际启动／运行步数、推进秒数、产物、液体体积回收比例，以及准备、端口事务、完整物理步和观察的分项耗时。完整蒸馏入口保留生产运行窗口与分离判定。
+日常定位先使用单步定量入口：`GpuThermalContactsBenchmark` 比较实际湿壁热导与有限交换热量，`GpuSolidLiquidReactionsValidation <device> direct` 比较析出量与溶解度、扩散和整数批次，`GpuThermalPhaseValidation` 的 `surface` 模式分别比较吸附和解吸量，`GpuLiquidReactionsValidation <device> 2` 比较可逆动力学与有限时间解析解。各入口读取当前生产定义或自身声明的物理夹具参数。
 
 ```powershell
-./gradlew.bat :fabric:runGpuProcessFlowsValidation -PgpuProcessScenario=industrial_distillation_probe -PgpuProcessSteps=20 --offline --no-daemon --max-workers=1
+./gradlew.bat :gpu-kernel:runGpuThermalContactsBenchmark -PgpuThermalContactsGrid=4 -PgpuThermalContactsWarmup=0 -PgpuThermalContactsSamples=1 --offline --no-daemon --max-workers=1
+./gradlew.bat :gpu-kernel:runGpuThermalPhaseValidation -PgpuPhaseCases=surface --offline --no-daemon --max-workers=1
 uv run pytool/distillation_reference.py
 ```
 
-三层塔启动段的最新 20 步短诊断推进 1 s 物理时间，分项合计 37.19 s；每 tick 平均准备 43.32 ms、端口事务及查询 1776.16 ms、完整物理推进 36.41 ms、观察 3.80 ms，质量、元素、携能和有限墙收支通过。该记录覆盖实际端口持久事务；区域创建、JVM 启动和最终结算单列。后续优先处理同一代重复状态读取与逐端口完整候选交接的结构成本。
+壁面单次接触的参考热导为 26.3583369 W/K，GPU 为 26.3583398 W/K；参考交换热量为 140.208330 J，GPU 为 140.208346 J，有限墙与流体热账闭合。结晶参照为 49 批、2,450 SVQ，实际接受量一致。固定表面一步吸附 1,590 量子、一步解吸 626 量子，均与有限速率参照一致，质量和内能闭合。可逆反应在 5 s 时的解析产物为 66,666.646 量子，GPU 为 66,667。气体绝热路径的压力功积分与内能变化、公开转移持久化检查均通过。
+
+装置诊断使用 `industrial_distillation_probe`、`industrial_distillation_closed_probe`、`industrial_heat_probe` 和 `industrial_heat_stone_probe`。参数表示从首次 tick 开始的总步数，包含充液；结束后结算物料与能量并标记 `process_diagnostic_complete`。蒸馏逐层记录池液组成、温度、头空间蒸气组成和压力，使用相同生产相平衡求值器输出局部参照；同时输出准备、端口事务、物理推进和观察耗时。完整逆流流程可用 `industrial_heat_metal` 和 `industrial_heat_stone` 分别续查，`industrial_heat` 执行两者并比较结果。`industrial_distillation_trays` 与 `industrial_distillation_closed` 分别执行完整开阀和闭阀工况，`industrial_distillation_reflux` 执行配对比较。每百步复用层状态快照检查产物物种量与累计冷凝量，完整流程保留分离及收支判定。
+
+GPU 进程串行运行，复用同一次构建。直接运行 JVM 时将 `java.io.tmpdir` 指向项目 `build` 下的临时目录，场景世界与玩家存档分开保存。
+
+长工艺循环在内存中执行生产容器转移计划，使用真实接触格、逐 tick 配额及实际物料和携能。换热与蒸馏同一 tick 的各端口顺序修改共同宿主候选，并在物理步前统一提交；T01 单独覆盖 BoxActor、WAL、checkpoint 和恢复。诊断分别记录物理推进、端口交接与观察成本，完整流程保留物料及能量结算。本次三层塔夹具每 tick 的端口处理约为 115—124 ms，物理推进约为 13—14 ms，准备约为 35—36 ms，观察约为 13—14 ms；这些数值对应当前装置夹具，64³ 完整生产步预算单独计量。
 
 当前已通过物料箱与端口、阀门及双阀泵送、筛分和滤渣收集、冷却结晶与收集回投再溶解、固定表面催化，以及吸附穿透、再生和再吸附流程。局部相平衡下的 11 个热相变场景均已通过，覆盖冻结、熔化、蒸发、冷凝、溶解、析气、混合物和多接触，并检查质量、热账与恢复续算。
 
-隔墙换热完成金属与石墙的连续进出料、停热排空和蓄热释放。两侧产物保持盐分隔离，金属墙的冷侧升温高于石墙；停热后隔墙从内能峰值分别释放约 35.95 kJ 和 10.68 kJ，完整质量与进出料能量收支通过。
+金属和石墙逆流场景均完成连续进出料、停止热料、排空和蓄热释放，完整质量与进出料能量收支通过。金属墙冷侧产物平均温升为 0.016305 K，石墙为 0.003358 K，约相差 4.86 倍；两侧盐分隔离。停止热侧供料后，隔墙从内能峰值分别释放约 452.83 kJ 和 27.41 kJ。装置具有一米厚墙和较大流量，金属／石墙满润湿热导约为 716.27／39.77 W/K，冷热容量流率约为 2.63／2.64 MW/K，对应稳态 ε-NTU 冷侧温升参照为 0.016264／0.000904 K。墙的热时间常数分别约为 21,777／211,228 s，本次供料窗口为 30 s，实际结果包含有限墙与外墙蓄热、充液和流体停留时间的作用；稳态参照与实测批次显热分别记录。
 
-单级蒸馏冷壁收集约 16.1 L，乙醇摩尔分数由原料的 23.6% 提高至 38.3%，釜底为 21.9%；暖壁收集约 0.97 L。三层塔开启回流时收集约 37.61 L、实际回流约 42.23 L，关闭回流时回流量为零；在相近回收比例下，产物乙醇摩尔分数分别为 43.30% 和 32.49%。两种三层工况的各层最低有效液柱均超过 0.94 m，升气、降液、物料、元素、进出料携能和有限墙热账全部通过。各蒸馏工况从首次投料开始保留完整产物，收集物种量受实际累计冷凝量约束。
+单级蒸馏的原料乙醇摩尔分数为 23.59%。冷壁收集约 16.28 L，馏分乙醇摩尔分数为 38.94%，釜底为 21.89%；暖壁收集约 1.28 L。两种工况均包含完整投料、气体排放及产物收集，质量、物种、携能和有限墙热账通过。
 
-工艺效能按明确工况评价。上述蒸馏比较包含启动产物，匹配的液体体积回收比例约为累计投料的 0.0889%；回流量统计窗口为正式运行段。数据驱动脚本在无非凝气、101.325 kPa、每次完全平衡并冷凝的条件下，给出乙醇摩尔分数 39.92%、59.11%、76.08%、87.59% 的四次接触参照。实际塔层为池面接触，有限冷壁与气相排放共同影响分离。当前金属隔墙短窗口的冷侧平均升温约 0.00325 K，以 60 K 入口温差计算的温升有效度约 0.00542%。后续工艺评价同时记录回收率、各层组成、冷热流量、有限墙内能和同一时间窗口内的热耗。平衡级与回流条件参照 [LearnChemE](https://learncheme.com/quiz-yourself/interactive-self-study-modules/mccabe-thiele-diagrams/mccabe-thiele-diagrams-summary/)。
+三层自由表面塔完成回流开闭配对运行，三层液封、升气、降液及物料和能量收支通过。按每次提取的时序增量截取累计馏分，在相同体积回收比例 0.103383% 下，回流开启／关闭的乙醇摩尔分数为 43.2947%／41.7544%，相差 1.5403 个百分点。全程分别收集 43.20／187.76 L，平均乙醇摩尔分数为 43.29%／37.43%，乙醇物种回收率为 0.1475%／0.5428%。预装完成后的 60 s 窗口内，开启回流时净回流 48.32 L、产物 40.17 L，体积回流比为 1.203；关闭回流时净回流为零。各层池液末态仍约为 23%—24%，大量初始持液与有限接触时间使本次短窗口的富集增益较小。
+
+蒸馏参照脚本读取生产物性，在无非凝气、101.325 kPa、每次完全平衡并冷凝的条件下，从乙醇摩尔分数 23.59% 的原料得到 39.92%、59.11%、76.08%、87.59% 的四次接触结果。三层塔记录实际各层组成、温度、压力和局部平衡蒸气组成；预装后的同一窗口记录产物与回流体积，完整物料账包含启动产物和塔内持液。平衡级与回流条件参照 [LearnChemE](https://learncheme.com/quiz-yourself/interactive-self-study-modules/mccabe-thiele-diagrams/mccabe-thiele-diagrams-summary/)。
 
 GameTest 在实际服务器中运行传感器红石控制、箱端口装取、方块实体设置恢复、筛的放置转向拆除、原版活塞运动与双阀泵送。测试世界位于 `fabric/build/gametest/world`，独立于玩家存档。GPU 场景与游戏服务器串行运行。
 
