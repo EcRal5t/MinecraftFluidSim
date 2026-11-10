@@ -52,10 +52,16 @@ final class MinecraftRegionInputs {
 	}
 
 	boolean boundariesDue(long tick) { return tick % COLLISION_REFRESH_INTERVAL_TICKS == 0L; }
+	boolean externalHandoffsDue(FluidRegion region) { return externalStructures!=null && externalStructures.handoffsDue(region); }
 
 	FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region) {
-		FluidRegion.CollisionStats collisions = FluidRegionWorldInteraction.refreshCollisions(
-				level, region, cellsPerBlock, worldUpdates);
+		FluidRegion.CollisionStats collisions;
+		try { collisions = FluidRegionWorldInteraction.refreshCollisions(level, region, cellsPerBlock, worldUpdates, externalStructures); }
+		catch(ExternalMovingStructures.InputRejectedException waiting) {
+			region.requireCollisionRefresh();
+			if(externalStructures!=null)externalStructures.rejected(region.id(),waiting.getMessage());
+			throw waiting;
+		}
 		if (collisions.changedCells() > 0 || collisions.displacedCellVolume() > 0.0F
 				|| collisions.escapedCellVolume() > 0.0F || collisions.markerBudgetLimited()) {
 			region.setLastCollisionStats(collisions);

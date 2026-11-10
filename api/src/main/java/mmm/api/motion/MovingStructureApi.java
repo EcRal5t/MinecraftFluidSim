@@ -19,12 +19,29 @@ public interface MovingStructureApi {
 	interface Provider {
 		/** Complete current structures for this dimension, including retired structures until accepted. */
 		List<Structure> sample(String dimensionId);
+		/**
+		 * Latest assembly/disassembly intent per structure, published before world edits and retained
+		 * through recovery. Restore these intents before MMM refreshes a restored region. The adapter
+		 * owns its world/entity persistence; MMM verifies geometry before accepting the handoff.
+		 * Keep an unfinished description unchanged until accepted. Observations are read-only and
+		 * may be requested multiple times in one server tick.
+		 */
+		default List<Handoff> handoffs(String dimensionId) { return List.of(); }
+	}
+
+	enum HandoffKind { ASSEMBLE, DISASSEMBLE }
+	/** Stable block key and its actual static world location for this handoff. */
+	record FixedBlock(String key, int x, int y, int z, String blockId) { }
+	/** Stationary, micro-grid-aligned geometry; use a greater revision for every lifecycle change. */
+	record Handoff(HandoffKind kind, Structure structure, List<FixedBlock> blocks) {
+		public Handoff { blocks = List.copyOf(blocks); }
 	}
 
 	/**
 	 * Source and target are world-space translations of fixed local boxes. The source of a new
 	 * segment must match the accepted endpoint. Initial structures start wholly outside the region;
-	 * retired structures end wholly outside it. Static assembly and rotation are unsupported.
+	 * retired structures end wholly outside it. An accepted assembly handoff also admits an
+	 * interior source. Rotation is unsupported.
 	 */
 	record Structure(UUID id, UUID entityId, long revision, Pose source, Pose target,
 			double durationSeconds, List<Piece> pieces, boolean retired) {

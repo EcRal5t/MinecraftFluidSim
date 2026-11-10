@@ -47,6 +47,16 @@ Create 源码用于核对标准存储调用链；本项目当前没有 Create 26
 
 两个 `FakeCreate` 类仅存在于测试源码。Create 的局部形状与坐标约定来自适配计划固定的上游提交；当前验证不加载 Create，不涉及真实 Display Link、护目镜、装配拆解或动力网络。`sensor-display,protocol`、`external-motion`、模组构建、GameTest 编译与架构边界检查已通过；日志位于 `build/validation/create-display-motion-build.log` 和 `build/validation/create-external-motion.log`。
 
+### 原位装配与拆解
+
+```powershell
+./gradlew.bat :fabric:runHostValidation -PhostValidation=structure-handoff,external-motion :fabric:assemble verifyArchitecture --offline --no-daemon --max-workers=1
+```
+
+`ExternalStructureHandoffValidation` 通过正式碰撞刷新入口执行多片与半砖装拆，核对同格无关遮罩、质量、体积、内能、已接受代次及分片身份。装配后的平移使用生产采集和接受进度入口，以测试侧接受体状态推进到目标，再执行拆解；同时检查提前拆解、半程恢复、缺少提供器、部分世界状态、预算和重复交接。运动接受状态由 host 夹具提供，此入口不执行 GPU 运动求解或 Create 世界事件。
+
+`ExternalStructureThermalHandoffValidation` 检查普通墙热体、筛轴、表面吸附库存及余量的身份交接，核对审计账、内能和旧端口清理；错误目标朝向拒绝，落地后暂时没有热端口的同一墙体继续保留库存。`structure-handoff`、`external-motion`、构建与架构检查已通过，日志为 `build/validation/create-structure-handoff.log` 和 `build/validation/create-structure-handoff-final.log`。实际 Create 生命周期绑定、跨模组存档协调和跨区域库存转移按适配计划继续验证。
+
 ### 工业装置
 
 工业流程使用 `IndustrialLayout` 的方块布局和生产容器事务。箱、端口、筛、热墙及表面材料加载正式数据，逐步输出来自已提交库存。端口额度按在线 tick 计算，离线夹具与游戏入口共用配额和实际接触格选择。

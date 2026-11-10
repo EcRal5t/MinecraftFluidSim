@@ -50,6 +50,10 @@ public final class HostValidationSuite {
             mmm.simulation.EntityFluidWiringValidation.main(new String[0]);
             mmm.simulation.FakeCreateMotionValidation.main(new String[0]);
         });
+        checks.put("structure-handoff", () -> {
+            mmm.simulation.ExternalStructureHandoffValidation.main(new String[0]);
+            mmm.simulation.ExternalStructureThermalHandoffValidation.main(new String[0]);
+        });
         checks.put("ownership", () -> mmm.simulation.ownership.M6OwnershipValidation.main(new String[0]));
         checks.put("audit", () -> mmm.logging.CommandAuditFileValidation.main(new String[0]));
         String selection = args.length == 0 ? "full" : String.join(",", args);

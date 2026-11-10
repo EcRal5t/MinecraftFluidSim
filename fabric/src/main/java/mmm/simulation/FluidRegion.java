@@ -250,6 +250,7 @@ public final class FluidRegion {
 			domain = successor;
 		}
 		finiteThermalDevices = devices;
+		finiteThermalPorts = List.copyOf(ports);
 		boundaryTemperatures = successor.thermalBoundaryTemperatures();
 		boundaryTemperaturesKnown = true;
 		solverGeneration = next;
@@ -481,6 +482,30 @@ public final class FluidRegion {
 		if (!candidate.authoritativeLayout().equals(solverLayout()))
 			throw new IllegalStateException("Collision candidate layout changed");
 		commitHostEdit(baseGeneration, candidate);
+	}
+
+	/** Publishes collision geometry and its relocated wall inventories as one generation. */
+	void adoptStructureCandidate(long baseGeneration, HostFluidState candidate, FiniteThermalDeviceInventory inventory) {
+		if (!candidate.authoritativeLayout().equals(solverLayout()))
+			throw new IllegalStateException("Structure collision candidate layout changed");
+		var previous = currentFiniteDevices();
+		if (previous == null && inventory != null && !inventory.devices().isEmpty())
+			throw new IllegalArgumentException("Structure handoff introduced finite thermal inventory");
+		if (previous != null && (inventory == null || !previous.thermalRegistryFingerprint().equals(inventory.thermalRegistryFingerprint())
+				|| !previous.audit().equals(inventory.audit()) || !previous.exactInternalEnergy().equals(inventory.exactInternalEnergy())))
+			throw new IllegalArgumentException("Structure handoff changed finite thermal inventory");
+		var identities = new java.util.HashSet<String>();
+		if (inventory != null) for (var device : inventory.devices())
+			if (!device.providerId().equals(ExternalStructureThermalHandoff.PROVIDER))
+				identities.add(device.providerId() + "\0" + device.objectId());
+		var ports = finiteThermalPorts.stream().filter(port -> identities.contains(port.providerId() + "\0" + port.objectId())).toList();
+		candidate.replaceActivityConnections(List.of());
+		commitHostEdit(baseGeneration, candidate, inventory, ports);
+		devicePortsDirty = true;
+		activityConnections = List.of();
+		worldAvailability = null;
+		groupAvailability = null;
+		wakeForActivity();
 	}
 
 	public FluidRegionFootprint footprint() { return footprint; }

@@ -99,7 +99,7 @@ final class OrdinaryThermalWalls {
             var screenAxis=block.is(mmm.block.MmmBlocks.SCREEN)?block.getValue(mmm.block.ScreenBlock.FACING).getAxis():null;
             String id=Long.toString(packed)+"@"+BuiltInRegistries.BLOCK.getKey(block.getBlock())+(screenAxis==null?"":"@"+screenAxis.name());
             boolean touches=type!=null&&!ports(region,pos,type,registry,cellsPerBlock,screenAxis).isEmpty();
-            if(old!=null&&touches&&old.objectId().equals(id)&&old.deviceTypeId().equals(type)){next.add(old);continue;}
+            if(old!=null&&type!=null&&old.objectId().equals(id)&&old.deviceTypeId().equals(type)){next.add(old);continue;}
             if(old!=null)removed=removed.add(SignedDyadic.of(old.body().internalEnergyJ()));
             if(touches){
                 var definition=registry.finiteDevice(type);var mass=definition.bodyMassUnits();

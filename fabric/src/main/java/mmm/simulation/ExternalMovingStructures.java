@@ -28,6 +28,8 @@ final class ExternalMovingStructures implements MovingStructureApi {
 	private final Map<UUID, Pending> pending = new HashMap<>();
 	private final Map<Key, Long> retiredRevisions = new HashMap<>();
 	private final Set<UUID> orphanRegions = new HashSet<>();
+	private final Map<Key,Handoff> completedHandoffs = new HashMap<>();
+	private final Map<Key,Handoff> waitingHandoffs = new HashMap<>();
 
 	ExternalMovingStructures(MinecraftServer server) { this(server::isSameThread); }
 	ExternalMovingStructures(java.util.function.BooleanSupplier serverThread) { this.serverThread = serverThread; }
@@ -59,6 +61,128 @@ final class ExternalMovingStructures implements MovingStructureApi {
 	private record Pending(List<Advance> advances, Set<String> missingProviders) { }
 	record Capture(List<MovingBodyFluidCoupling.Request> source, List<MovingBodyFluidCoupling.Request> target,
 			Set<UUID> excludedEntities, boolean advancing) { }
+	record CompletedHandoff(String provider, Handoff handoff) { }
+	record HandoffPlan(List<mmm.fluid.FluidDomainContracts.CollisionEdit> edits, EntityBodyState bodies,
+			mmm.thermal.FiniteThermalDeviceInventory inventory, List<CompletedHandoff> completed) { }
+
+	boolean handoffsDue(FluidRegion region) {
+		if(waitingHandoffs.keySet().stream().anyMatch(key->key.region.equals(region.id())))return true;
+		for(var provider:providers.entrySet())try {
+			for(var handoff:provider.getValue().handoffs(region.dimension().identifier().toString())) {
+				var frame=handoff.structure();
+				if(sweeps(region,frame,frame.source(),frame.target())
+						&& !sameHandoff(handoff,completedHandoffs.get(new Key(provider.getKey(),region.id(),frame.id()))))return true;
+			}
+		} catch(RuntimeException unavailable) { return true; }
+		return false;
+	}
+
+	/** Pure preparation: ordinary collision refresh must wait until every advertised handoff agrees. */
+	HandoffPlan prepareHandoffs(FluidRegion region, mmm.world.CollisionField observed,
+			java.util.function.Predicate<FixedBlock> available, java.util.function.Function<FixedBlock,String> blockIdAt) {
+		var bodies=new LinkedHashMap<UUID,MovingBodyFluidCoupling.Request>();
+		for(var body:region.entityBodyState().bodies())bodies.put(body.bodyId(),body);
+		var edits=new ArrayList<mmm.fluid.FluidDomainContracts.CollisionEdit>();
+		var edited=new HashSet<Integer>(); var claimed=new HashSet<UUID>();
+		var completed=new ArrayList<CompletedHandoff>();
+		var inventory=region.hasThermalState()?region.finiteThermalDevices(region.solverLayout().thermalRegistryFingerprint()):null;
+		for(var provider:providers.entrySet()) {
+			String id=provider.getKey();
+			try {
+				for(var frame:List.copyOf(provider.getValue().sample(region.dimension().identifier().toString())))
+					for(var piece:frame.pieces())claimed.add(bodyId(id,frame.id(),piece.key()));
+				var advertised=new LinkedHashMap<UUID,Handoff>();
+				waitingHandoffs.forEach((key,value)-> { if(key.provider.equals(id) && key.region.equals(region.id()))advertised.put(key.structure,value); });
+				var seen=new HashSet<UUID>();
+				for(var handoff:List.copyOf(provider.getValue().handoffs(region.dimension().identifier().toString()))) {
+					if(!seen.add(handoff.structure().id()))throw new IllegalArgumentException("Duplicate handoff structure");
+					var waiting=advertised.get(handoff.structure().id());
+					if(waiting!=null && !sameHandoff(waiting,handoff))
+						throw new IllegalArgumentException("An unfinished handoff must complete before its description changes");
+					advertised.put(handoff.structure().id(),handoff);
+				}
+				for(var handoff:advertised.values()) {
+					var frame=handoff.structure(); validate(frame);
+					for(var piece:frame.pieces())claimed.add(bodyId(id,frame.id(),piece.key()));
+					// One dimension may contain several independent MMM regions.
+					if(!sweeps(region,frame,frame.source(),frame.target())
+							&& frame.pieces().stream().noneMatch(p->bodies.containsKey(bodyId(id,frame.id(),p.key()))))continue;
+					var key=new Key(id,region.id(),frame.id()); var old=completedHandoffs.get(key);
+					if(old!=null && frame.revision()<=old.structure().revision()) {
+						if(!sameHandoff(old,handoff))throw new IllegalArgumentException("Stale or changed handoff revision");
+						continue;
+					}
+					var owned=ExternalStructureGeometry.masks(region,handoff,block->true);
+					waitingHandoffs.put(key,handoff);
+					for(var block:handoff.blocks())if(!available.test(block))
+						throw new IllegalArgumentException("Handoff awaits available world blocks");
+					var structureBodies=new ArrayList<MovingBodyFluidCoupling.Request>();
+					int found=0;
+					for(var piece:frame.pieces()) {
+						var body=request(region,bodyId(id,frame.id(),piece.key()),piece.bounds(),frame.source(),0,0,0);
+						structureBodies.add(body);
+						var previous=bodies.get(body.bodyId());
+						if(previous!=null) {
+							found++;
+							if(handoff.kind()==HandoffKind.DISASSEMBLE && !sameBounds(previous.bounds(),body.bounds()))
+								throw new IllegalArgumentException("Disassembly awaits the accepted structure pose");
+						}
+					}
+					if(found!=0 && found!=structureBodies.size())throw new IllegalArgumentException("Incomplete accepted structure");
+					if(handoff.kind()==HandoffKind.ASSEMBLE && found!=0 && old!=null)
+						throw new IllegalArgumentException("Structure must disassemble before another assembly");
+					boolean replay=handoff.kind()==HandoffKind.ASSEMBLE?found!=0:found==0;
+					var segment=segments.get(key);
+					if(handoff.kind()==HandoffKind.DISASSEMBLE && segment!=null
+							&& (segment.fraction<1 || frame.revision()<=segment.value.revision()))
+						throw new IllegalArgumentException("Disassembly awaits completion and a newer revision");
+					if(handoff.kind()==HandoffKind.DISASSEMBLE)
+						for(var block:handoff.blocks())if(!block.blockId().equals(blockIdAt.apply(block)))
+							throw new IllegalArgumentException("Disassembly target block identity differs");
+					var changes=ExternalStructureGeometry.edits(region,observed,owned,handoff.kind(),replay);
+					for(var change:changes) {
+						if(!edited.add(region.grid().cell(change.x(),change.y(),change.z())))
+							throw new IllegalArgumentException("Handoffs share a fixed cell");
+						edits.add(change);
+					}
+					if(!replay)for(var body:structureBodies) {
+						if(handoff.kind()==HandoffKind.ASSEMBLE)bodies.put(body.bodyId(),body);
+						else bodies.remove(body.bodyId());
+					}
+					if(bodies.size()>MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP)
+						throw new IllegalArgumentException("Handoff exceeds the complete region body budget");
+					if(inventory!=null && !replay) {
+						if(handoff.kind()==HandoffKind.ASSEMBLE)ExternalStructureGeometry.requireWholeThermalBlocks(region,handoff,owned,inventory);
+						inventory=ExternalStructureThermalHandoff.plan(inventory,id,handoff);
+					}
+					completed.add(new CompletedHandoff(id,handoff));
+				}
+			} catch(RuntimeException failure) {
+				statuses.put(new Address(id,region.id()),new Status(State.REJECTED,failure.getMessage(),progress(id,region.id())));
+				throw new InputRejectedException("Structure handoff "+id+": "+failure.getMessage(),failure);
+			}
+		}
+		for(var body:region.entityBodyState().bodies())if(external(body.bodyId()) && !claimed.contains(body.bodyId()))
+			throw new InputRejectedException("Saved external structure awaits its provider before world refresh");
+		return new HandoffPlan(List.copyOf(edits),new EntityBodyState(List.copyOf(bodies.values())),inventory,List.copyOf(completed));
+	}
+
+	void handoffsAccepted(FluidRegion region,HandoffPlan plan) {
+		for(var item:plan.completed()) {
+			var frame=item.handoff().structure(); var key=new Key(item.provider(),region.id(),frame.id());
+			completedHandoffs.put(key,item.handoff());
+			waitingHandoffs.remove(key);
+			if(item.handoff().kind()==HandoffKind.ASSEMBLE) {
+				boolean atSource=frame.pieces().stream().allMatch(piece->region.entityBodyState().bodies().stream().anyMatch(body->
+						body.bodyId().equals(bodyId(item.provider(),frame.id(),piece.key()))
+						&& sameBounds(body.bounds(),request(region,body.bodyId(),piece.bounds(),frame.source(),0,0,0).bounds())));
+				if(atSource)segments.putIfAbsent(key,new Segment(frame,1));
+			}
+			else { segments.remove(key); retiredRevisions.put(key,frame.revision()); }
+			statuses.put(new Address(item.provider(),region.id()),new Status(State.ACCEPTED,
+					"Structure handoff accepted",progress(item.provider(),region.id())));
+		}
+	}
 
 	Capture capture(FluidRegion region) {
 		UUID regionId = region.id();
@@ -91,8 +215,14 @@ final class ExternalMovingStructures implements MovingStructureApi {
 			try {
 				for (var frame : frames) {
 					validate(frame);
+					var lifecycle=completedHandoffs.get(new Key(providerId,regionId,frame.id()));
+					if(lifecycle!=null && lifecycle.kind()==HandoffKind.DISASSEMBLE
+							&& frame.revision()<=lifecycle.structure().revision())continue;
 					if (frame.retired() && !outside(region, frame, frame.target()))
 						throw new IllegalArgumentException("Retired structure must end outside the region");
+					if(frame.retired() && region.hasThermalState() && ExternalStructureThermalHandoff.hasCarried(
+							region.finiteThermalDevices(region.solverLayout().thermalRegistryFingerprint()),providerId,frame.id()))
+						throw new IllegalArgumentException("Carried thermal walls require disassembly in their owning region");
 					if (!structures.add(frame.id())) throw new IllegalArgumentException("Duplicate structure identity");
 					if (frame.entityId() != null) excluded.add(frame.entityId());
 					UUID structureId = frame.id();
@@ -211,6 +341,8 @@ final class ExternalMovingStructures implements MovingStructureApi {
 		segments.keySet().removeIf(key -> key.region.equals(id));
 		statuses.keySet().removeIf(key -> key.region.equals(id));
 		retiredRevisions.keySet().removeIf(key -> key.region.equals(id));
+		completedHandoffs.keySet().removeIf(key -> key.region.equals(id));
+		waitingHandoffs.keySet().removeIf(key -> key.region.equals(id));
 	}
 	private Map<UUID, Progress> progress(String provider, UUID region) {
 		return progress(provider, region, segments);
@@ -237,6 +369,10 @@ final class ExternalMovingStructures implements MovingStructureApi {
 		}
 	}
 	private static boolean samePose(Pose a, Pose b) { return a.x()==b.x() && a.y()==b.y() && a.z()==b.z() && a.axisAligned()==b.axisAligned(); }
+	private static boolean sameHandoff(Handoff a,Handoff b) {
+		return a!=null && b!=null && a.kind()==b.kind() && sameSegment(a.structure(),b.structure())
+				&& a.blocks().size()==b.blocks().size() && new HashSet<>(a.blocks()).equals(new HashSet<>(b.blocks()));
+	}
 	private static boolean samePieces(Structure a, Structure b) {
 		return a.pieces().size()==b.pieces().size() && new HashSet<>(a.pieces()).equals(new HashSet<>(b.pieces()));
 	}

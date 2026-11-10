@@ -34,7 +34,7 @@
 
 - **外部规定运动结构**
   - 代码入口：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[MmmFabricApi.movingStructures](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
-  - 测试选择器：`external-motion`（`FakeCreateMotionValidation` 与运动体联动用例）。
+  - 测试选择器：`structure-handoff`、`external-motion`。
 
 - **探针与控制台**
   - 代码入口：
@@ -128,17 +128,21 @@ Query API 提供宏观状态查询（体积、质量、密度、温度、材料�
 
 ## 外部规定运动结构
 
-`MovingStructureApi` 是 MMM 提供的规定运动接口。Fabric 适配器在服务端主线程通过 `MmmFabricApi.movingStructures(server)` 取得服务，用稳定 provider ID 注册 `Provider`，并通过 `status(providerId, regionId)` 读取逐区域状态。provider 的 `sample(dimensionId)` 返回该维度当前结构的完整列表；注册与采样均在服务器主线程执行。Create 适配器负责观察并排队 Create 已发生的运动，Create 继续拥有原世界结构和动力。MMM 接收实际世界坐标与仿真时长，沿自身流体求解推进规定运动。
+`MovingStructureApi` 是 MMM 提供的规定运动接口。Fabric 适配器在服务端主线程通过 `MmmFabricApi.movingStructures(server)` 取得服务，用稳定 provider ID 注册 `Provider`，并通过 `status(providerId, regionId)` 读取逐区域状态。Create 适配器负责观察和排队 Create 的实际运动；Create 保有原世界结构、实体和动力网络，MMM 按实际位置、形状与仿真时长推进流体。适配器不需要 SU 换算，MMM 不重建 Create 方块或动力网络。
 
-每个 `Structure` 包含稳定结构 UUID、可选实体 UUID、`revision`、源位姿 `source`、目标位姿 `target`、`durationSeconds`、固定形状的 `pieces` 和 `retired` 标记。每个 `Piece` 由稳定键与局部轴对齐 `Box` 组成，`Pose` 给出世界坐标中的平移，长度单位为 m，时间单位为 s。实体 UUID 用于识别同一实体的重复碰撞输入。一个运动段保持相同 revision、起终点、时长及分块；后续段使用更大的 revision，以已接受终点作为源点并保持分块形状。
+`Provider.sample(dimensionId)` 返回该维度的当前结构列表。每个 `Structure` 包含稳定结构 UUID、可选实体 UUID、`revision`、世界坐标平移 `source` 与 `target`、正的 `durationSeconds`、固定形状 `pieces` 和 `retired` 标记。`Piece` 由稳定键和局部轴对齐 `Box` 组成；长度单位为 m，时间单位为 s。实体 UUID 用于避免同一实体被重复计入碰撞。一个运动段保持相同 revision、起终点、时长及分块；后续段使用更大的 revision，以已接受终点作为源点并保持分块形状。
 
-MMM 按求解步时长逐段推进，并在对应运动步被接受后更新 `Progress` 中的 revision、已接受位姿和完成比例。适配器保留正在处理的段，按接受进度提交后续段；物理推进落后时继续排队，世界中的 Create 运动保持由 Create 控制。`WAITING` 表示尚无区域观测，`LAGGING` 表示运动段或提供方数据等待处理，`BUSY` 表示前一段尚未完成，`ACCEPTED` 表示已接受当前段，`REJECTED` 表示输入或当前可用条件需要处理。调用方根据状态和结构进度重试；修正输入后重新提供有效段。
+MMM 按求解步时长逐段推进，在运动步接受后更新 `Progress` 中的 revision、已接受位姿和完成比例。适配器保留正在处理的段，按接受进度排队后续段；Create 自身继续控制原世界运动。`WAITING` 表示尚无区域观测，`LAGGING` 表示运动段或提供方数据等待处理，`BUSY` 表示前一段尚未完成，`ACCEPTED` 表示当前段或交接已接受，`REJECTED` 表示输入或可用条件需要处理。调用方依据状态和进度重试，修正输入后重新提供有效段。扫掠涉及的活动组须可用，结构与其他运动体共同受完整区域运动体预算约束；拒绝时保留已接受状态。
 
-结构从区域外开始，允许按轴对齐盒组作平移；首次源形状须整体位于区域外，退役段的目标须整体位于区域外，接受退役后移除结构。接口使用实际方块／实体位置，外部适配器负责转换其已有运动描述；MMM 不转换 Create 动力单位，也不重建 Create 方块或动力网络。运动扫掠涉及的活动组须可用，结构与其他运动体共同受区域运动体预算约束；不满足时保持已接受状态，待条件恢复或输入修正后重试。
+首次出现的普通运动结构须从区域外进入，退役段的目标须整体位于区域外。区域内的装配和拆解使用 `Provider.handoffs(dimensionId)`：每个结构提供最新的 `Handoff`，携带 `ASSEMBLE` 或 `DISASSEMBLE`、静止的结构帧和 `FixedBlock` 列表。适配器在修改世界方块前发布对应意图，并保存该结构的最新意图、世界方块和实体状态。每次生命周期变化使用递增 revision；`FixedBlock.key` 与结构内方块保持稳定，坐标给出本次交接的实际世界位置，`blockId` 标识该方块类型。拆解等待最后一个运动段被接受；拆解接受后，旧运动帧不会重新建立结构。
 
-区域 checkpoint 保存已接受的外部运动几何。服务器重启后，适配器重新注册相同 provider 并重放可与已保存几何匹配的结构段，MMM 据此恢复接受进度。已保存结构暂时缺少提供方时保留其几何并等待提供方恢复，避免遗漏结构改变区域占容；调用方应保留尚未完成的段，直到观察到接受结果。
+交接要求整个结构位于同一区域，轴对齐形状与固定碰撞微格对齐，各块位置和所需区块可用。MMM 在普通世界碰撞刷新前核对真实世界微格与交接意图，并在同一个候选中转换固定碰撞和运动体归属。普通墙的内能和表面材料随对应方块从固定墙转给结构，拆解时再交回目标固定墙；热墙交接覆盖该墙的完整固定几何。世界改动尚未完成、几何或活动组暂不可用时，交接保持待处理，MMM 保留已接受状态并在后续刷新重试。
 
-接口与实现：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)。测试选择器：`external-motion`。
+MMM checkpoint 保存已接受的运动几何和热库存。重启后，适配器在 MMM 首次刷新恢复区域之前重新注册 provider，并重放每个结构最近的生命周期意图及尚未完成的运动段；MMM 核对已保存几何，恢复交接或运动进度。缺少对应 provider 的已保存结构保留原有几何与热库存，等待适配器恢复。MMM checkpoint 与适配器的世界、实体和意图存档各自持久化，恢复依靠上述意图与几何核对完成。
+
+当前支持轴对齐平移、同一区域装配与拆解，以及原区域内的墙体热库存交接。携带墙体热库存的结构在其原区域完成拆解；结构旋转、跨区域热库存转移和真实 Create 26.2 类型绑定列为后续工作。
+
+接口与实现：[MovingStructureApi](../../api/src/main/java/mmm/api/motion/MovingStructureApi.java)、[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)、[ExternalMovingStructures](../../fabric/src/main/java/mmm/simulation/ExternalMovingStructures.java)、[ExternalStructureGeometry](../../fabric/src/main/java/mmm/simulation/ExternalStructureGeometry.java)、[ExternalStructureThermalHandoff](../../fabric/src/main/java/mmm/simulation/ExternalStructureThermalHandoff.java)、[MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)。测试选择器：`structure-handoff`、`external-motion`。
 
 ## 内置探针与控制界面
 

@@ -72,7 +72,7 @@ final class MinecraftRegionTick {
 	void manualStep(ServerLevel level, FluidRegion region, MinecraftMotionExecutor motion) {
 		inputs.discardEntityResponse(region);
 		try {
-			if (region.collisionRefreshRequired()) refreshRegionInputs(level, region);
+			if (region.collisionRefreshRequired() || inputs.externalHandoffsDue(region)) refreshRegionInputs(level, region);
 			activityConnections.accept(region);
 			MinecraftRegionInputs.TickInputs captured;
 			try { captured = inputs.captureManualStep(level, region, profile.hasCapability(WorldCapability.THERMAL)); }
@@ -101,8 +101,9 @@ final class MinecraftRegionTick {
 			return;
 		}
 		boolean collisionsChanged = false;
-		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick)) {
+		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick) || inputs.externalHandoffsDue(region)) {
 			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
+			catch (ExternalMovingStructures.InputRejectedException waiting) { return; }
 			catch (FluidDomainContracts.CollisionEditBlockedException blocked) {
 				if (region.pauseForUnavailableDevice()) throw blocked;
 				blockCollisionEdit(level, region, blocked);
