@@ -19,6 +19,8 @@ public final class ProcessSensorBlockEntity extends BlockEntity {
     private boolean below=true,analog;
     private int output;
     private BlockPos first,second;
+    private final mmm.network.ProcessTrendHistory history = new mmm.network.ProcessTrendHistory();
+    public mmm.network.ProcessTrendHistory history(){return history;}
     public ProcessSensorBlockEntity(BlockPos pos,BlockState state){super(MmmBlocks.PROCESS_SENSOR_ENTITY,pos,state);}
     public Measure measure(){return measure;}
     public double low(){return low;}
@@ -31,6 +33,7 @@ public final class ProcessSensorBlockEntity extends BlockEntity {
     public BlockPos second(){return second;}
     public void configure(Measure measure,double low,double high,boolean below,boolean analog,BlockPos first,BlockPos second){
         if(!Double.isFinite(low)||!Double.isFinite(high)||high<=low)throw new IllegalArgumentException("上限应大于下限");
+        if(this.measure!=measure || this.low!=low || this.high!=high || !java.util.Objects.equals(this.first,first) || !java.util.Objects.equals(this.second,second))history.reset();
         this.measure=measure;this.low=low;this.high=high;this.below=below;this.analog=analog;this.first=first.immutable();this.second=second.immutable();setChanged();
     }
     public void observe(double value){

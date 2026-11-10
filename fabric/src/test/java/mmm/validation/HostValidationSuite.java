@@ -24,6 +24,7 @@ public final class HostValidationSuite {
         });
         checks.put("protocol", () -> {
             mmm.network.FluidNetworkProtocolValidation.main(new String[0]);
+            mmm.network.ProcessTrendHistoryValidation.main(new String[0]);
             mmm.client.ClientSurfaceValidation.main(new String[0]);
             mmm.simulation.CommittedEventHubValidation.main(new String[0]);
             mmm.simulation.ShellFluidQueryValidation.main(new String[0]);

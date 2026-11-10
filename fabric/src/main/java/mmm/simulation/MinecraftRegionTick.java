@@ -166,6 +166,7 @@ final class MinecraftRegionTick {
 			if (!blockStepFailure(level, region, failure)) throw failure;
 			return;
 		}
+		region.advanceSessionSimulationTime();
 		boolean thermalRequiresMotion = false;
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			thermalRequiresMotion = observeThermalStep(region, thermalBefore, motionStepDue,

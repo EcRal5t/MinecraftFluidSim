@@ -133,10 +133,16 @@ public final class IndustrialOperations {
         var first=sensor.first();var second=sensor.second();
         if(first==null){first=sensor.getBlockPos().relative(sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getOpposite());second=first;}
         var region=targets.regionAtBlock(level,first);
-        if(region==null||!region.solverLoaded()||region.availabilityFailure()!=null||targets.regionAtBlock(level,second)!=region){sensor.signal(0);return;}
-        observeSensor(region,sensor,first,second);
+        if(region==null||!region.solverLoaded()||region.availabilityFailure()!=null||targets.regionAtBlock(level,second)!=region){sensor.history().breakSeries();sensor.signal(0);return;}
+        sensor.history().region(region);
+        boolean active=!region.paused();
+        if(!active)sensor.history().breakSeries("已暂停");
+        observeSensor(region,sensor,first,second,active);
     }
     static void observeSensor(FluidRegion region,ProcessSensorBlockEntity sensor,BlockPos first,BlockPos second){
+        observeSensor(region,sensor,first,second,true);
+    }
+    private static void observeSensor(FluidRegion region,ProcessSensorBlockEntity sensor,BlockPos first,BlockPos second,boolean record){
         double h=region.solverConfig().cellSize();var origin=region.origin();
         int[] min={(int)Math.floor((Math.min(first.getX(),second.getX())-origin.getX())/h),(int)Math.floor((Math.min(first.getY(),second.getY())-origin.getY())/h),(int)Math.floor((Math.min(first.getZ(),second.getZ())-origin.getZ())/h)};
         int[] max={(int)Math.ceil((Math.max(first.getX(),second.getX())+1-origin.getX())/h),(int)Math.ceil((Math.max(first.getY(),second.getY())+1-origin.getY())/h),(int)Math.ceil((Math.max(first.getZ(),second.getZ())+1-origin.getZ())/h)};
@@ -146,7 +152,8 @@ public final class IndustrialOperations {
             for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
                 int face=region.grid().faceAt(x,y,z,a);if(face>=0)faces.add(face);
             }
-            sensor.observe(region.observeLiquidFlow(faces.stream().mapToInt(Integer::intValue).toArray())*1000);return;
+            sensor.observe(region.observeLiquidFlow(faces.stream().mapToInt(Integer::intValue).toArray())*1000);
+            if(record)sensor.history().sample(region.sessionSimulationSeconds(),sensor.reading());return;
         }
         double sum=0,weight=0;var host=sensor.measure()==ProcessSensorBlockEntity.Measure.PRESSURE?region.hostSnapshot():null;
         for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
@@ -160,7 +167,8 @@ public final class IndustrialOperations {
                 case FLOW->throw new IllegalStateException("Flow is sampled from accepted faces");
             }
         }
-        if(weight>0)sensor.observe(sum/weight);else sensor.signal(0);
+        if(weight>0){sensor.observe(sum/weight);if(record)sensor.history().sample(region.sessionSimulationSeconds(),sensor.reading());}
+        else {if(record)sensor.history().breakSeries();sensor.signal(0);}
     }
     public void tickPort(ServerLevel level,FluidPortBlockEntity port){
         if(port.mode()==FluidPortBlockEntity.Mode.STOPPED)return;

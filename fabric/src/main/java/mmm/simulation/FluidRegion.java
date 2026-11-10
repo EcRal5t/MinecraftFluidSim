@@ -45,6 +45,7 @@ public final class FluidRegion {
 	private long snapshotSequence;
 	private long tick;
 	private double lastStepMilliseconds;
+	private double sessionSimulationSeconds;
 	private FluidDomainContracts.StepStats lastStats;
 	private CollisionStats lastCollisionStats = CollisionStats.EMPTY;
 	private boolean collisionRefreshRequired;
@@ -185,6 +186,8 @@ public final class FluidRegion {
 	}
 
 	public UUID id() { return id; }
+	double sessionSimulationSeconds() { return sessionSimulationSeconds; }
+	void advanceSessionSimulationTime() { sessionSimulationSeconds += solverConfig.timeStep(); }
 	public ResourceKey<Level> dimension() { return dimension; }
 	public BlockPos origin() { return origin; }
 	public int sizeX() { return sizeX; }

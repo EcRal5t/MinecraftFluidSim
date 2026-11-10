@@ -70,6 +70,7 @@ final class MinecraftMotionExecutor {
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous region state: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);
+		region.advanceSessionSimulationTime();
 		return result;
 	}
 }
