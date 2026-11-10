@@ -1271,7 +1271,7 @@ public final class GpuProcessFlowsValidation {
             double[] finalSealHeight=new double[3];
             if(trays)for(int stage=0;stage<3;stage++)finalSealHeight[stage]=distillationSealHeight(region,trayGeometry.get(stage).seal());
             System.out.println("distillation_products scenario="+scenario+" product_nanos="+productVolume
-                    +" ethanol_fraction="+(ethanol+water==0?0:ethanol/(double)(ethanol+water))+" bottoms_fraction="+bottomsFraction+" reflux="+reflux+" batches="+compositions);
+                    +" ethanol_fraction="+(ethanol+water==0?0:ethanol/(double)(ethanol+water))+" bottoms_fraction="+bottomsFraction+" reflux="+reflux+" batches="+compositions.size());
             if(trays)System.out.println("distillation_stage_summary scenario="+scenario+" gas="+Arrays.toString(upwardGas)+" liquid="+Arrays.toString(downwardLiquid)
                     +" min_seal_m="+Arrays.toString(minSealHeight)+" final_seal_m="+Arrays.toString(finalSealHeight)+" required_seal_m="+sealHeight);
             if(after!=Math.addExact(initial,supplied))throw new AssertionError("Distillation changed combined mass");
@@ -1361,39 +1361,7 @@ public final class GpuProcessFlowsValidation {
         return volume/(width*width);
     }
     private static boolean distillationBlockFilled(FluidRegion region,BlockPos block) {
-        int x=2*(block.getX()-region.origin().getX()),y=2*(block.getY()-region.origin().getY()),z=2*(block.getZ()-region.origin().getZ());
-        var host=region.hostSnapshot();
-        for(int dx=0;dx<2;dx++)for(int dy=0;dy<2;dy++)for(int dz=0;dz<2;dz++)
-            if(host.volume(x+dx,y+dy,z+dz)<.999f)return false;
-        return true;
-    }
-    private static void distillationState(FluidRegion region,CommittedWorldRegistries world,IndustrialLayout layout,
-            IndustrialLayout.Scenario scenario,int step,int[] productCell) {
-        var state=region.hostSnapshot().captureAuthoritativeState();var gas=state.spatialGas();
-        long vapor=0,upperVapor=0;
-        for(int cell=0;cell<gas.cellCount();cell++) {
-            var component=gas.cells().get(cell).component(BuiltinGasDefinitions.ETHANOL_VAPOR);
-            if(component==null)continue;
-            vapor=Math.addExact(vapor,component.standardVolumeNanos());
-            if(region.grid().y(cell)>=16)upperVapor=Math.addExact(upperVapor,component.standardVolumeNanos());
-        }
-        long evaporated=gasPhaseSinkQuanta(gas,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL);
-        var source=gas.phaseSource().component(BuiltinGasDefinitions.ETHANOL_VAPOR);
-        long created=source==null?0:source.species().stream().filter(value->value.speciesId().equals(BuiltinChemicalDefinitions.ETHANOL)).mapToLong(value->value.amountQuanta()).sum();
-        double bottom=0,upper=0,collector=0;
-        for(var stock:state.liquid().physicalStocks()) {
-            int cell=stock.key().cell(),y=region.grid().y(cell);
-            if(y<4)bottom+=stock.volume().toDouble();
-            if(y>=16)upper+=stock.volume().toDouble();
-            if(region.grid().x(cell)==productCell[0] && region.grid().y(cell)/2==productCell[1]/2 && region.grid().z(cell)/2==productCell[2]/2)collector+=stock.volume().toDouble();
-        }
-        var cold=layout.walls().stream().filter(wall->layout.blocks().get(wall.position()).is(net.minecraft.world.level.block.Blocks.IRON_BLOCK)).findFirst().orElseThrow();
-        String prefix=cold.position().asLong()+"@";
-        var wall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().filter(value->value.objectId().startsWith(prefix)).findFirst().orElseThrow();
-        System.out.println("distillation_state scenario="+scenario+" step="+step+" vapor_nanos="+vapor+" upper_vapor_nanos="+upperVapor+" evaporated_quanta="+created+" condensed_quanta="+evaporated
-                +" bottom_volume="+bottom+" upper_volume="+upper+" outlet_cell_volume="+collector+" wall_temperature="+SurfaceThermalState.temperature(world.thermalRegistry(),wall)
-                +" wall_energy="+wall.body().internalEnergyJ()+" external_heat_and_feed="+state.thermalOwner().audit().externalSource().toDouble());
-
+        return distillationSealHeight(region,block)>=region.solverConfig().cellSize()*FluidRegionFactory.CELLS_PER_BLOCK;
     }
     private static int[] coldWallSample(FluidRegion region,CommittedWorldRegistries world,String object){
         var wall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
