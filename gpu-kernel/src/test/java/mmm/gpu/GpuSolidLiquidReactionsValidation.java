@@ -15,7 +15,17 @@ import java.util.List;
 /** Real saline inventory precipitates a new bed while transporting nonzero MAC momentum. */
 public final class GpuSolidLiquidReactionsValidation {
     private GpuSolidLiquidReactionsValidation(){}
-    public static void main(String[] args){run(args,false,8,false);run(args,true,0,false);run(args,true,8,false);run(args,false,0,true);}
+    public static void main(String[] args){
+        if(args.length>1) {
+            switch(args[1]) {
+                case "direct" -> run(args,false,8,false);
+                case "region-capacity" -> run(args,true,0,false);
+                case "region" -> run(args,true,8,false);
+                case "multi-donor" -> run(args,false,0,true);
+                default -> throw new IllegalArgumentException("Unknown solid/liquid scenario: "+args[1]);
+            }
+        } else {run(args,false,8,false);run(args,true,0,false);run(args,true,8,false);run(args,false,0,true);}
+    }
     private static void run(String[] args,boolean region,int deposits,boolean multiDonor){
         var chemical=mmm.fluid.TestFluidDefinitions.load().chemistry();var granular=mmm.fluid.TestFluidDefinitions.load().granular();var gas=mmm.fluid.TestFluidDefinitions.load().gas();
         int grid=3,cells=27,cell=13;double h=.5,gravity=9.81,duration=31_536_000;long initialMass=10_000_000_000L,ions=1_000_000;
@@ -116,6 +126,23 @@ public final class GpuSolidLiquidReactionsValidation {
                 }
                 var bed=solidAfter.deposits();if(bed.size()!=1||bed.getFirst().inventory().solidVolumeSvq()<=0)throw new AssertionError("No new precipitate bed");
                 var deposited=bed.getFirst().inventory();if(after.massUnits()[0]+deposited.massUnits()!=initialMass)throw new AssertionError("Phase mass lost");
+                if(!region) {
+                    var reaction=granular.reactions().stream().filter(value->value.solidMaterialId().equals(BuiltinGranularDefinitions.PRECIPITATE)).findFirst().orElseThrow();
+                    var curve=reaction.solubility();
+                    long coefficient=reaction.aqueousStoichiometry().values().iterator().next();
+                    double ratio=curve.ratio()+curve.slopePerK()*(300-curve.referenceTemperatureK());
+                    long dissolved=ions/coefficient,saturated=(long)Math.floor(ions*ratio/coefficient);
+                    long excess=Math.max(0,dissolved-saturated);
+                    double diameter=granular.material(granular.materialHandle(reaction.solidMaterialId())).primaryGrainDiameterMeters();
+                    double liquidFraction=inventory.volumes().valueAt(0).toDouble(),area=h*h*liquidFraction;
+                    double rate=2*curve.diffusivityM2PerS()*area*duration/(diameter*liquidFraction*h*h*h);
+                    double fraction=-Math.expm1(-rate);
+                    long batches=(long)Math.floor(excess*fraction/reaction.solidExtentPerBatch());
+                    long expected=Math.multiplyExact(batches,reaction.solidVolumeSvqPerBatch());
+                    System.out.println("solid_liquid_reference saturated_extent="+saturated+" excess_extent="+excess+" transfer_fraction="+fraction
+                            +" expected_batches="+batches+" expected_svq="+expected+" actual_svq="+deposited.solidVolumeSvq());
+                    if(deposited.solidVolumeSvq()!=expected)throw new AssertionError("Precipitation differs from saturation and diffusion reference");
+                }
                 SignedDyadic removed=inventory.volumes().valueAt(0).subtract(after.volumes().valueAt(0));
                 if(!removed.equals(SignedDyadic.of(deposited.solidVolumeSvq(),-24)))throw new AssertionError("Liquid/SVQ transfer is not exact");
                 for(int s:new int[]{sodium,chloride}){long count=0;for(int i=0;i<after.speciesHandles().length;i++)if(after.speciesHandles()[i]==s)count+=after.speciesAmounts()[i];

@@ -73,7 +73,7 @@ public final class PistonPumpGameTest {
         port.configure(FluidPortBlockEntity.Mode.STOPPED,FluidPortBlockEntity.Phase.LIQUID,1_000_000_000L,false);
         runtime.industrial().setValve(level,test.absolutePos(inlet),0);
         runtime.industrial().setValve(level,test.absolutePos(outlet),0);
-        double[] compression={0,0,0};Chamber[] chamber={null};
+        double[] compression={0,0,0,0};Chamber[] chamber={null};
         int[] stage={-3},ticks={0},cycles={0};long[] liquid={0},solids={Math.addExact(initial.granularMassUnits(),initial.coherentMassUnits())};double[] before={0,0};boolean[] moving={false};
         test.onEachTick(()->{
             ticks[0]++;
@@ -86,10 +86,16 @@ public final class PistonPumpGameTest {
                 chamber[0]=chamber(test,region);compression[0]=chamber[0].pressure();
                 compression[1]=gasEnergy(region);
                 compression[2]=region.thermalAudit().mechanicalWork().toDouble();
+                compression[3]=blockCapacity(test,region,destination);
                 setPower(test,drive,true);stage[0]=-2;ticks[0]=0;
             } else if(stage[0]==-2&&ticks[0]>=20&&moving[0]&&settled(test,runtime,region,destination)) {
                 assertValves(test,inlet,outlet,0,0);
                 var after=chamber(test,region);double pressure=after.pressure();
+                double swept=compression[3]-blockCapacity(test,region,destination);
+                test.assertTrue(Math.abs(swept-1.0)<1e-12,"Piston swept volume differs from its one-block stroke: "+swept);
+                System.out.println("piston_compression swept_m3="+swept+" chamber="+chamber[0]+" -> "+after
+                        +" gas_energy_change_j="+(gasEnergy(region)-compression[1])
+                        +" mechanical_work_j="+(region.thermalAudit().mechanicalWork().toDouble()-compression[2]));
                 test.assertTrue(pressure>compression[0],"Closed chamber pressure did not rise: "+compression[0]+" -> "+pressure
                         +"; gasEnergy="+compression[1]+" -> "+gasEnergy(region)
                         +"; work="+compression[2]+" -> "+region.thermalAudit().mechanicalWork().toDouble()
@@ -133,6 +139,9 @@ public final class PistonPumpGameTest {
                 } else if(cycles[0]>=4) {
                     double after=poolVolume(test,region,4,6);
                     test.assertTrue(after>before[0],"Pump delivered no water to its outlet pool: "+before[0]+" -> "+after);
+                    double delivered=(after-before[0])*Math.pow(region.solverConfig().cellSize(),3);
+                    System.out.println("piston_pump cycles="+cycles[0]+" delivered_m3="+delivered+" stroke_volume_m3=1.0"
+                            +" initial_source_m3="+before[1]*Math.pow(region.solverConfig().cellSize(),3));
                     double sourceAfter=poolVolume(test,region,4,2);
                     test.assertTrue(sourceAfter<before[1],"Pump source pool did not decrease: "+before[1]+" -> "+sourceAfter);
                     setPower(test,inletPower,false);setPower(test,outletPower,false);stage[0]=11;ticks[0]=0;
@@ -215,6 +224,14 @@ public final class PistonPumpGameTest {
         var state=region.hostSnapshot();double sum=0;
         for(int dx=0;dx<2;dx++)for(int dy=0;dy<4;dy++)for(int dz=0;dz<2;dz++)sum+=state.volume(cellX+dx,cellY+dy,cellZ+dz);
         return sum;
+    }
+    private static double blockCapacity(GameTestHelper test,FluidRegion region,BlockPos position) {
+        var block=test.absolutePos(position);var origin=region.origin();
+        int x=(block.getX()-origin.getX())*2,y=(block.getY()-origin.getY())*2,z=(block.getZ()-origin.getZ())*2;
+        int open=0;
+        for(int dx=0;dx<2;dx++)for(int dy=0;dy<2;dy++)for(int dz=0;dz<2;dz++)
+            open+=Integer.bitCount((~region.solidMicroMask(x+dx,y+dy,z+dz))&255);
+        return open*Math.pow(region.solverConfig().cellSize(),3)/8;
     }
     private record Chamber(double pressure,double gasVolume,long standardVolumeNanos,long gasMassUnits,double gasEnergy) { }
     private static Chamber chamber(GameTestHelper test,FluidRegion region) {

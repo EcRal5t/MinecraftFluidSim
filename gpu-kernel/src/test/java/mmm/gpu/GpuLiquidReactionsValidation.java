@@ -17,7 +17,8 @@ public final class GpuLiquidReactionsValidation {
     private GpuLiquidReactionsValidation(){}
     public static void main(String[] args){
         int device=args.length>0?Integer.parseInt(args[0]):0;
-        for(int scenario=0;scenario<6;scenario++)run(device,scenario);
+        if(args.length>1)run(device,Integer.parseInt(args[1]));
+        else for(int scenario=0;scenario<6;scenario++)run(device,scenario);
     }
     private static void run(int device,int scenario){
         var chemistry=(scenario==0||scenario==5)?mmm.fluid.TestFluidDefinitions.load().chemistry():kineticRegistry(scenario);var baseGranular=mmm.fluid.TestFluidDefinitions.load().granular();
@@ -95,7 +96,16 @@ public final class GpuLiquidReactionsValidation {
                     long remaining=actualAmounts.getOrDefault("test:kinetic_a",0L),b=actualAmounts.getOrDefault("test:kinetic_b",0L),c=actualAmounts.getOrDefault("test:kinetic_c",0L);
                     if(remaining+b+c!=initial||remaining<0||b<0||c<0)throw new AssertionError("Competitive reaction lost inventory: "+actualAmounts);
                     if(scenario==1&&(b<initial/3||Math.abs(b-c)>2))throw new AssertionError("Shared reactant competition biased reaction order: "+actualAmounts);
-                    if(scenario==2&&Math.abs(b-2.0*initial/3)>initial*.01)throw new AssertionError("Reversible kinetics failed to approach equilibrium: "+actualAmounts);
+                    if(scenario==2) {
+                        var kinetics=chemistry.reactions().stream().filter(rule->rule.id().equals("test:kinetic_forward")).findFirst().orElseThrow().kinetics();
+                        double forward=kinetics.forwardRate(),reverse=kinetics.reverseRate();
+                        double equilibrium=initial*forward/(forward+reverse);
+                        double finiteTime=equilibrium*(-Math.expm1(-(forward+reverse)*100*.05));
+                        double quotient=remaining>0?b/(double)remaining:Double.POSITIVE_INFINITY;
+                        System.out.println("reversible_reference initial="+initial+" observed="+b+" finite_time="+finiteTime
+                                +" equilibrium="+equilibrium+" quotient="+quotient+" equilibrium_quotient="+(forward/reverse));
+                        if(Math.abs(b-finiteTime)>initial*.01)throw new AssertionError("Reversible kinetics differs from finite-time reference: "+actualAmounts);
+                    }
                     if(scenario==3&&b!=4)throw new AssertionError("Subquantum rate or checkpoint progress was lost/repeated: "+actualAmounts);
                     if(scenario==4&&(b<=c||300+(Double.longBitsToDouble(after.energyBits()[0])+.1*b)/4200<=350))
                         throw new AssertionError("Temperature-dependent competition or reaction heat feedback failed: "+actualAmounts);

@@ -78,8 +78,11 @@ public final class EntityFluidWiringValidation {
 		domain.setSolid(1,1,1,true);domain.setVolume(2,1,1,.4f);domain.sealDomainBoundary();
 		domain.bindGasRegistry(definitions.gas());domain.bindThermal(definitions.thermal(),fluids,300);
 		long mass=domain.totalMassUnits();double volume=domain.totalVolumeExact(), energy=domain.totalInternalEnergy();
+		int fixedMask=domain.solidMicroMask(1,1,1);
 		domain.handoffCollisionBodies(List.of(new mmm.fluid.FluidDomainContracts.CollisionEdit(1,1,1,0)),new mmm.fluid.EntityBodyState(List.of(body)));
 		require(domain.solidMicroMask(1,1,1)==0 && domain.entityBodyState().bodies().size()==1, "Piston did not leave fixed geometry");
+		double openedVolume=Integer.bitCount(fixedMask&255)*Math.pow(domain.config().cellSize(),3)/8.0;
+		require(Math.abs(openedVolume-.5*.5*.5)<1e-12, "Piston shape handoff changed its displaced volume: "+openedVolume);
 		domain.handoffCollisionBodies(List.of(new mmm.fluid.FluidDomainContracts.CollisionEdit(1,1,1,255)),mmm.fluid.EntityBodyState.EMPTY);
 		require(domain.solidMicroMask(1,1,1)==255 && domain.totalMassUnits()==mass && domain.totalVolumeExact()==volume && domain.totalInternalEnergy()==energy, "Piston handoff changed inventory or energy");
 	}

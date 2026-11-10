@@ -99,6 +99,7 @@ public final class GasTransferValidation {
 				close(settled.absolutePressurePa(),work.absolutePressurePa(),"Joint gas work pressure differs from EOS");
 				close(settled.gasVolumeM3(),work.gasVolumeM3(),"Joint gas work volume differs from EOS");
 				checkAdiabatic(work,advectedVolume,temperature0,r,cv);
+				if(liquidReference==0)checkCompressionWork(work,advectedVolume,temperature0,r,cv);
 			}
 		}
 		double traceR=1e-4,traceCv=2.5e-4;
@@ -112,6 +113,18 @@ public final class GasTransferValidation {
 				&&tiny.gasVolumeM3()>0&&tiny.liquidVolumeM3()>0,
 				"Compressed mixture did not retain finite positive gas and liquid volumes");
 		close(tiny.gasVolumeM3()+tiny.liquidVolumeM3(),1e-12,"Compressed mixture did not fill its capacity");
+	}
+	private static void checkCompressionWork(MixtureVolumeModel.GasWorkState state,double volume0,
+			double temperature0,double gasConstant,double heatCapacity) {
+		int slices=16;double width=Math.log(state.gasVolumeM3()/volume0)/slices,work=0;
+		for(int i=0;i<=slices;i++) {
+			double volume=volume0*Math.exp(i*width);
+			var point=MixtureVolumeModel.gasWorkState(volume,0,gasConstant,heatCapacity,temperature0,volume0);
+			work-=(i==0||i==slices?1:i%2==0?2:4)*point.absolutePressurePa()*volume*width/3;
+		}
+		double energy=heatCapacity*(state.temperatureK()-temperature0);
+		require(Math.abs(work-energy)<=1e-4*Math.max(1,Math.abs(energy)),
+				"Adiabatic piston pressure work differs from gas energy: work="+work+" energy="+energy);
 	}
 
 	private static void checkAdiabatic(MixtureVolumeModel.GasWorkState state,double volume0,

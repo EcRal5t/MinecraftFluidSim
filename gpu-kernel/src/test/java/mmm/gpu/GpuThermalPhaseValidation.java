@@ -17,8 +17,10 @@ public final class GpuThermalPhaseValidation {
             read(definitions,"thermal_species",ThermalDefinitionCodec::decodeSpecies),read(definitions,"phase_transitions",ThermalDefinitionCodec::decodeTransition),
             List.of(),List.of(),chemistry.fingerprint(),granular.fingerprint(),gas.fingerprint());
         try(var backend=new VulkanFluidSolverBackend(device)) {
-            for(String mode:(args.length>2?List.of(args[2].split(",")):List.of("freeze","melt","boil","condense","dissolve","outgas","ambient-outgas","mixed-boil","mixed-condense","multi-contact","vapor-empty")))
-                run(backend,mode,mode.equals("vapor-empty")?extendedLiquidRange(thermal):thermal,gas);
+            for(String mode:(args.length>2?List.of(args[2].split(",")):List.of("freeze","melt","boil","condense","dissolve","outgas","ambient-outgas","mixed-boil","mixed-condense","multi-contact","vapor-empty"))) {
+                if(mode.equals("surface"))runSurface(backend,thermal,gas,definitions);
+                else run(backend,mode,mode.equals("vapor-empty")?extendedLiquidRange(thermal):thermal,gas);
+            }
         }
     }
     private static ThermalRegistry extendedLiquidRange(ThermalRegistry source){
@@ -31,6 +33,95 @@ public final class GpuThermalPhaseValidation {
         }).toList();
         return new ThermalRegistry(materials,source.speciesOffsets(),source.transitions(),source.boundaries(),source.finiteDevices(),
                 source.chemicalRegistryFingerprint(),source.granularRegistryFingerprint(),source.gasRegistryFingerprint());
+    }
+    private static void runSurface(VulkanFluidSolverBackend backend,ThermalRegistry base,GasRegistry gas,Path definitions) throws Exception {
+        var thermal=new ThermalRegistry(base.materials(),base.speciesOffsets(),base.transitions(),base.boundaries(),
+                read(definitions,"finite_thermal_devices",ThermalDefinitionCodec::decodeFiniteDevice),
+                read(definitions,"surface_materials",ThermalDefinitionCodec::decodeSurface),
+                base.chemicalRegistryFingerprint(),base.granularRegistryFingerprint(),base.gasRegistryFingerprint());
+        var chemistry=mmm.fluid.TestFluidDefinitions.load().chemistry();
+        var domain=new HostFluidState(4,4,4,new FluidSolverConfig(.5f,0,.05f,200,1e-5f,.002f),mmm.fluid.TestFluidDefinitions.withThermal(thermal));
+        var fluids=new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material()));
+        domain.bindMaterialRegistry(fluids);domain.bindMaterialDefinitions(mmm.fluid.TestFluidDefinitions.load().material());domain.sealDomainBoundary();
+        domain.bindChemistry(chemistry);domain.bindGasRegistry(gas);domain.bindThermal(thermal,fluids,293.15);
+        int cell=domain.grid().cell(1,1,1),node=domain.gasNodeAt(.75,.75,.75);
+        if(node<1)throw new AssertionError("Surface test gas cell is unavailable");
+        domain.editGas(node,BuiltinGasDefinitions.CO2,1_000_000_000L,293.15,false);
+        var surface=new FixedSurfaceState(FiniteThermalDeviceDefinition.LocalFace.EAST,"mmm:co2_adsorbent",
+                mmm.units.Mass.fromKilograms(1),Map.of(BuiltinChemicalDefinitions.CO2,500_000L));
+        var wallDefinition=thermal.finiteDevice("mmm:ordinary_metal_wall");
+        var wallMaterial=thermal.material(thermal.materialHandle(wallDefinition.thermalMaterialId()));
+        var wallPort=wallDefinition.ports().stream().filter(port->port.localFace()==surface.face()).findFirst().orElseThrow();
+        var body=new FiniteThermalBodyState(0,thermal.fingerprint(),wallDefinition.thermalMaterialId(),wallDefinition.bodyMassUnits(),0);
+        var device=new FiniteThermalDeviceState("mmm:surface_test","wall",wallDefinition.id(),body,List.of(surface));
+        body=new FiniteThermalBodyState(0,thermal.fingerprint(),body.thermalMaterialId(),body.massUnits(),SurfaceThermalState.energyAtTemperature(thermal,device,293.15));
+        device=new FiniteThermalDeviceState(device.providerId(),device.objectId(),device.deviceTypeId(),body,device.surfaces());
+        var devices=new FiniteThermalDeviceInventory(thermal.fingerprint(),List.of(device));
+        var ports=List.of(new FluidStateAccess.DevicePort(device.providerId(),device.objectId(),
+                new FluidDomainContracts.ThermalPortRequest(1,1,1,0,wallPort.wallThicknessMeters(),wallMaterial.conductivityWPerMeterK(),wallPort.fluidFilmThicknessMeters())));
+        var first=surfaceStep(backend,domain,devices,ports,thermal,gas,cell,"adsorb");
+        var low=HostFluidState.restoreAuthoritativeState(first.state());
+        var co2=first.state().spatialGas().cells().get(cell).component(BuiltinGasDefinitions.CO2);
+        if(co2!=null)low.editGas(low.gasNodeAt(.75,.75,.75),BuiltinGasDefinitions.CO2,co2.standardVolumeNanos(),
+                low.gasNodeTemperatureK(low.gasNodeAt(.75,.75,.75)),true);
+        surfaceStep(backend,low,first.devices(),ports,thermal,gas,cell,"desorb");
+    }
+    private record SurfaceResult(FluidDomainState state,FiniteThermalDeviceInventory devices) {}
+    private static SurfaceResult surfaceStep(VulkanFluidSolverBackend backend,HostFluidState domain,FiniteThermalDeviceInventory devices,
+                                             List<FluidStateAccess.DevicePort> ports,ThermalRegistry thermal,GasRegistry gas,int cell,String label) {
+        var state=domain.captureAuthoritativeState();var device=devices.devices().getFirst();var surface=device.surfaces().getFirst();
+        var definition=thermal.surfaceMaterial(surface.materialId());var adsorbate=definition.adsorbates().getFirst();
+        var inventory=state.spatialGas().cells().get(cell);var component=inventory.component(BuiltinGasDefinitions.CO2);
+        double pressure=new GasThermalModel(thermal,gas).absolutePressure(inventory,domain.cellGasVolume(1,1,1),state.spatialGas().energyAt(cell));
+        double partial=component==null?0:pressure*component.standardVolumeNanos()/(double)inventory.standardVolumeNanos();
+        double temperature=SurfaceThermalState.temperature(thermal,device);
+        double affinity=adsorbate.affinityPerPa()*Math.exp(adsorbate.adsorptionHeatJPerMol()/8.31446261815324*(1/temperature-1/adsorbate.referenceTemperatureK()));
+        long present=surface.speciesQuanta().getOrDefault(BuiltinChemicalDefinitions.CO2,0L);
+        double capacity=mmm.units.Mass.kilograms(surface.loadingMassUnits())*definition.siteCapacityMolesPerKg()*1e6;
+        double demand=definition.exchangeMolesPerSquareMeterSecond()*definition.effectiveAreaFactor()*.25*domain.config().timeStep()*1e6
+                *(affinity*partial/(1+affinity*partial)-present/capacity)+surface.residualQuanta().getOrDefault(BuiltinChemicalDefinitions.CO2,0.0);
+        long unit=mmm.fluid.TestFluidDefinitions.load().chemistry().speciesMassUnits(mmm.fluid.TestFluidDefinitions.load().chemistry().speciesHandle(BuiltinChemicalDefinitions.CO2),1);
+        long requested=(long)Math.floor(Math.abs(demand));
+        if(demand>=0) {
+            long donor=component==null?0:component.species().stream().filter(amount->amount.speciesId().equals(BuiltinChemicalDefinitions.CO2))
+                    .mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
+            requested=Math.min(requested,Math.min(donor,Math.min(component==null?0:component.massUnits()/unit,(long)Math.floor(capacity-present))));
+        } else requested=Math.min(requested,present);
+        int gasHandle=thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS,BuiltinGasDefinitions.CO2);
+        var gasMaterial=thermal.material(gasHandle);double minimum=ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+        double gasReference=thermal.speciesOffset(gasHandle,BuiltinChemicalDefinitions.CO2).referenceInternalEnergyJPerMol().toDouble()*1e-6;
+        double gasTemperature=new GasThermalModel(thermal,gas).state(inventory,state.spatialGas().energyAt(cell)).temperatureK();
+        double carried=unit*1e-10*(gasMaterial.referenceSpecificEnergyJPerKg()+gasMaterial.sensibleSpecificEnergyAt(demand>=0?gasTemperature:temperature))+gasReference;
+        double surfaceEnergy=1e-6*(adsorbate.referenceEnergyJPerMol()+adsorbate.heatCapacityJPerMolK()*(temperature-adsorbate.referenceTemperatureK()));
+        double wallCost=demand>=0?surfaceEnergy-carried:carried-surfaceEnergy;
+        double wallMargin=device.body().internalEnergyJ()-SurfaceThermalState.energyAtTemperature(thermal,device,minimum);
+        if(wallCost>0)requested=Math.min(requested,(long)Math.floor(Math.max(0,wallMargin)/wallCost));
+        if(demand>=0) {
+            double gasCold=unit*1e-10*(gasMaterial.referenceSpecificEnergyJPerKg()+gasMaterial.sensibleSpecificEnergyAt(minimum))+gasReference;
+            double gasCost=carried-gasCold,gasMargin=state.spatialGas().energyAt(cell)-new GasThermalModel(thermal,gas).internalEnergyAtTemperature(inventory,minimum);
+            if(gasCost>0)requested=Math.min(requested,(long)Math.floor(Math.max(0,gasMargin)/gasCost));
+        }
+        long expected=demand>=0?requested:-requested;
+        if(label.equals("adsorb")?expected<=0:expected>=0)throw new AssertionError("Surface reference direction is wrong: "+label+" "+expected);
+        var input=new FluidStateAccess(){public FluidDomainState.Layout layout(){return state.layout();}public FluidDomainState exportState(){return state;}
+            public FiniteThermalDeviceInventory finiteThermalDevices(){return devices;}public List<FluidStateAccess.DevicePort> finiteThermalPorts(){return ports;}};
+        try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,input,false,0));var prepared=candidate.claimPreparedDeviceState();var result=prepared.commit()) {
+            var after=result.exportState();var next=result.finiteThermalDevices();var nextDevice=next.devices().getFirst();
+            long actual=nextDevice.surfaces().getFirst().speciesQuanta().getOrDefault(BuiltinChemicalDefinitions.CO2,0L)-present;
+            if(Math.abs(actual-expected)>1)throw new AssertionError("Surface "+label+" differs from finite-rate reference: actual="+actual+" expected="+expected+" partial="+partial);
+            long beforeMass=state.spatialGas().cells().stream().mapToLong(GasInventory::totalMassUnits).sum()+present*unit;
+            long afterMass=after.spatialGas().cells().stream().mapToLong(GasInventory::totalMassUnits).sum()+(present+actual)*unit;
+            if(beforeMass!=afterMass || present+actual<0 || present+actual>capacity)throw new AssertionError("Surface "+label+" changed mass or exceeded capacity");
+            double beforeEnergy=domain.exactInternalEnergy().toDouble()+device.body().internalEnergyJ();
+            double afterEnergy=HostFluidState.restoreAuthoritativeState(after).exactInternalEnergy().toDouble()+nextDevice.body().internalEnergyJ();
+            if(Math.abs(afterEnergy-beforeEnergy)>1e-9*Math.max(Math.abs(beforeEnergy),Math.abs(afterEnergy)))
+                throw new AssertionError("Surface "+label+" changed total energy: "+beforeEnergy+" / "+afterEnergy);
+            System.out.println("surface_reference direction="+label+" partial_pa="+partial+" initial="+present+" expected="+expected+" actual="+actual+" capacity="+capacity);
+            try(var settlement=backend.evaluate(new FluidStepRequest(1,result,List.of(),false,0,false,true));
+                var preparedSettlement=settlement.claimPreparedDeviceState();var settled=preparedSettlement.commit()) {
+                return new SurfaceResult(settled.exportState(),settled.finiteThermalDevices());
+            }
+        }
     }
     private static void run(VulkanFluidSolverBackend backend,String mode,ThermalRegistry thermal,GasRegistry gas) {
         if(mode.equals("gas-pulse")||mode.equals("gas-pocket")){runLocalGas(backend,mode,thermal,gas);return;}
