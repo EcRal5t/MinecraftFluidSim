@@ -186,7 +186,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 long quantum=Math.max(1,Math.round((double)batch.massUnits()/unit/t.lowerVolumeSvqPerBatch()));
                 double reference=t.equilibriumTemperatureK(101325),slope=phaseModel.saturationSlopePaPerKelvin(t,reference,101325)*reference*reference/101325;
                 ruleBytes.putInt(material).putInt(component).putInt(species).putInt(config.definitions().identity().rules().indexOf(t.id())).putLong(unit);
-                ruleBytes.putDouble(reference).putDouble(slope).putDouble(0).putDouble(1).putDouble(100000).putDouble(0).putDouble(0).putDouble(0);
+                ruleBytes.putDouble(reference).putDouble(slope).putDouble(0).putDouble(0).putDouble(0).putDouble(0).putDouble(0).putDouble(0);
                 ruleBytes.putInt(1).putInt(0).putLong(quantum).putLong(1).putLong(0).putLong(0);
             }
             ruleBytes.flip();

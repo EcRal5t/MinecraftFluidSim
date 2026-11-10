@@ -134,21 +134,17 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         int collectorY=trays?13:8,weirY=collectorY+3,roofY=weirY+1,ventY=roofY+1;
         var blocks=shell(min,8,ventY+1,7);var ports=new ArrayList<Port>();var thermal=new ArrayList<Wall>();
         addPort(blocks,ports,min.offset(0,1,2),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
-        var feedPort=ports.removeLast();ports.add(new Port(feedPort.position(),feedPort.outward(),feedPort.mode(),feedPort.phase(),feedPort.rate(),true));
-        addPort(blocks,ports,min.offset(7,collectorY,4),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
+        var feedPort=ports.removeLast();ports.add(new Port(feedPort.position(),feedPort.outward(),feedPort.mode(),feedPort.phase(),trays?1_000_000_000L:feedPort.rate(),true));
+        addPort(blocks,ports,min.offset(6,collectorY-1,4),Direction.DOWN,FluidPortBlockEntity.Mode.OUTPUT);
         var productPort=ports.removeLast();ports.add(new Port(productPort.position(),productPort.outward(),productPort.mode(),productPort.phase(),productPort.rate(),true));
         addPort(blocks,ports,min.offset(7,1,2),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
         if(trays) {
             var bottomPort=ports.removeLast();ports.add(new Port(bottomPort.position(),bottomPort.outward(),bottomPort.mode(),bottomPort.phase(),bottomPort.rate(),true));
         }
-        for(int x=2;x<=3;x++)for(int z=2;z<=3;z++) {
-            addPort(blocks,ports,min.offset(x,ventY,z),Direction.UP,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
-            var port=ports.removeLast();ports.add(new Port(port.position(),port.outward(),port.mode(),port.phase(),1_000_000_000L,false));
-        }
         var open=new java.util.HashSet<BlockPos>();var pipeWalls=new java.util.HashSet<BlockPos>();var sealOutlets=new java.util.HashSet<BlockPos>();
-        for(int x=1;x<=6;x++)open.add(min.offset(x,1,2));
-        open.add(min.offset(2,2,2));
         if(trays) {
+            for(int x=1;x<=6;x++)open.add(min.offset(x,1,2));
+            open.add(min.offset(2,2,2));
             for(int y=1;y<=2;y++) {
                 for(int z=2;z<=5;z++)open.add(min.offset(6,y,z));
                 open.add(min.offset(5,y,5));
@@ -172,17 +168,29 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
                 addPort(blocks,ports,tray.inlet(),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
                 var port=ports.removeLast();ports.add(new Port(port.position(),port.outward(),port.mode(),port.phase(),1_000_000_000L,false));
             }
+        } else {
+            for(int x=1;x<=6;x++)for(int z=1;z<=5;z++) {
+                open.add(min.offset(x,1,z));
+                if(x>3 || z>3)open.add(min.offset(x,2,z));
+            }
+            for(int z=2;z<=5;z++)open.add(min.offset(2,3,z));
+            for(int x=3;x<=5;x++)open.add(min.offset(x,3,5));
         }
-        for(int y=trays?12:3;y<weirY;y++)open.add(min.offset(2,y,2));
+        addPort(blocks,ports,min.offset(7,collectorY,4),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
+        var productVent=ports.removeLast();ports.add(new Port(productVent.position(),productVent.outward(),productVent.mode(),productVent.phase(),1_000_000_000L,true));
+        if(trays) {
+            addPort(blocks,ports,min.offset(3,12,5),Direction.SOUTH,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
+            var refluxVent=ports.removeLast();ports.add(new Port(refluxVent.position(),refluxVent.outward(),refluxVent.mode(),refluxVent.phase(),1_000_000_000L,true));
+        }
+        for(int y=trays?12:4;y<weirY;y++)open.add(min.offset(2,y,2));
         // Vapor crosses the raised passage while carried liquid returns to the riser.
         for(int x:new int[]{2,3,5,6})open.add(min.offset(x,weirY,2));
         for(int x=2;x<=5;x++)open.add(min.offset(x,roofY,2));
         for(int z=3;z<=4;z++)open.add(min.offset(6,weirY,z));
-        for(int y=collectorY;y<=weirY;y++)open.add(min.offset(5,y,4));
-        open.add(min.offset(6,collectorY,4));
+        for(int y=collectorY;y<=weirY;y++)open.add(min.offset(6,y,4));
         if(trays) {
-            open.add(min.offset(4,collectorY,4));
-            for(int x=3;x<=4;x++)open.add(min.offset(x,collectorY-1,4));
+            for(int y=12;y<=weirY;y++)open.add(min.offset(3,y,4));
+            for(int x=3;x<=6;x++)open.add(min.offset(x,weirY,4));
         }
         for(int x=2;x<=3;x++)open.add(min.offset(x,roofY,3));
         open.removeAll(pipeWalls);
@@ -195,16 +203,47 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         }
         for(var outlet:sealOutlets)blocks.put(outlet,Blocks.STONE_SLAB.defaultBlockState()
                 .setValue(net.minecraft.world.level.block.SlabBlock.TYPE,net.minecraft.world.level.block.state.properties.SlabType.TOP));
+        for(var port:ports)if(port.phase()==FluidPortBlockEntity.Phase.GAS) {
+            blocks.put(port.position(),MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,port.outward()));
+            blocks.put(port.box(),MmmBlocks.MATERIAL_BOX.defaultBlockState());
+            open.remove(port.position());open.remove(port.box());
+        }
+        var product=ports.get(1);var box=product.box();
+        blocks.put(product.position(),MmmBlocks.FLUID_PORT.defaultBlockState().setValue(FluidPortBlock.FACING,Direction.DOWN));
+        blocks.put(box,MmmBlocks.MATERIAL_BOX.defaultBlockState());
+        open.remove(product.position());open.remove(box);
+        for(var direction:List.of(Direction.WEST,Direction.NORTH,Direction.SOUTH,Direction.DOWN)) {
+            var wall=box.relative(direction);blocks.put(wall,MmmBlocks.FLUID_BOUNDARY.defaultBlockState());open.remove(wall);
+        }
+        blocks.remove(box.relative(Direction.EAST));
+        var controller=min.offset(2,1,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
+        var levelSensor=min.offset(0,1,1);blocks.put(levelSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
+        var temperatureSensor=min.offset(5,collectorY-1,4);blocks.put(temperatureSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
+        open.remove(temperatureSensor);
+        var sensors=new ArrayList<Sensor>();
+        var productPressure=min.offset(7,collectorY,3);blocks.put(productPressure,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
+        sensors.add(new Sensor(productPressure,ProcessSensorBlockEntity.Measure.PRESSURE,100_000,110_000,false,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
+        if(trays) {
+            var refluxPressure=min.offset(3,13,5);blocks.put(refluxPressure,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
+            open.remove(refluxPressure);
+            sensors.add(new Sensor(refluxPressure,ProcessSensorBlockEntity.Measure.PRESSURE,100_000,110_000,false,min.offset(3,12,4),min.offset(3,12,4)));
+        }
+        sensors.add(new Sensor(levelSensor,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(1,1,1),min.offset(6,2,5)));
+        sensors.add(new Sensor(temperatureSensor,ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,350,375,true,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
+        if(trays) {
+            var bottomSensor=min.offset(7,1,1);blocks.put(bottomSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.WEST));
+            var seal=trays(min).getFirst().seal();
+            sensors.add(new Sensor(bottomSensor,ProcessSensorBlockEntity.Measure.LEVEL,.65,.85,false,seal,seal));
+        }
         for(int x=2;x<=4;x++)for(int z=1;z<=3;z++) {
             var hot=min.offset(x,0,z);blocks.put(hot,MmmBlocks.THERMAL_RESERVOIR.defaultBlockState());thermal.add(new Wall(hot,293.15));
         }
         var condenserWalls=new java.util.LinkedHashSet<BlockPos>();
         var collectors=new java.util.LinkedHashSet<BlockPos>();
-        for(int y=collectorY;y<=weirY;y++)collectors.add(min.offset(5,y,4));
-        collectors.add(min.offset(6,collectorY,4));
+        for(int y=collectorY;y<=weirY;y++)collectors.add(min.offset(6,y,4));
         if(trays) {
-            collectors.add(min.offset(4,collectorY,4));
-            for(int x=3;x<=4;x++)collectors.add(min.offset(x,collectorY-1,4));
+            for(int y=12;y<=weirY;y++)collectors.add(min.offset(3,y,4));
+            for(int x=3;x<=6;x++)collectors.add(min.offset(x,weirY,4));
         }
         for(var collector:collectors) {
             for(var direction:Direction.values()) {
@@ -218,17 +257,6 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
             if(state!=null && state.is(Blocks.IRON_BLOCK))heatedWalls.add(adjacent);
         }
         for(var wall:heatedWalls)thermal.add(new Wall(wall,condenserWalls.contains(wall)?(warm?400:285):380));
-        var controller=min.offset(2,1,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
-        var levelSensor=min.offset(0,1,1);blocks.put(levelSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
-        var temperatureSensor=min.offset(7,collectorY,3);blocks.put(temperatureSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
-        var sensors=new ArrayList<Sensor>();
-        sensors.add(new Sensor(levelSensor,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(1,1,1),min.offset(6,2,5)));
-        sensors.add(new Sensor(temperatureSensor,ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,350,375,true,min.offset(6,collectorY,4),min.offset(6,collectorY,4)));
-        if(trays) {
-            var bottomSensor=min.offset(7,1,1);blocks.put(bottomSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.WEST));
-            var seal=trays(min).getFirst().seal();
-            sensors.add(new Sensor(bottomSensor,ProcessSensorBlockEntity.Measure.LEVEL,.65,.85,false,seal,seal));
-        }
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),sensors,thermal,List.of());
     }
     private static IndustrialLayout surfaceChannel(BlockPos min,boolean adsorption,boolean partial) {
