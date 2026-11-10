@@ -227,6 +227,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 控制器、外壳和接口建立区域；桶、发射器、气体源、换热器和耕地通过区域事务交接库存。演示复用相同初始化、调度与提交流程；原版静水池接管与归还使用世界归属日志。命令见[命令速查](../maintenance/commands.md)，后续玩法见[产品路线](../roadmap/product-roadmap.md)。
 
+区域创建与附近环境温度的后续替换方案见[空间选区与环境热场](../roadmap/region-and-environment-heat-plan.md)。该方案覆盖空间选择、范围增长、世界坐标热库存和调用方迁移；实施状态由当前计划维护。
+
 <a id="performance"></a>
 <a id="diagnosis"></a>
 ## 性能和故障定位
