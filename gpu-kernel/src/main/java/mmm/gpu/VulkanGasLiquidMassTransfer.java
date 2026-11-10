@@ -89,7 +89,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_SLOT(4),
         ORPHAN_ENERGY(8),
         ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4), SURFACE_TEMPERATURE(8), SURFACE_CHANGED(4), SURFACE_REMOVED_MASS(8), SURFACE_RECEIVER(4),
-        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8), LIQUID_SPECIES_ENERGY(8), MOMENTUM_TRANSFER(8), GAS_CALORIC(8), AUDIT_QUANTA(8), AUDIT_NANOS(8);
+        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8), LIQUID_SPECIES_ENERGY(8), GAS_CALORIC(8), AUDIT_QUANTA(8), AUDIT_NANOS(8);
         final int width;
         Field(int width) {
             this.width = width;
@@ -199,8 +199,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case SURFACE_RULES -> 28 * surfaceRules;
                     case CONTROL -> 8;
                     case HEAD -> groups;
-                    case GAS_TO_LIQUID_MASS, LIQUID_TO_GAS_MASS -> Math.multiplyExact(cells, 7);
-                    case MOMENTUM_TRANSFER -> Math.multiplyExact(cells, 8);
+                    case GAS_TO_LIQUID_MASS, LIQUID_TO_GAS_MASS -> cells;
                     case OLD_GAS_U, NEW_GAS_U -> inputs.gas().gas().nodeCapacity();
                     case GAS_CALORIC -> Math.multiplyExact(inputs.gas().gas().nodeCapacity(), 4);
                     case OLD_K, NEW_K, FACE_P, FACE_P_NEXT -> faces;
@@ -318,15 +317,13 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             return new VulkanEnergyLedger.Stream(1, word(f), column(f).count(), 2, sign);
         }
     }
-    private final FlipKernelBindings bindings;
-    private final FlipKernelBindings proposeBindings;
-    private final FlipKernelBindings contactBindings;
-    private final FlipKernelBindings exchangeBindings;
+    private final java.util.Map<Integer, FlipKernelBindings> bindings = new java.util.LinkedHashMap<>();
+    private final ArrayList<AutoCloseable> owned = new ArrayList<>();
     private final VulkanLiquidPhaseRows rows;
     private VulkanStageTimings timings;
     private final VulkanCommandTemplates templates;
     VulkanGasLiquidMassTransfer(VulkanDeviceContext c) {
-        templates = new VulkanCommandTemplates(c);
+        templates = own(new VulkanCommandTemplates(c));
         var shader = VulkanLiquidPhaseRows.resource("gas-liquid-mass-transfer.comp")
                 .replace("// HOST_LAYOUT", shaderLayout()).replace("// SERIES_CONDUCTANCE_LIBRARY", VulkanLiquidPhaseRows.resource("series-conductance.glsl"))
                 .replace("// PHASE_ROWS_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-phase-rows.glsl"))
@@ -335,53 +332,20 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 .replace("// LIQUID_CALORIC_STATE", VulkanLiquidPhaseRows.resource("liquid-caloric-state.glsl"))
                 .replace("// GAS_CALORIC_STATE", VulkanGasThermodynamics.caloricShader())
                 .replace("// PLIC_FACE_LIBRARY", VulkanLiquidPhaseRows.resource("plic-face.glsl"));
-        bindings = new FlipKernelBindings(c, 3, shader, 16, -1);
         try {
-            proposeBindings = new FlipKernelBindings(c, 3, shader, 16, 1);
+            for (int stage : new int[]{0,1,4,5,6,7,8,9,11,13,14,15,16,17,18,20})
+                bindings.put(stage, own(new FlipKernelBindings(c, 3, shader, 12, stage)));
+            rows = own(new VulkanLiquidPhaseRows(c));
+            if(Boolean.getBoolean("mmm.gpuMechanicalStages") && c.hasTimestampQueries())timings=own(new VulkanStageTimings(c,32));
         } catch (RuntimeException | Error e) {
-            bindings.close();
-            throw e;
-        }
-        try {
-            exchangeBindings = new FlipKernelBindings(c, 3, shader, 16, 4);
-        } catch (RuntimeException | Error e) {
-            proposeBindings.close();
-            bindings.close();
-            throw e;
-        }
-        try {
-            contactBindings = new FlipKernelBindings(c, 3, shader, 16, 17);
-        } catch (RuntimeException | Error e) {
-            exchangeBindings.close();
-            proposeBindings.close();
-            bindings.close();
-            throw e;
-        }
-        try {
-            rows = new VulkanLiquidPhaseRows(c);
-        } catch (RuntimeException | Error e) {
-            contactBindings.close();
-            exchangeBindings.close();
-            proposeBindings.close();
-            bindings.close();
-            throw e;
-        }
-        try {
-            if(Boolean.getBoolean("mmm.gpuMechanicalStages") && c.hasTimestampQueries())timings=new VulkanStageTimings(c,24);
-        } catch (RuntimeException | Error e) {
-            rows.close();
-            contactBindings.close();
-            exchangeBindings.close();
-            proposeBindings.close();
-            bindings.close();
+            try { close(); } catch (RuntimeException failure) { e.addSuppressed(failure); }
             throw e;
         }
     }
+    private <T extends AutoCloseable> T own(T resource) { owned.add(resource); return resource; }
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(arena, errors, arena));
-        proposeBindings.rebindRanges(List.of(arena, errors, arena));
-        contactBindings.rebindRanges(List.of(arena, errors, arena));
-        exchangeBindings.rebindRanges(List.of(arena, errors, arena));
+        var ranges = List.of(arena, errors, arena);
+        for (var pipeline : bindings.values()) pipeline.rebindRanges(ranges);
         rows.rebindRanges(arena, errors);
     }
     int execute(VulkanRegionStorage.Candidate candidate, Layout l, double duration, boolean phaseEnabled,VulkanGasThermodynamics.Layout eos,
@@ -423,7 +387,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     void recordPrepare(VkCommandBuffer c, Layout l) {
         timed(c,"gas-transfer-import",()->rows.recordImport(c,l.rows));
         timed(c,"gas-transfer-clear-pending",()->{
-            stage(c,l,0,Math.max(Math.multiplyExact(7,l.cells),Math.max(Math.multiplyExact(Math.multiplyExact(l.cells,l.rules),2),Math.max(l.wallDevices,Math.max(l.groups,l.inputs.gas().gas().nodeCapacity())))));
+            stage(c,l,0,Math.max(l.cells,Math.max(Math.multiplyExact(Math.multiplyExact(l.cells,l.rules),2),Math.max(l.wallDevices,Math.max(l.groups,l.inputs.gas().gas().nodeCapacity())))));
             stage(c,l,9,l.progress.pendingCapacity());
         });
         for(int pass=0;pass<7;pass++){
@@ -449,12 +413,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     }
     private void recordMomentumHeat(VkCommandBuffer c,Layout l,int pass) {
         timed(c,"gas-transfer-momentum-heat",()->{
-            stage(c,l,19,l.cells,pass);
             stage(c,l,5,l.faces,pass);
             stage(c,l,6,l.cells,pass);
             stage(c,l,7,l.inputs.gas().gas().nodeCapacity(),pass);
             stage(c,l,11,l.cells,pass);
-            stage(c,l,21,l.cells,pass);
         });
     }
     void recordPublish(VkCommandBuffer c, Layout l) {
@@ -471,10 +433,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         if (count == 0)
             return;
         try (var s = stackPush()) {
-            var selected=stage==1?proposeBindings:stage==17?contactBindings:stage==4?exchangeBindings:bindings;
+            var selected=bindings.get(stage);
             selected.bind(c, s);
             vkCmdPushConstants(c, selected.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                s.ints(l.word(Field.HEADER), stage, count, pass));
+                s.ints(l.word(Field.HEADER), count, pass));
             int g = (count + 127) / 128;
             vkCmdDispatch(c, Math.min(g, 65535), (g + 65534) / 65535, 1);
             VulkanRegionStorage.barrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
@@ -486,17 +448,13 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     }
     @Override
     public void close() {
-        try {
-            templates.close();
-            if(timings!=null)timings.close();
-        } finally {
-            try { rows.close(); } finally {
-                try { contactBindings.close(); } finally {
-                    try { exchangeBindings.close(); } finally {
-                        try { proposeBindings.close(); } finally { bindings.close(); }
-                    }
-                }
-            }
+        RuntimeException failure = null;
+        for (int i=owned.size()-1;i>=0;i--) try { owned.get(i).close(); }
+        catch (Exception e) {
+            if (failure==null) failure=new IllegalStateException("Closing gas-liquid kernels failed",e);
+            else failure.addSuppressed(e);
         }
+        owned.clear();
+        if (failure!=null) throw failure;
     }
 }
