@@ -1,6 +1,9 @@
 package mmm.client;
 
 import java.util.ArrayList;
+import java.util.Locale;
+import java.util.TreeSet;
+import mmm.chemistry.ChemicalLimits;
 import java.util.List;
 import mmm.network.SampleAnalysisPayload;
 import mmm.network.SampleAnalysisRequest;
@@ -16,7 +19,6 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.util.FormattedCharSequence;
 
 /** Scrollable view of the current sample and an optional locally retained baseline. */
 public final class SampleAnalysisScreen extends Screen {
@@ -25,7 +27,7 @@ public final class SampleAnalysisScreen extends Screen {
     private final SampleAnalysisPayload sample;
     private int offset;
     private SampleAnalysisScreen(SampleAnalysisPayload sample) {
-        super(Component.literal("容器样品分析"));
+        super(text("title"));
         this.sample = sample;
     }
     public static void register() {
@@ -52,88 +54,155 @@ public final class SampleAnalysisScreen extends Screen {
             comparison.observeDimension(dimension); pending.update(dimension,client.gui.screen()!=null);
         });
     }
+    private final List<Row> rows = new ArrayList<>();
+    private record Cell(String value, double fraction) {
+        Cell(String value) { this(value, Double.NaN); }
+    }
+    private record Row(Component label, List<Cell> cells, boolean header) { }
+    private static Component text(String key) { return Component.translatable("screen.mmm.sample." + key); }
     @Override protected void init() {
-        int buttonWidth = Math.min(140, (width - 24) / 2);
-        addRenderableWidget(IndustrialUi.button(Component.literal("保存当前样品为基准"), button -> {
+        int w = 140;
+        addRenderableWidget(IndustrialUi.button(text("save"), button -> {
             comparison.save(sample); offset = 0; rebuildWidgets();
-        }).bounds(width / 2 - buttonWidth - 3, height - 28, buttonWidth, 20).build());
-        var clear = IndustrialUi.button(Component.literal("清除基准"), button -> {
+        }).bounds(width / 2 - w - 3, height - 32, w, 20).build());
+        var clear = IndustrialUi.button(text("clear"), button -> {
             comparison.clear(); offset = 0; rebuildWidgets();
-        }).bounds(width / 2 + 3, height - 28, buttonWidth, 20).build();
+        }).bounds(width / 2 + 3, height - 32, w, 20).build();
         clear.active = comparison.baseline() != null;
         addRenderableWidget(clear);
+        buildRows();
     }
-    private record DisplayLine(FormattedCharSequence text, double fraction) { }
-    private List<DisplayLine> wrapped(SampleAnalysisPayload value, int columnWidth) {
-        var result = new ArrayList<DisplayLine>();
-        double[] fractions = new double[value.lines().size()];
-        java.util.Arrays.fill(fractions, -1);
-        for (var fraction : value.fractions()) fractions[fraction.line()] = fraction.value();
-        for (int index = 0; index < value.lines().size(); index++) {
-            String line = value.lines().get(index);
-            double fraction = fractions[index];
-            int textWidth = fraction >= 0 && columnWidth >= 140 ? columnWidth - 48 : columnWidth;
-            var parts = font.split(Component.literal(line), Math.max(1, textWidth));
-            for (int i = 0; i < parts.size(); i++) result.add(new DisplayLine(parts.get(i), i == 0 ? fraction : -1));
+    private void buildRows() {
+        rows.clear();
+        var base = comparison.baseline();
+        boolean paired = base != null;
+        header("quantity", paired ? new String[]{"baseline", "current", "change"} : new String[]{"current"});
+        quantity("mass", base == null ? Double.NaN : base.massKg(), sample.massKg(), "kg", true);
+        quantity("volume", base == null ? Double.NaN : base.volumeM3(), sample.volumeM3(), "m³",
+                base == null || base.phase() == sample.phase());
+        quantity("temperature", base == null ? Double.NaN : base.temperatureK(), sample.temperatureK(), "K", true);
+        quantity("energy", base == null ? Double.NaN : base.internalEnergyJ() / 1e6, sample.internalEnergyJ() / 1e6, "MJ", true);
+        header("materials", paired ? new String[]{"mass", "volume", "mass", "volume"} : new String[]{"mass", "volume"});
+        var materials = new TreeSet<String>();
+        sample.materials().forEach(m -> materials.add(m.id()));
+        if (base != null) base.materials().forEach(m -> materials.add(m.id()));
+        for (String id : materials) {
+            var cells = new ArrayList<Cell>();
+            if (base != null) materialCells(cells, base, id);
+            materialCells(cells, sample, id);
+            rows.add(new Row(CompositionNames.label(id), cells, false));
         }
-        return result;
+        if (materials.isEmpty()) rows.add(new Row(text("empty"), List.of(), false));
+        header("species", paired ? new String[]{"amount", "mass_fraction", "mole_fraction", "concentration",
+                "amount", "mass_fraction", "mole_fraction", "concentration"}
+                : new String[]{"amount", "mass_fraction", "mole_fraction", "concentration"});
+        var species = new TreeSet<String>();
+        sample.species().forEach(s -> species.add(s.id()));
+        if (base != null) base.species().forEach(s -> species.add(s.id()));
+        for (String id : species) {
+            var cells = new ArrayList<Cell>();
+            if (base != null) speciesCells(cells, base, id);
+            speciesCells(cells, sample, id);
+            rows.add(new Row(CompositionNames.label(id), cells, false));
+        }
+        if (species.isEmpty()) rows.add(new Row(text("unrecorded"), List.of(), false));
     }
-    private int columnWidth() { return comparison.baseline() == null ? Math.max(1, width - 32) : Math.max(1, (width - 40) / 2); }
-    private int visibleLines() { return Math.max(1, (height - 91) / 11); }
-    private int maxOffset() {
-        int count = wrapped(sample, columnWidth()).size();
-        if (comparison.baseline() != null) count = Math.max(count, wrapped(comparison.baseline(), columnWidth()).size());
-        return Math.max(0, count - visibleLines());
+    private void header(String label, String[] columns) {
+        rows.add(new Row(text(label), java.util.Arrays.stream(columns).map(k -> new Cell(text(k).getString())).toList(), true));
     }
+    private void quantity(String key, double baseline, double current, String unit, boolean comparable) {
+        var cells = new ArrayList<Cell>();
+        if (comparison.baseline() != null) cells.add(new Cell(number(baseline) + " " + unit));
+        cells.add(new Cell(number(current) + " " + unit));
+        if (comparison.baseline() != null) cells.add(new Cell(comparable ? signed(current - baseline) + " " + unit : "—"));
+        rows.add(new Row(text(key), cells, false));
+    }
+    private static void materialCells(List<Cell> cells, SampleAnalysisPayload value, String id) {
+        var material = value.materials().stream().filter(m -> m.id().equals(id)).findFirst().orElse(null);
+        cells.add(new Cell(number(material == null ? 0 : material.massKg()) + " kg"));
+        cells.add(new Cell(number(material == null ? 0 : material.volumeM3()) + " m³"));
+    }
+    private static void speciesCells(List<Cell> cells, SampleAnalysisPayload value, String id) {
+        var species = value.species().stream().filter(s -> s.id().equals(id)).findFirst().orElse(null);
+        if (species == null) {
+            for (int i = 0; i < 4; i++) cells.add(new Cell(value.completeSpecies() ? "0" : "—"));
+            return;
+        }
+        double moles = (double) species.amountQuanta() / ChemicalLimits.QUANTA_PER_MOL;
+        cells.add(new Cell(number(moles)));
+        cells.add(new Cell(number(species.massFraction() * 100), species.massFraction()));
+        cells.add(new Cell(number(species.moleFraction() * 100)));
+        cells.add(new Cell(number(value.volumeM3() > 0 ? moles / value.volumeM3() : Double.NaN)));
+    }
+    private int tableTop() {
+        return sample.phase() == SampleAnalysisPayload.Phase.GAS
+                || comparison.baseline() != null && comparison.baseline().phase() == SampleAnalysisPayload.Phase.GAS ? 62 : 50;
+    }
+    private int visibleRows() { return Math.max(1, (height - tableTop() - 40) / 21); }
+    private int maxOffset() { return Math.max(0, rows.size() - visibleRows()); }
     @Override public boolean mouseScrolled(double x, double y, double horizontal, double vertical) {
-        offset = Math.max(0, Math.min(maxOffset(), offset - (int) Math.signum(vertical) * 3));
+        offset = Math.clamp(offset - (int) Math.signum(vertical) * 3, 0, maxOffset());
         return true;
     }
     @Override public boolean isPauseScreen() { return false; }
     @Override public void tick() {
-        if(minecraft.level==null || !sample.dimension().equals(minecraft.level.dimension().identifier().toString())) onClose();
+        if (minecraft.level == null || !sample.dimension().equals(minecraft.level.dimension().identifier().toString())) onClose();
     }
-    @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-        IndustrialUi.panel(graphics, 8, 8, width - 16, height - 16);
-        IndustrialUi.header(graphics, 9, 9, width - 18);
-        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-        IndustrialUi.brand(graphics, 13, 11, 16);
-        graphics.centeredText(font, title, width / 2, 14, IndustrialUi.TEXT);
-        int columnWidth = columnWidth();
-        if (comparison.baseline() != null) graphics.fill(20 + columnWidth, 48, 21 + columnWidth, height - 36, IndustrialUi.EDGE);
-        IndustrialUi.icon(graphics, phase(comparison.baseline() == null ? sample : comparison.baseline()), 16, 31, 16);
-        graphics.text(font, comparison.baseline() == null ? "当前样品" : "基准样品", 35, 35, IndustrialUi.CYAN, false);
-        if (comparison.baseline() != null) {
-            IndustrialUi.icon(graphics, phase(sample), 24 + columnWidth, 31, 16);
-            graphics.text(font, "当前样品", 43 + columnWidth, 35, IndustrialUi.CYAN, false);
+    @Override public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+        IndustrialUi.panel(g, 8, 8, width - 16, height - 16);
+        IndustrialUi.header(g, 9, 9, width - 18);
+        IndustrialUi.brand(g, 13, 11, 16);
+        g.text(font, title, 35, 14, IndustrialUi.TEXT, false);
+        super.extractRenderState(g, mouseX, mouseY, partialTick);
+        int labelWidth = 128, dataLeft = 20 + labelWidth, dataWidth = width - 40 - labelWidth;
+        var base = comparison.baseline();
+        if (base == null) sampleHeading(g, sample, text("current"), dataLeft, dataWidth);
+        else {
+            sampleHeading(g, base, text("baseline"), dataLeft, dataWidth / 2);
+            sampleHeading(g, sample, text("current"), dataLeft + dataWidth / 2, dataWidth / 2);
         }
         offset = Math.min(offset, maxOffset());
-        drawLines(graphics, comparison.baseline() == null ? sample : comparison.baseline(), 16, columnWidth);
-        if (comparison.baseline() != null) drawLines(graphics, sample, 24 + columnWidth, columnWidth);
-        if (maxOffset() > 0) {
-            int top = 50, track = Math.max(1, visibleLines() * 11 - 2);
-            int thumb = Math.max(4, track * visibleLines() / (visibleLines() + maxOffset()));
-            int position = (track - thumb) * offset / maxOffset();
-            graphics.fill(width - 14, top, width - 12, top + track, IndustrialUi.INSET);
-            graphics.fill(width - 14, top + position, width - 12, top + position + thumb, IndustrialUi.CYAN);
+        for (int i = offset; i < Math.min(rows.size(), offset + visibleRows()); i++) {
+            Row row = rows.get(i);
+            int y = tableTop() + (i - offset) * 21;
+            g.fill(16, y, width - 20, y + 21, row.header() ? IndustrialUi.INSET
+                    : (i & 1) == 0 ? IndustrialUi.PANEL : 0xff28353e);
+            g.text(font, row.label(), 21, y + 6, row.header() ? IndustrialUi.CYAN : IndustrialUi.TEXT, false);
+            int n = row.cells().size();
+            for (int col = 0; col < n; col++) {
+                Cell cell = row.cells().get(col);
+                int x = dataLeft + dataWidth * col / n, end = dataLeft + dataWidth * (col + 1) / n - 8;
+                g.enableScissor(x, y, end, y + 21);
+                if (row.header()) {
+                    String[] lines = cell.value().split("\\n|\n", -1);
+                    for (int line = 0; line < lines.length; line++)
+                        g.text(font, lines[line], end - font.width(lines[line]), y + (lines.length > 1 ? 1 : 6) + line * 10, IndustrialUi.MUTED, false);
+                } else {
+                    g.text(font, cell.value(), end - font.width(cell.value()), y + 5, IndustrialUi.TEXT, false);
+                    if (Double.isFinite(cell.fraction())) IndustrialUi.bar(g, end - 46, y + 16, 46, 3, cell.fraction(), IndustrialUi.CYAN);
+                }
+                g.disableScissor();
+            }
         }
+        IndustrialUi.scrollbar(g, width - 16, tableTop(), visibleRows() * 21, offset, visibleRows(), rows.size());
     }
-    private static IndustrialUi.Icon phase(SampleAnalysisPayload payload) {
-        return switch (payload.phase()) {
+    private void sampleHeading(GuiGraphicsExtractor g, SampleAnalysisPayload value, Component heading, int x, int w) {
+        IndustrialUi.icon(g, switch (value.phase()) {
             case LIQUID -> IndustrialUi.Icon.LIQUID;
             case GAS -> IndustrialUi.Icon.GAS;
             case SOLID -> IndustrialUi.Icon.SOLID;
-        };
+        }, x, 35, 14);
+        g.text(font, heading, x + 20, 36, IndustrialUi.CYAN, false);
+        String phase = text(value.phase().name().toLowerCase(Locale.ROOT)).getString();
+        g.text(font, phase, x + w - 8 - font.width(phase), 36, IndustrialUi.MUTED, false);
+        if (value.phase() == SampleAnalysisPayload.Phase.GAS) g.text(font, text("standard"), x + 20, 48, IndustrialUi.MUTED, false);
     }
-    private void drawLines(GuiGraphicsExtractor graphics, SampleAnalysisPayload payload, int x, int columnWidth) {
-        var lines = wrapped(payload, columnWidth);
-        for (int i = offset; i < Math.min(lines.size(), offset + visibleLines()); i++)
-            {
-                var line = lines.get(i);
-                int y = 52 + (i - offset) * 11;
-                graphics.text(font, line.text(), x, y, IndustrialUi.TEXT, false);
-                if (line.fraction() >= 0 && columnWidth >= 140)
-                    IndustrialUi.bar(graphics, x + columnWidth - 44, y + 2, 42, 6, line.fraction(), IndustrialUi.CYAN);
-            }
+    private static String number(double value) {
+        if (!Double.isFinite(value)) return "—";
+        if (value == 0) return "0";
+        double magnitude = Math.abs(value);
+        return magnitude >= 1e5 || magnitude < .001 ? String.format(Locale.ROOT, "%.3g", value)
+                : java.math.BigDecimal.valueOf(value).round(new java.math.MathContext(5)).stripTrailingZeros().toPlainString();
     }
+    private static String signed(double value) { return Double.isFinite(value) && value > 0 ? "+" + number(value) : number(value); }
 }

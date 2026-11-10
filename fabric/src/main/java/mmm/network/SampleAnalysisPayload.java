@@ -3,60 +3,89 @@ package mmm.network;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import mmm.MmmMod;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
-/** Bounded, server-authored display snapshot of one held container. */
-public record SampleAnalysisPayload(java.util.UUID session, String dimension, Phase phase,
-                                    List<String> lines, List<Fraction> fractions) implements CustomPacketPayload {
-    private static final int MAX_LINES = 2048;
-    private static final int MAX_LINE_LENGTH = 256;
+/** Quantities from one held container; formatting belongs to the client. */
+public record SampleAnalysisPayload(UUID session, String dimension, Phase phase,
+        double volumeM3, double massKg, double temperatureK, double internalEnergyJ,
+        boolean completeSpecies, List<Material> materials, List<Species> species) implements CustomPacketPayload {
+    private static final int MAX_ROWS = 512;
     public enum Phase { LIQUID, GAS, SOLID }
-    public record Fraction(int line, double value) {
-        public Fraction {
-            if (line < 0 || !Double.isFinite(value) || value < 0 || value > 1)
-                throw new IllegalArgumentException("Invalid sample fraction");
+    public record Material(String id, double volumeM3, double massKg) {
+        public Material { identifier(id); nonnegative(volumeM3); nonnegative(massKg); }
+    }
+    public record Species(String id, long amountQuanta, double massFraction, double moleFraction) {
+        public Species {
+            identifier(id);
+            if (amountQuanta < 0) throw new IllegalArgumentException("Negative sample amount");
+            fraction(massFraction); fraction(moleFraction);
         }
     }
-    public static final Type<SampleAnalysisPayload> TYPE = new Type<>(MmmMod.id("sample_analysis_v2"));
+    public static final Type<SampleAnalysisPayload> TYPE = new Type<>(MmmMod.id("sample_analysis_v3"));
     public static final StreamCodec<FriendlyByteBuf, SampleAnalysisPayload> CODEC = StreamCodec.of(
             SampleAnalysisPayload::encode, SampleAnalysisPayload::decode);
     public SampleAnalysisPayload {
         Objects.requireNonNull(session); Objects.requireNonNull(dimension); Objects.requireNonNull(phase);
-        lines = List.copyOf(lines); fractions = List.copyOf(fractions);
-        if (lines.size() > MAX_LINES || lines.stream().anyMatch(s -> s.length() > MAX_LINE_LENGTH)
-                || fractions.size() > lines.size()) throw new IllegalArgumentException("Sample analysis exceeds packet limits");
-        boolean[] seen = new boolean[lines.size()];
-        for (Fraction fraction : fractions) {
-            if (fraction.line() >= lines.size() || seen[fraction.line()]) throw new IllegalArgumentException("Invalid sample fraction line");
-            seen[fraction.line()] = true;
-        }
+        if (dimension.length() > 256) throw new IllegalArgumentException("Sample dimension too long");
+        nonnegative(volumeM3); nonnegative(massKg);
+        if (!(Double.isNaN(temperatureK) || Double.isFinite(temperatureK) && temperatureK > 0)
+                || Double.isInfinite(internalEnergyJ)) throw new IllegalArgumentException("Invalid sample thermal state");
+        materials = List.copyOf(materials); species = List.copyOf(species);
+        if (materials.size() > MAX_ROWS || species.size() > MAX_ROWS)
+            throw new IllegalArgumentException("Sample exceeds row budget");
+        if (materials.stream().map(Material::id).distinct().count() != materials.size()
+                || species.stream().map(Species::id).distinct().count() != species.size())
+            throw new IllegalArgumentException("Duplicate sample component");
     }
-    public SampleAnalysisPayload(Phase phase, List<String> lines, List<Fraction> fractions) {
-        this(new java.util.UUID(0,0), "", phase, lines, fractions);
+    public SampleAnalysisPayload(Phase phase, double volumeM3, double massKg, double temperatureK, double internalEnergyJ,
+            boolean completeSpecies, List<Material> materials, List<Species> species) {
+        this(new UUID(0, 0), "", phase, volumeM3, massKg, temperatureK, internalEnergyJ, completeSpecies, materials, species);
+    }
+    public SampleAnalysisPayload withSession(UUID session, String dimension) {
+        return new SampleAnalysisPayload(session, dimension, phase, volumeM3, massKg, temperatureK, internalEnergyJ,
+                completeSpecies, materials, species);
+    }
+    public static SampleAnalysisPayload empty(Phase phase) {
+        return new SampleAnalysisPayload(phase, 0, 0, Double.NaN, Double.NaN, false, List.of(), List.of());
     }
     @Override public Type<SampleAnalysisPayload> type() { return TYPE; }
-    private static void encode(FriendlyByteBuf buf, SampleAnalysisPayload payload) {
-        buf.writeUUID(payload.session); buf.writeUtf(payload.dimension,256); buf.writeVarInt(payload.phase.ordinal());
-        buf.writeVarInt(payload.lines.size());
-        for (String line : payload.lines) buf.writeUtf(line, MAX_LINE_LENGTH);
-        buf.writeVarInt(payload.fractions.size());
-        for (Fraction fraction : payload.fractions) { buf.writeVarInt(fraction.line()); buf.writeDouble(fraction.value()); }
+    private static void encode(FriendlyByteBuf b, SampleAnalysisPayload p) {
+        b.writeUUID(p.session); b.writeUtf(p.dimension, 256); b.writeEnum(p.phase);
+        b.writeDouble(p.volumeM3); b.writeDouble(p.massKg); b.writeDouble(p.temperatureK); b.writeDouble(p.internalEnergyJ);
+        b.writeBoolean(p.completeSpecies); b.writeVarInt(p.materials.size());
+        for (var m : p.materials) { b.writeUtf(m.id, 128); b.writeDouble(m.volumeM3); b.writeDouble(m.massKg); }
+        b.writeVarInt(p.species.size());
+        for (var s : p.species) { b.writeUtf(s.id, 128); b.writeVarLong(s.amountQuanta); b.writeDouble(s.massFraction); b.writeDouble(s.moleFraction); }
     }
-    private static SampleAnalysisPayload decode(FriendlyByteBuf buf) {
-        var session=buf.readUUID(); var dimension=buf.readUtf(256);
-        int phase=buf.readVarInt();
-        if (phase < 0 || phase >= Phase.values().length) throw new IllegalArgumentException("Invalid sample phase");
-        int count = buf.readVarInt();
-        if (count < 0 || count > MAX_LINES) throw new IllegalArgumentException("Invalid sample line count");
-        var lines = new ArrayList<String>(count);
-        for (int i = 0; i < count; i++) lines.add(buf.readUtf(MAX_LINE_LENGTH));
-        int fractionCount = buf.readVarInt();
-        if (fractionCount < 0 || fractionCount > count) throw new IllegalArgumentException("Invalid sample fraction count");
-        var fractions = new ArrayList<Fraction>(fractionCount);
-        for (int i = 0; i < fractionCount; i++) fractions.add(new Fraction(buf.readVarInt(), buf.readDouble()));
-        return new SampleAnalysisPayload(session, dimension, Phase.values()[phase], lines, fractions);
+    private static SampleAnalysisPayload decode(FriendlyByteBuf b) {
+        var session = b.readUUID(); String dimension = b.readUtf(256); Phase phase = b.readEnum(Phase.class);
+        double volume = b.readDouble(), mass = b.readDouble(), temperature = b.readDouble(), energy = b.readDouble();
+        boolean complete = b.readBoolean();
+        int count = count(b);
+        var materials = new ArrayList<Material>(count);
+        for (int i = 0; i < count; i++) materials.add(new Material(b.readUtf(128), b.readDouble(), b.readDouble()));
+        count = count(b);
+        var species = new ArrayList<Species>(count);
+        for (int i = 0; i < count; i++) species.add(new Species(b.readUtf(128), b.readVarLong(), b.readDouble(), b.readDouble()));
+        return new SampleAnalysisPayload(session, dimension, phase, volume, mass, temperature, energy, complete, materials, species);
+    }
+    private static int count(FriendlyByteBuf b) {
+        int value = b.readVarInt();
+        if (value < 0 || value > MAX_ROWS) throw new IllegalArgumentException("Invalid sample row count");
+        return value;
+    }
+    private static void identifier(String id) {
+        if (id == null || id.isBlank() || id.length() > 128) throw new IllegalArgumentException("Invalid sample component id");
+    }
+    private static void nonnegative(double value) {
+        if (!Double.isFinite(value) || value < 0) throw new IllegalArgumentException("Invalid sample quantity");
+    }
+    private static void fraction(double value) {
+        if (!(Double.isNaN(value) || Double.isFinite(value) && value >= 0 && value <= 1))
+            throw new IllegalArgumentException("Invalid sample fraction");
     }
 }

@@ -134,10 +134,9 @@ final class DemoWorkbenchScreen extends Screen {
 		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		if (state.regionId() != null) {
 			Component status = Component.translatable(state.paused() || state.blocked() ? "screen.mmm.demos.paused" : "screen.mmm.demos.running");
-			if (state.preset() != selected) status = Component.translatable(
-					"screen.mmm.demos." + state.preset().name().toLowerCase(java.util.Locale.ROOT))
-					.append(Component.literal(" · ")).append(status);
-			graphics.centeredText(font, status, width / 2, 80, 0xffa0a0a0);
+            if (state.preset() != selected) graphics.text(font, Component.translatable(
+                    "screen.mmm.demos." + state.preset().name().toLowerCase(java.util.Locale.ROOT)), 20, 80, IndustrialUi.MUTED, false);
+            graphics.centeredText(font, status, width / 2, 80, IndustrialUi.CYAN);
 		}
 		if (state.failure() != null) {
 			var lines = font.split(Component.literal(state.failure()), Math.max(1, width - 32));

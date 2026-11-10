@@ -26,7 +26,7 @@ public final class SurfaceCoatingItem extends Item {
         if(encoded!=null){
             var contents=SurfaceCoatingContents.decode(encoded);
             tooltip.accept(net.minecraft.network.chat.Component.literal(mmm.units.Mass.kilograms(contents.surface().loadingMassUnits())+" kg"));
-            contents.surface().speciesQuanta().forEach((species,quanta)->tooltip.accept(net.minecraft.network.chat.Component.literal(species+" · "+(quanta/(double)mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)+" mol")));
+            contents.surface().speciesQuanta().forEach((species,quanta)->tooltip.accept(net.minecraft.network.chat.Component.literal(species+": "+(quanta/(double)mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)+" mol")));
         }
     }
 }

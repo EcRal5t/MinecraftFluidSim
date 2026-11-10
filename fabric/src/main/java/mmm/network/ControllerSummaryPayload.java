@@ -150,6 +150,17 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 		buffer.writeBoolean(range.available());
 		buffer.writeDouble(range.minimumK());
 		buffer.writeDouble(range.maximumK());
+        buffer.writeVarInt(inventory.components().size());
+        for (var row : inventory.components()) {
+            buffer.writeUtf(row.id(), 128);
+            buffer.writeEnum(row.phase());
+            buffer.writeDouble(row.massKilograms());
+            buffer.writeDouble(row.volumeCubicMetres());
+            buffer.writeBoolean(row.residualMass());
+            buffer.writeBoolean(row.temperatureRange().available());
+            buffer.writeDouble(row.temperatureRange().minimumK());
+            buffer.writeDouble(row.temperatureRange().maximumK());
+        }
 	}
 
 	private static ControllerSummary.Inventory readInventory(FriendlyByteBuf buffer) {
@@ -165,8 +176,19 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 		double energy = buffer.readDouble();
 		ControllerSummary.TemperatureRange range = new ControllerSummary.TemperatureRange(
 				buffer.readBoolean(), buffer.readDouble(), buffer.readDouble());
+        int count = buffer.readVarInt();
+        if (count < 0 || count > 4096) throw new IllegalArgumentException("Invalid controller component count");
+        var components = new java.util.ArrayList<ControllerSummary.ComponentRow>(count);
+        for (int i = 0; i < count; i++) {
+            String id = buffer.readUtf(128);
+            var phase = buffer.readEnum(ControllerSummary.Phase.class);
+            double mass = buffer.readDouble(), volume = buffer.readDouble();
+            boolean residual = buffer.readBoolean();
+            var componentRange = new ControllerSummary.TemperatureRange(buffer.readBoolean(), buffer.readDouble(), buffer.readDouble());
+            components.add(new ControllerSummary.ComponentRow(id, phase, mass, volume, componentRange, residual));
+        }
 		return new ControllerSummary.Inventory(live, liquidVolume, liquidMass,
 				species, granularVolume, granularMass, coherentVolume, coherentMass,
-				gasVolume, gasMass, energyAvailable, energy, range);
+				gasVolume, gasMass, energyAvailable, energy, range, components);
 	}
 }

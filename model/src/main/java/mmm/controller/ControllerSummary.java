@@ -120,9 +120,12 @@ public record ControllerSummary(
 			double gasMassKilograms,
 			boolean internalEnergyAvailable,
 			double totalInternalEnergyJ,
-			TemperatureRange temperatureRange
+			TemperatureRange temperatureRange,
+            java.util.List<ComponentRow> components
 	) {
 		public Inventory {
+            components = java.util.List.copyOf(components);
+            if (components.size() > 4096) throw new IllegalArgumentException("Too many inventory components");
 			if (!finiteNonNegative(liquidVolumeCubicMetres) || !finiteNonNegative(liquidMassKilograms)
 					|| speciesQuanta < 0L || granularSolidVolumeSvq < 0L
 					|| !finiteNonNegative(granularMassKilograms) || coherentSolidVolumeSvq < 0L
@@ -136,10 +139,20 @@ public record ControllerSummary(
 					|| speciesQuanta != 0L || granularSolidVolumeSvq != 0L || granularMassKilograms != 0.0
 					|| coherentSolidVolumeSvq != 0L || coherentMassKilograms != 0.0
 					|| gasStandardVolumeNanos != 0L || gasMassKilograms != 0.0 || internalEnergyAvailable
-					|| temperatureRange.available())) {
+					|| temperatureRange.available() || !components.isEmpty())) {
 				throw new IllegalArgumentException("Metadata-only controller summary invented live inventory");
 			}
 		}
+
+        public Inventory(boolean live, double liquidVolumeCubicMetres, double liquidMassKilograms,
+                long speciesQuanta, long granularSolidVolumeSvq, double granularMassKilograms,
+                long coherentSolidVolumeSvq, double coherentMassKilograms, long gasStandardVolumeNanos,
+                double gasMassKilograms, boolean internalEnergyAvailable, double totalInternalEnergyJ,
+                TemperatureRange temperatureRange) {
+            this(live, liquidVolumeCubicMetres, liquidMassKilograms, speciesQuanta, granularSolidVolumeSvq,
+                    granularMassKilograms, coherentSolidVolumeSvq, coherentMassKilograms, gasStandardVolumeNanos,
+                    gasMassKilograms, internalEnergyAvailable, totalInternalEnergyJ, temperatureRange, java.util.List.of());
+        }
 
 		public static Inventory unavailable() {
 			return new Inventory(false, 0.0, 0.0, 0L, 0L, 0.0, 0L, 0.0,
@@ -150,6 +163,22 @@ public record ControllerSummary(
 			return Double.isFinite(value) && value >= 0.0;
 		}
 	}
+
+    public enum Phase { LIQUID, GAS, GRANULAR, COHERENT }
+
+    public record ComponentRow(String id, Phase phase, double massKilograms, double volumeCubicMetres,
+                               TemperatureRange temperatureRange, boolean residualMass) {
+        public ComponentRow(String id, Phase phase, double massKilograms, double volumeCubicMetres,
+                            TemperatureRange temperatureRange) {
+            this(id, phase, massKilograms, volumeCubicMetres, temperatureRange, false);
+        }
+        public ComponentRow {
+            if (id == null || id.isBlank() || id.length() > 128 || phase == null
+                    || !(Double.isNaN(massKilograms) || Double.isFinite(massKilograms) && massKilograms >= 0)
+                    || !(Double.isNaN(volumeCubicMetres) || Double.isFinite(volumeCubicMetres) && volumeCubicMetres >= 0) || temperatureRange == null)
+                throw new IllegalArgumentException("Invalid controller component row");
+        }
+    }
 
 	public record TemperatureRange(boolean available, double minimumK, double maximumK) {
 		public TemperatureRange {

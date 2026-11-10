@@ -53,11 +53,11 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 		FluidRegionFootprint footprint = region.footprint();
 		boolean live = region.solverLoaded();
 		var device = live ? region.inventorySummary() : null;
-		HostFluidState domain = live && device == null ? region.hostSnapshot() : null;
+		HostFluidState domain = live ? region.hostSnapshot() : null;
 		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
 		ControllerSummary.Inventory inventory = live
-				? device == null ? liveInventory(region, domain) : deviceInventory(device) : ControllerSummary.Inventory.unavailable();
+				? withComponents(device == null ? liveInventory(region, domain) : deviceInventory(device), domain) : ControllerSummary.Inventory.unavailable();
 		String ownershipLock = operations.ownershipLockDescription(region);
 		boolean containerWalPending = hasPendingContainerWal.test(region.id());
 		boolean phaseWorkPending = live && region.hasPendingPhaseMotionWork();
@@ -100,6 +100,19 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 						stats == null ? 0 : stats.pressureIterations(),
 						stats == null ? 0.0 : stats.pressureResidual(), numericalFailure)));
 	}
+
+    private static ControllerSummary.Inventory withComponents(ControllerSummary.Inventory base, HostFluidState domain) {
+        var components = domain.observeComposition().rows().stream().map(row -> new ControllerSummary.ComponentRow(
+                row.id(), ControllerSummary.Phase.valueOf(row.phase().name()), row.massKilograms(), row.volumeCubicMetres(),
+                Double.isFinite(row.minimumTemperatureK()) ? ControllerSummary.TemperatureRange.available(
+                        row.minimumTemperatureK(), row.maximumTemperatureK()) : ControllerSummary.TemperatureRange.unavailable(),
+                row.residualMass())).toList();
+        return new ControllerSummary.Inventory(base.live(), base.liquidVolumeCubicMetres(), base.liquidMassKilograms(),
+                base.speciesQuanta(), base.granularSolidVolumeSvq(), base.granularMassKilograms(),
+                base.coherentSolidVolumeSvq(), base.coherentMassKilograms(), base.gasStandardVolumeNanos(),
+                base.gasMassKilograms(), base.internalEnergyAvailable(), base.totalInternalEnergyJ(),
+                base.temperatureRange(), components);
+    }
 
     private static ControllerSummary.Inventory deviceInventory(mmm.fluid.ResidentFluidState.InventorySummary device){
         var range=Double.isFinite(device.minimumTemperatureK())?ControllerSummary.TemperatureRange.available(device.minimumTemperatureK(),device.maximumTemperatureK()):ControllerSummary.TemperatureRange.unavailable();

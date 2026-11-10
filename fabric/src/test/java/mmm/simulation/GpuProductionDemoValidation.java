@@ -615,7 +615,9 @@ public final class GpuProductionDemoValidation {
 		checkScenario(region, scenario, false);
 		snapshots.createDispatch(region);
 		String status = RegionDiagnosticsReport.residentStatus(region);
-		require(!status.isBlank() && region.deviceResident(), stage + ": status lost the device state");
+		require(status.contains("[solver]") && status.contains("GPU resident generation = " + region.solverGeneration())
+                && status.contains("[fluid]") && status.contains("[gas]") && region.deviceResident(),
+                stage + ": status lost the device state or inventory sections");
 		System.out.printf("stage=%s generation=%d liquid_mass=%d total_mass_delta=%d water_temperature_k=%.6f max_speed=%.6g resident=%s validation_scope_ms=%.3f%n",
 				stage, region.solverGeneration(), summary.liquidMassUnits(), massDelta, bulkWaterTemperatureK, region.maximumSpeed(),
 				region.deviceResident(), (System.nanoTime() - validationStarted) / 1e6);

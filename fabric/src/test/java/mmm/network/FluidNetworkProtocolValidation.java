@@ -65,6 +65,16 @@ public final class FluidNetworkProtocolValidation {
             require(packet.equals(DebugDiagnosticPayload.CODEC.decode(buffer)) && buffer.readableBytes() == 0,
                     "debug diagnostic codec roundtrip");
         } finally { buffer.release(); }
+        var snapshot = new DebugDiagnosticPayload.Snapshot(true, "region-1", "ACTIVE", true, 16, 8, 4, 42,
+                2.5, 3, true, 2, 19, 0.001, 0.002, 0.003);
+        var typed = new DebugDiagnosticPayload(DebugDiagnosticPayload.Kind.SNAPSHOT, DebugDiagnosticPayload.Level.INFO,
+                "minecraft:overworld", "solver", "selected-region", "", snapshot);
+        var typedBuffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            DebugDiagnosticPayload.CODEC.encode(typedBuffer, typed);
+            require(typed.equals(DebugDiagnosticPayload.CODEC.decode(typedBuffer)) && typedBuffer.readableBytes() == 0,
+                    "typed debug snapshot codec roundtrip");
+        } finally { typedBuffer.release(); }
         String oversized = "x".repeat(2047) + "😀" + "z".repeat(2050);
         var parts = DebugDiagnostics.split(oversized);
         require(parts.size() == 3 && String.join("", parts).equals(oversized), "debug report chunks preserve text");
@@ -81,10 +91,15 @@ public final class FluidNetworkProtocolValidation {
 	private static void validateObservationCodecs() {
         UUID session=UUID.randomUUID(); var position=new BlockPos(1,2,3); String dimension="minecraft:overworld";
         var trendRequest=new ProcessTrendRequest(position,dimension,session,7,false);
-        var trend=new ProcessTrendPayload(position,dimension,session,7,"液位","运行中",false,true,
-                List.of(new ProcessTrendHistory.Point(.05,2,false),new ProcessTrendHistory.Point(.1,3,true)));
+        var trend=new ProcessTrendPayload(position,dimension,session,7,"LEVEL","RUNNING",false,true,
+                List.of(new ProcessTrendPayload.Series(mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL,
+                                List.of(new ProcessTrendHistory.Point(.05,.2,false),new ProcessTrendHistory.Point(.1,.3,true))),
+                        new ProcessTrendPayload.Series(mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE,
+                                List.of(new ProcessTrendHistory.Point(.05,101325,false)))));
         var sampleRequest=new SampleAnalysisRequest(session,dimension,net.minecraft.world.InteractionHand.MAIN_HAND);
-        var sample=new SampleAnalysisPayload(session,dimension,SampleAnalysisPayload.Phase.LIQUID,List.of("水"),List.of(new SampleAnalysisPayload.Fraction(0,0.5)));
+        var sample=new SampleAnalysisPayload(session, dimension, SampleAnalysisPayload.Phase.LIQUID, 1, 1000, 293.15, 1234, false,
+                List.of(new SampleAnalysisPayload.Material("mmm:water", 1, 1000)),
+                List.of(new SampleAnalysisPayload.Species("mmm:h2o", 1_000_000, .5, Double.NaN)));
         var buffer=new FriendlyByteBuf(Unpooled.buffer());
         try {
             ProcessTrendRequest.CODEC.encode(buffer,trendRequest); require(trendRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"trend request codec");
@@ -216,7 +231,15 @@ public final class FluidNetworkProtocolValidation {
 						ControllerSummary.Capacity.unavailable(1_024L)),
 				new ControllerSummary.Inventory(true, 0.75, 741.0, 123L, 456L, 7.5,
 						789L, 8.5, 321L, 0.42, true, 91_000.0,
-						ControllerSummary.TemperatureRange.available(278.5, 341.25)),
+						ControllerSummary.TemperatureRange.available(278.5, 341.25), List.of(
+                                new ControllerSummary.ComponentRow("mmm:h2o", ControllerSummary.Phase.LIQUID, 740.5, Double.NaN,
+                                        ControllerSummary.TemperatureRange.available(278.5, 300.0)),
+                                new ControllerSummary.ComponentRow("mmm:h2o", ControllerSummary.Phase.GAS, 0.42, 321e-9,
+                                        ControllerSummary.TemperatureRange.available(341.25, 341.25)),
+                                new ControllerSummary.ComponentRow("mmm:solute", ControllerSummary.Phase.LIQUID, 0.4, Double.NaN,
+                                        ControllerSummary.TemperatureRange.available(278.5, 300.0)),
+                                new ControllerSummary.ComponentRow("mmm:water", ControllerSummary.Phase.LIQUID, 0.1, Double.NaN,
+                                        ControllerSummary.TemperatureRange.available(278.5, 300.0), true))),
 				new ControllerSummary.Gates(true, false, true, true, false),
 				new ControllerSummary.Diagnostics(2.5, 17, 1.0E-6, "bounded diagnostic"));
 		UUID otherRegion = new UUID(47L, 53L);
@@ -271,6 +294,18 @@ public final class FluidNetworkProtocolValidation {
 			decoded = ControllerSummaryPayload.CODEC.decode(buffer);
 		} finally { buffer.release(); }
 		require(decoded.summary().equals(summary), "controller summary payload did not round-trip exactly");
+        var composition = decoded.summary().inventory();
+        require(composition.components().size() == 4
+                        && composition.components().get(0).phase() == ControllerSummary.Phase.LIQUID
+                        && composition.components().get(1).phase() == ControllerSummary.Phase.GAS
+                        && Math.abs(composition.components().get(0).massKilograms() + composition.components().get(2).massKilograms()
+                                + composition.components().get(3).massKilograms() - composition.liquidMassKilograms()) < 1e-9
+                        && composition.components().get(1).massKilograms() == composition.gasMassKilograms()
+                        && Double.isNaN(composition.components().get(2).volumeCubicMetres())
+                        && !composition.components().get(2).residualMass()
+                        && composition.components().get(3).residualMass()
+                        && !composition.components().get(0).residualMass(),
+                "controller composition lost phase, carrier totals, or unavailable species volume");
 		require(decoded.requestGeneration() == 0 && decoded.regionId().equals(REGION),
 				"initial controller opening acquired a request token or lost its identity");
 		for (ControllerSummaryPayload response : List.of(
@@ -374,6 +409,12 @@ public final class FluidNetworkProtocolValidation {
 				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
 						FluidProtocol.REQUIRED_CAPABILITIES & ~FluidProtocol.CAP_CONTROLLER_FAILURES, "")).accepted(),
 				"controller failure responses require a compatible client");
+        require((offer.requiredCapabilities() & FluidProtocol.CAP_CONTROLLER_COMPOSITION) != 0
+                && !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.MATERIAL,
+                        offer.requiredCapabilities() & ~FluidProtocol.CAP_CONTROLLER_COMPOSITION, "")).accepted()
+                && !FluidProtocol.negotiate(new FluidProtocol.Offer(FluidProtocol.Layout.MATERIAL,
+                        offer.requiredCapabilities() & ~FluidProtocol.CAP_CONTROLLER_COMPOSITION, 0)).accepted(),
+                "controller composition requires compatible client and server");
 		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.MATERIAL
 				&& accepted.capabilities() == (FluidProtocol.REQUIRED_CAPABILITIES | FluidProtocol.CAP_MATERIAL_SNAPSHOT),
 				"matching layout/capability offer was not selected exactly");

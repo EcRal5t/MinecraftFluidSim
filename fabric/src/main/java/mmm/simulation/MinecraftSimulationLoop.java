@@ -86,20 +86,19 @@ final class MinecraftSimulationLoop {
         FluidRegion region = regions.selected();
         for (var player : server.getPlayerList().getPlayers()) {
             if (!mmm.network.DebugDiagnostics.canInspect(player)) continue;
-            String text = "No selected region in range";
+            var snapshot = new mmm.network.DebugDiagnosticPayload.Snapshot(false, "", "", false, 0, 0, 0, 0, 0, 0,
+                    false, 0, 0, 0, 0, 0);
             if (region != null && region.footprint() != null && region.dimension().equals(player.level().dimension())
                     && MinecraftRegionActivation.nearRegion(player, region)) {
                 var stats = region.lastStats();
-                text = String.format(java.util.Locale.ROOT,
-                        "Region %s | %s\nGrid %d × %d × %d | tick %d\nStep %.2f ms | interval %d ticks",
-                        region.id(), region.lifecycle().state(), region.sizeX(), region.sizeY(), region.sizeZ(),
-                        region.tick(), region.lastStepMilliseconds(), region.stepIntervalTicks());
-                if (stats != null) text += String.format(java.util.Locale.ROOT,
-                        "\nSubsteps %d | pressure iterations %d | residual %.4g\nRelative volume error %.4g | mass error %.4g",
-                        stats.substeps(), stats.pressureIterations(), stats.pressureResidual(),
-                        stats.relativeVolumeError(), stats.relativeMassError());
+                snapshot = new mmm.network.DebugDiagnosticPayload.Snapshot(true, region.id().toString(),
+                        region.lifecycle().state().toString(), region.paused(), region.sizeX(), region.sizeY(), region.sizeZ(),
+                        region.tick(), region.lastStepMilliseconds(), region.stepIntervalTicks(), stats != null,
+                        stats == null ? 0 : stats.substeps(), stats == null ? 0 : stats.pressureIterations(),
+                        stats == null ? 0 : stats.pressureResidual(), stats == null ? 0 : stats.relativeVolumeError(),
+                        stats == null ? 0 : stats.relativeMassError());
             }
-            mmm.network.DebugDiagnostics.snapshot(player, "selected-region", text);
+            mmm.network.DebugDiagnostics.snapshot(player, snapshot);
         }
     }
 

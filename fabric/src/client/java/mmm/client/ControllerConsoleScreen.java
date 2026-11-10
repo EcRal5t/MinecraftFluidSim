@@ -68,32 +68,27 @@ public final class ControllerConsoleScreen extends Screen {
         detailTab.active = !details;
         addRenderableWidget(detailTab);
 		serverActions.clear();
-		int buttonWidth = Math.min(92, Math.max(1, (width - 36) / 3));
-		int gap = 6;
-		int total = buttonWidth * 3 + gap * 2;
-		int left = (width - total) / 2;
-		int y = height - 30;
-		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller.select"),
-				button -> send(ControllerConsoleAction.SELECT)).bounds(left, y, buttonWidth, 20).build());
-		Component runAction = Component.translatable(summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
-				? "screen.mmm.controller.resume" : "screen.mmm.controller.pause");
-		Button pause = IndustrialUi.button(runAction, button -> send(
-				summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
-						? ControllerConsoleAction.RESUME : ControllerConsoleAction.PAUSE))
-				.bounds(left + buttonWidth + gap, y, buttonWidth, 20).build();
-		addServerAction(pause);
-		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller.refresh"),
-				button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
-				.bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
-
-		int lifecycleWidth = Math.min(76, Math.max(1, (width - 32 - 3 * gap) / 4));
-		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
-		int lifecycleLeft = (width - lifecycleTotal) / 2;
-		int lifecycleY = height - 54;
-		int displayWidth = Math.min(200, Math.max(1, width - 24));
-		addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.display.open"),
-				button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
-				.bounds((width - displayWidth) / 2, height - 78, displayWidth, 20).build());
+        int gap = 6;
+        int buttonWidth = Math.min(92, Math.max(1, (width - 32 - 3 * gap) / 4));
+        int left = (width - (buttonWidth * 4 + gap * 3)) / 2;
+        int y = height - 30;
+        addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller.select"),
+                button -> send(ControllerConsoleAction.SELECT)).bounds(left, y, buttonWidth, 20).build());
+        Component runAction = Component.translatable(summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
+                ? "screen.mmm.controller.resume" : "screen.mmm.controller.pause");
+        addServerAction(IndustrialUi.button(runAction, button -> send(
+                summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
+                        ? ControllerConsoleAction.RESUME : ControllerConsoleAction.PAUSE))
+                .bounds(left + buttonWidth + gap, y, buttonWidth, 20).build());
+        addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.controller.refresh"),
+                button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
+                .bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
+        addServerAction(IndustrialUi.button(Component.translatable("screen.mmm.display.open"),
+                button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
+                .bounds(left + (buttonWidth + gap) * 3, y, buttonWidth, 20).build());
+        int lifecycleWidth = buttonWidth;
+        int lifecycleLeft = left;
+        int lifecycleY = height - 54;
 		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
 		addLifecycleButton(lifecycleLeft + lifecycleWidth + gap, lifecycleY, lifecycleWidth,
 				"vent", LifecycleOperation.VENT_SEALED_GAS);
@@ -157,73 +152,65 @@ public final class ControllerConsoleScreen extends Screen {
         IndustrialUi.scrollbar(graphics, width - 17, 58, Math.max(1, visible * 12), scroll, visible, lines.size());
     }
 
-    private record DashboardCard(IndustrialUi.Icon icon, Component label, String value, String secondary) { }
-
-    private List<DashboardCard> dashboardCards() {
-        var inventory = summary.inventory();
-        if (!inventory.live()) return List.of(new DashboardCard(IndustrialUi.Icon.WARNING,
-                Component.translatable("screen.mmm.controller.inventory"),
-                Component.translatable("screen.mmm.controller.inventory_unloaded").getString(), ""));
-        var range = inventory.temperatureRange();
-        return List.of(
-                new DashboardCard(IndustrialUi.Icon.LIQUID, Component.translatable("screen.mmm.controller.liquid"),
-                        UnitFormat.volume(inventory.liquidVolumeCubicMetres()), decimal(inventory.liquidMassKilograms()) + " kg"),
-                new DashboardCard(IndustrialUi.Icon.GAS, Component.translatable("screen.mmm.controller.gas"),
-                        UnitFormat.volumeNanos(inventory.gasStandardVolumeNanos()), decimal(inventory.gasMassKilograms()) + " kg"),
-                new DashboardCard(IndustrialUi.Icon.SOLID, Component.translatable("screen.mmm.controller.granular"),
-                        UnitFormat.solidVolume(inventory.granularSolidVolumeSvq()), decimal(inventory.granularMassKilograms()) + " kg"),
-                new DashboardCard(IndustrialUi.Icon.SOLID, Component.translatable("screen.mmm.controller.coherent"),
-                        UnitFormat.solidVolume(inventory.coherentSolidVolumeSvq()), decimal(inventory.coherentMassKilograms()) + " kg"),
-                new DashboardCard(IndustrialUi.Icon.TEMPERATURE, Component.translatable("screen.mmm.controller.temperature"),
-                        range.available() ? decimal(range.minimumK()) + " – " + decimal(range.maximumK()) + " K" : "—", ""),
-                new DashboardCard(IndustrialUi.Icon.POWER, Component.translatable("screen.mmm.controller.energy"),
-                        inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—", ""));
-    }
-    private int dashboardColumns() { return width >= 360 && height >= 230 ? 2 : 1; }
-    private int dashboardCardHeight() { return height >= 230 ? 46 : 36; }
-    private int dashboardVisibleRows() { return Math.max(1, (height - 142) / dashboardCardHeight()); }
-    private int dashboardTotalRows() { return 1 + (dashboardCards().size() + dashboardColumns() - 1) / dashboardColumns(); }
+    private int dashboardVisibleRows() { return Math.max(1, (height - 176) / 16); }
+    private int dashboardTotalRows() { return summary.inventory().components().size(); }
     private void renderDashboard(GuiGraphicsExtractor graphics) {
-        var cards = dashboardCards();
-        int columns = dashboardColumns(), cardHeight = dashboardCardHeight();
-        int visible = dashboardVisibleRows(), total = dashboardTotalRows();
-        scroll = Math.min(scroll, Math.max(0, total - visible));
-        int left = 15, gap = 5, contentWidth = Math.max(1, width - 37);
-        int cardWidth = Math.max(1, (contentWidth - gap * (columns - 1)) / columns);
-        for (int row = scroll; row < Math.min(total, scroll + visible); row++) {
-            int y = 58 + (row - scroll) * cardHeight;
-            if (row == 0) {
-                IndustrialUi.panel(graphics, left, y, contentWidth, cardHeight - 3);
-                IndustrialUi.icon(graphics, !summary.availability().ready() || failure != null ? IndustrialUi.Icon.WARNING
-                        : summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED ? IndustrialUi.Icon.PAUSE : IndustrialUi.Icon.PLAY,
-                        left + 5, y + 6, 16);
-                Component status = failure != null ? Component.literal(failure) : Component.empty()
-                        .append(localized("operator", summary.operatorIntent())).append(" · ")
-                        .append(summary.availability().ready() ? common("ready") : localized("availability", summary.availability().reason()));
-                var statusLines = font.split(status, Math.max(1, contentWidth - 28));
-                for (int i = 0; i < Math.min(statusLines.size(), (cardHeight - 8) / 11); i++)
-                    graphics.text(font, statusLines.get(i), left + 25, y + 5 + i * 11,
-                            !summary.availability().ready() || failure != null ? IndustrialUi.AMBER : IndustrialUi.TEXT, false);
-            } else {
-                for (int col = 0; col < columns; col++) {
-                    int index = (row - 1) * columns + col;
-                    if (index >= cards.size()) break;
-                    DashboardCard card = cards.get(index);
-                    int x = left + col * (cardWidth + gap);
-                    IndustrialUi.panel(graphics, x, y, cardWidth, cardHeight - 3);
-                    IndustrialUi.icon(graphics, card.icon(), x + 5, y + 5, 16);
-                    graphics.enableScissor(x + 24, y + 3, x + cardWidth - 3, y + cardHeight - 4);
-                    graphics.text(font, card.label(), x + 25, y + 5, IndustrialUi.MUTED, false);
-                    var valueLines = font.split(Component.literal(card.value()), Math.max(1, cardWidth - 30));
-                    for (int i = 0; i < Math.min(valueLines.size(), cardHeight >= 46 ? 2 : 1); i++)
-                        graphics.text(font, valueLines.get(i), x + 25, y + 17 + i * 11, IndustrialUi.TEXT, false);
-                    if (cardHeight >= 46 && valueLines.size() <= 1 && !card.secondary().isEmpty())
-                        graphics.text(font, card.secondary(), x + 25, y + 29, IndustrialUi.CYAN, false);
-                    graphics.disableScissor();
-                }
-            }
+        int left = 16, right = width - 22, contentWidth = Math.max(1, right - left);
+        int statusY = 58;
+        graphics.fill(left, statusY, right, statusY + 18, 0xff1c2a30);
+        Component operator = localized("operator", summary.operatorIntent());
+        Component availability = summary.availability().ready() ? common("ready")
+                : localized("availability", summary.availability().reason());
+        graphics.text(font, operator, left + 5, statusY + 5, IndustrialUi.TEXT, false);
+        graphics.text(font, availability, left + Math.max(100, contentWidth / 3), statusY + 5,
+                summary.availability().ready() ? IndustrialUi.CYAN : IndustrialUi.AMBER, false);
+        if (failure != null) {
+            int x = left + contentWidth * 2 / 3;
+            String message = failure.lines().findFirst().orElse("");
+            if (font.width(message) > right - x - 5)
+                message = font.plainSubstrByWidth(message, right - x - 5 - font.width("…")) + "…";
+            graphics.text(font, message, x, statusY + 5, IndustrialUi.AMBER, false);
         }
-        IndustrialUi.scrollbar(graphics, width - 17, 58, visible * cardHeight - 3, scroll, visible, total);
+        int nameX = left + 4, massX = left + contentWidth * 38 / 100;
+        int volumeX = left + contentWidth * 57 / 100, tempX = left + contentWidth * 77 / 100;
+        graphics.text(font, Component.translatable("screen.mmm.controller.column_component"), nameX, 82, IndustrialUi.MUTED, false);
+        graphics.text(font, Component.translatable("screen.mmm.controller.column_mass"), massX, 82, IndustrialUi.MUTED, false);
+        graphics.text(font, Component.translatable("screen.mmm.controller.column_volume"), volumeX, 82, IndustrialUi.MUTED, false);
+        graphics.pose().pushMatrix();
+        graphics.pose().scale(0.75f, 0.75f);
+        graphics.text(font, Component.translatable("screen.mmm.controller.column_standard"), (int)(volumeX / 0.75f), 124, IndustrialUi.MUTED, false);
+        graphics.pose().popMatrix();
+        graphics.text(font, Component.translatable("screen.mmm.controller.column_temperature"), tempX, 82, IndustrialUi.MUTED, false);
+        var rows = summary.inventory().components();
+        int visible = dashboardVisibleRows();
+        scroll = Math.min(scroll, Math.max(0, rows.size() - visible));
+        for (int i = scroll; i < Math.min(rows.size(), scroll + visible); i++) {
+            var row = rows.get(i); int y = 106 + (i - scroll) * 16;
+            graphics.fill(left, y, right, y + 16, i % 2 == 0 ? 0xff202f35 : 0xff19262c);
+            String phase = Component.translatable("screen.mmm.controller.phase_" + row.phase().name().toLowerCase(Locale.ROOT)).getString();
+            String name = CompositionNames.label(row.id()).getString();
+            if (row.residualMass()) name += " " + Component.translatable("screen.mmm.controller.residual_mass").getString();
+            tableText(graphics, name + " (" + phase + ")", nameX, massX - 4, y + 4);
+            tableText(graphics, Double.isNaN(row.massKilograms()) ? "—" : decimal(row.massKilograms()) + " kg", massX, volumeX - 4, y + 4);
+            tableText(graphics, Double.isNaN(row.volumeCubicMetres()) ? "—" : UnitFormat.volume(row.volumeCubicMetres()), volumeX, tempX - 4, y + 4);
+            var range = row.temperatureRange();
+            tableText(graphics, range.available() ? decimal(range.minimumK()) + " – " + decimal(range.maximumK()) + " K" : "—", tempX, right - 2, y + 4);
+        }
+        if (!summary.inventory().live()) graphics.text(font, Component.translatable("screen.mmm.controller.inventory_unloaded"), nameX, 110, IndustrialUi.MUTED, false);
+        else if (rows.isEmpty()) graphics.text(font, Component.translatable("screen.mmm.controller.inventory_empty"), nameX, 110, IndustrialUi.MUTED, false);
+        var inventory = summary.inventory();
+        String energy = inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—";
+        graphics.text(font, Component.translatable("screen.mmm.controller.total_energy", energy), left + 4,
+                height - 70, IndustrialUi.TEXT, false);
+        if (rows.stream().anyMatch(row -> Double.isNaN(row.volumeCubicMetres())))
+            graphics.text(font, Component.translatable("screen.mmm.controller.volume_unavailable"),
+                    left + contentWidth / 2, height - 70, IndustrialUi.MUTED, false);
+        IndustrialUi.scrollbar(graphics, width - 17, 106, visible * 16, scroll, visible, rows.size());
+    }
+    private void tableText(GuiGraphicsExtractor graphics, String text, int x, int right, int y) {
+        graphics.enableScissor(x, y - 2, Math.max(x + 1, right), y + 11);
+        graphics.text(font, text, x, y, IndustrialUi.TEXT, false);
+        graphics.disableScissor();
     }
     private List<FormattedCharSequence> wrappedRows() {
         List<FormattedCharSequence> lines = new ArrayList<>();
@@ -301,5 +288,12 @@ public final class ControllerConsoleScreen extends Screen {
 	private static Component localized(String family, Enum<?> value) {
 		return Component.translatable("screen.mmm." + family + "." + value.name().toLowerCase(Locale.ROOT));
 	}
-	private static String decimal(double value) { return String.format(Locale.ROOT, "%.6g", value); }
+	private static String decimal(double value) {
+        String text = String.format(Locale.ROOT, "%.6g", value);
+        int exponent = Math.max(text.indexOf('e'), text.indexOf('E'));
+        String suffix = exponent < 0 ? "" : text.substring(exponent);
+        String mantissa = exponent < 0 ? text : text.substring(0, exponent);
+        if (mantissa.contains(".")) mantissa = mantissa.replaceAll("0+$", "").replaceAll("\\.$", "");
+        return mantissa + suffix;
+    }
 }

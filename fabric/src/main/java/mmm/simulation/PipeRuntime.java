@@ -99,18 +99,18 @@ public final class PipeRuntime {
         for(int i=0;i<state.network().segments().size();i++) {
             var segment=state.network().segments().get(i);if(!segment.id().equals(Long.toString(position.asLong())))continue;
             var mixture=PipeHydraulics.mixture(segment,state.network().liquids().rows().get(i),new GasThermalModel(world.thermalRegistry(),world.gasRegistry()));
-            String value=String.format(Locale.ROOT,"管腔 %.2f L · 液体 %.2f L · %.2f kPa · 沉积 %.3f kg",segment.capacityM3()*1000,
+            String value=String.format(Locale.ROOT,"管腔 %.2f L\n液体 %.2f L\n%.2f kPa\n沉积 %.3f kg",segment.capacityM3()*1000,
                     mixture.liquidVolumeM3()*1000,mixture.absolutePressurePa()/1000,segment.deposits().stream().mapToDouble(d->d.inventory().mass()).sum());
-            if(!segment.gas().isEmpty())value+=String.format(Locale.ROOT," · 气温 %.1f ℃",new GasThermalModel(world.thermalRegistry(),world.gasRegistry())
+            if(!segment.gas().isEmpty())value+=String.format(Locale.ROOT,"\n气温 %.1f ℃",new GasThermalModel(world.thermalRegistry(),world.gasRegistry())
                     .state(segment.gas(),segment.gasInternalEnergy()).temperatureK()-273.15);
             var liquid=state.network().liquids().rows().get(i).stream().max(java.util.Comparator.comparingLong(mmm.inventory.LiquidCellInventory.Stock::massUnits)).orElse(null);
             if(liquid!=null) {
                 int material=world.thermalRegistry().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,state.network().materialIds().get(liquid.key().material()));
                 var species=liquid.mixture()==null?Map.<String,Long>of():liquid.mixture().stableAmounts(world.chemicalRegistry());
                 double temperature=new mmm.thermal.ThermalStateFunction(world.thermalRegistry()).stateForInternalEnergy(material,liquid.massKilograms(),species,liquid.internalEnergy()).temperatureK();
-                value+=String.format(Locale.ROOT," · 主液相 %.1f ℃",temperature-273.15);
+                value+=String.format(Locale.ROOT,"\n主液相 %.1f ℃",temperature-273.15);
             }
-            return failures.containsKey(dimension)?value+" · 暂停："+failures.get(dimension):value;
+            return failures.containsKey(dimension)?value+"\n暂停："+failures.get(dimension):value;
         }
         return "管道正在建立管腔";
     }

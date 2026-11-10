@@ -33,21 +33,20 @@ public final class SampleAnalysisValidation {
         world.attachLiquidThermalContents(stack, 320);
         var before = stack.copy();
         var sample = SampleAnalysis.analyze(stack, world);
-        String text = String.join("\n", sample.lines());
         require(sample.phase() == SampleAnalysisPayload.Phase.LIQUID, "incorrect sample phase");
-        require(sample.fractions().size() == 2, "missing composition fractions");
-        require(sample.fractions().stream().anyMatch(f -> Math.abs(f.value() - .8846153846) < 1e-6)
-                && sample.fractions().stream().anyMatch(f -> Math.abs(f.value() - .1153846154) < 1e-6), "incorrect visual fractions");
-        require(sample.fractions().stream().allMatch(f -> sample.lines().get(f.line()).startsWith("质量分数：")),
-                "fraction metadata points to the wrong report line");
+        require(sample.species().size() == 2 && sample.materials().size() == 1, "missing typed composition rows");
+        var ethanol = sample.species().stream().filter(row -> row.id().equals(BuiltinChemicalDefinitions.ETHANOL)).findFirst().orElseThrow();
+        var water = sample.species().stream().filter(row -> row.id().equals(BuiltinChemicalDefinitions.H2O)).findFirst().orElseThrow();
+        require(Math.abs(ethanol.massFraction() - .8846153846) < 1e-6 && Math.abs(water.massFraction() - .1153846154) < 1e-6,
+                "incorrect mass fraction denominators");
+        require(ethanol.moleFraction() == .75 && water.moleFraction() == .25, "incorrect mole fractions");
+        require(Math.abs(sample.temperatureK() - 320) < .001, "temperature did not use saved internal energy");
+        require(sample.volumeM3() == .5 && ethanol.amountQuanta() == 3_000_000 && water.amountQuanta() == 1_000_000,
+                "concentration source did not retain whole-container volume and amounts");
         try {
-            new SampleAnalysisPayload(SampleAnalysisPayload.Phase.GAS, List.of("x"), List.of(new SampleAnalysisPayload.Fraction(1, .5)));
-            throw new AssertionError("out-of-range fraction line accepted");
+            new SampleAnalysisPayload.Species("mmm:h2o", 1, 1.1, .5);
+            throw new AssertionError("out-of-range mass fraction accepted");
         } catch (IllegalArgumentException expected) { }
-        require(text.contains("320.00 K"), "temperature did not use saved internal energy: " + text);
-        require(text.contains("88.462% · 摩尔分数：75.000%"), "ethanol fractions use incorrect denominators: " + text);
-        require(text.contains("11.538% · 摩尔分数：25.000%"), "water fractions use incorrect denominators: " + text);
-        require(text.contains("6.0000 mol/m³") && text.contains("2.0000 mol/m³"), "concentration did not use total volume: " + text);
         require(net.minecraft.world.item.ItemStack.matches(before, stack), "analysis changed the held container");
         var buffer = new FriendlyByteBuf(Unpooled.buffer());
         try {
@@ -56,7 +55,9 @@ public final class SampleAnalysisValidation {
         } finally { buffer.release(); }
         var oversized = new FriendlyByteBuf(Unpooled.buffer());
         try {
-            oversized.writeUUID(new java.util.UUID(0,0)); oversized.writeUtf("minecraft:overworld"); oversized.writeVarInt(0); oversized.writeVarInt(2049);
+            oversized.writeUUID(new java.util.UUID(0,0)); oversized.writeUtf("minecraft:overworld"); oversized.writeVarInt(0);
+            for (int i = 0; i < 4; i++) oversized.writeDouble(1);
+            oversized.writeBoolean(false); oversized.writeVarInt(513);
             try { SampleAnalysisPayload.CODEC.decode(oversized); throw new AssertionError("oversized packet accepted"); }
             catch (IllegalArgumentException expected) { }
         } finally { oversized.release(); }

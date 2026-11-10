@@ -38,23 +38,35 @@ public final class MmmCommandLog {
 			throw exception;
 		} finally {
 			persist(session);
+            if (source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player)
+                mmm.network.DebugDiagnostics.event(player,
+                        session.result == 0 ? mmm.network.DebugDiagnosticPayload.Level.WARN : mmm.network.DebugDiagnosticPayload.Level.INFO,
+                        "command", session.result == 0 ? "failed" : "complete", session.result == 0 ? failureSummary(session.lines) : "");
 			if (previous == null) ACTIVE.remove(); else ACTIVE.set(previous);
 		}
 	}
 
-	public static void sendSuccess(CommandSourceStack source, String message, boolean broadcastToOps) {
-		if (!(source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player)
-                || !mmm.network.DebugDiagnostics.event(player, mmm.network.DebugDiagnosticPayload.Level.INFO, "command", "result", message))
-            source.sendSuccess(() -> Component.literal(message), broadcastToOps);
-		record("SUCCESS", message);
-	}
+    static String failureSummary(List<CommandAuditFile.Line> lines) {
+        for (var line : lines) if (line.kind().equals("FAILURE") || line.kind().equals("EXCEPTION")) {
+            String text = line.text() == null ? "" : line.text().split("\\R", 2)[0].replaceAll("\\s+", " ").strip();
+            if (text.length() <= 100) return text;
+            int end = Character.isHighSurrogate(text.charAt(99)) ? 99 : 100;
+            return text.substring(0, end);
+        }
+        return "";
+    }
 
-	public static void sendFailure(CommandSourceStack source, String message) {
-		if (!(source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player)
-                || !mmm.network.DebugDiagnostics.event(player, mmm.network.DebugDiagnosticPayload.Level.ERROR, "command", "failure", message))
+	public static void sendSuccess(CommandSourceStack source, String message, boolean broadcastToOps) {
+        if (!(source.getEntity() instanceof net.minecraft.server.level.ServerPlayer))
+            source.sendSuccess(() -> Component.literal(message), broadcastToOps);
+        record("SUCCESS", message);
+    }
+
+    public static void sendFailure(CommandSourceStack source, String message) {
+        if (!(source.getEntity() instanceof net.minecraft.server.level.ServerPlayer))
             source.sendFailure(Component.literal(message));
-		record("FAILURE", message);
-	}
+        record("FAILURE", message);
+    }
 
 	public static void detail(String message) {
 		record("DETAIL", message);
