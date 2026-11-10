@@ -1149,10 +1149,12 @@ public final class GpuProcessFlowsValidation {
             int tick=0;
             motion.settlePendingPhaseWork(region);region.replaceThermalBoundaryTemperatures(temperatures);
             double[] upwardGas=new double[3],downwardLiquid=new double[3];
+            double[] minSealHeight={Double.POSITIVE_INFINITY,Double.POSITIVE_INFINITY,Double.POSITIVE_INFINITY};
+            double sealHeight=region.solverConfig().cellSize()*FluidRegionFactory.CELLS_PER_BLOCK/2.0;
             int[][] gasFaces=trays?distillationStageFaces(region,trayGeometry,true):new int[0][];
             int[][] liquidFaces=trays?distillationStageFaces(region,trayGeometry,false):new int[0][];
             int operatingStep=0,startupStep=0;
-            boolean primed=!trays,sealsMaintained=true;
+            boolean primed=!trays;
             while(operatingStep<steps) {
                 boolean filling=!primed || !trays&&!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(feed);
                 if(filling && startupStep>=steps)throw new AssertionError("Distillation charging did not finish");
@@ -1214,18 +1216,23 @@ public final class GpuProcessFlowsValidation {
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Distillation process step rejected");
                 tick++;
                 if(trays) {
-                    boolean sealed=distillationSeal(region,trayGeometry.get(0).seal())&&distillationSeal(region,trayGeometry.get(1).seal())&&distillationSeal(region,trayGeometry.get(2).seal());
+                    double[] heights=new double[3];
+                    boolean sealed=true;
+                    for(int stage=0;stage<3;stage++) {
+                        heights[stage]=distillationSealHeight(region,trayGeometry.get(stage).seal());
+                        sealed &= heights[stage]>=sealHeight;
+                    }
                     if(filling && sealed && distillationBlockFilled(region,trayGeometry.get(2).pool()))primed=true;
-                    if(!filling && !sealed)sealsMaintained=false;
-                    if(!filling && sealed) {
+                    if(!filling) {
                         reflux+=Math.max(0,-region.observeLiquidFlow(refluxPlane))/20.0;
                         for(int stage=0;stage<3;stage++) {
+                            minSealHeight[stage]=Math.min(minSealHeight[stage],heights[stage]);
                             upwardGas[stage]+=Math.max(0,region.observeGasFlow(gasFaces[stage]))/20.0;
                             downwardLiquid[stage]+=Math.max(0,-region.observeLiquidFlow(liquidFaces[stage]))/20.0;
                         }
                     }
                     if(step%100==0)System.out.println("distillation_stages scenario="+scenario+" step="+step+" gas="+Arrays.toString(upwardGas)+" liquid="+Arrays.toString(downwardLiquid)
-                            +" seals="+distillationSeal(region,trayGeometry.get(0).seal())+","+distillationSeal(region,trayGeometry.get(1).seal())+","+distillationSeal(region,trayGeometry.get(2).seal()));
+                            +" seal_height_m="+Arrays.toString(heights));
                 }
             }
             motion.settlePendingPhaseWork(region);
@@ -1260,6 +1267,13 @@ public final class GpuProcessFlowsValidation {
             long remainingVolume=Math.max(0,mmm.item.MaterialBucketItem.volume(feed));
             for(var batch:priming){after=Math.addExact(after,chemicalMass(batch,world));remainingVolume=Math.addExact(remainingVolume,Math.max(0,mmm.item.MaterialBucketItem.volume(batch)));}
             long feedVolume=Math.subtractExact(suppliedVolume,remainingVolume);
+            double bottomsFraction=bottomsEthanol+bottomsWater==0?-1:bottomsEthanol/(double)(bottomsEthanol+bottomsWater);
+            double[] finalSealHeight=new double[3];
+            if(trays)for(int stage=0;stage<3;stage++)finalSealHeight[stage]=distillationSealHeight(region,trayGeometry.get(stage).seal());
+            System.out.println("distillation_products scenario="+scenario+" product_nanos="+productVolume
+                    +" ethanol_fraction="+(ethanol+water==0?0:ethanol/(double)(ethanol+water))+" bottoms_fraction="+bottomsFraction+" reflux="+reflux+" batches="+compositions);
+            if(trays)System.out.println("distillation_stage_summary scenario="+scenario+" gas="+Arrays.toString(upwardGas)+" liquid="+Arrays.toString(downwardLiquid)
+                    +" min_seal_m="+Arrays.toString(minSealHeight)+" final_seal_m="+Arrays.toString(finalSealHeight)+" required_seal_m="+sealHeight);
             if(after!=Math.addExact(initial,supplied))throw new AssertionError("Distillation changed combined mass");
             var remaining=new DistillationInventory();remaining.addLiquid(feed,world);
             for(var batch:priming)remaining.addLiquid(batch,world);
@@ -1278,11 +1292,8 @@ public final class GpuProcessFlowsValidation {
             double wallEnergy=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().mapToDouble(value->value.body().internalEnergyJ()).sum();
             double deviceExchange=finalState.thermalOwner().audit().finiteDeviceExchange().subtract(initialAudit.finiteDeviceExchange()).toDouble();
             requireEnergyTotal(wallEnergy+deviceExchange,initialWallEnergy,"Distillation finite wall energy");
-            if(trays)for(int stage=0;stage<3;stage++)if(!sealsMaintained||!distillationSeal(region,trayGeometry.get(stage).seal())||upwardGas[stage]<=0||((stage<2 || scenario==IndustrialLayout.Scenario.DISTILLATION)&&downwardLiquid[stage]<=0))
-                throw new AssertionError("Distillation stage lacks sealed gas/liquid transport: stage="+stage+" gas="+upwardGas[stage]+" liquid="+downwardLiquid[stage]+" seal="+distillationSeal(region,trayGeometry.get(stage).seal()));
-            double bottomsFraction=bottomsEthanol+bottomsWater==0?-1:bottomsEthanol/(double)(bottomsEthanol+bottomsWater);
-            System.out.println("distillation_products scenario="+scenario+" product_nanos="+productVolume
-                    +" ethanol_fraction="+(ethanol+water==0?0:ethanol/(double)(ethanol+water))+" bottoms_fraction="+bottomsFraction+" reflux="+reflux);
+            if(trays)for(int stage=0;stage<3;stage++)if(minSealHeight[stage]<sealHeight||finalSealHeight[stage]<sealHeight||upwardGas[stage]<=0||((stage<2 || scenario==IndustrialLayout.Scenario.DISTILLATION)&&downwardLiquid[stage]<=0))
+                throw new AssertionError("Distillation stage lacks sealed gas/liquid transport: stage="+stage+" gas="+upwardGas[stage]+" liquid="+downwardLiquid[stage]+" min_seal_m="+minSealHeight[stage]+" final_seal_m="+finalSealHeight[stage]+" required_seal_m="+sealHeight);
             if(productVolume==0)return new Distillate(0,feedVolume,0,bottomsFraction,reflux,List.of());
             var gas=region.hostSnapshot().captureAuthoritativeState().spatialGas();
             long condensedEthanol=gasPhaseSinkQuanta(gas,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL);
@@ -1338,11 +1349,16 @@ public final class GpuProcessFlowsValidation {
     private static int[][] distillationStageFaces(FluidRegion region,List<IndustrialLayout.Tray> trays,boolean gas) {
         return trays.stream().map(tray->horizontalBlockFaces(region,gas?tray.gasOpening():tray.downpipe(),0)).toArray(int[][]::new);
     }
-    private static boolean distillationSeal(FluidRegion region,BlockPos block) {
-        int x=2*(block.getX()-region.origin().getX()),y=2*(block.getY()-region.origin().getY()),z=2*(block.getZ()-region.origin().getZ());
-        var host=region.hostSnapshot();
-        for(int dx=0;dx<2;dx++)for(int dz=0;dz<2;dz++)if(host.volume(x+dx,y,z+dz)<.999f)return false;
-        return true;
+    private static double distillationSealHeight(FluidRegion region,BlockPos block) {
+        int n=FluidRegionFactory.CELLS_PER_BLOCK;
+        int x=n*(block.getX()-region.origin().getX()),y=n*(block.getY()-region.origin().getY()),z=n*(block.getZ()-region.origin().getZ());
+        double volume=0;
+        for(int dx=0;dx<n;dx++)for(int dy=0;dy<n;dy++)for(int dz=0;dz<n;dz++) {
+            var sample=region.observeCellInventory(x+dx,y+dy,z+dz);
+            if(sample!=null)volume+=sample.liquidVolumeCubicMetres();
+        }
+        double width=region.solverConfig().cellSize()*n;
+        return volume/(width*width);
     }
     private static boolean distillationBlockFilled(FluidRegion region,BlockPos block) {
         int x=2*(block.getX()-region.origin().getX()),y=2*(block.getY()-region.origin().getY()),z=2*(block.getZ()-region.origin().getZ());
