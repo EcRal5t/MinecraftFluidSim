@@ -169,13 +169,16 @@ final class VulkanThermalConduction implements AutoCloseable {
     static Layout spatialLayout(int owners,int terms,int contacts,int samples,Tables tables,long base,long alignment,int baths,VulkanScratchPool pool){
         return new Layout(owners,terms,contacts,tables,base,alignment,baths,samples,pool);
     }
-    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
+    private final FlipKernelBindings[] bindings=new FlipKernelBindings[52];private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanThermalConduction(VulkanDeviceContext context){
-        bindings=new FlipKernelBindings(context,2,shader(),32);
-        try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}
+        var source=shader();try{
+            for(int stage:new int[]{STAGE_INITIALIZE,STAGE_COUNT_CONTACTS,STAGE_SCATTER_CONTACTS,STAGE_PREPARE_OWNERS,STAGE_NORMALIZE_RATES,STAGE_PREPARE_TILES,STAGE_COUNT_TILES,STAGE_REDUCE_DEGREE_TILES,STAGE_CLEAR_RESERVOIRS,STAGE_CONTACT_DISPATCH,STAGE_REDUCE_FLUX_TILES,STAGE_SPATIAL_GATHER_DISPATCH,STAGE_FINISH_ENERGY,STAGE_INITIAL_FLUX})
+                bindings[stage]=new FlipKernelBindings(context,2,source,32,stage);
+            scan=new VulkanPrefixScan(context);
+        }catch(RuntimeException|Error failure){for(var binding:bindings)if(binding!=null)binding.close();throw failure;}
     }
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){
-        this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);
+        this.arena=arena;for(var binding:bindings)if(binding!=null)binding.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);
     }
     /** Supplied owner graphs use the same finite-step exchange as spatial contacts. */
     void recordGraphPrepare(VkCommandBuffer command,Layout l,double dt){
@@ -220,9 +223,9 @@ final class VulkanThermalConduction implements AutoCloseable {
     private void stage(VkCommandBuffer command,Layout l,double dt,int stage,int step,double fraction,int count,boolean indirect){
         if(count==0)return;int groups=(count+127)/128;
         try(var stack=stackPush()){
-            bindings.bind(command,stack);
-            var push=stack.malloc(32).putInt(l.headerWordOffset()).putInt(stage).putInt(count).putInt(step).putDouble(dt).putDouble(fraction).flip();
-            vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
+            var binding=bindings[stage];binding.bind(command,stack);
+            var push=stack.malloc(32).putInt(l.headerWordOffset()).putInt(0).putInt(count).putInt(step).putDouble(dt).putDouble(fraction).flip();
+            vkCmdPushConstants(command,binding.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
             if(indirect){
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
@@ -246,5 +249,5 @@ final class VulkanThermalConduction implements AutoCloseable {
             if(input==null)throw new IllegalStateException("Thermal conduction shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8).replace("// HOST_LAYOUT", shaderLayout());
         }catch(IOException failure){throw new IllegalStateException("Thermal conduction shader unavailable",failure);}
     }
-    @Override public void close(){try{scan.close();}finally{bindings.close();}}
+    @Override public void close(){try{scan.close();}finally{for(var binding:bindings)if(binding!=null)binding.close();}}
 }

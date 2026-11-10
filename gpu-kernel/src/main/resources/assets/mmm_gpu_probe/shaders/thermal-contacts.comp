@@ -8,7 +8,8 @@ layout(local_size_x=128)in;
 layout(binding=0,std430)buffer Arena{uint words[];};
 layout(binding=0,std430)buffer LongArena{int64_t longs[];};
 layout(binding=1,std430)buffer Errors{uint errors;};
-layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
+layout(push_constant)uniform Push{int header;int reserved;int count;int step;double dt;double unused;}p;
+layout(constant_id=0) const int pipelineStage=-1;
 // SPATIAL_GRID
 // HOST_LAYOUT
 // SERIES_CONDUCTANCE_LIBRARY
@@ -35,6 +36,7 @@ const int STAGE_INITIALIZE_GRAPH = 21;
 const int STAGE_UPDATE_MODE_REQUIREMENT = 22;
 const int STAGE_SPATIAL_DISPATCH = 24;
 const int STAGE_PROJECT_CONTACT_GEOMETRY = 25;
+const int STAGE_LIMITED_SPATIAL_FLUX = 26;
 int headerWord(int n){return int(words[p.header+n]);}int workField(int n){return headerWord(WORK_FIELDS+n);}
 int conductionHeaderWord(int i){return int(words[headerWord(H_CONDUCTION_HEADER)+i]);}int conductionField(int field){return conductionHeaderWord(CONDUCTION_FIELDS+field);}
 // Reserve the first lane's shared destination once for the participating subgroup.
@@ -428,7 +430,7 @@ void exchangePair(int first,int second,double conductance,double dt){
  if(first==second||conductance==0.0LF)return;
  if(!(isFinite(conductance)&&conductance>0.0LF)){reportInvalid();return;}
  int a=min(first,second),b=max(first,second);
- if(p.step==0){addOwnerValue(CONDUCTION_DEGREE,a,conductance);addOwnerValue(CONDUCTION_DEGREE,b,conductance);return;}
+ if(pipelineStage==STAGE_PREPARE_SPATIAL_FLUX){addOwnerValue(CONDUCTION_DEGREE,a,conductance);addOwnerValue(CONDUCTION_DEGREE,b,conductance);return;}
  precise double difference=readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*b)-readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*a);
  double denominator=1.0LF+dt*(readDouble(conductionField(CONDUCTION_DEGREE)+2*a)+readDouble(conductionField(CONDUCTION_DEGREE)+2*b));
  precise double heatTransfer=conductance*difference*dt/denominator;
@@ -458,7 +460,7 @@ void spatialFlux(int id){
  }
  for(int bath=int(words[workField(FIELD_BATH_OFFSETS)+id]);bath<int(words[workField(FIELD_BATH_OFFSETS)+id+1]);bath++){
   double g=readDouble(workField(FIELD_BATH_G)+2*bath);
-  if(p.step==0){addOwnerValue(CONDUCTION_DEGREE,owner,g);continue;}
+  if(pipelineStage==STAGE_PREPARE_SPATIAL_FLUX){addOwnerValue(CONDUCTION_DEGREE,owner,g);continue;}
   double temperature=readDouble(workField(FIELD_BATH_T)+2*bath);
   double denominator=1.0LF+dt*readDouble(conductionField(CONDUCTION_DEGREE)+2*owner);
   precise double q=g*(temperature-readDouble(conductionField(CONDUCTION_TEMPERATURE)+2*owner))*dt/denominator;
@@ -479,12 +481,13 @@ void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[workFie
 }
 void main(){int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
 if(id>=p.count)return;
- if(p.stage==STAGE_SPATIAL_DISPATCH){if(id==0)spatialDispatch();return;}
- if(p.stage==STAGE_CLEAR){clear(id);return;}
- if(errors!=0u)return;
- if(p.stage==STAGE_PREPARE_SPATIAL_FLUX){if(errors!=0u||id>=liveSamples())return;spatialFlux(id);return;}
- if(p.stage==STAGE_WRITE_BATHS){writeBaths(id);return;}if(p.stage==STAGE_INITIALIZE_GRAPH){graphInitialize(id);return;}
- if(p.stage==STAGE_UPDATE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=max(words[workField(FIELD_REQUIREMENTS)+4],words[conductionField(CONDUCTION_MODE)+1]);return;}
- if(p.stage==STAGE_SAVE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=words[conductionField(CONDUCTION_MODE)+1];return;}if(p.stage==STAGE_PREPARE_OWNER){prepareOwner(id);return;}if(p.stage==STAGE_PREPARE_TERMS){prepareTerms(id);return;}if(p.stage==STAGE_WRITE_CONTACTS){writeContacts(id);return;}
- if(p.stage==STAGE_FLAG_OWNER)flagOwner(id);else if(p.stage==STAGE_FLAG_SAMPLE)flagSample(id);else if(p.stage==STAGE_PREPARE_SAMPLE)prepareSample(id);else if(p.stage==STAGE_SCATTER_SAMPLE)scatterSample(id);else if(p.stage==STAGE_COVERAGE)coverage(id);else if(p.stage==STAGE_COUNT_CONTACTS)contacts(id,false);else if(p.stage==STAGE_PUBLISH)publish(id);else if(p.stage==STAGE_COUNT_PORTS)portCount(id);else if(p.stage==STAGE_SCATTER_PORTS)portScatter(id);else if(p.stage==STAGE_COUNT_BATHS)countBaths(id);else if(p.stage==STAGE_PROJECT_CONTACT_GEOMETRY)projectContactGeometry(id);
+ if(pipelineStage==STAGE_SPATIAL_DISPATCH){if(id==0)spatialDispatch();return;}
+ if(pipelineStage==STAGE_CLEAR){clear(id);return;}
+ if(pipelineStage==STAGE_UPDATE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=max(words[workField(FIELD_REQUIREMENTS)+4],words[conductionField(CONDUCTION_MODE)+1]);return;}
+ if(pipelineStage==STAGE_SAVE_MODE_REQUIREMENT){if(id==0)words[workField(FIELD_REQUIREMENTS)+4]=words[conductionField(CONDUCTION_MODE)+1];return;}
+ if(errors!=0u && !(errors==64u && pipelineStage==STAGE_WRITE_CONTACTS))return;
+ if(pipelineStage==STAGE_PREPARE_SPATIAL_FLUX || pipelineStage==STAGE_LIMITED_SPATIAL_FLUX){if(errors!=0u||id>=liveSamples())return;spatialFlux(id);return;}
+ if(pipelineStage==STAGE_WRITE_BATHS){writeBaths(id);return;}if(pipelineStage==STAGE_INITIALIZE_GRAPH){graphInitialize(id);return;}
+ if(pipelineStage==STAGE_PREPARE_OWNER){prepareOwner(id);return;}if(pipelineStage==STAGE_PREPARE_TERMS){prepareTerms(id);return;}if(pipelineStage==STAGE_WRITE_CONTACTS){writeContacts(id);return;}
+ if(pipelineStage==STAGE_FLAG_OWNER)flagOwner(id);else if(pipelineStage==STAGE_FLAG_SAMPLE)flagSample(id);else if(pipelineStage==STAGE_PREPARE_SAMPLE)prepareSample(id);else if(pipelineStage==STAGE_SCATTER_SAMPLE)scatterSample(id);else if(pipelineStage==STAGE_COVERAGE)coverage(id);else if(pipelineStage==STAGE_COUNT_CONTACTS)contacts(id,false);else if(pipelineStage==STAGE_PUBLISH)publish(id);else if(pipelineStage==STAGE_COUNT_PORTS)portCount(id);else if(pipelineStage==STAGE_SCATTER_PORTS)portScatter(id);else if(pipelineStage==STAGE_COUNT_BATHS)countBaths(id);else if(pipelineStage==STAGE_PROJECT_CONTACT_GEOMETRY)projectContactGeometry(id);
 }

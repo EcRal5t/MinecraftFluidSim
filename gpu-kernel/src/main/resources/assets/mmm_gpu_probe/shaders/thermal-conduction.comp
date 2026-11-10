@@ -5,7 +5,8 @@
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header;int stage;int count;int step;double dt;double fraction; } p;
+layout(push_constant) uniform Params { int header;int reserved;int count;int step;double dt;double fraction; } p;
+layout(constant_id=0) const int pipelineStage=-1;
 // HOST_LAYOUT
 const uint ERROR_INVALID_CONDUCTION = 256u;
 const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
@@ -142,27 +143,27 @@ void spatialGatherDispatch(){
 }
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
-    if(p.stage==STAGE_FINISH_ENERGY){
+    if(pipelineStage==STAGE_FINISH_ENERGY){
       if(errors==0u&&id<owners()){double u=readDouble(FIELD_BEFORE_ENERGY,id)+ownerFlux(id);writeDouble(FIELD_OWNER_ENERGY,id,u);if(headerWord(H_CONTACT_MODE)!=2)writeDouble(FIELD_TEMPERATURE,id,invert(id,u-readDouble(FIELD_BEFORE_ENERGY,id)));dvec2 change=twoSum(u,-readDouble(FIELD_BEFORE_ENERGY,id));writeDouble(FIELD_ENERGY_CHANGE,2*id,change.x);writeDouble(FIELD_ENERGY_CHANGE,2*id+1,change.y);}
       return;
     }
-    if(p.stage==STAGE_INITIAL_FLUX){if(errors==0u)flux(id,p.dt,0);return;}
-    if(p.stage==STAGE_NORMALIZE_RATES){if(errors==0u&&id<owners())writeDouble(FIELD_DEGREE,id,readDouble(FIELD_DEGREE,id)/readDouble(FIELD_MIN_CP,id));return;}
-    if(p.stage==STAGE_SPATIAL_GATHER_DISPATCH){if(id==0)spatialGatherDispatch();return;}
-    if(p.stage==STAGE_CONTACT_DISPATCH){if(id==0){int count=errors==0u?max(1,((headerWord(H_CONTACT_MODE)!=0?readInt(FIELD_MODE,1):contacts())+127)/128):0;writeInt(FIELD_DISPATCH,12,min(count,65535));writeInt(FIELD_DISPATCH,13,max(1,(count+65534)/65535));writeInt(FIELD_DISPATCH,14,1);}return;}
+    if(pipelineStage==STAGE_INITIAL_FLUX){if(errors==0u)flux(id,p.dt,0);return;}
+    if(pipelineStage==STAGE_NORMALIZE_RATES){if(errors==0u&&id<owners())writeDouble(FIELD_DEGREE,id,readDouble(FIELD_DEGREE,id)/readDouble(FIELD_MIN_CP,id));return;}
+    if(pipelineStage==STAGE_SPATIAL_GATHER_DISPATCH){if(id==0)spatialGatherDispatch();return;}
+    if(pipelineStage==STAGE_CONTACT_DISPATCH){if(id==0){int count=errors==0u?max(1,((headerWord(H_CONTACT_MODE)!=0?readInt(FIELD_MODE,1):contacts())+127)/128):0;writeInt(FIELD_DISPATCH,12,min(count,65535));writeInt(FIELD_DISPATCH,13,max(1,(count+65534)/65535));writeInt(FIELD_DISPATCH,14,1);}return;}
     if(errors!=0u&&headerWord(H_CONTACT_MODE)!=0)return;
     if(owners()<0||owners()>headerWord(H_OWNER_CAPACITY)||readInt(FIELD_COUNTS,1)<0||readInt(FIELD_COUNTS,1)>headerWord(H_TERM_CAPACITY)||contacts()<0||contacts()>headerWord(H_CONTACT_CAPACITY)){if(id==0)invalid();return;}
     // All bath demand is counted even when a private candidate needs a larger bath column.
-    if((errors&ERROR_INSUFFICIENT_CAPACITY)!=0u&&p.stage!=STAGE_INITIALIZE&&p.stage!=STAGE_COUNT_CONTACTS&&p.stage!=STAGE_CONTACT_DISPATCH)return;
-    if(p.stage==STAGE_REDUCE_FLUX_TILES){if(block<readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)))reduceTile(block,lane,23);return;}
-    if(p.stage==STAGE_REDUCE_DEGREE_TILES){if(block<readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)))reduceTile(block,lane,22);return;}
+    if((errors&ERROR_INSUFFICIENT_CAPACITY)!=0u&&pipelineStage!=STAGE_INITIALIZE&&pipelineStage!=STAGE_COUNT_CONTACTS&&pipelineStage!=STAGE_CONTACT_DISPATCH)return;
+    if(pipelineStage==STAGE_REDUCE_FLUX_TILES){if(block<readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)))reduceTile(block,lane,23);return;}
+    if(pipelineStage==STAGE_REDUCE_DEGREE_TILES){if(block<readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)))reduceTile(block,lane,22);return;}
 
-    if(p.stage==STAGE_INITIALIZE){if(id<headerWord(H_OWNER_CAPACITY))initialize(id);}
-    else if(p.stage==STAGE_COUNT_CONTACTS)countContact(id);
-    else if(p.stage==STAGE_SCATTER_CONTACTS){if(id<headerWord(H_CONTACT_CAPACITY))scatter(id);}
-    else if(p.stage==STAGE_PREPARE_OWNERS)prepareOwner(id);
-    else if(p.stage==STAGE_PREPARE_TILES){if(id<p.count)prepareTile(id);}
-    else if(p.stage==STAGE_COUNT_TILES){if(id<headerWord(H_OWNER_CAPACITY))writeInt(FIELD_TILE_COUNTS,id,id<owners()&&readInt(FIELD_DEGREE_COUNTS,id)>128?(readInt(FIELD_DEGREE_COUNTS,id)+127)/128:0);}
-    else if(p.stage==STAGE_CLEAR_RESERVOIRS){if(id<headerWord(H_BATH_CAPACITY))for(int slot=0;slot<headerWord(H_ENABLED);slot++)writeDouble(FIELD_RESERVOIR_CHANGE,id*headerWord(H_ENABLED)+slot,0.0);}
+    if(pipelineStage==STAGE_INITIALIZE){if(id<headerWord(H_OWNER_CAPACITY))initialize(id);}
+    else if(pipelineStage==STAGE_COUNT_CONTACTS)countContact(id);
+    else if(pipelineStage==STAGE_SCATTER_CONTACTS){if(id<headerWord(H_CONTACT_CAPACITY))scatter(id);}
+    else if(pipelineStage==STAGE_PREPARE_OWNERS)prepareOwner(id);
+    else if(pipelineStage==STAGE_PREPARE_TILES){if(id<p.count)prepareTile(id);}
+    else if(pipelineStage==STAGE_COUNT_TILES){if(id<headerWord(H_OWNER_CAPACITY))writeInt(FIELD_TILE_COUNTS,id,id<owners()&&readInt(FIELD_DEGREE_COUNTS,id)>128?(readInt(FIELD_DEGREE_COUNTS,id)+127)/128:0);}
+    else if(pipelineStage==STAGE_CLEAR_RESERVOIRS){if(id<headerWord(H_BATH_CAPACITY))for(int slot=0;slot<headerWord(H_ENABLED);slot++)writeDouble(FIELD_RESERVOIR_CHANGE,id*headerWord(H_ENABLED)+slot,0.0);}
 
 }
