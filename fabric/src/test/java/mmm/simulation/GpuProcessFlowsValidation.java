@@ -426,7 +426,8 @@ public final class GpuProcessFlowsValidation {
             if(!region.hostSnapshot().thermalAudit().acceptsInventory(region.hostSnapshot().exactInternalEnergy()))throw new AssertionError("Counterflow fluid energy audit did not close");
             requireEnergyTotal(transfers.source.toDouble(),hotInputEnergy+coldInputEnergy,"Counterflow incoming batch energy");
             requireEnergyTotal(transfers.sink.toDouble(),productEnergy+gasEnergy,"Counterflow outgoing batch energy");
-            double beforeStop=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().mapToDouble(value->value.body().internalEnergyJ()).sum();
+            double beforeStop=counterflowWallEnergy(region,world,layout);
+            double peakWallEnergy=beforeStop;
             var activeDrain=new IndustrialLayout.Port(hotDrainPort.position(),hotDrainPort.outward(),mmm.block.FluidPortBlockEntity.Mode.OUTPUT,
                     hotDrainPort.phase(),hotDrainPort.rate(),hotDrainPort.redstone());
             for(int step=0;step<600;step++) {
@@ -452,11 +453,13 @@ public final class GpuProcessFlowsValidation {
                 }
                 available(region);transfers.add(transferAudit,region.hostSnapshot().thermalAudit());
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Counterflow after hot feed stopped rejected");
+                peakWallEnergy=Math.max(peakWallEnergy,counterflowWallEnergy(region,world,layout));
             }
             motion.settlePendingPhaseWork(region);
-            double afterStop=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().mapToDouble(value->value.body().internalEnergyJ()).sum();
-            System.out.println("counterflow_after_stop stone="+stone+" wall_energy="+beforeStop+" / "+afterStop);
-            if(!(afterStop<beforeStop))throw new AssertionError("Finite wall did not release stored heat after hot feed stopped");
+            double afterStop=counterflowWallEnergy(region,world,layout);
+            System.out.println("counterflow_after_stop stone="+stone+" wall_energy_initial="+beforeStop
+                    +" wall_energy_peak="+peakWallEnergy+" wall_energy_final="+afterStop+" released="+(peakWallEnergy-afterStop));
+            if(!(afterStop<peakWallEnergy))throw new AssertionError("Finite wall did not release stored heat after hot feed stopped");
             gasMass=0;for(var batch:vented)gasMass=Math.addExact(gasMass,gasMass(batch));
             long stopped=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(hot,world)+chemicalMass(cold,world)+productMass+gasMass;
             if(stopped!=Math.addExact(initial,supplied))throw new AssertionError("Counterflow after hot feed stopped changed combined mass");
@@ -465,6 +468,13 @@ public final class GpuProcessFlowsValidation {
             requireEnergyTotal(transfers.sink.toDouble(),productEnergy+gasEnergy,"Counterflow outgoing batch energy after stop");
             return coldTemperature;
         }
+    }
+    private static double counterflowWallEnergy(FluidRegion region,CommittedWorldRegistries world,IndustrialLayout layout) {
+        var wallIds=layout.walls().stream().map(wall->wall.position().asLong()+"@").toList();
+        return region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
+                .filter(device->device.providerId().equals(OrdinaryThermalWalls.PROVIDER)
+                        && wallIds.stream().anyMatch(device.objectId()::startsWith))
+                .mapToDouble(device->device.body().internalEnergyJ()).sum();
     }
     private static boolean counterflowFilled(FluidRegion region,int[] cell) {
         var liquid=region.observeCellInventory(cell[0],cell[1],cell[2]);

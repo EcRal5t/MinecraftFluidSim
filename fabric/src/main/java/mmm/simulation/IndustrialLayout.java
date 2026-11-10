@@ -93,19 +93,19 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         return new IndustrialLayout(min,controller,blocks,ports,List.of(new Screen(screen,.000005,.6)),List.of(),walls,List.of());
     }
     private static IndustrialLayout connectedTanks(BlockPos min) {
-        int sx=14,sy=5,sz=5;var blocks=shell(min,sx,sy,sz);
-        // The central passage retains a 2 by 2 metre opening between the two tanks.
-        for(int x=4;x<=9;x++)for(int y=1;y<4;y++)for(int z=1;z<4;z++)
-            if(y==3||z==3)blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
+        int sx=14,sy=6,sz=5;var blocks=shell(min,sx,sy,sz);
+        // The liquid passage and upper gas passage cross the partition independently.
+        for(int x=4;x<=9;x++)for(int y=1;y<5;y++)for(int z=1;z<4;z++)
+            if(!(y<=2 && z<=2) && !(y==4 && z==3))blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
         var screens=new ArrayList<Screen>();
         for(int y=1;y<=2;y++)for(int z=1;z<=2;z++) {
             var p=min.offset(6,y,z);
             blocks.put(p,MmmBlocks.VALVE.defaultBlockState().setValue(ValveBlock.FACING,Direction.EAST));
         }
         var ports=new ArrayList<Port>();
-        addPort(blocks,ports,min.offset(0,1,1),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
+        addPort(blocks,ports,min.offset(0,3,1),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
         addPort(blocks,ports,min.offset(13,1,1),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
-        var sensorPos=min.offset(0,1,0);
+        var sensorPos=min.offset(0,3,0);
         blocks.put(sensorPos,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
         {var p=ports.getFirst();ports.set(0,new Port(p.position(),p.outward(),p.mode(),p.phase(),p.rate(),true));}
         var sensor=new Sensor(sensorPos,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(10,1,1),min.offset(12,3,3));
