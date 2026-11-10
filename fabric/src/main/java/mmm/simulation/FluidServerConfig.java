@@ -2,7 +2,6 @@ package mmm.simulation;
 
 import mmm.application.RegionCatalog;
 import mmm.granular.GranularLimits;
-import mmm.thermal.ThermalLimits;
 import mmm.thermal.ThermalTransport;
 
 import java.io.IOException;
@@ -30,7 +29,6 @@ public record FluidServerConfig(
 		long maximumGranularParcels,
 		long maximumGranularDepositGroups,
 		int maximumThermalSubstepsPerStep,
-		int maximumPhaseOperationsPerStep,
 		long maximumQuarantineEntries,
 		long maximumQuarantineBytes,
 		RegionCatalog.Limits limits
@@ -44,7 +42,7 @@ public record FluidServerConfig(
 	private static final long MAXIMUM_QUARANTINE_BYTES = 1L << 40;
 	private static final Set<String> KEYS = Set.of(
 			"schema", "controllersEnabled", "worldBridgeEnabled", "maximumGranularParcels",
-			"maximumGranularDepositGroups", "maximumThermalSubstepsPerStep", "maximumPhaseOperationsPerStep",
+			"maximumGranularDepositGroups", "maximumThermalSubstepsPerStep",
 			"maximumQuarantineEntries", "maximumQuarantineBytes", "maximumRegions", "maximumCellsPerRegion",
 			"maximumTotalCells");
 
@@ -56,9 +54,7 @@ public record FluidServerConfig(
 			throw new IllegalArgumentException("Granular server budgets are outside hard limits");
 		}
 		if (maximumThermalSubstepsPerStep <= 0
-				|| maximumThermalSubstepsPerStep > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS
-				|| maximumPhaseOperationsPerStep <= 0
-				|| maximumPhaseOperationsPerStep > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
+				|| maximumThermalSubstepsPerStep > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS) {
 			throw new IllegalArgumentException("Thermal server budgets are outside hard limits");
 		}
 		if (maximumQuarantineEntries < 0L || maximumQuarantineEntries > MAXIMUM_QUARANTINE_ENTRIES
@@ -70,7 +66,7 @@ public record FluidServerConfig(
 	public FluidServerConfig(boolean controllersEnabled, boolean worldBridgeEnabled, RegionCatalog.Limits limits) {
 		this(controllersEnabled, worldBridgeEnabled, GranularLimits.MAX_ACTIVE_PARCELS_PER_SERVER,
 				GranularLimits.MAX_DEPOSIT_GROUPS_PER_SERVER, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS,
-				ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP, DEFAULT_QUARANTINE_ENTRIES,
+				DEFAULT_QUARANTINE_ENTRIES,
 				DEFAULT_QUARANTINE_BYTES, limits);
 	}
 
@@ -102,13 +98,12 @@ public record FluidServerConfig(
 			long granularParcels = positiveLong(properties, "maximumGranularParcels");
 			long granularDeposits = positiveLong(properties, "maximumGranularDepositGroups");
 			int thermalSubsteps = positiveInteger(properties, "maximumThermalSubstepsPerStep");
-			int phaseOperations = positiveInteger(properties, "maximumPhaseOperationsPerStep");
 			long quarantineEntries = nonNegativeLong(properties, "maximumQuarantineEntries");
 			long quarantineBytes = nonNegativeLong(properties, "maximumQuarantineBytes");
 			RegionCatalog.Limits limits = new RegionCatalog.Limits(
 					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"), positiveLong(properties, "maximumTotalCells"));
 			return new FluidServerConfig(flag(properties, "controllersEnabled"), flag(properties, "worldBridgeEnabled"),
-					granularParcels, granularDeposits, thermalSubsteps, phaseOperations, quarantineEntries,
+					granularParcels, granularDeposits, thermalSubsteps, quarantineEntries,
 					quarantineBytes, limits);
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid Matter, Motion & Mechanics server config: " + exception.getMessage(), exception);
@@ -125,7 +120,6 @@ public record FluidServerConfig(
 		properties.setProperty("maximumGranularParcels", Long.toString(maximumGranularParcels));
 		properties.setProperty("maximumGranularDepositGroups", Long.toString(maximumGranularDepositGroups));
 		properties.setProperty("maximumThermalSubstepsPerStep", Integer.toString(maximumThermalSubstepsPerStep));
-		properties.setProperty("maximumPhaseOperationsPerStep", Integer.toString(maximumPhaseOperationsPerStep));
 		properties.setProperty("maximumQuarantineEntries", Long.toString(maximumQuarantineEntries));
 		properties.setProperty("maximumQuarantineBytes", Long.toString(maximumQuarantineBytes));
 		properties.setProperty("maximumRegions", Integer.toString(limits.maximumRegions()));
@@ -145,13 +139,13 @@ public record FluidServerConfig(
 
 	public FluidServerConfig withControllersEnabled(boolean enabled) {
 		return new FluidServerConfig(enabled, worldBridgeEnabled, maximumGranularParcels, maximumGranularDepositGroups,
-				maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, maximumQuarantineEntries,
+				maximumThermalSubstepsPerStep, maximumQuarantineEntries,
 				maximumQuarantineBytes, limits);
 	}
 
 	public FluidServerConfig withWorldBridgeEnabled(boolean enabled) {
 		return new FluidServerConfig(controllersEnabled, enabled, maximumGranularParcels, maximumGranularDepositGroups,
-				maximumThermalSubstepsPerStep, maximumPhaseOperationsPerStep, maximumQuarantineEntries,
+				maximumThermalSubstepsPerStep, maximumQuarantineEntries,
 				maximumQuarantineBytes, limits);
 	}
 

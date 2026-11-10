@@ -141,6 +141,12 @@ void dyadicWriteSum(DyadicTerm items[DYADIC_MAX_TERMS],int itemCount,DyadicMeasu
 // Comparison requires only the sign of the exact difference; a wide positive difference still
 // orders correctly even when its magnitude would not fit the inventory storage envelope.
 int dyadicCompare(DyadicTerm left,DyadicTerm right) {
+    if(!dyadicPresent(left))return dyadicPresent(right)?-right.sign:0;
+    if(!dyadicPresent(right))return left.sign;
+    if(left.sign!=right.sign)return left.sign;
+    int64_t leftTop=int64_t(left.exponent)+32l*int64_t(left.count-1)+int64_t(findMSB(dyadicWord(left.bank,left.offset+left.count-1)));
+    int64_t rightTop=int64_t(right.exponent)+32l*int64_t(right.count-1)+int64_t(findMSB(dyadicWord(right.bank,right.offset+right.count-1)));
+    if(leftTop!=rightTop)return leftTop>rightTop?left.sign:-left.sign;
     DyadicTerm items[DYADIC_MAX_TERMS];items[0]=left;items[1]=right;items[1].sign=-items[1].sign;
     DyadicMeasure result=dyadicMeasure(items,2);
     return result.status==DYADIC_ZERO?0:result.status==DYADIC_NEGATIVE?-1:1;

@@ -498,7 +498,7 @@ public final class GpuProductionDemoValidation {
 						: bodies.getFirst().velocityXMetresPerSecond() > 0), "Player observation has incorrect motion");
 			}
 			var result = ticks.executeMotion(plan, new MotionStepCommand(region.id(), region.solverGeneration(),
-					bodies, true, startup.config().maximumPhaseOperationsPerStep(), false));
+					bodies, true, false));
 			require(result.result().accepted(), "Scheduled motion rejected: " + result.result().status());
 			double elapsed = (System.nanoTime() - tickStart) / 1e6;
 			if (playerPresent) {

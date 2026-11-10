@@ -104,7 +104,7 @@ public final class GasLiquidPhaseModel {
 			ThermalPhaseTransition transition, long batches,
 			Map<String, Long> speciesQuanta, long massResidualUnits
 	) {
-		if (batches <= 0L || batches > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
+		if (batches <= 0L) {
 			throw new IllegalArgumentException("Gas phase batch count is invalid");
 		}
 		if (speciesQuanta == null) {

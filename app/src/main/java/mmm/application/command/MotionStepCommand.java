@@ -1,6 +1,5 @@
 package mmm.application.command;
 
-import mmm.thermal.ThermalLimits;
 import mmm.world.MovingBodyFluidCoupling;
 
 import java.util.List;
@@ -13,27 +12,26 @@ public record MotionStepCommand(
 		long expectedSolverGeneration,
 		List<MovingBodyFluidCoupling.Request> movingBodies,
 		boolean phaseChangeEnabled,
-		int maximumPhaseOperations,
 		boolean mechanicalAuditEnabled,
 		boolean pendingPhaseSettlementOnly,
 		boolean[] activeCells
 ) {
 	public MotionStepCommand(UUID id, long generation, List<MovingBodyFluidCoupling.Request> bodies,
-			boolean phase, int budget, boolean audit, boolean settlement) {
-		this(id, generation, bodies, phase, budget, audit, settlement, null);
+			boolean phase, boolean audit, boolean settlement) {
+		this(id, generation, bodies, phase, audit, settlement, null);
 	}
 	@Override public boolean[] activeCells() { return activeCells == null ? null : activeCells.clone(); }
 	public MotionStepCommand(
 			UUID regionId, long expectedSolverGeneration,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
-			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean mechanicalAuditEnabled
+			boolean phaseChangeEnabled, boolean mechanicalAuditEnabled
 	) {
-		this(regionId, expectedSolverGeneration, movingBodies, phaseChangeEnabled, maximumPhaseOperations,
+		this(regionId, expectedSolverGeneration, movingBodies, phaseChangeEnabled,
 				mechanicalAuditEnabled, false);
 	}
 
 	public static MotionStepCommand pendingPhaseSettlement(UUID regionId, long expectedSolverGeneration) {
-		return new MotionStepCommand(regionId, expectedSolverGeneration, List.of(), false, 0, false, true);
+		return new MotionStepCommand(regionId, expectedSolverGeneration, List.of(), false, false, true);
 	}
 
 	public MotionStepCommand {
@@ -44,20 +42,9 @@ public record MotionStepCommand(
 			throw new IllegalArgumentException("Moving-body command budget is invalid");
 		}
 		movingBodies = List.copyOf(movingBodies);
-		requirePhaseBudget(phaseChangeEnabled, maximumPhaseOperations);
 		if (pendingPhaseSettlementOnly && (!movingBodies.isEmpty() || phaseChangeEnabled
-				|| maximumPhaseOperations != 0 || mechanicalAuditEnabled)) {
+				|| mechanicalAuditEnabled)) {
 			throw new IllegalArgumentException("Pending phase settlement command must be mechanics-only");
-		}
-	}
-
-	static void requirePhaseBudget(boolean enabled, int maximumOperations) {
-		if (enabled && (maximumOperations <= 0
-				|| maximumOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
-			throw new IllegalArgumentException("Phase-change command budget is invalid");
-		}
-		if (!enabled && maximumOperations != 0) {
-			throw new IllegalArgumentException("Inactive phase change cannot reserve operations");
 		}
 	}
 }

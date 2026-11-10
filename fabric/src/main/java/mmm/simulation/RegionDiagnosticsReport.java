@@ -20,7 +20,6 @@ import net.minecraft.server.level.ServerLevel;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
-import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
 /** Read-only operator diagnostics derived from committed runtime owners and the selected live region. */
@@ -35,7 +34,6 @@ public final class RegionDiagnosticsReport {
 	private final BooleanSupplier worldBridgeFeatureEnabled;
 	private final BooleanSupplier configuredWorldBridgeFeatureEnabled;
 	private final Supplier<List<String>> ownershipIssues;
-	private final IntSupplier maximumPhaseOperationsPerStep;
 
 	RegionDiagnosticsReport(
 			FluidRegionManager regions,
@@ -47,7 +45,6 @@ public final class RegionDiagnosticsReport {
 			BooleanSupplier worldBridgeFeatureEnabled,
 			BooleanSupplier configuredWorldBridgeFeatureEnabled,
 			Supplier<List<String>> ownershipIssues,
-			IntSupplier maximumPhaseOperationsPerStep,
 			Supplier<String> computeDescription
 	) {
 		this.computeDescription = Objects.requireNonNull(computeDescription);
@@ -61,8 +58,6 @@ public final class RegionDiagnosticsReport {
 		this.configuredWorldBridgeFeatureEnabled = Objects.requireNonNull(
 				configuredWorldBridgeFeatureEnabled, "Configured world bridge gate");
 		this.ownershipIssues = Objects.requireNonNull(ownershipIssues, "Ownership issues");
-		this.maximumPhaseOperationsPerStep = Objects.requireNonNull(
-				maximumPhaseOperationsPerStep, "Phase operation budget");
 	}
 
 	public String ownership(MinecraftServer server) {
@@ -301,11 +296,9 @@ public final class RegionDiagnosticsReport {
 				: String.format("%.2f..%.2f K", minimumQ / 16.0, maximumQ / 16.0);
 		FluidDomainContracts.ThermalPhaseStats condensed = domain.lastThermalPhaseStats();
 		FluidDomainContracts.GasThermalPhaseStats gas = domain.lastGasThermalPhaseStats();
-		int phaseBudget = maximumPhaseOperationsPerStep.getAsInt();
 		String phase = condensed.operations() == 0 && gas.operations() == 0 ? "idle"
-				: String.format("solid=%d gas=%d%s (boil %d/condense %d cells)",
+				: String.format("solid=%d gas=%d (boil %d/condense %d cells)",
 						condensed.operations(), gas.operations(),
-						condensed.operations() + gas.operations() == phaseBudget ? "/" + phaseBudget + " budget-hit" : "",
 						gas.boiledCells(), gas.condensedCells());
 		return String.format("thermal %s T=%s U=%.6g J source=%.6g sink=%.6g work=%.6g device=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
 				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),

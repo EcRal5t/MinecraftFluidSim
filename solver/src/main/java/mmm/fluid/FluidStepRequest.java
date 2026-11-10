@@ -1,6 +1,5 @@
 package mmm.fluid;
 
-import mmm.thermal.ThermalLimits;
 import mmm.world.MovingBodyFluidCoupling;
 
 import java.util.List;
@@ -12,35 +11,34 @@ public record FluidStepRequest(
 		FluidStateAccess stateAccess,
 		List<MovingBodyFluidCoupling.Request> movingBodies,
 		boolean phaseChangeEnabled,
-		int maximumPhaseOperations,
 		boolean mechanicalAuditEnabled,
 		boolean pendingPhaseSettlementOnly,
 		boolean[] activeCells
 ) {
 	public FluidStepRequest(long generation, FluidStateAccess state, List<MovingBodyFluidCoupling.Request> bodies,
-			boolean phase, int budget, boolean audit, boolean settlement) {
-		this(generation, state, bodies, phase, budget, audit, settlement, null);
+			boolean phase, boolean audit, boolean settlement) {
+		this(generation, state, bodies, phase, audit, settlement, null);
 	}
 	@Override public boolean[] activeCells() { return activeCells == null ? null : activeCells.clone(); }
 	public FluidStepRequest(
 			long baseGeneration, FluidDomainState state,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
-			boolean phaseChangeEnabled, int maximumPhaseOperations
+			boolean phaseChangeEnabled
 	) {
-		this(baseGeneration, state, movingBodies, phaseChangeEnabled, maximumPhaseOperations, false, false);
+		this(baseGeneration, state, movingBodies, phaseChangeEnabled, false, false);
 	}
 
 	public FluidStepRequest(
 			long baseGeneration, FluidDomainState state,
 			List<MovingBodyFluidCoupling.Request> movingBodies,
-			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean mechanicalAuditEnabled
+			boolean phaseChangeEnabled, boolean mechanicalAuditEnabled
 	) {
-		this(baseGeneration, state, movingBodies, phaseChangeEnabled, maximumPhaseOperations,
+		this(baseGeneration, state, movingBodies, phaseChangeEnabled,
 				mechanicalAuditEnabled, false);
 	}
 
 	public static FluidStepRequest pendingPhaseSettlement(long baseGeneration, FluidDomainState state) {
-		return new FluidStepRequest(baseGeneration, state, List.of(), false, 0, false, true);
+		return new FluidStepRequest(baseGeneration, state, List.of(), false, false, true);
 	}
 
 	public FluidStepRequest {
@@ -57,15 +55,11 @@ public record FluidStepRequest(
 		}
 		movingBodies = new EntityBodyState(movingBodies).bodies();
 		if (phaseChangeEnabled && (stateAccess.layout().thermalRegistryFingerprint().isEmpty()
-				|| stateAccess.layout().chemicalRegistryFingerprint().isEmpty() || maximumPhaseOperations <= 0
-				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
-			throw new IllegalArgumentException("Phase-change request is incompatible with the state/budget");
-		}
-		if (!phaseChangeEnabled && maximumPhaseOperations != 0) {
-			throw new IllegalArgumentException("Inactive phase change must not reserve an operation budget");
+				|| stateAccess.layout().chemicalRegistryFingerprint().isEmpty())) {
+			throw new IllegalArgumentException("Phase-change request is incompatible with the state");
 		}
 		if (pendingPhaseSettlementOnly && (!movingBodies.isEmpty() || phaseChangeEnabled
-				|| maximumPhaseOperations != 0 || mechanicalAuditEnabled)) {
+				|| mechanicalAuditEnabled)) {
 			throw new IllegalArgumentException("Pending phase settlement must be a mechanics-only request");
 		}
 	}

@@ -1,6 +1,7 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
     uint words[];
@@ -8,11 +9,12 @@ layout(binding = 0, std430) buffer Arena {
 layout(binding = 1, std430) buffer Errors {
     uint errors;
 };
+layout(binding = 2, std430) buffer WideArena { int64_t longs[]; };
 layout(push_constant) uniform Params {
     int header;
     int stage;
     int count;
-    int maximum;
+    int reserved;
 }
 p;
 bool activeCell(int cell);
@@ -299,9 +301,8 @@ void initialize(int id) {
         setDouble(FIELD_FACE_NEW_K, id, 0.0LF);
     }
     if (id == 0) {
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 12; i++)
             words[workField(FIELD_CONTROL) + i] = 0u;
-        words[workField(FIELD_CONTROL) + 5] = uint(p.maximum);
     }
 }
 void importSolid(int source) {
@@ -379,19 +380,8 @@ bool fits(int liquid, int solid, int64_t batches, int payload, bool freezing, in
         pairEnergy(liquid, solid, readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), freezing, moved, divisor);
     return isFinite(cold.x) && isFinite(cold.y) && cold.x + cold.y <= total;
 }
-int claim(int wanted) {
-    uint available = words[workField(FIELD_CONTROL) + 5];
-    while (available > 0u) {
-        uint take = min(available, uint(wanted)),
-             prior = atomicCompSwap(words[workField(FIELD_CONTROL) + 5], available, available - take);
-        if (prior == available)
-            return int(take);
-        available = prior;
-    }
-    return 0;
-}
 void phaseCell(int ordinal) {
-    int cell = (ordinal + int(words[headerWord(H_CURSOR)])) % cellCount();
+    int cell = ordinal;
     if (!activeCell(cell))
         return;
     double score = -1.0LF, chosenEquilibrium = 0.0LF, chosenTemperature = 0.0LF;
@@ -428,7 +418,7 @@ void phaseCell(int ordinal) {
     int64_t divisor = freezing ? freezable(liquid) : mass(1, solid),
             batchMass = readInt64(headerWord(H_DEFINITIONS) + payload + 3), lower = readInt64(headerWord(H_DEFINITIONS) + payload + 5),
             upper = readInt64(headerWord(H_DEFINITIONS) + payload + 7);
-    int64_t high = min(int64_t(p.maximum), divisor / batchMass);
+    int64_t high = divisor / batchMass;
     if (!freezing)
         high = min(high, get64(FIELD_SVQ, solid) / lower);
     if (high <= 0l)
@@ -469,7 +459,7 @@ void phaseCell(int ordinal) {
         return;
     }
     double desired = round(abs(total - initial.x - initial.y) / latent);
-    int wanted = int(min(double(high), max(0.0LF, desired))), batches = claim(wanted);
+    int64_t batches = min(high, int64_t(max(0.0LF, desired)));
     if (batches == 0)
         return;
     int64_t b = int64_t(batches), moved = moveMass(liquid, solid, b, payload, freezing, divisor);
@@ -496,8 +486,8 @@ void phaseCell(int ordinal) {
     set64(FIELD_CELL_REMOVED_MASS, cell, freezing ? moved : 0l);
     words[workField(FIELD_CELL_CHANGED) + cell] = 1u;
     atomicAdd(words[workField(FIELD_CONTROL) + 6 + (freezing ? 0 : 1)], 1u);
-    atomicAdd(words[workField(FIELD_CONTROL) + 8], uint(batches));
-    atomicAdd(words[workField(FIELD_CONTROL) + 9], uint(freezing ? batches : -batches));
+    atomicAdd(words[workField(FIELD_CONTROL) + 8], 1u);
+    atomicAdd(longs[(workField(FIELD_CONTROL) + 10) / 2], freezing ? batches : -batches);
 }
 int axisFaces(int axis) { return gridFaceCount(axis); }
 int faceIndex(int cell,int side) { return gridFace(cell,side); }
@@ -643,13 +633,12 @@ void publish(int id) {
     }
     if (id < cellCount() && words[workField(FIELD_CELL_CHANGED) + id] != 0u) {
         atomicOr(words[headerWord(H_PHASE_MOTION_CELLS) + id], 1u);
-        atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)], 1u);
     }
     if (id == 0) {
+        if(words[workField(FIELD_CONTROL)+8]!=0u)words[headerWord(H_PHASE_PENDING_SUMMARY)]=1u;
         words[coherentField(COHERENT_COUNTS)] = words[workField(FIELD_CONTROL) + 3];
         words[coherentField(COHERENT_COUNTS) + 1] = words[workField(FIELD_CONTROL) + 4];
         words[coherentField(COHERENT_SPECIES_OFFSETS) + int(words[workField(FIELD_CONTROL) + 3])] = words[workField(FIELD_CONTROL) + 4];
-        words[headerWord(H_CURSOR)] = uint((int(words[headerWord(H_CURSOR)]) + max(1, int(words[workField(FIELD_CONTROL) + 8]))) % cellCount());
     }
 }
 bool activeCell(int cell) {

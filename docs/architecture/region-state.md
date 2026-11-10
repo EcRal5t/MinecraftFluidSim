@@ -250,7 +250,7 @@ mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启�
 
 颗粒 section 保留 active/deposit 库存、组成和占容所需字段。
 气体 section 按局部格索引保存非空组分库存、整数质量、物种、质量余量和内能；空格恢复为空库存与零内能。manifest 保存材料身份、气体总量、来源／去向账和内能总账。
-`mmm:solver_runtime` 扩展保存封闭模式、化学轮转与待处理格、床层调度、热边界和最近真实压力场等运行输入。
+`mmm:solver_runtime` 扩展保存封闭模式、化学待处理格、床层调度、热边界和最近真实压力场等运行输入。
 这些数据随正常 HEAD、容器 WAL 涉及的区域代次和上一代恢复采用同一解码链。
 
 冷恢复直接生成 `LiquidCellInventory.Snapshot`、`PhaseOccupancyState`、`MacMomentumState` 和 `ThermalOwnerSnapshot`，

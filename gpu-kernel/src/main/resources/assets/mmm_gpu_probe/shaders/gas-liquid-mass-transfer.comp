@@ -34,6 +34,7 @@ const uint ERROR_INVALID_STATE = 67108864u;
 const int STAGE_INITIALIZE = 0;
 const int STAGE_PROPOSE = 1;
 const int STAGE_EXCHANGE = 4;
+const int STAGE_CONTACT = 17;
 const int STAGE_MOMENTUM = 5;
 const int STAGE_CELL_HEAT = 6;
 const int STAGE_FINISH_GAS = 7;
@@ -106,24 +107,26 @@ void dyadicWrite(int at, uint value) { words[at] = value; }
 // Evaluate the exact liquid reference volume after removing whole phase-change batches.
 int remainingVolumeStatus(int lr, int64_t batches) {
     int header = headerWord(H_PHASE_ROWS_HEADER);
-    DyadicTerm items[7];
-    for (int i = 0; i < 7; i++) items[i] = DyadicTerm(1, 0, 0, 0, 0);
+    DyadicTerm base=DyadicTerm(1,0,0,0,0);
     if (lr < phaseRowHeader(header, LP_H_SLOT_COUNT) && lr < int(words[stockField(LP_STOCK_COUNTS)])) {
         int count = int(words[stockField(LP_STOCK_VOLUME_COUNTS) + lr]);
-        items[0] = DyadicTerm(1, stockField(LP_STOCK_VOLUME_LIMBS) + int(words[stockField(LP_STOCK_VOLUME_OFFSETS) + lr]),
+        base = DyadicTerm(1, stockField(LP_STOCK_VOLUME_LIMBS) + int(words[stockField(LP_STOCK_VOLUME_OFFSETS) + lr]),
                               count, int(words[stockField(LP_STOCK_VOLUME_EXPONENTS) + lr]), count > 0 ? 1 : 0);
     }
     int64_t delta = readQuantity(phaseRowField(header, LP_FIELD_DELTA_SVQ) + 2 * lr) - batches;
-    if (delta != 0l) {
-        u64vec2 value = mul128(delta < 0l ? 0UL - uint64_t(delta) : uint64_t(delta),
+    if(delta>=0l)return delta>0l || base.count>0?DYADIC_POSITIVE:DYADIC_ZERO;
+    if(base.count==0)return DYADIC_NEGATIVE;
+    {
+        u64vec2 value = mul128(0UL - uint64_t(delta),
                                 uint64_t(readQuantity(header + LP_H_VOLUME_SIGNIFICAND)));
         int at = phaseRowField(header, LP_FIELD_DELTA_LIMBS) + 4 * lr;
         words[at] = uint(value.x); words[at + 1] = uint(value.x >> 32);
         words[at + 2] = uint(value.y); words[at + 3] = uint(value.y >> 32);
         int count = value.y != 0UL ? (value.y >> 32 != 0UL ? 4 : 3) : (value.x >> 32 != 0UL ? 2 : 1);
-        items[1] = DyadicTerm(1, at, count, phaseRowHeader(header, LP_H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
+        DyadicTerm removed=DyadicTerm(1,at,count,phaseRowHeader(header,LP_H_VOLUME_EXPONENT),1);
+        int order=dyadicCompare(base,removed);
+        return order>0?DYADIC_POSITIVE:order<0?DYADIC_NEGATIVE:DYADIC_ZERO;
     }
-    return dyadicMeasure(items, 7).status;
 }
 
 bool vaporBatchesFit(int lr, int species, int64_t batches, int64_t quantum, int64_t unit, int64_t oldMass) {
@@ -132,10 +135,8 @@ bool vaporBatchesFit(int lr, int species, int64_t batches, int64_t quantum, int6
     if (status == DYADIC_ZERO) {
         int64_t q = batches * quantum;
         if (q * unit != oldMass) return false;
-        int header = headerWord(H_PHASE_ROWS_HEADER);
-        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
-            if (phaseRowSpecies(header, lr, s) != (s == species ? q : 0l)) return false;
-        return true;
+        return readQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr)==q &&
+               phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,species)==q;
     }
     if (status != DYADIC_NEGATIVE) reportInvalid();
     return false;
@@ -204,14 +205,7 @@ double specificGas(int m, double t) {
 double liquidCold(int lr, int material) {
     double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
     double kg=double(phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr))*massUnit();
-    double coldEnergy=kg*specificLiquid(material,minimum);
-
-    for (int sp = 0; sp < headerWord(H_SPECIES_COUNT); sp++) {
-        int64_t speciesAmount = phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp);
-        if (speciesAmount > 0l)
-            coldEnergy += double(speciesAmount) * readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE) + 2 * (material * liquidCaloricWord(CAL_SPECIES_STRIDE) + sp));
-    }
-    return coldEnergy;
+    return kg*specificLiquid(material,minimum)+readDouble(workField(FIELD_LIQUID_SPECIES_ENERGY)+2*lr);
 }
 
 ivec3 shape() { return gridShape(); }
@@ -301,9 +295,14 @@ void initialize(int i) {
             int64_t liquidMass=phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr),quanta=0l;
             mass=addq(mass,liquidMass);
             reference+=phaseRowVolume(headerWord(H_PHASE_ROWS_HEADER),lr);
-            if(liquidMass>0l)for(int sp=0;sp<headerWord(H_SPECIES_COUNT);sp++)
-                quanta=addq(quanta,phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp));
+            double speciesEnergy=0.0LF;
+            if(liquidMass>0l)for(int sp=0;sp<headerWord(H_SPECIES_COUNT);sp++){
+                int64_t amount=phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp);
+                quanta=addq(quanta,amount);
+                if(amount!=0l)speciesEnergy+=double(amount)*readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(m*liquidCaloricWord(CAL_SPECIES_STRIDE)+sp));
+            }
             writeQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr,quanta);
+            writeDouble(workField(FIELD_LIQUID_SPECIES_ENERGY)+2*lr,speciesEnergy);
         }
         for (int m = 0; m < gasHeaderWord(GAS_H_COMPONENT_COUNT); m++) {
             mass=addq(mass,readQuantity(gasField(GAS_MASS_UNITS)+2*component(i,m)));
@@ -359,7 +358,7 @@ void clearUnavailablePending(int c) {
            readDouble(workField(FIELD_PENDING_RESIDUAL)+2*at)==0.0LF)continue;
         int r=workField(FIELD_RULES)+32*k,sp=int(words[r+2]);
         bool vapor=words[r+22]!=0u;
-        if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_OPERATIONS)<=0))continue;
+        if(vapor && (headerWord(H_PHASE_ENABLED)==0))continue;
         if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),row(c,int(words[r])),sp)>0l)continue;
         bool available=false;
         for(int pass=0;pass<7 && !available;pass++){
@@ -386,11 +385,8 @@ double currentPressure(int cell,double reference,double nanos,double temperature
 double liquidRowTemperature(int lr,int material,out double capacity){
     double mass=double(phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr))*massUnit();
     if(mass<=0.0LF){capacity=0.0LF;return 0.0LF;}
-    double base=mass*readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*material);
-    for(int sp=0;sp<headerWord(H_SPECIES_COUNT);sp++){
-        int64_t amount=phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp);
-        if(amount!=0l)base+=double(amount)*readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(material*liquidCaloricWord(CAL_SPECIES_STRIDE)+sp));
-    }
+    double base=mass*readDouble(liquidCaloricWord(CAL_MATERIAL_REFERENCE)+2*material)
+            +readDouble(workField(FIELD_LIQUID_SPECIES_ENERGY)+2*lr);
     double temperature=caloricStateTemperature(headerWord(H_LIQUID_CALORIC),material,mass,0.0LF,
             phaseRowEnergy(headerWord(H_PHASE_ROWS_HEADER),lr)-base,capacity);
     double minimum=readDouble(headerWord(H_LIQUID_CALORIC)+CAL_MINIMUM_TEMPERATURE);
@@ -411,7 +407,7 @@ int propose(int c) {
         for(int k=0;k<rules;k++){
             int r=workField(FIELD_RULES)+32*k;if(int(words[r])!=m)continue;
             int sp=int(words[r+2]),at=c*rules+k;bool vapor=words[r+22]!=0u;
-            if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_OPERATIONS)<=0))continue;
+            if(vapor && (headerWord(H_PHASE_ENABLED)==0))continue;
             int gs=gasSpecies(component(node,int(words[r+1])),sp);
             if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)==0l &&
                     (gs<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)==0l))continue;
@@ -478,7 +474,7 @@ double dryWallArea(int c,int direction){
     return area*porosity;
 }
 void proposeDryWall(int index){
-    if(headerWord(H_WALL_COUNTS)<0 || headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_OPERATIONS)<=0)return;
+    if(headerWord(H_WALL_COUNTS)<0 || headerWord(H_PHASE_ENABLED)==0)return;
     int rules=headerWord(H_RULE_COUNT),port=index/rules,k=index%rules;
     if(port>=int(words[headerWord(H_WALL_COUNTS)+1]))return;
     int r=workField(FIELD_RULES)+32*k;if(words[r+22]==0u)return;
@@ -732,7 +728,7 @@ uvec4 exchange(int node, int first) {
     double energy = readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node);
     int receiver = int(words[workField(FIELD_ORPHAN_RECEIVER)+node]);
     for (int at = first; at >= 0; at = int(words[workField(FIELD_NEXT) + at])) {
-        bool wall=p.maximum==7;
+        const bool wall=pipelineStage==STAGE_EXCHANGE;
         int port=wall?at/headerWord(H_RULE_COUNT):-1;
         int c=wall?int(words[headerWord(H_WALL_PORT_CELL)+port]):at/headerWord(H_RULE_COUNT);
         int pending=c*headerWord(H_RULE_COUNT)+(at%headerWord(H_RULE_COUNT));
@@ -819,6 +815,11 @@ uvec4 exchange(int node, int first) {
         int64_t quantum=vapor?readQuantity(r+24):1l;
         if(quantum<=0l){reportInvalid();return counts;}
         q=(q/quantum)*quantum;int64_t requestedQ=q;
+        if(q==0l){
+            writeDouble(workField(FIELD_PENDING_RESIDUAL)+2*pending,demand);
+            writeDouble(workField(FIELD_PENDING_TIME)+2*pending,0.0LF);
+            continue;
+        }
         if (unit <= 0l) {
             reportInvalid();
             return counts;
@@ -838,9 +839,8 @@ uvec4 exchange(int node, int first) {
                            max(0l, readQuantity(gasField(GAS_MASS_UNITS) + 2 * comp) - (complete ? 0l : 1l)) / unit));
             q = min(q, (0x7fffffffffffffffl - oldMass) / unit);
         } else {
-            bool complete=readQuantity(phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_MASS_RESIDUAL)+2*lr)==0l;
-            for(int other=0;other<headerWord(H_SPECIES_COUNT);other++)
-                if(other!=sp && phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,other)!=0l)complete=false;
+            bool complete=readQuantity(phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_MASS_RESIDUAL)+2*lr)==0l &&
+                readQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr)==phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp);
             q = min(q, min(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp), max(0l,oldMass-(complete?0l:1l)) / unit));
             q = min(q, (0x7fffffffffffffffl - readQuantity(gasField(GAS_MASS_UNITS) + 2 * comp)) / unit);
         }
@@ -862,19 +862,11 @@ uvec4 exchange(int node, int first) {
             q = coldLimit(
                 q, energy - gasCold(node),
                 carried - double(unit) * massUnit() * specificGas(gm, readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE)) - reference);
-        uint reservedOperation=0u;
+
         if(vapor){
             if (!dissolve) q = limitVaporByVolume(lr, sp, q, quantum, unit, oldMass);
             q=(q/quantum)*quantum;
-            if(q>0l){
-                uint limit=uint(headerWord(H_MAXIMUM_PHASE_OPERATIONS)),used=words[workField(FIELD_CONTROL)+6];
-                while(used<limit){
-                    uint previous=atomicCompSwap(words[workField(FIELD_CONTROL)+6],used,used+1u);
-                    if(previous==used){reservedOperation=1u;break;}
-                    used=previous;
-                }
-                if(reservedOperation==0u)q=0l;
-            }
+
         }
         int64_t mass = q * unit,
                 nanos = q > 0l
@@ -900,7 +892,6 @@ uvec4 exchange(int node, int first) {
             bool indivisible=nanos==readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp) && nanos==1l;
             int64_t before=q;
             q=reserveWall(device,r,c,q,quantum,unit,carried,gasTemperature,readDouble(headerWord(H_WALL_TEMPERATURE)+2*device),readDouble(workField(FIELD_PENDING_RESIDUAL)+2*pending),indivisible,liquidCarried);
-            if(q==0l && reservedOperation>0u){atomicAdd(words[workField(FIELD_CONTROL)+6],uint(-1));reservedOperation=0u;}
             if(q!=before){
                 mass=q*unit;
                 nanos=q>0l?max(1l,int64_t(floor(double(q)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF)+.5LF))):0l;
@@ -912,7 +903,6 @@ uvec4 exchange(int node, int first) {
             demand - (dissolve ? 1.0LF : -1.0LF) * double(requestedQ) * 1e-6LF);
         writeDouble(workField(FIELD_PENDING_TIME) + 2 * pending, 0.0);
         if (q == 0l){
-            if(reservedOperation>0u)atomicAdd(words[workField(FIELD_CONTROL)+6],uint(-int(reservedOperation)));
             continue;
         }
         if(oldMass==0l)createPhaseRow(headerWord(H_PHASE_ROWS_HEADER),c,m,(~int(words[geometryHeaderWord(GEO_H_MASKS)+c]))&255);
@@ -921,6 +911,10 @@ uvec4 exchange(int node, int first) {
         writePhaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp, addq(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER), lr, sp), dissolve ? q : -q));
         int quanta=workField(FIELD_LIQUID_QUANTA)+2*lr;
         writeQuantity(quanta,addq(readQuantity(quanta),dissolve?q:-q));
+        int speciesEnergy=workField(FIELD_LIQUID_SPECIES_ENERGY)+2*lr;
+        double speciesReference=readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(m*liquidCaloricWord(CAL_SPECIES_STRIDE)+sp));
+        writeDouble(speciesEnergy,readQuantity(quanta)==0l?0.0LF:
+                readDouble(speciesEnergy)+(dissolve?1.0LF:-1.0LF)*double(q)*speciesReference);
         writeQuantity(phaseRowField(headerWord(H_PHASE_ROWS_HEADER), LP_FIELD_MASS) + 2 * lr, addq(oldMass, dissolve ? mass : -mass));
         if(vapor){
             int delta=phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_DELTA_SVQ)+2*lr;
@@ -957,11 +951,11 @@ uvec4 exchange(int node, int first) {
         atomicAdd(longs[(gasField(GAS_STANDARD_VOLUME_NANOS) + 2 * audit) / 2], nanos);
         double heightDifference=double(gridPosition(node).y-gridPosition(c).y)*readDouble(p.header+H_CELL_SIZE);
         writeDouble(workField(FIELD_PE_WORK) + 2 * c, readDouble(workField(FIELD_PE_WORK)+2*c)+(dissolve?1.0LF:-1.0LF)*double(mass)*massUnit()*readDouble(p.header+H_GRAVITY)*heightDifference);
-        if(vapor){words[headerWord(H_PHASE_MOTION_CELLS) + c] = 1u;atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)], 1u);}
+        if(vapor)words[headerWord(H_PHASE_MOTION_CELLS) + c] = 1u;
     }
     writeDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node, energy);
     words[workField(FIELD_ORPHAN_RECEIVER)+node]=uint(receiver);
-    if(p.maximum==7)words[workField(FIELD_HEAD)+node]=uint(-1);
+    if(pipelineStage==STAGE_EXCHANGE)words[workField(FIELD_HEAD)+node]=uint(-1);
     return counts;
 }
 int faceBase(int axis) { return gridFaceOffset(axis); }
@@ -1166,15 +1160,22 @@ void reduceActivity(uvec4 counts,int lane) {
         if(total.y!=0u)atomicOr(words[control+1],1u);
         if(total.z!=0u)atomicAdd(words[control+4],total.z);
         if(total.w!=0u)atomicAdd(words[control+5],total.w);
+        if(total.z+total.w!=0u){atomicAdd(words[control+6],total.z+total.w);atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)],1u);}
     }
 }
 void main() {
     int i = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if(pipelineStage==STAGE_PROPOSE){
-        uvec4 counts=uvec4(0u);
         if(i<p.count && errors==0u){
             writeDouble(referenceOutput()+2*i,readDouble(referenceInput()+2*i));
-            int first=propose(i);
+            words[workField(FIELD_HEAD)+i]=uint(propose(i));
+        }
+        return;
+    }
+    if(pipelineStage==STAGE_CONTACT){
+        uvec4 counts=uvec4(0u);
+        if(i<p.count && errors==0u){
+            int first=int(words[workField(FIELD_HEAD)+i]);
             if(first>=0)counts=exchange(contactNode(i,p.maximum),first);
         }
         reduceActivity(counts,int(gl_LocalInvocationID.x));
@@ -1195,9 +1196,9 @@ void main() {
     if (errors != 0u)
         return;
     if(p.stage==16){exchangeSurfaces();}
+    else if(p.stage==18)words[workField(FIELD_HEAD)+i]=uint(-1);
     else if(p.stage==15){
-        int node=contactNode(i,6);
-        if(activeCell(i) && node>=0 && activeCell(node))clearUnavailablePending(i);
+        if(activeCell(i))clearUnavailablePending(i);
     } else if(p.stage==13)
         proposeDryWall(i);
     else if(p.stage==14)

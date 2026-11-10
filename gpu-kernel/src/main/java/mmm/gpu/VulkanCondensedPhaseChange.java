@@ -10,7 +10,6 @@ import java.util.EnumMap;
 import java.util.List;
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.FluidMaterialRegistry;
-import mmm.thermal.ThermalLimits;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalRegistry;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -35,7 +34,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
         OCCUPIED_SVQ(105),
         PHASE_MOTION_CELLS(106),
         PHASE_PENDING_SUMMARY(107),
-        CURSOR(108),
+
         SIZE_X(109),
         SIZE_Y(110),
         SIZE_Z(111),
@@ -196,7 +195,7 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
                     case FACE_MOMENTUM, FACE_OLD_K, FACE_NEW_K -> faces;
                     case FACE_HEAT -> 2 * faces;
                     case SCAN -> Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(1, rows)) / 4);
-                    case CONTROL -> 10;
+                    case CONTROL -> 12;
                     default -> rows;
                 };
                 var column = new VulkanLiquidStateLayout.Column(align(cursor, alignment), n, field.width);
@@ -249,7 +248,6 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
                 input.progress().word(VulkanReactionProgressLayout.Field.PHASE_MOTION_CELLS);
             h[Header.PHASE_PENDING_SUMMARY.word] =
                 input.progress().word(VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY);
-            h[Header.CURSOR.word] = input.progress().word(VulkanReactionProgressLayout.Field.CURSOR);
             h[Header.SIZE_X.word] = input.liquid().sizeX();
             h[Header.SIZE_Y.word] = input.liquid().sizeY();
             h[Header.SIZE_Z.word] = input.liquid().sizeZ();
@@ -298,9 +296,8 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
     private final FlipKernelBindings bindings;
     private final VulkanLiquidPhaseRows liquidRows;
     private final VulkanPrefixScan scan;
-    private int completedOperations;
     VulkanCondensedPhaseChange(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, 2,
+        bindings = new FlipKernelBindings(context, 3,
             VulkanLiquidPhaseRows.resource("condensed-phase-change.comp")
                 .replace("// HOST_LAYOUT", shaderLayout())
                 .replace("// PHASE_ROWS_LIBRARY", VulkanLiquidPhaseRows.resource("liquid-phase-rows.glsl"))
@@ -310,12 +307,9 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
         scan = new VulkanPrefixScan(context);
     }
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(arena, errors));
+        bindings.rebindRanges(List.of(arena, errors, arena));
         liquidRows.rebindRanges(arena, errors);
         scan.rebindRanges(arena, arena, arena, errors);
-    }
-    int completedOperations() {
-        return completedOperations;
     }
     void recordActivity(VkCommandBuffer command,Layout l,GpuBuffer output,GpuBuffer errors) {
         rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
@@ -326,37 +320,34 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
         }
-        stage(command,l,10,l.input.liquid().stockCapacity(),0);
+        stage(command,l,10,l.input.liquid().stockCapacity());
     }
-    void recordPrepare(VkCommandBuffer command, Layout l, int maximum) {
+    void recordPrepare(VkCommandBuffer command, Layout l) {
         liquidRows.recordImport(command, l.phaseRows);
-        stage(command, l, 0, Math.max(l.faces, Math.max(l.rows, l.input.coherent().groupCapacity())), maximum);
-        stage(command, l, 1, l.input.coherent().groupCapacity(), maximum);
-        stage(command, l, 2, l.input.liquid().cellCount(), maximum);
-        stage(command, l, 3, l.input.liquid().cellCount(), maximum);
-        stage(command, l, 4, l.faces, maximum);
-        stage(command, l, 5, l.input.liquid().cellCount(), maximum);
-        stage(command, l, 6, l.rows, maximum);
+        stage(command, l, 0, Math.max(l.faces, Math.max(l.rows, l.input.coherent().groupCapacity())));
+        stage(command, l, 1, l.input.coherent().groupCapacity());
+        stage(command, l, 2, l.input.liquid().cellCount());
+        stage(command, l, 3, l.input.liquid().cellCount());
+        stage(command, l, 4, l.faces);
+        stage(command, l, 5, l.input.liquid().cellCount());
+        stage(command, l, 6, l.rows);
         scan.record(command, l.rows, l.word(Field.LIVE), l.word(Field.GROUP_OFFSETS), l.word(Field.SCAN));
         scan.record(command, l.rows, l.word(Field.SPECIES_COUNTS), l.word(Field.SPECIES_OFFSETS), l.word(Field.SCAN));
         liquidRows.recordAssemble(command, l.phaseRows);
-        stage(command, l, 7, 1, maximum);
-        stage(command, l, 8, l.rows, maximum);
+        stage(command, l, 7, 1);
+        stage(command, l, 8, l.rows);
     }
     void recordPublish(VkCommandBuffer command, Layout l) {
         liquidRows.recordPublish(command, l.phaseRows);
         stage(command, l, 9,
             Math.max(l.input.coherent().speciesCapacity(),
-                Math.max(l.faces, Math.max(l.rows, l.input.liquid().cellCount()))),
-            0);
+                Math.max(l.faces, Math.max(l.rows, l.input.liquid().cellCount()))));
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout l, int maximum) {
-        if (maximum < 0 || maximum > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)
-            throw new IllegalArgumentException("Invalid phase operation budget");
+    int execute(VulkanRegionStorage.Candidate candidate, Layout l) {
         var result = candidate.continueBatch((command, input, output, errors, staging, stack) -> {
             rebindRanges(new FlipKernelBindings.BufferRange(output), new FlipKernelBindings.BufferRange(errors));
-            recordPrepare(command, l, maximum);
-        }, l.feedbackOffset(), 36);
+            recordPrepare(command, l);
+        }, l.feedbackOffset(), 20);
         if (result.error() != 0)
             return result.error();
         var feedback = result.feedback().order(ByteOrder.LITTLE_ENDIAN);
@@ -364,18 +355,18 @@ final class VulkanCondensedPhaseChange implements AutoCloseable {
             throw new CapacityGrowth(feedback.getInt(4), feedback.getInt(8), feedback.getInt(12), feedback.getInt(16));
         if (feedback.getInt(0) != 2)
             throw new IllegalStateException("Condensed phase successor is incomplete");
-        completedOperations = feedback.getInt(32);
+
         return candidate
             .continueBatch((command, input, output, errors, staging, stack) -> recordPublish(command, l), 0, 0)
             .error();
     }
-    private void stage(VkCommandBuffer command, Layout l, int stage, int count, int maximum) {
+    private void stage(VkCommandBuffer command, Layout l, int stage, int count) {
         if (count == 0)
             return;
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                stack.ints(l.word(Field.HEADER), stage, count, maximum));
+                stack.ints(l.word(Field.HEADER), stage, count, 0));
             int groups = (count + 127) / 128;
             vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,

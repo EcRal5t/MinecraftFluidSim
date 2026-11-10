@@ -138,7 +138,7 @@ public final class GpuLiquidMechanicalBenchmark {
     }
     private static int advance(VulkanLiquidRegion region,VulkanLiquidProjection.Parameters parameters,boolean production) {
         if(!production){region.advanceMechanical(parameters);return 0;}
-        var request=new VulkanLiquidRegion.RequestInputs(mmm.fluid.EntityBodyState.EMPTY,true,mmm.thermal.ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP);
+        var request=new VulkanLiquidRegion.RequestInputs(mmm.fluid.EntityBodyState.EMPTY,true);
         try(var source=region.captureState();var candidate=region.prepareMechanical(source,parameters,request)){int substeps=candidate.substeps();candidate.commit();return substeps;}
     }
     private static void printPressureProgress(String phase,int step,VulkanPressureKernel.Progress progress){

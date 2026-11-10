@@ -58,7 +58,7 @@ public final class GpuSpatialDomainValidation {
         host.restoreMacMomentum(new MacMomentumState(grid,px,py,pz));
         before=host.captureAuthoritativeState();
         var initial=totals(before); double initialEnergy=host.exactInternalEnergy().toDouble()+kinetic(before);
-        try(var candidate=backend.evaluate(new FluidStepRequest(0,before,List.of(),false,0,false,false));
+        try(var candidate=backend.evaluate(new FluidStepRequest(0,before,List.of(),false,false,false));
             var prepared=candidate.claimPreparedDeviceState();var current=prepared.commit()) {
             if(candidate.stats().substeps()!=1)throw new AssertionError("High-speed liquid was split into "+candidate.stats().substeps()+" substeps");
             var after=current.exportState();var result=totals(after);
@@ -127,7 +127,7 @@ public final class GpuSpatialDomainValidation {
         var initialInventory=totals(current.exportState());
         try {
             for(int step=0;step<8;step++) {
-                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,0,false,false));
+                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,false,false));
                     var prepared=candidate.claimPreparedDeviceState()) {
                     var next=prepared.commit();current.close();current=next;
                 }
@@ -165,7 +165,7 @@ public final class GpuSpatialDomainValidation {
         boolean[] active=current.activityGraph().available(world);
         if(active[grid.cell(shift+1,1,1)]||active[grid.cell(shift+6,1,1)])
             throw new AssertionError("Unavailable chunk did not pause both sides of the connected channel");
-        try(var candidate=backend.evaluate(new FluidStepRequest(generation,current,List.of(),false,0,false,false,active))) {
+        try(var candidate=backend.evaluate(new FluidStepRequest(generation,current,List.of(),false,false,false,active))) {
             var after=candidate.state();
             if(!before.liquid().stocks().equals(after.liquid().stocks())
                     ||!before.spatialGas().cells().equals(after.spatialGas().cells())

@@ -13,7 +13,7 @@ import mmm.spatial.SpatialGrid;
 /** Small continuation columns orthogonal to cell inventories and face momentum. */
 final class SolverRuntimeCodec {
 	static final String MANIFEST_EXTENSION="mmm:solver_runtime";
-	record Data(SpatialGrid grid,boolean sealed,boolean precipitation,int maximumThermalSubsteps,int[] dirty,int cursor,
+	record Data(SpatialGrid grid,boolean sealed,boolean precipitation,int maximumThermalSubsteps,int[] dirty,
 	            List<RegionChemistry.MassTransferPending> massTransferPending,
 	            double[] boundary,CondensedPhasePressureField pressure,GranularDepositDynamics.State granular,
 	            EntityBodyState entityBodies) { }
@@ -25,7 +25,6 @@ final class SolverRuntimeCodec {
 			out.writeBoolean(state.sealedDomainBoundary());out.writeBoolean(state.precipitationEnabled());out.writeInt(state.maximumThermalTransportSubsteps());
 			int[] dirty=state.copyChemicalDirtyCells();out.writeBoolean(dirty!=null);
 			if(dirty!=null){out.writeInt(dirty.length);for(int cell:dirty)writeCell(out,grid,cell);}
-			writeCell(out,grid,state.chemicalReactionCursor());
 			var pending=state.chemicalMassTransferPending();out.writeInt(pending.size());
 			for(var entry:pending){writeCell(out,grid,entry.cell());out.writeInt(entry.material());out.writeInt(entry.supportMask());out.writeUTF(entry.definitionId());out.writeLong(Double.doubleToRawLongBits(entry.pendingSeconds()));out.writeLong(Double.doubleToRawLongBits(entry.residualMoles()));}
 			double[] boundary=state.copyThermalBoundaryTemperaturesK();out.writeBoolean(boundary!=null);if(boundary!=null){out.writeInt(boundary.length);for(double value:boundary)out.writeLong(Double.doubleToRawLongBits(value));}
@@ -54,7 +53,7 @@ final class SolverRuntimeCodec {
 			var grid=new SpatialGrid(sizeX,sizeY,sizeZ,blocks);int cells=grid.cellCount();
 			boolean sealed=input.readBoolean(),precip=input.readBoolean();int substeps=input.readInt();
 			int[] dirty=null;if(input.readBoolean()){dirty=new int[count(input.readInt(),cells)];for(int i=0;i<dirty.length;i++)dirty[i]=readCell(input,grid);}
-			int cursor=readCell(input,grid);double[] boundary=null;
+			double[] boundary=null;
 			int pendingCount=count(input.readInt(),(int)Math.min(bytes.length/30L,(long)cells*8*ChemicalLimits.MAX_GAS_LIQUID_MASS_TRANSFERS));
 			var pending=new ArrayList<RegionChemistry.MassTransferPending>(pendingCount);
 			for(int i=0;i<pendingCount;i++)pending.add(new RegionChemistry.MassTransferPending(readCell(input,grid),input.readInt(),input.readInt(),input.readUTF(),Double.longBitsToDouble(input.readLong()),Double.longBitsToDouble(input.readLong())));
@@ -79,7 +78,7 @@ final class SolverRuntimeCodec {
 				double wx=readDoubleBits(input),wy=readDoubleBits(input),wz=readDoubleBits(input),inverseMass=readDoubleBits(input);
 				bodies.add(new MovingBodyFluidCoupling.Request(id,bounds,vx,vy,vz,cx,cy,cz,wx,wy,wz,input.readInt(),inverseMass));
 			}
-			if(input.read()!=-1)throw new IOException("Trailing solver continuation bytes");return new Data(grid,sealed,precip,substeps,dirty,cursor,List.copyOf(pending),boundary,pressure,granular,new EntityBodyState(bodies));
+			if(input.read()!=-1)throw new IOException("Trailing solver continuation bytes");return new Data(grid,sealed,precip,substeps,dirty,List.copyOf(pending),boundary,pressure,granular,new EntityBodyState(bodies));
 		}catch(IllegalArgumentException|ArithmeticException invalid){throw new IOException("Invalid solver continuation",invalid);}
 	}
 	private static void writeCell(DataOutputStream out,SpatialGrid grid,int cell)throws IOException{out.writeInt(grid.x(cell));out.writeInt(grid.y(cell));out.writeInt(grid.z(cell));}

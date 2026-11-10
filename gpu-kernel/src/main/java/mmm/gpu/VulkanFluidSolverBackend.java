@@ -387,7 +387,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         try {
             prepared = source.region.device.prepareThermal(source.capture, source.codec.template().config().timeStep(),
                 new VulkanLiquidRegion.RequestInputs(source.entityBodies(), request.phaseChangeEnabled(),
-                    request.maximumPhaseOperations(), request.activeCells()));
+                    request.activeCells()));
             var pending = new Pending(source, prepared);
             prepared = null;
             try {
@@ -430,8 +430,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         return new FluidDomainContracts.GasLiquidMassTransferStats(c[0] != 0, c[1] != 0);
     }
     private FluidDomainContracts.ThermalPhaseStats condensedStats(State state) {
-        var c = state.capture.thermalPhaseCounters();
-        return new FluidDomainContracts.ThermalPhaseStats(c[8], c[6], c[7], c[9]);
+        return state.capture.thermalPhaseStats();
     }
     private FluidDomainContracts.GasThermalPhaseStats gasPhaseStats(State state) {
         var c = state.capture.gasPhaseCounters();

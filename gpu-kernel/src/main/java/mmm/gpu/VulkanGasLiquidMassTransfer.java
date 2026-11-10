@@ -40,7 +40,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         ACTIVITY_CELLS(30),
         ACTIVITY_FACES(31),
         PHASE_ENABLED(32),
-        MAXIMUM_PHASE_OPERATIONS(33), AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
+        AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
         SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55);
         final int word;
         Header(int word) {
@@ -89,7 +89,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         PENDING_SLOT(4),
         ORPHAN_ENERGY(8),
         ORPHAN_RECEIVER(4), WALL_RESERVATION(8), WALL_DELTA(8), WALL_PENDING(4), SURFACE_TEMPERATURE(8), SURFACE_CHANGED(4), SURFACE_REMOVED_MASS(8), SURFACE_RECEIVER(4),
-        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8);
+        LIQUID_QUANTA(8), LIQUID_REFERENCE(8), GAS_NANOS(8), LIQUID_REFERENCE_NEXT(8), LIQUID_SPECIES_ENERGY(8);
         final int width;
         Field(int width) {
             this.width = width;
@@ -204,7 +204,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case OLD_K, NEW_K, FACE_P -> faces;
                     case FACE_HEAT -> 2 * faces;
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
-                    case LIQUID_QUANTA -> rows.rows;
+                    case LIQUID_QUANTA, LIQUID_SPECIES_ENERGY -> rows.rows;
                     case NEXT, AREA -> scratchProposals;
                     case WALL_RESERVATION, SURFACE_TEMPERATURE, SURFACE_CHANGED -> wallDevices;
                     case WALL_DELTA -> Math.multiplyExact(2,wallDevices);
@@ -314,11 +314,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     }
     private final FlipKernelBindings bindings;
     private final FlipKernelBindings proposeBindings;
+    private final FlipKernelBindings contactBindings;
     private final FlipKernelBindings exchangeBindings;
     private final VulkanLiquidPhaseRows rows;
     private VulkanStageTimings timings;
-    private int completedPhaseOperations;
-    int completedPhaseOperations(){return completedPhaseOperations;}
     private final VulkanCommandTemplates templates;
     VulkanGasLiquidMassTransfer(VulkanDeviceContext c) {
         templates = new VulkanCommandTemplates(c);
@@ -345,8 +344,17 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             throw e;
         }
         try {
+            contactBindings = new FlipKernelBindings(c, 3, shader, 16, 17);
+        } catch (RuntimeException | Error e) {
+            exchangeBindings.close();
+            proposeBindings.close();
+            bindings.close();
+            throw e;
+        }
+        try {
             rows = new VulkanLiquidPhaseRows(c);
         } catch (RuntimeException | Error e) {
+            contactBindings.close();
             exchangeBindings.close();
             proposeBindings.close();
             bindings.close();
@@ -356,6 +364,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             if(Boolean.getBoolean("mmm.gpuMechanicalStages") && c.hasTimestampQueries())timings=new VulkanStageTimings(c,24);
         } catch (RuntimeException | Error e) {
             rows.close();
+            contactBindings.close();
             exchangeBindings.close();
             proposeBindings.close();
             bindings.close();
@@ -365,10 +374,11 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
         bindings.rebindRanges(List.of(arena, errors, arena));
         proposeBindings.rebindRanges(List.of(arena, errors, arena));
+        contactBindings.rebindRanges(List.of(arena, errors, arena));
         exchangeBindings.rebindRanges(List.of(arena, errors, arena));
         rows.rebindRanges(arena, errors);
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout l, double duration, boolean phaseEnabled,int maximumPhaseOperations,VulkanGasThermodynamics.Layout eos,
+    int execute(VulkanRegionStorage.Candidate candidate, Layout l, double duration, boolean phaseEnabled,VulkanGasThermodynamics.Layout eos,
         VulkanGasGeometry.Layout geometry) {
         if (!(Double.isFinite(duration) && duration >= 0))
             throw new IllegalArgumentException("Invalid film duration");
@@ -378,7 +388,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             var h = l.headerBytes();
             h.putInt(4 * Header.GAS_HEADER.word, eos.headerWordOffset())
                 .putInt(4 * Header.GEOMETRY_HEADER.word, geometry.headerWordOffset())
-                .putInt(4 * Header.PHASE_ENABLED.word,phaseEnabled?1:0).putInt(4 * Header.MAXIMUM_PHASE_OPERATIONS.word,maximumPhaseOperations)
+                .putInt(4 * Header.PHASE_ENABLED.word,phaseEnabled?1:0)
                 .putDouble(4 * Header.DURATION.word, duration);
             vkCmdUpdateBuffer(command, output.handle(), l.column(Field.HEADER).offset(), h);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -397,7 +407,6 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         var result = candidate
             .continueBatch(
                 (command, input, output, errors, staging, stack) -> recordPublish(command, l), l.feedbackOffset(), 28);
-        completedPhaseOperations=result.error()==0?result.feedback().getInt(24):0;
         if(timings!=null){
             double contact=0;
             for(var sample:timings.read()){
@@ -417,10 +426,12 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         for(int pass=0;pass<7;pass++){
             final int current=pass;
             if(pass==6)stage(c,l,15,l.cells,pass);
-            timed(c,"gas-transfer-contact",()->stage(c,l,1,l.cells,current));
+            timed(c,"gas-transfer-geometry",()->stage(c,l,1,l.cells,current));
+            timed(c,"gas-transfer-contact",()->stage(c,l,17,l.cells,current));
         }
         if(l.dryProposals>0){
             timed(c,"gas-transfer-dry-wall",()->{
+                stage(c,l,18,l.groups);
                 stage(c,l,13,l.dryProposals);
                 stage(c,l,4,l.groups,7);
             });
@@ -449,7 +460,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         if (count == 0)
             return;
         try (var s = stackPush()) {
-            var selected=stage==1?proposeBindings:stage==4?exchangeBindings:bindings;
+            var selected=stage==1?proposeBindings:stage==17?contactBindings:stage==4?exchangeBindings:bindings;
             selected.bind(c, s);
             vkCmdPushConstants(c, selected.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                 s.ints(l.word(Field.HEADER), stage, count, pass));
@@ -469,8 +480,10 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             if(timings!=null)timings.close();
         } finally {
             try { rows.close(); } finally {
-                try { exchangeBindings.close(); } finally {
-                    try { proposeBindings.close(); } finally { bindings.close(); }
+                try { contactBindings.close(); } finally {
+                    try { exchangeBindings.close(); } finally {
+                        try { proposeBindings.close(); } finally { bindings.close(); }
+                    }
                 }
             }
         }

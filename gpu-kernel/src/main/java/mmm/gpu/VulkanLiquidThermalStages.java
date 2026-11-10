@@ -64,7 +64,6 @@ final class VulkanLiquidThermalStages {
         if (error != 0) return error;
         error = region.kernels.reactionKernel.execute(candidate, transport.reactions,
                 region.activeInputs != null && region.activeInputs.phaseChangeEnabled(),
-                region.activeInputs == null ? 0 : region.activeInputs.maximumPhaseOperations(),
                 sourceEOS, previousGeometry, duration,activity.feedback().getInt(0));
         return error;
     }

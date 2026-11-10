@@ -63,7 +63,6 @@ public final class FluidDomainStateAssertions {
 		if (includeTransient) {
 			require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
 					context + ": chemical dirty-cell schedule changed");
-			require(expected.chemicalReactionCursor()==actual.chemicalReactionCursor(),context+": reaction cursor changed");
 		}
 		compareGranular(expected.granular(), actual.granular(), context);
 		if (includeTransient) {

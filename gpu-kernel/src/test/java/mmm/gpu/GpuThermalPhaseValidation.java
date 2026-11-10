@@ -105,7 +105,7 @@ public final class GpuThermalPhaseValidation {
         if(label.equals("adsorb")?expected<=0:expected>=0)throw new AssertionError("Surface reference direction is wrong: "+label+" "+expected);
         var input=new FluidStateAccess(){public FluidDomainState.Layout layout(){return state.layout();}public FluidDomainState exportState(){return state;}
             public FiniteThermalDeviceInventory finiteThermalDevices(){return devices;}public List<FluidStateAccess.DevicePort> finiteThermalPorts(){return ports;}};
-        try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,input,false,0));var prepared=candidate.claimPreparedDeviceState();var result=prepared.commit()) {
+        try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,input,false));var prepared=candidate.claimPreparedDeviceState();var result=prepared.commit()) {
             var after=result.exportState();var next=result.finiteThermalDevices();var nextDevice=next.devices().getFirst();
             long actual=nextDevice.surfaces().getFirst().speciesQuanta().getOrDefault(BuiltinChemicalDefinitions.CO2,0L)-present;
             if(Math.abs(actual-expected)>1)throw new AssertionError("Surface "+label+" differs from finite-rate reference: actual="+actual+" expected="+expected+" partial="+partial);
@@ -117,7 +117,7 @@ public final class GpuThermalPhaseValidation {
             if(Math.abs(afterEnergy-beforeEnergy)>1e-9*Math.max(Math.abs(beforeEnergy),Math.abs(afterEnergy)))
                 throw new AssertionError("Surface "+label+" changed total energy: "+beforeEnergy+" / "+afterEnergy);
             System.out.println("surface_reference direction="+label+" partial_pa="+partial+" initial="+present+" expected="+expected+" actual="+actual+" capacity="+capacity);
-            try(var settlement=backend.evaluate(new FluidStepRequest(1,result,List.of(),false,0,false,true));
+            try(var settlement=backend.evaluate(new FluidStepRequest(1,result,List.of(),false,false,true));
                 var preparedSettlement=settlement.claimPreparedDeviceState();var settled=preparedSettlement.commit()) {
                 return new SurfaceResult(settled.exportState(),settled.finiteThermalDevices());
             }
@@ -166,7 +166,7 @@ public final class GpuThermalPhaseValidation {
         }
         FluidStateAccess current=domain.captureAuthoritativeState();
         try {
-            try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,current,false,0));var prepared=candidate.claimPreparedDeviceState()){
+            try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,current,false));var prepared=candidate.claimPreparedDeviceState()){
                 var next=prepared.commit();current.close();current=next;
             }
             long expectedMass=mass(((ResidentFluidState)current).inventorySummary());
@@ -180,7 +180,7 @@ public final class GpuThermalPhaseValidation {
             var initialElements=film?elements(initialSpecies,initialCheckpoint.chemicalRegistry()):Map.<String,Long>of();
             int operations=0;
             for(int step=1;step<=2;step++){
-                try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(step,current,!film,film?0:ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));var prepared=candidate.claimPreparedDeviceState()){
+                try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(step,current,!film));var prepared=candidate.claimPreparedDeviceState()){
                     var stats=candidate.stats();
                     if(film||mixed||vaporEmpty||mode.equals("boil")||mode.equals("condense")){if(stats.massTransfer().active()&&stats.massTransfer().changedStocks())operations++;}
                     else operations+=mode.equals("freeze")?stats.condensedPhase().frozenCells():stats.condensedPhase().meltedCells();
@@ -211,7 +211,7 @@ public final class GpuThermalPhaseValidation {
                 if(!species(after).equals(species(initialCheckpoint)))throw new AssertionError(mode+" species inventory changed");
             }
             if(operations==0)throw new AssertionError(mode+" did not convert any inventory");
-            try(var candidate=backend.evaluate(new FluidStepRequest(3,current,List.of(),false,0,false,true));var prepared=candidate.claimPreparedDeviceState()){
+            try(var candidate=backend.evaluate(new FluidStepRequest(3,current,List.of(),false,false,true));var prepared=candidate.claimPreparedDeviceState()){
                 var next=prepared.commit();current.close();current=next;
             }
             check(current,expectedMass,ambient);
@@ -224,7 +224,7 @@ public final class GpuThermalPhaseValidation {
             if(!restored.thermalAudit().acceptsInventory(restored.exactInternalEnergy()))throw new AssertionError(mode+" checkpoint audit failed");
             if(ambient){
                 var resumed=restored.captureAuthoritativeState();
-                try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(4,resumed,false,0));var prepared=candidate.claimPreparedDeviceState()){
+                try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(4,resumed,false));var prepared=candidate.claimPreparedDeviceState()){
                     var next=prepared.commit();current.close();current=next;
                 }finally{resumed.close();}
                 check(current,expectedMass,true);
@@ -249,7 +249,7 @@ public final class GpuThermalPhaseValidation {
         try(var before=domain.captureAuthoritativeState()){
             var initial=before.exportState();double liquidBefore=initial.liquid().physicalStocks().getFirst().internalEnergy();
             double gasBefore=initial.spatialGas().energyAt(cell);
-            try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,before,false,0));var prepared=candidate.claimPreparedDeviceState();var after=prepared.commit()){
+            try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(0,before,false));var prepared=candidate.claimPreparedDeviceState();var after=prepared.commit()){
                 var result=after.exportState();double liquidAfter=result.liquid().physicalStocks().getFirst().internalEnergy();
                 double gasAfter=result.spatialGas().energyAt(cell);
                 if(!(liquidAfter>liquidBefore&&gasAfter<gasBefore))throw new AssertionError("Half-cell gas/liquid interface failed to exchange heat: liquid="+liquidBefore+" -> "+liquidAfter+", gas="+gasBefore+" -> "+gasAfter);
@@ -283,7 +283,7 @@ public final class GpuThermalPhaseValidation {
             double initialTemperature=new GasThermalModel(thermal,gas).state(initial.spatialGas().cells().get(pulse),initial.spatialGas().energyAt(pulse)).temperatureK();
             if(initialTemperature<=293.15)throw new AssertionError("Gas pulse did not create its local temperature difference");
             for(int step=1;step<=4;step++){
-                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,0,false,true));var prepared=candidate.claimPreparedDeviceState()){
+                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,false,true));var prepared=candidate.claimPreparedDeviceState()){
                     var next=prepared.commit();current.close();current=next;
                 }
                 check(current,mass,false);

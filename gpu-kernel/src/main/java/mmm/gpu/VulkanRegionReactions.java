@@ -161,7 +161,6 @@ final class VulkanRegionReactions implements AutoCloseable {
             var result = new ArrayList<VulkanLiquidStateLayout.Column>();
             for (var f : VulkanReactionProgressLayout.Field.values())
                 if (f.name().startsWith("PENDING_") || f == VulkanReactionProgressLayout.Field.RESIDUAL_MOLES
-                    || f == VulkanReactionProgressLayout.Field.CURSOR
                     || f == VulkanReactionProgressLayout.Field.REQUEST_GENERATION
                     || f == VulkanReactionProgressLayout.Field.DIRTY_CELLS
                     || f == VulkanReactionProgressLayout.Field.PHASE_MOTION_CELLS
@@ -425,14 +424,13 @@ final class VulkanRegionReactions implements AutoCloseable {
                 0, 0, status.feedback().getInt(0), status.feedback().getInt(4), status.feedback().getInt(8));
         return status.error();
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout layout, boolean phaseEnabled, int maximum,
+    int execute(VulkanRegionStorage.Candidate candidate, Layout layout, boolean phaseEnabled,
         VulkanGasThermodynamics.Layout eos, VulkanGasGeometry.Layout geometry, double duration) {
-        return execute(candidate,layout,phaseEnabled,maximum,eos,geometry,duration,7);
+        return execute(candidate,layout,phaseEnabled,eos,geometry,duration,7);
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout layout, boolean phaseEnabled, int maximum,
+    int execute(VulkanRegionStorage.Candidate candidate, Layout layout, boolean phaseEnabled,
         VulkanGasThermodynamics.Layout eos, VulkanGasGeometry.Layout geometry, double duration, int activity) {
         int error = 0;
-        int remaining = maximum;
         long stage=stageStart();
         if (layout.diffusion() != null && (activity&1)!=0) {
             error = diffusionKernel.execute(candidate,layout.diffusion(),duration);
@@ -455,12 +453,11 @@ final class VulkanRegionReactions implements AutoCloseable {
             return error;
         boolean condensedActive=false;
         if (layout.massTransfer() != null) {
-            error = massTransferKernel.execute(candidate, layout.massTransfer(), duration, phaseEnabled, maximum, eos, geometry);
+            error = massTransferKernel.execute(candidate, layout.massTransfer(), duration, phaseEnabled, eos, geometry);
             stage=stageTime("gas-liquid",stage);
             if (error != 0)
                 return error;
-            remaining -= massTransferKernel.completedPhaseOperations();
-            boolean inspectCondensed=phaseEnabled && remaining>0 && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
+            boolean inspectCondensed=phaseEnabled && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
             if (inspectCondensed) {
             var refreshed = candidate
                         .continueBatch(
@@ -478,9 +475,9 @@ final class VulkanRegionReactions implements AutoCloseable {
                 return error;
             }
         }
-        if (!phaseEnabled || maximum == 0)
+        if (!phaseEnabled)
             return 0;
-        if(layout.massTransfer()==null && remaining>0 && layout.condensedPhase()!=null && layout.condensedPhase().enabled()) {
+        if(layout.massTransfer()==null && layout.condensedPhase()!=null && layout.condensedPhase().enabled()) {
             var condensedActivity=candidate.continueBatch((command,input,output,errors,staging,stack)->
                     condensedKernel.recordActivity(command,layout.condensedPhase(),output,errors),layout.condensedPhase().feedbackOffset(),4);
             if(condensedActivity.error()!=0)return condensedActivity.error();
@@ -500,7 +497,7 @@ final class VulkanRegionReactions implements AutoCloseable {
             if (error != 0)
                 return error;
             try {
-                error = condensedKernel.execute(candidate, layout.condensedPhase(), remaining);
+                error = condensedKernel.execute(candidate, layout.condensedPhase());
             } catch (VulkanCondensedPhaseChange.CapacityGrowth growth) {
                 throw new CapacityGrowth(
                     growth.liquidSpecies, growth.liquidLimbs, 0, 0, 0, growth.coherentGroups, growth.coherentSpecies);

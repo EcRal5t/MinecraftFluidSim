@@ -506,7 +506,7 @@ public final class FluidRegionLifecycleValidation {
 		require(motion.axis() == RegionTickUseCase.Axis.MOTION,
 				"a due motion axis did not take precedence over thermal-only stepping");
 		ticks.executeMotion(motion, new MotionStepCommand(new UUID(43L, 47L), 0L,
-				List.of(), false, 0, false));
+				List.of(), false, false));
 		require(calls[0] == 1 && calls[1] == 0,
 				"one due tick consumed more or less than its single frozen motion input");
 

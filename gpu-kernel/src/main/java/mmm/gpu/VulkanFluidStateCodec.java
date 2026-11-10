@@ -275,7 +275,7 @@ final class VulkanFluidStateCodec {
                       .mapToInt(mmm.fluid.PendingPhaseMotionState.Entry::cell)
                       .toArray();
             var progress = new VulkanReactionProgressLayout.State(
-                template.chemicalReactionCursor(), 0, pending, dirty == null ? new int[0] : dirty, phase);
+                0, pending, dirty == null ? new int[0] : dirty, phase);
             reactions = new VulkanRegionReactions.Configuration(reactionDefinitions, fluids, chemistry, progress,
                 template.config().gravity(), template.precipitationEnabled(), thermal, template.gasRegistry());
         }
@@ -322,7 +322,6 @@ final class VulkanFluidStateCodec {
             template.chemicalRegistry() == null ? null
                 : capture.generation() == 0     ? template.copyChemicalDirtyCells()
                                                 : progress.dirtyCells(),
-            capture.generation() == 0 ? template.chemicalReactionCursor() : progress.cursor(),
             capture.generation() == 0 ? template.chemicalMassTransferPending() : pending, template.granularRegistry(),
             physicalGranular,
             granular == null ? null : granular.schedulerState(template.grid()),

@@ -40,7 +40,6 @@ final class MinecraftRegionTick {
 	private final MinecraftRegionInputs inputs;
 	private final FluidSnapshotPublisher snapshots;
 	private final WorldCapabilityProfile profile;
-	private final int maximumPhaseOperationsPerStep;
 	private java.util.function.Consumer<FluidRegion> activityConnections = region -> { };
 	void activityConnections(java.util.function.Consumer<FluidRegion> connections) { activityConnections = Objects.requireNonNull(connections); }
 	private java.util.function.BiPredicate<ServerLevel,FluidRegion> farmlandHydration = (level,region) -> true;
@@ -52,17 +51,12 @@ final class MinecraftRegionTick {
 			RegionApplicationService application,
 			MinecraftRegionInputs inputs,
 			FluidSnapshotPublisher snapshots,
-			WorldCapabilityProfile profile,
-			int maximumPhaseOperationsPerStep
+			WorldCapabilityProfile profile
 	) {
 		this.useCase = new RegionTickUseCase(Objects.requireNonNull(application, "Region application"), POLICY);
 		this.inputs = Objects.requireNonNull(inputs, "Minecraft region inputs");
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.profile = Objects.requireNonNull(profile, "World capability profile");
-		if (maximumPhaseOperationsPerStep < 0) {
-			throw new IllegalArgumentException("Phase-operation budget must be non-negative");
-		}
-		this.maximumPhaseOperationsPerStep = maximumPhaseOperationsPerStep;
 	}
 
 	void finishServerTick() { inputs.finishServerTick(); }
@@ -137,12 +131,11 @@ final class MinecraftRegionTick {
 		FluidDomainContracts.StepStats completedMotion = null;
 		try {
 			boolean phaseChange = profile.hasCapability(WorldCapability.PHASECHANGE);
-			int phaseBudget = phaseChange ? maximumPhaseOperationsPerStep : 0;
 			if (motionStepDue) {
 				region.wakeThermal(ThermalActivity.WakeReason.CARRIER_MOTION);
 				RegionTickUseCase.MotionOutcome outcome = useCase.executeMotion(tickPlan,
 						new MotionStepCommand(region.id(), region.solverGeneration(), frozen.movingBodies(),
-								phaseChange, phaseBudget, false, false, frozen.activeCells()));
+								phaseChange, false, false, frozen.activeCells()));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Motion step application rejected synchronous region state: " + outcome.result().status());
 				inputs.commitEntityResponse(level, region, outcome.result().movingBodyCoupling());
@@ -156,7 +149,7 @@ final class MinecraftRegionTick {
 			} else {
 				inputs.discardEntityResponse(region);
 				RegionTickUseCase.ThermalOutcome outcome = useCase.executeThermal(tickPlan,
-						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange, phaseBudget, frozen.activeCells()));
+						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange, frozen.activeCells()));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Thermal step application rejected synchronous region state: " + outcome.result().status());
 				completedThermalAxis = outcome.result().stats();

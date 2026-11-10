@@ -87,7 +87,7 @@ public final class MmmRuntimeFactory {
 				worldRegistries.resolveMaterial("mmm:water").referenceDensity());
 		regionInputs.worldUpdates(worldUpdates);
 		MinecraftRegionTick regionTick = new MinecraftRegionTick(regionApplication, regionInputs, snapshots,
-				worldRegistries.profile(), policy.maximumPhaseOperationsPerStep());
+				worldRegistries.profile());
 		MinecraftPendingPhaseWorkBarrier phaseWorkBarrier =
 				new MinecraftPendingPhaseWorkBarrier(motion, regionTick);
 		MinecraftRegionAvailability availability = new MinecraftRegionAvailability(
@@ -160,7 +160,7 @@ public final class MmmRuntimeFactory {
 		RegionDiagnosticsReport regionDiagnostics = new RegionDiagnosticsReport(
 				regionManager, regionOperations, takeover, debugFixtures, worldRegistries,
 				policy::controllerEnabled, policy::liveWorldBridgeEnabled,
-				policy::configuredWorldBridgeEnabled, ownership::current, policy::maximumPhaseOperationsPerStep, solverBackend::executionDescription);
+				policy::configuredWorldBridgeEnabled, ownership::current, solverBackend::executionDescription);
 		MinecraftContainerTransactionAdapter containerTransactions = new MinecraftContainerTransactionAdapter(
 				regionManager, regionOperations, containerRecovery, worldRegistries.profile().profileFingerprint(),
 				worldRegistries.thermalOrNull() == null ? null : worldRegistries.thermalOrNull().fingerprint());

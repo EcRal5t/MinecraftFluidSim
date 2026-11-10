@@ -42,7 +42,7 @@ final class MinecraftMotionExecutor {
 		if (!region.hasPendingPhaseMotionWork(active)) return null;
 		long start = System.nanoTime();
 		MotionStepResult result = application.stepMotion(new MotionStepCommand(
-				region.id(), region.solverGeneration(), List.of(), false, 0, false, true, active));
+				region.id(), region.solverGeneration(), List.of(), false, false, true, active));
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous phase settlement: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);
@@ -65,8 +65,7 @@ final class MinecraftMotionExecutor {
 			boolean phaseChange, boolean[] active) {
 		long start = System.nanoTime();
 		MotionStepResult result = application.stepMotion(new MotionStepCommand(
-				region.id(), region.solverGeneration(), movingBodies, phaseChange,
-				phaseChange ? policy.maximumPhaseOperationsPerStep() : 0, false, false, active));
+				region.id(), region.solverGeneration(), movingBodies, phaseChange, false, false, active));
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous region state: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);

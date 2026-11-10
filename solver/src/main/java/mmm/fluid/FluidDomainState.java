@@ -35,7 +35,6 @@ public final class FluidDomainState implements FluidStateAccess {
 	private final ChemicalRegistry chemicalRegistry;
 	private final ChemicalTransferLedger chemicalSource, chemicalSink;
 	private final int[] chemicalDirtyCells;
-	private final int chemicalReactionCursor;
 	private final List<RegionChemistry.MassTransferPending> chemicalMassTransferPending;
 	private final GranularRegistry granularRegistry;
 	private final GranularStateSnapshot granular;
@@ -75,20 +74,20 @@ public final class FluidDomainState implements FluidStateAccess {
 	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,FluidDefinitions definitions,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
-			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells,
 			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
 			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
-		this(sizeX, sizeY, sizeZ, config,definitions, sealedDomainBoundary, liquid, phaseOccupancy, momentum, fixedGeometry, entityBodies, palette, chemicalRegistry, chemicalSource, chemicalSink, chemicalDirtyCells, chemicalReactionCursor, chemicalMassTransferPending, granularRegistry, granular, granularDynamics, precipitationEnabled, gasRegistry, gas, thermalRegistry, thermalOwner, maximumThermalTransportSubsteps, pendingPhaseMotion, thermalBoundaryTemperaturesK, condensedPhasePressure, materialDefinitions, PhysicalActivityGroups.Snapshot.EMPTY);
+		this(sizeX, sizeY, sizeZ, config,definitions, sealedDomainBoundary, liquid, phaseOccupancy, momentum, fixedGeometry, entityBodies, palette, chemicalRegistry, chemicalSource, chemicalSink, chemicalDirtyCells, chemicalMassTransferPending, granularRegistry, granular, granularDynamics, precipitationEnabled, gasRegistry, gas, thermalRegistry, thermalOwner, maximumThermalTransportSubsteps, pendingPhaseMotion, thermalBoundaryTemperaturesK, condensedPhasePressure, materialDefinitions, PhysicalActivityGroups.Snapshot.EMPTY);
 	}
 
 	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,FluidDefinitions definitions,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
-			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells,
 			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
@@ -97,7 +96,7 @@ public final class FluidDomainState implements FluidStateAccess {
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions, PhysicalActivityGroups.Snapshot activityState) {
 		this(SpatialGrid.rectangular(sizeX,sizeY,sizeZ),config,definitions,sealedDomainBoundary,liquid,phaseOccupancy,momentum,
 				fixedGeometry,entityBodies,palette,chemicalRegistry,chemicalSource,chemicalSink,chemicalDirtyCells,
-				chemicalReactionCursor,chemicalMassTransferPending,granularRegistry,granular,granularDynamics,
+				chemicalMassTransferPending,granularRegistry,granular,granularDynamics,
 				precipitationEnabled,gasRegistry,gas,thermalRegistry,thermalOwner,maximumThermalTransportSubsteps,
 				pendingPhaseMotion,thermalBoundaryTemperaturesK,condensedPhasePressure,materialDefinitions,activityState);
 	}
@@ -105,7 +104,7 @@ public final class FluidDomainState implements FluidStateAccess {
 	public FluidDomainState(SpatialGrid grid, FluidSolverConfig config,FluidDefinitions definitions,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
-			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells,
 			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
@@ -113,7 +112,7 @@ public final class FluidDomainState implements FluidStateAccess {
 			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
 		this(grid,config,definitions,sealedDomainBoundary,liquid,phaseOccupancy,momentum,fixedGeometry,entityBodies,palette,
-				chemicalRegistry,chemicalSource,chemicalSink,chemicalDirtyCells,chemicalReactionCursor,chemicalMassTransferPending,
+				chemicalRegistry,chemicalSource,chemicalSink,chemicalDirtyCells,chemicalMassTransferPending,
 				granularRegistry,granular,granularDynamics,precipitationEnabled,gasRegistry,gas,thermalRegistry,thermalOwner,
 				maximumThermalTransportSubsteps,pendingPhaseMotion,thermalBoundaryTemperaturesK,condensedPhasePressure,
 				materialDefinitions,PhysicalActivityGroups.Snapshot.EMPTY);
@@ -122,7 +121,7 @@ public final class FluidDomainState implements FluidStateAccess {
 	public FluidDomainState(SpatialGrid grid, FluidSolverConfig config,FluidDefinitions definitions,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
-			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells,
 			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
@@ -147,7 +146,6 @@ public final class FluidDomainState implements FluidStateAccess {
 		this.chemicalRegistry = chemicalRegistry; this.chemicalSource = Objects.requireNonNull(chemicalSource);
 		this.chemicalSink = Objects.requireNonNull(chemicalSink);
 		this.chemicalDirtyCells = chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
-		this.chemicalReactionCursor = chemicalReactionCursor;
 		this.chemicalMassTransferPending = List.copyOf(chemicalMassTransferPending);
 		if (chemicalRegistry == null && !this.chemicalMassTransferPending.isEmpty())
 			throw new IllegalArgumentException("Inactive chemistry contains pending mass transfer");
@@ -174,8 +172,7 @@ public final class FluidDomainState implements FluidStateAccess {
 					.equals(this.palette.get(pending.material()).id()))
 				throw new IllegalArgumentException("Pending mass transfer material differs from its liquid phase");
 		}
-		if ((chemicalRegistry == null) != (chemicalDirtyCells == null) || chemicalRegistry != null && this.palette.isEmpty()
-				|| chemicalReactionCursor < 0 || chemicalReactionCursor >= cells)
+		if ((chemicalRegistry == null) != (chemicalDirtyCells == null) || chemicalRegistry != null && this.palette.isEmpty())
 			throw new IllegalArgumentException("Invalid chemical registry or scheduling state");
 		if (chemicalDirtyCells != null) { int previous = -1; for (int cell : chemicalDirtyCells) {
 			if (cell <= previous || cell >= cells) throw new IllegalArgumentException("Invalid chemical dirty-cell order"); previous = cell;
@@ -224,7 +221,6 @@ public final class FluidDomainState implements FluidStateAccess {
 	public ChemicalTransferLedger chemicalSource() { return chemicalSource; }
 	public ChemicalTransferLedger chemicalSink() { return chemicalSink; }
 	public int[] copyChemicalDirtyCells() { return chemicalDirtyCells == null ? null : chemicalDirtyCells.clone(); }
-	public int chemicalReactionCursor() { return chemicalReactionCursor; }
 	public List<RegionChemistry.MassTransferPending> chemicalMassTransferPending() { return chemicalMassTransferPending; }
 	public GranularRegistry granularRegistry() { return granularRegistry; }
 	public GranularStateSnapshot granular() { return granular; }

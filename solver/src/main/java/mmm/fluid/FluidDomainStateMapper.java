@@ -26,7 +26,6 @@ final class FluidDomainStateMapper {
 				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.externalSource(),
 				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.escapedSink(),
 				domain.chemistry == null ? null : domain.chemistry.dirtyCells(),
-				domain.chemistry == null ? 0 : domain.chemistry.reactionCursor(),
 				domain.chemistry == null ? List.of() : domain.chemistry.massTransferPending(),
 				domain.granularState == null ? null : domain.granularState.registry,granular,
 				domain.granularDepositDynamics == null ? null : domain.granularDepositDynamics.captureState(),
@@ -82,7 +81,6 @@ final class FluidDomainStateMapper {
 			domain.chemistry = new mmm.chemistry.RegionChemistry(state.chemicalRegistry(),domain.cellCount);
 			domain.chemistry.restoreAuditLedgers(state.chemicalSource(),state.chemicalSink());
 			domain.chemistry.restoreDirtyCells(state.copyChemicalDirtyCells());
-			domain.chemistry.restoreReactionCursor(state.chemicalReactionCursor());
 			domain.chemistry.restoreMassTransferPending(state.chemicalMassTransferPending());
 		}
 		domain.liquidCells = LiquidCellInventory.fromValidatedSnapshot(state.liquid(),state.chemicalRegistry());

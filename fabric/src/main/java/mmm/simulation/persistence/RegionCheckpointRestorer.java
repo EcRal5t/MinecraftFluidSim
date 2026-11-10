@@ -39,7 +39,7 @@ public final class RegionCheckpointRestorer {
 		}catch(IllegalArgumentException invalid){throw new IOException("Spatial gas thermal state is invalid",invalid);}}
 		if(heat!=null){var liquidU=SignedDyadic.ZERO;for(var stock:liquid.stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));if(localGas!=null)liquidU=liquidU.add(SignedDyadic.sum(localGas.internalEnergy()));heat.requireClosed(liquidU,cells);}
 		try{return new FluidDomainState(runtime.grid(),manifest.solverConfig(),definitions,runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),runtime.entityBodies(),manifest.materialPalette(),
-				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,runtime.cursor(),
+				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,
 				runtime.massTransferPending(),
 				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,FluidDomainState.GasContinuation.spatial(localGas),heat==null?null:thermal,heat,
 				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseMotion(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
@@ -112,7 +112,7 @@ public final class RegionCheckpointRestorer {
 	public FlipChemicalParticleState reconstructChemical(FluidDefinitions definitions)throws IOException{if(!manifest.hasChemicalState())throw new IOException("Chemical diagnostic layout differs");return debugState(definitions,definitions.chemistry()).chemicals();}
 	private FluidDomainState debugState(FluidDefinitions definitions,ChemicalRegistry chemistry)throws IOException {
 		var run=runtime();var audit=chemistry==null?new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY):decodeChemicalAuditExtension();
-		return new FluidDomainState(run.grid(),manifest.solverConfig(),definitions,run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),run.entityBodies(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),run.massTransferPending(),null,null,null,false,definitions.gas(),manifest.hasGasState()?FluidDomainState.GasContinuation.spatial(reconstructSpatialGasPayload(null,null)):null,null,null,0,null,null,null,null);
+		return new FluidDomainState(run.grid(),manifest.solverConfig(),definitions,run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),run.entityBodies(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.massTransferPending(),null,null,null,false,definitions.gas(),manifest.hasGasState()?FluidDomainState.GasContinuation.spatial(reconstructSpatialGasPayload(null,null)):null,null,null,0,null,null,null,null);
 	}
 	public SpatialGasState reconstructSpatialGas(GasRegistry gas,ChemicalRegistry chemistry)throws IOException {
 		validateCheckpoint();return reconstructSpatialGasPayload(gas,manifest.hasChemicalState()?chemistry:null);

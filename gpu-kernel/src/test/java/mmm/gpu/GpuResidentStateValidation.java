@@ -85,7 +85,7 @@ public final class GpuResidentStateValidation {
             domain.restoreEntityBodyState(new EntityBodyState(List.of(source)));
             FluidStateAccess current=domain.captureAuthoritativeState();
             try(var backend=new VulkanFluidSolverBackend(device);
-                var candidate=backend.evaluate(new FluidStepRequest(0,current,List.of(target),false,0,false,false));
+                var candidate=backend.evaluate(new FluidStepRequest(0,current,List.of(target),false,false,false));
                 var prepared=candidate.claimPreparedDeviceState()) {
                 var impulse=candidate.movingBodyCoupling().bodyImpulses().stream().filter(value->value.bodyId().equals(id)).findFirst().orElseThrow();
                 response[i]=inverse[i]*impulse.impulseXKilogramMetresPerSecond();
@@ -117,7 +117,7 @@ public final class GpuResidentStateValidation {
         var body=new mmm.world.MovingBodyFluidCoupling.Request(java.util.UUID.fromString("a7184c41-7a9c-4c56-8b2a-e7d7b474ca23"),
                 new mmm.world.MovingBodyFluidCoupling.Bounds(edge*.5,.5,.5,(edge+1)*.5,1,1),0,0,0);
         try(var backend=new VulkanFluidSolverBackend(device)){
-            try(var candidate=backend.evaluate(new FluidStepRequest(0,current,List.of(body),false,0,false,false));
+            try(var candidate=backend.evaluate(new FluidStepRequest(0,current,List.of(body),false,false,false));
                 var prepared=candidate.claimPreparedDeviceState()){
                 var next=prepared.commit();current.close();current=next;
             }
@@ -129,7 +129,7 @@ public final class GpuResidentStateValidation {
                 throw new AssertionError("Ambient closure lost gas or energy accounting");
             var restored=HostFluidState.restoreAuthoritativeState(checkpoint).captureAuthoritativeState();
             current.close();current=restored;
-            try(var candidate=backend.evaluate(new FluidStepRequest(1,current,List.of(body),false,0,false,false));
+            try(var candidate=backend.evaluate(new FluidStepRequest(1,current,List.of(body),false,false,false));
                 var prepared=candidate.claimPreparedDeviceState()){
                 var next=prepared.commit();current.close();current=next;
             }
@@ -154,8 +154,8 @@ public final class GpuResidentStateValidation {
         totals.values().removeIf(value->value==0);return totals;
     }
     private static void validateCapabilityContracts(FluidDomainState thermalOnly) {
-        expectIllegal(() -> new FluidStepRequest(0, thermalOnly, List.of(), true, 1));
-        expectIllegal(() -> new FluidThermalStepRequest(0, thermalOnly, true, 1));
+        expectIllegal(() -> new FluidStepRequest(0, thermalOnly, List.of(), true));
+        expectIllegal(() -> new FluidThermalStepRequest(0, thermalOnly, true));
         var domain = new HostFluidState(2, 2, 2, thermalOnly.config(), mmm.fluid.TestFluidDefinitions.load());
         domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(mmm.fluid.TestFluidDefinitions.load().material().entry("mmm:water").material())));
         domain.bindChemistry(mmm.fluid.TestFluidDefinitions.load().chemistry());
@@ -179,7 +179,7 @@ public final class GpuResidentStateValidation {
         if (initial.spatialGas()==null || initial.spatialGas().cells().stream().allMatch(mmm.fluid.air.GasInventory::isEmpty))
             throw new AssertionError("Granular fixture lost its local gas inventory");
         try (var backend = new VulkanFluidSolverBackend(device);
-             var candidate = backend.evaluate(new FluidStepRequest(0, initial, List.of(), false, 0));
+             var candidate = backend.evaluate(new FluidStepRequest(0, initial, List.of(), false));
              var prepared = candidate.claimPreparedDeviceState()) {
             var gas=prepared.exportState().spatialGas();
             if (gas==null || gasAccountMass(gas)!=gasAccountMass(initial.spatialGas())
@@ -240,20 +240,20 @@ public final class GpuResidentStateValidation {
         try(var backend=providers.getFirst().create(device)){
             if(!backend.id().equals(VulkanFluidSolverBackend.ID))throw new AssertionError("Discovered backend identity differs");
             // Rejecting a prepared successor releases it without publication.
-            try(var abandoned=backend.evaluate(new FluidStepRequest(0,current,List.of(),false,0,false,false))){
+            try(var abandoned=backend.evaluate(new FluidStepRequest(0,current,List.of(),false,false,false))){
                 if(!abandoned.layout().equals(initial.layout()))throw new AssertionError("Abandoned backend successor changed layout");
             }
             for(int step=0;step<3;step++){
                 FluidStateAccess next;
-                if(step==1){try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(step,current,false,0));var prepared=candidate.claimPreparedDeviceState()){
+                if(step==1){try(var candidate=backend.evaluateThermal(new FluidThermalStepRequest(step,current,false));var prepared=candidate.claimPreparedDeviceState()){
                     if(prepared==null)throw new AssertionError("Thermal backend did not retain a private device candidate");next=prepared.commit();}}
-                else{try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,0,false,false));var prepared=candidate.claimPreparedDeviceState()){
+                else{try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,false,false));var prepared=candidate.claimPreparedDeviceState()){
                     if(prepared==null)throw new AssertionError("Mechanical backend did not retain a private device candidate");next=prepared.commit();}}
                 current.close();current=next;if(!(current instanceof ResidentFluidState resident))throw new AssertionError("Backend adoption lost GPU residency");
                 var summary=resident.inventorySummary();if(summary.liquidMassUnits()!=expectedMass||summary.gasMassUnits()!=expectedGasMass||!resident.observation().thermalAuditClosed())throw new AssertionError("Backend adoption changed liquid/gas inventory or thermal audit");
                 requireWetSample(resident.sampleBody(.5,.25,.5,1,.75,1));if(resident.display().thermal()==null)throw new AssertionError("Backend thermal display unavailable");
                 requireCellAndWater(resident.observeCellInventory(1,0,1),resident.waterContacts(contactFaces()));
-                if(step==0){var before=resident.inventorySummary();try(var abandoned=backend.evaluate(new FluidStepRequest(step+1,current,List.of(),false,0,false,false))){}
+                if(step==0){var before=resident.inventorySummary();try(var abandoned=backend.evaluate(new FluidStepRequest(step+1,current,List.of(),false,false,false))){}
                     if(!before.equals(resident.inventorySummary()))throw new AssertionError("Rejected resident candidate changed its pinned source summary");}
                 System.out.println("backend_committed="+(step+1)+" resident=true summary_mass_units="+summary.liquidMassUnits()+" body_water_contact=true");
             }
@@ -286,7 +286,7 @@ public final class GpuResidentStateValidation {
                 double shift=(step-3)*.005;
                 var body=new mmm.world.MovingBodyFluidCoupling.Request(bodyId,
                         new mmm.world.MovingBodyFluidCoupling.Bounds(1.42+shift,.15,1.42,1.58+shift,.35,1.58),.1,0,0);
-                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(body),false,0,false,false));
+                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(body),false,false,false));
                     var prepared=candidate.claimPreparedDeviceState()){
                     requireBodyResult(candidate.movingBodyCoupling(),bodyId);
                     var next=prepared.commit();current.close();current=next;
@@ -308,7 +308,7 @@ public final class GpuResidentStateValidation {
             current.close();current=restored;
             var retainedBody=new mmm.world.MovingBodyFluidCoupling.Request(bodyId,
                     new mmm.world.MovingBodyFluidCoupling.Bounds(1.425,.15,1.42,1.585,.35,1.58),0,0,0);
-            try(var candidate=backend.evaluate(new FluidStepRequest(5,current,List.of(retainedBody),false,0,false,false));
+            try(var candidate=backend.evaluate(new FluidStepRequest(5,current,List.of(retainedBody),false,false,false));
                 var prepared=candidate.claimPreparedDeviceState()){
                 requireBodyResult(candidate.movingBodyCoupling(),bodyId);
                 var next=prepared.commit();current.close();current=next;
@@ -350,7 +350,7 @@ public final class GpuResidentStateValidation {
                     throw new AssertionError("Adopted thermal input changed inventory or lost its temperature");
                 try { accepted.commit(); throw new AssertionError("Thermal candidate was adopted twice"); }
                 catch (IllegalStateException expected) { }
-                try (var thermal = backend.evaluateThermal(new FluidThermalStepRequest(1, successor, false, 0));
+                try (var thermal = backend.evaluateThermal(new FluidThermalStepRequest(1, successor, false));
                      var prepared = thermal.claimPreparedDeviceState(); var advanced = prepared.commit()) {
                     if (!java.util.Arrays.equals(changed, advanced.exportState().copyThermalBoundaryTemperaturesK()))
                         throw new AssertionError("Thermal input disappeared after a device step");

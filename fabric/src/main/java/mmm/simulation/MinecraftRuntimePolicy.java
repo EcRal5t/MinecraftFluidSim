@@ -33,7 +33,6 @@ final class MinecraftRuntimePolicy {
 	boolean configuredWorldBridgeEnabled() { return config.worldBridgeEnabled(); }
 	boolean defaultEntityPhysicsEnabled() { return defaultEntityPhysicsEnabled; }
 	boolean defaultDebugOverlays() { return defaultDebugOverlays; }
-	int maximumPhaseOperationsPerStep() { return config.maximumPhaseOperationsPerStep(); }
 	int maximumThermalSubstepsPerStep() { return config.maximumThermalSubstepsPerStep(); }
 
 	String setControllerEnabled(boolean enabled) {

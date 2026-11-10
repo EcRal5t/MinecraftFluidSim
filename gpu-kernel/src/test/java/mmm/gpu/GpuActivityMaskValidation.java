@@ -53,7 +53,7 @@ public final class GpuActivityMaskValidation {
         try(var backend=new VulkanFluidSolverBackend(device);
             var imported=backend.prepareState(null,initial,null,List.of());var resident=imported.commit()) {
             var before=resident.exportState();
-            try(var candidate=backend.evaluate(new FluidStepRequest(0,resident,List.of(retainedBody),false,0,false,false,active));
+            try(var candidate=backend.evaluate(new FluidStepRequest(0,resident,List.of(retainedBody),false,false,false,active));
                 var prepared=candidate.claimPreparedDeviceState();var state=(ResidentFluidState)prepared.commit()) {
             checkMechanicalCounters(state);
             checkActivity(state,active);
@@ -66,7 +66,7 @@ public final class GpuActivityMaskValidation {
             var beforeActive=liquidTotals(before,true);var afterActive=liquidTotals(after,true);
             if(beforeActive.equals(afterActive))throw new AssertionError("Active group did not transport liquid");
             checkMomenta(before.momentum(),after.momentum());
-            try(var thermalCandidate=backend.evaluateThermal(new FluidThermalStepRequest(1,state,true,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP,active));
+            try(var thermalCandidate=backend.evaluateThermal(new FluidThermalStepRequest(1,state,true,active));
                 var thermalPrepared=thermalCandidate.claimPreparedDeviceState();var thermalState=(ResidentFluidState)thermalPrepared.commit()) {
                 checkActivity(thermalState,active);
                 if(thermalState.observation().gasPressureFlow())

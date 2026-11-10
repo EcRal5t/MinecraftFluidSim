@@ -6,11 +6,10 @@ import java.util.Map;
 import java.util.List;
 import java.util.TreeMap;
 
-/** Region chemistry registry, source/sink audits and bounded reaction scheduling. */
+/** Region chemistry registry, source/sink audits and pending reactions. */
 public final class RegionChemistry {
 	private final ChemicalRegistry registry;
 	private final long[] dirtyCellWords;
-	private int reactionCursor;
 	private final int cellCount;
 	private List<MassTransferPending> massTransferPending = List.of();
 	/** Stable liquid-stock and transfer-rule identity; gas nodes are resolved again from current geometry. */
@@ -41,7 +40,6 @@ public final class RegionChemistry {
 		dirtyCellWords=new long[(cellCount+63)>>>6];
 	}
 	public ChemicalRegistry registry(){return registry;}
-	public int reactionCursor(){return reactionCursor;}
 	public List<MassTransferPending> massTransferPending() { return massTransferPending; }
 	public void restoreMassTransferPending(List<MassTransferPending> pending) {
 		var ordered = new java.util.ArrayList<>(List.copyOf(pending));
@@ -53,10 +51,6 @@ public final class RegionChemistry {
 			previous = entry;
 		}
 		massTransferPending = List.copyOf(ordered);
-	}
-	public void restoreReactionCursor(int cell){
-		if(cell<0||cell>>>6>=dirtyCellWords.length)throw new IllegalArgumentException("Reaction cursor is outside the grid");
-		reactionCursor=cell;
 	}
 	public ChemicalTransferLedger escapedSink() { return escapedSink; }
 	public ChemicalTransferLedger externalSource() { return externalSource; }
@@ -202,7 +196,7 @@ public final class RegionChemistry {
 		return result;
 	}
 
-	/** Replaces only the bounded reaction scheduler cursor; inventory and audits are untouched. */
+	/** Restores the cells marked for chemical processing. */
 	public void restoreDirtyCells(int[] cells) {
 		if (cells == null) throw new IllegalArgumentException("Chemical dirty-cell state is missing");
 		Arrays.fill(dirtyCellWords, 0L);
