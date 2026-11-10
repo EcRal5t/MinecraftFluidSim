@@ -36,6 +36,29 @@ final class GpuControllerFixture {
     final ContainerJournalFileStore journal;
     final Actor actor;
     final CommittedWorldRegistries world;
+    private mmm.fluid.HostFluidState transferEdit;
+    private FluidRegion transferCandidate;
+    private long transferGeneration;
+    private boolean transferChanged, transferThermal;
+
+    FluidRegion beginTransfers() {
+        if(transferCandidate!=null)throw new IllegalStateException("Transfer batch already open");
+        transferGeneration=region.solverGeneration();
+        transferEdit=region.beginHostEdit();
+        transferCandidate=region.lifecycleCandidate(transferEdit,region.paused());
+        transferChanged=false;transferThermal=false;
+        return transferCandidate;
+    }
+    mmm.fluid.HostFluidState transferState() { return transferEdit; }
+    void commitTransfers() {
+        if(transferCandidate==null)throw new IllegalStateException("Transfer batch is not open");
+        if(transferChanged) {
+            region.commitHostEdit(transferGeneration,transferEdit);
+            region.wakeForActivity();
+            if(transferThermal)region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
+        }
+        transferEdit=null;transferCandidate=null;
+    }
 
     private GpuControllerFixture(FluidRegion region, int[] portCell, MinecraftContainerTransactionAdapter transactions,
             ContainerRecoveryCoordinator recovery, ContainerJournalFileStore journal, Actor actor, CommittedWorldRegistries world) {
@@ -87,7 +110,8 @@ final class GpuControllerFixture {
             public boolean isChunkLoaded(int x, int z) { return true; }
             public boolean isBoundary(BlockPos p) { return shell.contains(p.asLong()); }
         };
-        var scan = FluidBoundaryScanner.scan(layout.controller(), worldView, 512);
+        var scan = FluidBoundaryScanner.scan(layout.controller(), worldView, (int)Math.max(1L,
+                Math.min(Integer.MAX_VALUE, manager.limits().maximumCellsPerRegion()/FluidRegionFactory.CELL_VOLUMES_PER_BLOCK)));
         if (!scan.succeeded()) throw new IllegalStateException("controller scan: " + scan.failure());
         var dimension = ResourceKey.create(Registries.DIMENSION, Identifier.fromNamespaceAndPath("mmm", "gpu_controller"));
         var result = ControllerRegionCreation.create(manager, dimension, scan.footprint(), true, false, world,
@@ -341,21 +365,41 @@ final class GpuControllerFixture {
         transfer(before, false, cell);
     }
 
-    /** Offline box slot using the same bounded transfer plan and durable block actor as a live port. */
+    /** Offline box slot using the production bounded transfer plan. */
     ItemStack transferBox(ItemStack batch, int[] cell, boolean extract, long maximum) throws IOException {
-		Direction outward=cell[0]==0?Direction.WEST:cell[0]==region.sizeX()-1?Direction.EAST:cell[2]==0?Direction.NORTH:cell[2]==region.sizeZ()-1?Direction.SOUTH:cell[1]==0?Direction.DOWN:Direction.UP;
-		return transferBox(batch,cell,outward,extract,maximum);
+        return transferBox(batch,cell,boxOutward(cell),extract,maximum,false);
     }
     ItemStack transferBox(ItemStack batch, int[] cell, Direction outward, boolean extract, long maximum) throws IOException {
-		if(maximum<=0)return batch;
-		var quantity=batch.getItem() instanceof mmm.item.GasContainerItem?new mmm.api.transfer.TransferQuantity.Gas(maximum,0)
-				:batch.getItem() instanceof mmm.item.GranularContainerItem?new mmm.api.transfer.TransferQuantity.Granular(maximum)
-				:new mmm.api.transfer.TransferQuantity.Liquid(maximum,java.util.OptionalDouble.empty());
-		int scale=FluidRegionFactory.CELLS_PER_BLOCK;var interior=region.origin().offset(cell[0]/scale,cell[1]/scale,cell[2]/scale);
-		var edit=region.beginHostEdit();
-		cell=FluidWorldTargetResolver.transferCell(region,interior,outward,quantity,extract,edit);
-		if(cell==null)return batch;
+        return transferBox(batch,cell,outward,extract,maximum,false);
+    }
+    ItemStack transferBoxDurable(ItemStack batch, int[] cell, boolean extract, long maximum) throws IOException {
+        return transferBox(batch,cell,boxOutward(cell),extract,maximum,true);
+    }
+    private Direction boxOutward(int[] cell) {
+        return cell[0]==0?Direction.WEST:cell[0]==region.sizeX()-1?Direction.EAST:cell[2]==0?Direction.NORTH:cell[2]==region.sizeZ()-1?Direction.SOUTH:cell[1]==0?Direction.DOWN:Direction.UP;
+    }
+    private ItemStack transferBox(ItemStack batch, int[] cell, Direction outward, boolean extract, long maximum, boolean durable) throws IOException {
+        if(maximum<=0)return batch;
+        var quantity=batch.getItem() instanceof mmm.item.GasContainerItem?new mmm.api.transfer.TransferQuantity.Gas(maximum,0)
+                :batch.getItem() instanceof mmm.item.GranularContainerItem?new mmm.api.transfer.TransferQuantity.Granular(maximum)
+                :new mmm.api.transfer.TransferQuantity.Liquid(maximum,java.util.OptionalDouble.empty());
+        if(durable && transferCandidate!=null)throw new IllegalStateException("Durable transfer cannot join a host batch");
+        var target=transferCandidate==null?region:transferCandidate;
+        int scale=FluidRegionFactory.CELLS_PER_BLOCK;var interior=target.origin().offset(cell[0]/scale,cell[1]/scale,cell[2]/scale);
+        var edit=transferCandidate==null?region.beginHostEdit():transferEdit;
+        cell=FluidWorldTargetResolver.transferCell(target,interior,outward,quantity,extract,edit);
+        if(cell==null)return batch;
         var before=mmm.block.MaterialBoxBlockEntity.newBatch(batch);
+        var resolution=MinecraftContainerTransferPlan.resolveDirected(transactions,world,target,cell,edit,before,extract);
+        if(!resolution.resolved())return batch;
+        var plan=resolution.plan();
+        if(!durable) {
+            var outcome=transferCandidate==null?plan.executeUnmanaged(maximum)
+                    :plan.executeExact(target,Math.min(maximum,plan.requestedAmount()),plan.baseAmount());
+            if(outcome==null || !outcome.transferred())return batch;
+            if(transferCandidate!=null){transferChanged=true;transferThermal|=outcome.thermalEnergy()!=null;}
+            return world.bindActualContainerProfile(outcome.stack());
+        }
         var state=mmm.transfer.TransferActorState.decode(before.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
         var identity=new ContainerTransferActor.BlockInventory(region.dimension().identifier().toString(),
                 region.origin().getX()-1,region.origin().getY(),region.origin().getZ(),0,state.instanceId(),state.generation());
@@ -364,12 +408,9 @@ final class GpuControllerFixture {
         var boxRecovery=new ContainerRecoveryCoordinator(journal,boxActor,Map.of(),Set.of());
         var adapter=new MinecraftContainerTransactionAdapter(actor.manager,actor.operations,boxRecovery,
                 world.profile().profileFingerprint(),world.thermalRegistryFingerprint());
-        var resolution=MinecraftContainerTransferPlan.resolveDirected(adapter,world,region,cell,edit,before,extract);
-        if(!resolution.resolved())return batch;
-        var plan=resolution.plan();long requested=Math.min(maximum,plan.requestedAmount());
         var result=adapter.executeForRegion(region,identity,before,plan.sourceStack(),
                 extract?ContainerTransferJournal.Operation.EXTRACT:ContainerTransferJournal.Operation.INSERT,
-                plan.resourceKind(),requested,plan.baseAmount(),plan::executeExact,(raw,old)->raw,null,plan.edit(),plan.editGeneration());
+                plan.resourceKind(),Math.min(maximum,plan.requestedAmount()),plan.baseAmount(),plan::executeExact,(raw,old)->raw,null,plan.edit(),plan.editGeneration());
         if(result.status()==mmm.application.ContainerTransferUseCase.Status.NOT_TRANSFERRED)return batch;
         if(result.status()!=mmm.application.ContainerTransferUseCase.Status.COMMITTED)
             throw new IllegalStateException("Box transfer "+result.status()+": "+result.outcome().message());

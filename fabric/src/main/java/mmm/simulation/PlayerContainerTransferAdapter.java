@@ -119,7 +119,7 @@ public final class PlayerContainerTransferAdapter {
 					level, ContainerTransferActor.player(player.getUUID(), actorHand(hand)), held, false);
 			attempt = new Attempt(transaction.outcome(), transaction.transactionId());
 		} else {
-			MinecraftContainerTransferOperations.TransferOutcome outcome = plan.executeUnmanaged();
+			MinecraftContainerTransferOperations.TransferOutcome outcome = plan.executeUnmanaged(plan.requestedAmount());
 			if (outcome != null && outcome.transferred() && player.hasInfiniteMaterials() && pouring) {
 				outcome = new MinecraftContainerTransferOperations.TransferOutcome(
 						true, plan.filled(), held.copy(), outcome.message(), outcome.resourceAmount(),

@@ -279,10 +279,10 @@ final class MinecraftContainerTransferPlan {
 		};
 	}
 
-	MinecraftContainerTransferOperations.TransferOutcome executeUnmanaged() {
+	MinecraftContainerTransferOperations.TransferOutcome executeUnmanaged(long maximum) {
 		long generation = editGeneration;
 		var candidate = region.lifecycleCandidate(edit, region.paused());
-		var outcome = executeExact(candidate, requestedAmount, baseAmount);
+		var outcome = executeExact(candidate, Math.min(maximum, requestedAmount()), baseAmount);
 		if (outcome != null && outcome.transferred()) {
 			region.commitHostEdit(generation, edit);
 			region.wakeForActivity();
