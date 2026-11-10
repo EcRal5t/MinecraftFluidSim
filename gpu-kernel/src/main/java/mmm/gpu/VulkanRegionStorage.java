@@ -461,18 +461,6 @@ final class VulkanRegionStorage implements AutoCloseable {
             }
         }
 
-        /** Uploads a derived routing column into the current private candidate. */
-        void write(VulkanLiquidStateLayout.Column column, int[] values) {
-            synchronized (VulkanRegionStorage.this) {
-                requireOpen();
-                if (released || !submitted || finished || error != 0)
-                    throw new IllegalStateException("Candidate is not available for routing");
-                if (values.length != column.count())
-                    throw new IllegalArgumentException("Routing column length differs from layout");
-                var writer = new Import(slot, logicalBytes);
-                try { writer.put(column, values); } finally { writer.active = false; }
-            }
-        }
 
         /** Packs sparse uint32 capacity requirements into one small diagnostic readback. */
         void readWords(long[] offsets,ByteBuffer output) {

@@ -15,6 +15,63 @@ int64_t targetPore(int cell){
     int at=head(21)+2*cell;int64_t occupied=int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));
     return (int64_t(bitCount((~words[head(20)+cell])&255u))<<21)-occupied;
 }
+bool available(int cell){return cell>=0&&words[head(34)+cell]!=0u;}
+bool openRoute(int cell,int side){int face=localGasFace(cell,side,ivec3(head(0),head(1),head(2)));return face>=0&&faceValue(face,2)>0.0LF;}
+void resetFrontier(){words[head(28)]=0u;words[head(28)+1]=0u;words[head(28)+2]=0u;}
+void seedInterior(int cell){
+    int64_t pore=targetPore(cell);words[head(24)+cell]=pore>0l&&available(cell)?uint(cell):0xffffffffu;
+    words[head(25)+cell]=0xffffffffu;
+    if(pore>0l||!available(cell))return;
+    ivec3 size=ivec3(head(0),head(1),head(2));
+    for(int side=0;side<6;side++){
+        int next=localGasNeighbor(cell,side,size);
+        if(next>=0&&available(next)&&targetPore(next)>0l&&openRoute(cell,side)){
+            words[head(24)+cell]=uint(next);words[head(25)+cell]=uint(side);
+            words[head(26)+int(atomicAdd(words[head(28)],1u))]=uint(cell);break;
+        }
+    }
+    if(head(17)==0)for(int side=0;side<6;side++)if(localGasNeighbor(cell,side,size)<0&&openRoute(cell,side)){
+        atomicOr(words[head(28)+2],1u);break;
+    }
+}
+void resetNext(){words[head(28)+((p.unused^1)&1)]=0u;}
+void propagate(int index){
+    int parity=p.unused&1;if(uint(index)>=words[head(28)+parity])return;
+    int cell=int(words[head(26+parity)+index]);uint destination=words[head(24)+cell];
+    ivec3 size=ivec3(head(0),head(1),head(2));
+    for(int side=0;side<6;side++){
+        int next=localGasNeighbor(cell,side,size);
+        if(!available(next)||targetPore(next)>0l||!openRoute(cell,side))continue;
+        if(atomicCompSwap(words[head(24)+next],0xffffffffu,destination)==0xffffffffu){
+            words[head(25)+next]=uint(side^1);
+            int count=int(atomicAdd(words[head(28)+(parity^1)],1u));words[head(26+(parity^1))+count]=uint(next);
+        }
+    }
+}
+void seedExterior(int cell){
+    if(!available(cell)||targetPore(cell)>0l||words[head(24)+cell]!=0xffffffffu)return;
+    ivec3 size=ivec3(head(0),head(1),head(2));
+    for(int side=0;side<6;side++)if(localGasNeighbor(cell,side,size)<0&&openRoute(cell,side)){
+        words[head(24)+cell]=0xfffffffeu;words[head(25)+cell]=uint(side);
+        words[head(26)+int(atomicAdd(words[head(28)],1u))]=uint(cell);return;
+    }
+}
+void clearRouteCounts(int cell){words[head(29)+cell]=0u;}
+void emitRoutes(int cell){
+    bool closing=p.unused!=0&&targetPore(cell)==0l;ivec3 size=ivec3(head(0),head(1),head(2));
+    for(int side=0;side<6;side++){
+        int target=closing?(side==int(words[head(25)+cell])?int(words[head(24)+cell]):-1):localGasNeighbor(cell,side,size);
+        if(p.unused!=0&&!closing&&target>=0&&targetPore(target)==0l)target=-1;
+        words[head(23)+6*cell+side]=uint(target);if(target>=0)atomicAdd(words[head(29)+target],1u);
+    }
+}
+void initializeCursors(int cell){words[head(30)+cell]=words[head(31)+cell];}
+void scatterRoutes(int cell){
+    for(int side=0;side<6;side++){
+        int target=int(words[head(23)+6*cell+side]);if(target<0)continue;
+        int index=int(atomicAdd(words[head(30)+target],1u));words[head(32)+index]=uint(cell);words[head(33)+index]=uint(side);
+    }
+}
 double gasDemandForFace(int face,int other,double outward){
     if(head(8)<0 || outward<=0.0LF)return 0.0LF;
     if(other<0)return head(17)==0?outward*faceValue(face,2)*p.dt/p.h:0.0LF;
@@ -88,5 +145,14 @@ void main(){
     if(p.stage==1)putNumber(head(14)+2*id,0.0LF);
     else if(p.stage==2)cellScale(id);
     else if(p.stage==3)constrainFace(id);
+    else if(p.stage==4)resetFrontier();
+    else if(p.stage==5)seedInterior(id);
+    else if(p.stage==6)resetNext();
+    else if(p.stage==7)propagate(id);
+    else if(p.stage==8)seedExterior(id);
+    else if(p.stage==9)clearRouteCounts(id);
+    else if(p.stage==10)emitRoutes(id);
+    else if(p.stage==11)initializeCursors(id);
+    else if(p.stage==12)scatterRoutes(id);
 
 }

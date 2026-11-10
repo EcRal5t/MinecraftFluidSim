@@ -320,9 +320,17 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                         region.kernel.recordTransportPreferences(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),parameters.cellSize(),parameters.duration());
                     };
                     boolean movingSolid=transport.entity!=null||granularMotion;
+                    boolean rebuildRoutes=!sourceGeometryValid||granularMotion||!java.util.Objects.equals(sourceBodyState,targetBodyState);
+                    var routeLayout=transport.pressure.constraint;
+                    int routeFrontier=0,exteriorCandidates=0;
                     if(movingSolid){
-                        var accepted=candidate.continueBatch(project,0,0);
+                        boolean seed=rebuildRoutes&&!granularMotion;
+                        var accepted=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                            project.record(command,input,output,errors,staging,stack);
+                            if(seed)region.kernels.mixtureFlux.recordRouteSeeds(command,routeLayout);
+                        },seed?routeLayout.routeControl.offset():0,seed?12:0);
                         if(accepted.error()!=0)return accepted.error();
+                        if(seed){routeFrontier=accepted.feedback().getInt(0);exteriorCandidates=accepted.feedback().getInt(8);}
                     }
                     VulkanRegionStorage.ComputeCommands finishProjection=(command,input,output,errors,staging,stack)->{
                         if(transport.entity!=null)region.kernels.entityKernel.recordResult(command,transport.entity,parameters.cellSize(),parameters.duration());
@@ -386,26 +394,33 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
                                 region.kernels.contactKernel.recordFinishInterval(command,contacts);
                                 transport.recordMotionFinish(command,output,errors,parameters);
                                 region.kernel.recordTransportPreferences(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),parameters.cellSize(),parameters.duration());
-                            },0,0);
+                                if(rebuildRoutes)region.kernels.mixtureFlux.recordRouteSeeds(command,routeLayout);
+                            },rebuildRoutes?routeLayout.routeControl.offset():0,rebuildRoutes?12:0);
                             if(moved.error()==64){var feedback=ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN);
                                 candidate.read(transport.dynamics.transitions.column(VulkanGranularTransitions.Field.CONTROL).offset(),feedback);
                                 int[] required={feedback.getInt(0),feedback.getInt(4),feedback.getInt(8)};
                                 if(required[0]>granularReserves.particles()||required[1]>granularReserves.deposits()||required[2]>granularReserves.species())throw new GranularCapacityGrowth(required);}
                             if(moved.error()!=0)return moved.error();
+                            if(rebuildRoutes){routeFrontier=moved.feedback().getInt(0);exteriorCandidates=moved.feedback().getInt(8);}
                         }
                         capacityStage="liquid donor routes";
                         if(error==0) {
-                            if(!sourceGeometryValid||granularMotion||!java.util.Objects.equals(sourceBodyState,targetBodyState))
-                                region.kernels.mixtureFlux.prepareRoutes(candidate,transport.pressure.constraint,movingSolid);
+                            if(rebuildRoutes&&movingSolid){
+                                int routingError=region.kernels.mixtureFlux.finishRouteSearch(candidate,routeLayout,routeFrontier,exteriorCandidates);
+                                if(routingError!=0)return routingError;
+                            }
                             if(movingSolid){
-                                var routed=candidate.continueBatch((command,input,output,errors,staging,stack)->
-                                        region.kernels.mixtureFlux.recordAnalyze(command,transport.pressure.constraint,parameters.cellSize(),parameters.duration()),0,0);
+                                var routed=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                                        if(rebuildRoutes)region.kernels.mixtureFlux.recordRoutes(command,routeLayout,true);
+                                        region.kernels.mixtureFlux.recordAnalyze(command,routeLayout,parameters.cellSize(),parameters.duration());
+                                },0,0);
                                 if(routed.error()==4096)throw new MotionTimeRefinement("Moved solid leaves liquid without an open route");
                                 if(routed.error()!=0)return routed.error();
                             }
                             capacityStage="accepted volumes/material routes/gather/future gas geometry";
                             VulkanRegionStorage.ComputeCommands finishTransport=(command,input,output,errors,staging,stack)-> {
                                 if(!movingSolid){project.record(command,input,output,errors,staging,stack);
+                                    if(rebuildRoutes)region.kernels.mixtureFlux.recordRoutes(command,routeLayout,false);
                                     region.kernels.mixtureFlux.recordAnalyze(command,transport.pressure.constraint,parameters.cellSize(),parameters.duration());}
                                 if(!granularMotion)finishProjection.record(command,input,output,errors,staging,stack);
                                 if(transport.dynamics!=null&&!granularMotion)transport.recordEmptyGranular(command,output,errors,stack,parameters);
