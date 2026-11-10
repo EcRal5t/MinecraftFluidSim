@@ -26,7 +26,7 @@
 ./gradlew.bat :fabric:runGameTest --console=plain --max-workers=1
 ```
 
-`industrial` 负责有限批次进出料、气体载荷与恢复，`industrial_valve` 负责真实开口和接受面流量；筛分、结晶、隔墙换热、蒸馏、吸附再生和催化分别由对应场景连续推进。各流程自带所需运行时长，按本轮改动选择受影响场景。
+`industrial` 负责有限批次进出料、气体载荷与恢复，`industrial_valve` 负责真实开口和接受面流量；筛分、结晶、隔墙换热、蒸馏、吸附再生和催化分别由对应场景连续推进。蒸馏两阶段可分别用 `industrial_distillation_single` 和 `industrial_distillation_reflux` 运行，前者比较单级冷壁与暖壁，后者比较三层回流与关闭回流。各流程自带所需运行时长，按本轮改动选择受影响场景。
 
 GameTest 在实际服务器中运行传感器红石控制、箱端口装取、方块实体设置恢复、筛的放置转向拆除、原版活塞运动与双阀泵送。测试世界位于 `fabric/build/gametest/world`，独立于玩家存档。GPU 场景与游戏服务器串行运行。
 

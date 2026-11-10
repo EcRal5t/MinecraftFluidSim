@@ -30,6 +30,20 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
                          boolean below, BlockPos first, BlockPos second) { }
     public record Wall(BlockPos position, double temperatureK) { }
     public record Coating(BlockPos position, Direction face, String materialId, double loadingKg) { }
+    public record Tray(BlockPos gasOpening, BlockPos downpipe, BlockPos seal, BlockPos pool, BlockPos inlet) { }
+    private static List<Tray> trays(BlockPos min) {
+        var result=new ArrayList<Tray>();
+        for(int stage=0;stage<3;stage++) {
+            int floor=3+3*stage,gasX=stage%2==0?2:5,downX=stage%2==0?5:2;
+            result.add(new Tray(min.offset(gasX,floor,2),min.offset(downX,floor,5),
+                    min.offset(downX,stage==0?1:floor-2,5),min.offset(3,floor+1,4),min.offset(0,floor+1,gasX==2?4:3)));
+        }
+        return List.copyOf(result);
+    }
+    public List<Tray> distillationTrays() {
+        var valve=blocks.get(minimum.offset(3,12,4));
+        return valve!=null && valve.is(MmmBlocks.VALVE)?trays(minimum):List.of();
+    }
     public IndustrialLayout {
         blocks=Map.copyOf(blocks);ports=List.copyOf(ports);screens=List.copyOf(screens);sensors=List.copyOf(sensors);
         walls=List.copyOf(walls);coatings=List.copyOf(coatings);
@@ -117,63 +131,100 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),List.of(),thermal,List.of());
     }
     private static IndustrialLayout distillation(BlockPos min,boolean trays,boolean warm,boolean bypass) {
-        var blocks=shell(min,8,14,8);var ports=new ArrayList<Port>();var thermal=new ArrayList<Wall>();
-        addPort(blocks,ports,min.offset(0,2,2),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
-        var feedPort=ports.removeLast();ports.add(new Port(feedPort.position(),feedPort.outward(),feedPort.mode(),feedPort.phase(),1_000_000_000L,true));
-        addPort(blocks,ports,min.offset(7,11,5),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
+        int collectorY=trays?13:11,roofY=collectorY+1,ventY=roofY+1;
+        var blocks=shell(min,8,ventY+1,8);var ports=new ArrayList<Port>();var thermal=new ArrayList<Wall>();
+        addPort(blocks,ports,min.offset(0,1,2),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
+        var feedPort=ports.removeLast();ports.add(new Port(feedPort.position(),feedPort.outward(),feedPort.mode(),feedPort.phase(),feedPort.rate(),true));
+        addPort(blocks,ports,min.offset(7,collectorY,5),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
         var productPort=ports.removeLast();ports.add(new Port(productPort.position(),productPort.outward(),productPort.mode(),productPort.phase(),productPort.rate(),true));
         addPort(blocks,ports,min.offset(7,1,2),Direction.EAST,FluidPortBlockEntity.Mode.OUTPUT);
+        if(trays) {
+            var bottomPort=ports.removeLast();ports.add(new Port(bottomPort.position(),bottomPort.outward(),bottomPort.mode(),bottomPort.phase(),bottomPort.rate(),true));
+        }
         for(int x=2;x<=3;x++)for(int z=2;z<=3;z++) {
-            var vent=min.offset(x,13,z);
-            addPort(blocks,ports,vent,Direction.UP,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
+            addPort(blocks,ports,min.offset(x,ventY,z),Direction.UP,FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.GAS);
             var port=ports.removeLast();ports.add(new Port(port.position(),port.outward(),port.mode(),port.phase(),1_000_000_000L,false));
         }
-        // The boiler and condenser retain only the passages needed by their real ports.
-        for(int y=1;y<=2;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++)
-            if(z<2 || z>(trays?5:3))blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
-        for(int y=11;y<=12;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++)
-            if(x<2 || z<2 || z>5)blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
-        // The shaft keeps separate gas chimneys and liquid downcomers through each tray.
-        for(int y=3;y<=9;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++)
-            if(x<2 || x>(trays?5:3) || z<2 || z>(trays?5:3))
-                blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
+        var open=new java.util.HashSet<BlockPos>();var pipeWalls=new java.util.HashSet<BlockPos>();var sealOutlets=new java.util.HashSet<BlockPos>();
+        for(int x=1;x<=6;x++)open.add(min.offset(x,1,2));
+        open.add(min.offset(2,2,2));
         if(trays) {
-            int[] levels={3,6,8};
-            for(int layer=0;layer<levels.length;layer++) {
-                int y=levels[layer],gasX=layer%2==0?2:5,downX=layer%2==0?5:2;
-                int gasInside=gasX==2?3:4,downInside=downX==2?3:4;
-                for(int x=2;x<=5;x++)for(int z=2;z<=5;z++)
-                    if(!(x==gasX && z==2) && !(x==downX && z==5))
-                        blocks.put(min.offset(x,y,z),Blocks.IRON_BLOCK.defaultBlockState());
-                blocks.put(min.offset(gasInside,y+1,2),Blocks.IRON_BLOCK.defaultBlockState());
-                blocks.put(min.offset(gasX,y+1,3),Blocks.IRON_BLOCK.defaultBlockState());
-                // The downcomer opens sideways into the liquid pool below the tray.
-                blocks.put(min.offset(downX,y-1,4),Blocks.IRON_BLOCK.defaultBlockState());
-                if(y==3 || y==6)blocks.put(min.offset(downInside,y-1,5),Blocks.IRON_BLOCK.defaultBlockState());
-                if(y==3)blocks.put(min.offset(downX,y-2,4),Blocks.IRON_BLOCK.defaultBlockState());
+            for(int y=1;y<=2;y++) {
+                for(int z=2;z<=5;z++)open.add(min.offset(6,y,z));
+                open.add(min.offset(5,y,5));
             }
-            for(int y:new int[]{4,7,9}) {
-                blocks.remove(min.offset(1,y,4));
-                addPort(blocks,ports,min.offset(0,y,4),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
+            for(var tray:trays(min)) {
+                int floor=tray.gasOpening().getY()-min.getY(),downX=tray.downpipe().getX()-min.getX(),gasX=tray.gasOpening().getX()-min.getX();
+                open.add(tray.gasOpening());open.add(tray.downpipe());
+                for(int x=2;x<=5;x++)for(int z=2;z<=5;z++)open.add(min.offset(x,floor+1,z));
+                // The downpipe is isolated at pool level and opens over the weir one block above.
+                for(int y:new int[]{floor-1,floor+1}) {
+                    var pipe=min.offset(downX,y,5);
+                    for(var direction:Direction.Plane.HORIZONTAL)pipeWalls.add(pipe.relative(direction));
+                }
+                for(var direction:Direction.Plane.HORIZONTAL)pipeWalls.add(tray.seal().relative(direction));
+                sealOutlets.add(tray.seal().relative(floor==3||downX==2?Direction.EAST:Direction.WEST));
+                // The vapor riser opens above the pool into the headspace.
+                pipeWalls.add(min.offset(gasX==2?3:4,floor+1,2));
+                pipeWalls.add(min.offset(gasX,floor+1,3));
+                for(int x=2;x<=5;x++)for(int z=2;z<=5;z++)open.add(min.offset(x,floor+2,z));
+                open.add(tray.inlet().relative(Direction.EAST));
+                addPort(blocks,ports,tray.inlet(),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
                 var port=ports.removeLast();ports.add(new Port(port.position(),port.outward(),port.mode(),port.phase(),1_000_000_000L,false));
             }
-            blocks.put(min.offset(1,10,4),Blocks.IRON_BLOCK.defaultBlockState());
+            open.add(min.offset(2,12,2));
+        } else {
+            for(int y=3;y<=10;y++)open.add(min.offset(2,y,2));
         }
-        // The condenser has separate passages for rising gas and controlled reflux.
-        for(int x=2;x<7;x++)for(int z=2;z<7;z++)
-            if(!(x==2 && z==2) && !(trays && x==4 && z==5))
-                blocks.put(min.offset(x,10,z),Blocks.IRON_BLOCK.defaultBlockState());
-        if(trays)blocks.put(min.offset(4,10,5),MmmBlocks.VALVE.defaultBlockState()
-                .setValue(ValveBlock.FACING,Direction.UP).setValue(ValveBlock.OPENING,bypass?0:4));
+        // Vapor crosses the raised passage while carried liquid returns to the riser.
+        for(int x:new int[]{2,3,5,6})open.add(min.offset(x,collectorY,2));
+        for(int x=2;x<=5;x++)open.add(min.offset(x,roofY,2));
+        for(int z=3;z<=5;z++)open.add(min.offset(6,collectorY,z));
+        if(trays) {
+            for(int x=3;x<=5;x++)open.add(min.offset(x,collectorY,5));
+            open.add(min.offset(3,collectorY,4));
+        }
+        for(int x=2;x<=3;x++)open.add(min.offset(x,roofY,3));
+        open.removeAll(pipeWalls);
+        var reflux=min.offset(3,12,4);
+        for(int y=1;y<ventY;y++)for(int x=1;x<7;x++)for(int z=1;z<7;z++) {
+            var position=min.offset(x,y,z);
+            if(trays && position.equals(reflux))blocks.put(position,MmmBlocks.VALVE.defaultBlockState()
+                    .setValue(ValveBlock.FACING,Direction.UP).setValue(ValveBlock.OPENING,bypass?0:4));
+            else if(!open.contains(position))blocks.put(position,Blocks.IRON_BLOCK.defaultBlockState());
+        }
+        for(var outlet:sealOutlets)blocks.put(outlet,Blocks.STONE_SLAB.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.SlabBlock.TYPE,net.minecraft.world.level.block.state.properties.SlabType.TOP));
         for(int x=2;x<=4;x++)for(int z=1;z<=3;z++) {
             var hot=min.offset(x,0,z);blocks.put(hot,MmmBlocks.THERMAL_RESERVOIR.defaultBlockState());thermal.add(new Wall(hot,293.15));
         }
-        var cold=min.offset(6,12,5);blocks.put(cold,Blocks.IRON_BLOCK.defaultBlockState());thermal.add(0,new Wall(cold,warm?400:285));
+        var condenserWalls=new java.util.LinkedHashSet<BlockPos>();
+        var collectors=new ArrayList<BlockPos>();
+        for(int x=trays?3:6;x<=6;x++)collectors.add(min.offset(x,collectorY,5));
+        if(trays)collectors.add(min.offset(3,collectorY,4));
+        for(var collector:collectors) {
+            for(var direction:Direction.values()) {
+                var adjacent=collector.relative(direction);var state=blocks.get(adjacent);
+                if(state!=null && state.is(Blocks.IRON_BLOCK))condenserWalls.add(adjacent);
+            }
+        }
+        var heatedWalls=new java.util.LinkedHashSet<BlockPos>();
+        for(var passage:open)for(var direction:Direction.values()) {
+            var adjacent=passage.relative(direction);var state=blocks.get(adjacent);
+            if(state!=null && state.is(Blocks.IRON_BLOCK))heatedWalls.add(adjacent);
+        }
+        for(var wall:heatedWalls)thermal.add(new Wall(wall,condenserWalls.contains(wall)?(warm?400:285):380));
         var controller=min.offset(2,1,0);blocks.put(controller,MmmBlocks.FLUID_CONTROLLER.defaultBlockState());
-        var levelSensor=min.offset(0,2,1);blocks.put(levelSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
-        var temperatureSensor=min.offset(7,11,4);blocks.put(temperatureSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
-        var sensors=List.of(new Sensor(levelSensor,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(1,1,1),min.offset(6,2,6)),
-                new Sensor(temperatureSensor,ProcessSensorBlockEntity.Measure.TEMPERATURE,300,350,true,min.offset(5,11,4),min.offset(6,12,6)));
+        var levelSensor=min.offset(0,1,1);blocks.put(levelSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
+        var temperatureSensor=min.offset(7,collectorY,4);blocks.put(temperatureSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.SOUTH));
+        var sensors=new ArrayList<Sensor>();
+        sensors.add(new Sensor(levelSensor,ProcessSensorBlockEntity.Measure.LEVEL,.25,.75,true,min.offset(1,1,1),min.offset(6,2,6)));
+        sensors.add(new Sensor(temperatureSensor,ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,350,375,true,min.offset(6,collectorY,5),min.offset(6,collectorY,5)));
+        if(trays) {
+            var bottomSensor=min.offset(7,1,1);blocks.put(bottomSensor,MmmBlocks.PROCESS_SENSOR.defaultBlockState().setValue(ProcessSensorBlock.FACING,Direction.WEST));
+            var seal=trays(min).getFirst().seal();
+            sensors.add(new Sensor(bottomSensor,ProcessSensorBlockEntity.Measure.LEVEL,.65,.85,false,seal,seal));
+        }
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),sensors,thermal,List.of());
     }
     private static IndustrialLayout surfaceChannel(BlockPos min,boolean adsorption,boolean partial) {

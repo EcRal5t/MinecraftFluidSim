@@ -7,7 +7,13 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 
 public final class ProcessSensorBlockEntity extends BlockEntity {
-    public enum Measure { LEVEL, TEMPERATURE, PRESSURE, FLOW }
+    public enum Measure {
+        LEVEL("液位 · 0—1"), LIQUID_TEMPERATURE("液体温度 · K"), GAS_TEMPERATURE("气体温度 · K"),
+        PRESSURE("压力 · Pa"), FLOW("液体流量 · L/s");
+        private final String label;
+        Measure(String label){this.label=label;}
+        public String label(){return label;}
+    }
     private Measure measure=Measure.LEVEL;
     private double low=.25,high=.75,reading;
     private boolean below=true,analog;

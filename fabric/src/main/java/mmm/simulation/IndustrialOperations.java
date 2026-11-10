@@ -154,8 +154,8 @@ public final class IndustrialOperations {
             var liquid=region.observeCellInventory(x,y,z);
             switch(sensor.measure()){
                 case LEVEL->{sum+=liquid==null?0:liquid.liquidVolumeCubicMetres();weight+=Integer.bitCount((~region.solidMicroMask(x,y,z))&255)*h*h*h/8;}
-                case TEMPERATURE->{if(liquid!=null&&liquid.temperatureKelvin().isPresent()){sum+=liquid.temperatureKelvin().getAsDouble()*liquid.liquidMassKilograms();weight+=liquid.liquidMassKilograms();}
-                    var carriers=region.observeCellCarriers(x,y,z);var gas=carriers==null?null:carriers.gas();if(gas!=null){double mass=gas.components().stream().mapToDouble(mmm.fluid.CellCarrierInventoryView.ComponentAmount::massKilograms).sum();sum+=gas.temperatureKelvin()*mass;weight+=mass;}}
+                case LIQUID_TEMPERATURE->{if(liquid!=null&&liquid.temperatureKelvin().isPresent()){sum+=liquid.temperatureKelvin().getAsDouble()*liquid.liquidMassKilograms();weight+=liquid.liquidMassKilograms();}}
+                case GAS_TEMPERATURE->{var carriers=region.observeCellCarriers(x,y,z);var gas=carriers==null?null:carriers.gas();if(gas!=null){double mass=gas.components().stream().mapToDouble(mmm.fluid.CellCarrierInventoryView.ComponentAmount::massKilograms).sum();sum+=gas.temperatureKelvin()*mass;weight+=mass;}}
                 case PRESSURE->{sum+=host.pressure(x,y,z)+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA;weight++;}
                 case FLOW->throw new IllegalStateException("Flow is sampled from accepted faces");
             }

@@ -23,7 +23,7 @@ public final class ProcessSensorBlock extends Block implements EntityBlock {
     @Override protected boolean isSignalSource(BlockState state){return true;}
     @Override protected int getSignal(BlockState state,BlockGetter level,BlockPos pos,Direction side){return level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor?sensor.output():0;}
     @Override protected net.minecraft.world.InteractionResult useWithoutItem(BlockState state,Level level,BlockPos pos,net.minecraft.world.entity.player.Player player,net.minecraft.world.phys.BlockHitResult hit){
-        if(!level.isClientSide()&&level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor)player.sendSystemMessage(net.minecraft.network.chat.Component.literal(sensor.measure()+" · "+sensor.reading()+" · "+sensor.output()));
+        if(!level.isClientSide()&&level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor)player.sendSystemMessage(net.minecraft.network.chat.Component.literal(sensor.measure().label()+" · "+sensor.reading()+" · "+sensor.output()));
         return net.minecraft.world.InteractionResult.SUCCESS;
     }
 }

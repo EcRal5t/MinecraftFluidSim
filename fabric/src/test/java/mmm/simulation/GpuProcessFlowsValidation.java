@@ -33,6 +33,8 @@ public final class GpuProcessFlowsValidation {
                     case "industrial_screen" -> industrialScreen(steps);
                     case "industrial_crystallization" -> industrialCrystallization(steps);
                     case "industrial_distillation" -> industrialDistillation(steps);
+                    case "industrial_distillation_single" -> industrialDistillationSingle(steps);
+                    case "industrial_distillation_reflux" -> industrialDistillationReflux(steps);
                     default -> throw new IllegalArgumentException("Unknown industrial scenario: "+scenario);
                 }
                 System.out.println("process_complete scenario="+scenario);
@@ -992,15 +994,25 @@ public final class GpuProcessFlowsValidation {
 
     private record Distillate(long volume,long feedVolume,double ethanolFraction,double bottomsFraction,double reflux,List<ChemicalContents> batches) { }
     private static void industrialDistillation(int steps) throws Exception {
-        var chemistry=ProductionRegistries.load().chemical();
+        industrialDistillationSingle(steps);
+        industrialDistillationReflux(steps);
+    }
+    private static double distillationFeedFraction(ChemicalRegistry chemistry) {
         double waterVolume=chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)).effectiveVolumeM3PerMol();
         double ethanolVolume=chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.ETHANOL)).effectiveVolumeM3PerMol();
-        double feed=waterVolume/(waterVolume+ethanolVolume);
+        return waterVolume/(waterVolume+ethanolVolume);
+    }
+    private static void industrialDistillationSingle(int steps) throws Exception {
+        double feed=distillationFeedFraction(ProductionRegistries.load().chemical());
         var single=distillationRun(IndustrialLayout.Scenario.DISTILLATION_SINGLE,Math.max(1200,steps));
         if(!(single.volume()>0 && single.ethanolFraction()>feed && single.bottomsFraction()>=0 && single.bottomsFraction()<feed))
             throw new AssertionError("Single-stage distillation did not separate the feed: "+single+" feed="+feed);
         var warm=distillationRun(IndustrialLayout.Scenario.DISTILLATION_WARM,Math.max(1200,steps));
         if(!(single.volume()>warm.volume()))throw new AssertionError("Warming the condenser did not reduce liquid collection");
+    }
+    private static void industrialDistillationReflux(int steps) throws Exception {
+        var chemistry=ProductionRegistries.load().chemical();
+        double feed=distillationFeedFraction(chemistry);
         var trays=distillationRun(IndustrialLayout.Scenario.DISTILLATION,Math.max(1200,steps));
         if(!(trays.volume()>0 && trays.ethanolFraction()>feed && trays.bottomsFraction()>=0 && trays.bottomsFraction()<feed && trays.reflux()>0))
             throw new AssertionError("Tray distillation did not produce separated streams and reflux: "+trays);
@@ -1012,7 +1024,7 @@ public final class GpuProcessFlowsValidation {
         double withoutReflux=bypassVolume==0?0:distillateFractionAt(bypass,bypassVolume,chemistry);
         System.out.println("distillation_reflux_comparison recovery="+recovered+" volumes="+refluxVolume+"/"+bypassVolume+" reflux="+withReflux+" closed="+withoutReflux);
         if(!(bypass.reflux()==0 && refluxVolume>0 && bypassVolume>0 && withReflux!=withoutReflux))
-            throw new AssertionError("Distillation product or controls: single="+single+" warm="+warm+" trays="+trays+" bypass="+bypass+" feed="+feed);
+            throw new AssertionError("Distillation product or controls: trays="+trays+" bypass="+bypass+" feed="+feed);
     }
     private static Distillate distillationRun(IndustrialLayout.Scenario scenario,int steps) throws Exception {
         var definitions=ProductionRegistries.load();
@@ -1031,40 +1043,31 @@ public final class GpuProcessFlowsValidation {
         var temperatures=ThermalBoundaryResolver.sampleField(region.origin(),region.grid(),FluidRegionFactory.CELLS_PER_BLOCK,position ->
                 layout.walls().stream().filter(wall->wall.position().equals(position)&&layout.blocks().get(position).is(mmm.block.MmmBlocks.THERMAL_RESERVOIR))
                         .mapToDouble(wall->380).findFirst().orElse(Double.NaN));
-        int[] productCell={region.sizeX()-1,20,8};
+        int[] productCell=industrialPortCell(region,layout.ports().get(1));
+        var trayGeometry=layout.distillationTrays();
         ItemStack feed=ethanolSolution(world,380,1),product=new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET);
         boolean trays=scenario==IndustrialLayout.Scenario.DISTILLATION || scenario==IndustrialLayout.Scenario.DISTILLATION_BYPASS;
         ItemStack[] priming=trays?new ItemStack[]{ethanolSolution(world,380,1),ethanolSolution(world,380,1),ethanolSolution(world,380,1)}:new ItemStack[0];
         long suppliedVolume=1_000_000_000L*(1+priming.length);
-        var products=new ArrayList<ItemStack>();long bottomsMass=0,bottomsEthanol=0,bottomsWater=0;
+        var products=new ArrayList<ItemStack>();long startupProductMass=0,startupProductVolume=0,bottomsMass=0,bottomsEthanol=0,bottomsWater=0;
         long initial=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(feed,world),supplied=0,ventedMass=0,ventedEthanol=0;
         for(var batch:priming)initial=Math.addExact(initial,chemicalMass(batch,world));
         double ventedEnergy=0,reflux=0;var ventedComponents=new TreeMap<String,Long>();
-        var refluxFaces=new ArrayList<Integer>();
-        for(int local=0;local<region.grid().faceCount(1);local++) {
-            int face=region.grid().faceOffset(1)+local,left=region.grid().faceLeft(face),right=region.grid().faceRight(face);
-            if(left>=0 && right>=0 && region.grid().y(left)==18
-                    && region.grid().x(left)>=6 && region.grid().x(left)<8
-                    && region.grid().z(left)>=8 && region.grid().z(left)<10)refluxFaces.add(face);
-        }
-        int[] refluxPlane=refluxFaces.stream().mapToInt(Integer::intValue).toArray();
+        int[] refluxPlane=trays?horizontalBlockFaces(region,layout.blocks().entrySet().stream()
+                .filter(entry->entry.getValue().is(mmm.block.MmmBlocks.VALVE)).findFirst().orElseThrow().getKey(),1):new int[0];
         try(var backend=MmmRuntimeFactory.createSolverBackend()) {
             MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
             int tick=0;
-            long initialAir=noncondensableGasNanos(region);
-            long ventRate=layout.ports().stream().filter(port->port.phase()==mmm.block.FluidPortBlockEntity.Phase.GAS).mapToLong(IndustrialLayout.Port::rate).sum();
-            if(ventRate<=0)throw new AssertionError("Distillation has no startup gas outlet");
-            long evacuationBudget=Math.max(20,40*((initialAir+ventRate-1)/ventRate));
-            while(noncondensableGasNanos(region)>mmm.item.GasContainerItem.CAPACITY_NANOS) {
-                if(tick>=evacuationBudget)throw new AssertionError("Startup air did not leave within the gas outlet capacity: remaining="+noncondensableGasNanos(region));
-                if(tick%100==0)System.out.println("distillation_evacuation scenario="+scenario+" step="+tick+" remaining_nanos="+noncondensableGasNanos(region));
+            int evacuationBudget=Math.max(1200,steps);
+            while(maximumGasPressure(region,world)>100) {
+                if(tick>=evacuationBudget)throw new AssertionError("Distillation startup pressure remains above 100 Pa: "+maximumGasPressure(region,world));
+                if(tick%100==0)System.out.println("distillation_evacuation scenario="+scenario+" step="+tick+" pressure_pa="+maximumGasPressure(region,world)+" remaining_nanos="+noncondensableGasNanos(region));
                 motion.settlePendingPhaseWork(region);
                 for(var vent:layout.ports())if(vent.phase()==mmm.block.FluidPortBlockEntity.Phase.GAS) {
-                    var interior=vent.position().relative(vent.outward().getOpposite());
-                    int[] cell={(interior.getX()-region.origin().getX())*2,(interior.getY()-region.origin().getY())*2+1,(interior.getZ()-region.origin().getZ())*2};
+                    int[] cell=industrialPortCell(region,vent);
                     var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),cell,vent.outward(),true,IndustrialOperations.tickQuota(vent.rate(),tick));
                     var contents=mmm.item.GasContainerItem.contents(batch);if(contents==null)continue;
                     ventedMass=Math.addExact(ventedMass,contents.inventory().totalMassUnits());ventedEnergy+=contents.internalEnergy();
@@ -1078,26 +1081,31 @@ public final class GpuProcessFlowsValidation {
             System.out.println("distillation_evacuation_complete scenario="+scenario+" step="+tick+" remaining_nanos="+noncondensableGasNanos(region));
             motion.settlePendingPhaseWork(region);region.replaceThermalBoundaryTemperatures(temperatures);
             double[] upwardGas=new double[3],downwardLiquid=new double[3];
-            int[][] gasFaces=trays?distillationStageFaces(region,true):new int[0][];
-            int[][] liquidFaces=trays?distillationStageFaces(region,false):new int[0][];
-            int operatingStep=0,startupStep=0;boolean primed=!trays,sealsMaintained=true;
+            int[][] gasFaces=trays?distillationStageFaces(region,trayGeometry,true):new int[0][];
+            int[][] liquidFaces=trays?distillationStageFaces(region,trayGeometry,false):new int[0][];
+            int operatingStep=0,startupStep=0,conditioningStep=0;
+            int conditioningSteps=(int)Math.ceil(10/region.solverConfig().timeStep());
+            boolean primed=!trays,sealsMaintained=true;
             while(operatingStep<steps) {
-                boolean filling=!primed;
-                if(filling && startupStep++>=steps)throw new AssertionError("Distillation initial liquid seals did not fill");
-                int step=filling?startupStep-1:operatingStep++;
-                progress(filling?scenario.name()+"_fill":scenario.name(),step,steps);
+                boolean filling=!primed || !trays&&!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(feed);
+                boolean collecting=!filling && conditioningStep>=conditioningSteps;
+                if(!collecting && startupStep>=steps)throw new AssertionError("Distillation charging and startup collection did not finish");
+                int step=collecting?operatingStep++:startupStep++;
+                progress(collecting?scenario.name():scenario.name()+"_startup",step,steps);
                 if(step%100==0)distillationState(region,world,layout,scenario,step,productCell);
                 {
                     motion.settlePendingPhaseWork(region);
                     if(tick%4==0)for(var sensor:sensors)IndustrialOperations.observeSensor(region,sensor,sensor.first(),sensor.second());
                     for(int stage=0;stage<priming.length;stage++) {
                         if(!filling && stage!=1)continue;
-                        if(distillationPoolFilled(region,stage))continue;
+                        if(filling && distillationBlockFilled(region,trayGeometry.get(stage).pool()))continue;
                         if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(priming[stage])){priming[stage]=ethanolSolution(world,380,1);supplied=Math.addExact(supplied,chemicalMass(priming[stage],world));suppliedVolume=Math.addExact(suppliedVolume,1_000_000_000L);}
-                        int[] port={0,new int[]{6,12,16}[stage],6};long quota=IndustrialOperations.tickQuota(1_000_000_000L,tick);
+                        var inlet=trayGeometry.get(stage).inlet();
+                        var configured=layout.ports().stream().filter(port->port.position().equals(inlet)).findFirst().orElseThrow();
+                        int[] port=industrialPortCell(region,configured);long quota=IndustrialOperations.tickQuota(configured.rate(),tick);
                         var block=region.origin().offset(port[0]/2,port[1]/2,port[2]/2);
-                        if(FluidWorldTargetResolver.transferCell(region,block,Direction.WEST,new mmm.api.transfer.TransferQuantity.Liquid(quota,OptionalDouble.empty()),false)!=null)
-                            priming[stage]=fixture.transferBox(priming[stage],port,false,quota);
+                        if(FluidWorldTargetResolver.transferCell(region,block,configured.outward(),new mmm.api.transfer.TransferQuantity.Liquid(quota,OptionalDouble.empty()),false)!=null)
+                            priming[stage]=fixture.transferBox(priming[stage],port,configured.outward(),false,quota);
                     }
                     if(trays && filling && mmm.item.MaterialBucketItem.isEmptyMaterialBucket(feed)){feed=ethanolSolution(world,380,1);supplied=Math.addExact(supplied,chemicalMass(feed,world));suppliedVolume=Math.addExact(suppliedVolume,1_000_000_000L);}
                     if((!trays || filling) && !mmm.item.MaterialBucketItem.isEmptyMaterialBucket(feed) && industrialPortPowered(layout.ports().getFirst(),sensors))
@@ -1105,15 +1113,21 @@ public final class GpuProcessFlowsValidation {
                     var outlet=region.origin().offset(productCell[0]/2,productCell[1]/2,productCell[2]/2);
                     long productQuota=IndustrialOperations.tickQuota(layout.ports().get(1).rate(),tick);
                     var contact=FluidWorldTargetResolver.transferCell(region,outlet,Direction.EAST,new mmm.api.transfer.TransferQuantity.Liquid(productQuota,OptionalDouble.empty()),true);
-                    if(!filling && industrialPortPowered(layout.ports().get(1),sensors) && contact!=null) {
-                        if(mmm.item.MaterialBucketItem.volume(product)>=950_000_000L){products.add(product);product=new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET);}
-                        product=fixture.transferBox(product,productCell,true,productQuota);
+                    if(!filling && contact!=null && (!collecting || industrialPortPowered(layout.ports().get(1),sensors))) {
+                        if(collecting) {
+                            if(mmm.item.MaterialBucketItem.volume(product)>=950_000_000L){products.add(product);product=new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET);}
+                            product=fixture.transferBox(product,productCell,true,productQuota);
+                        } else {
+                            var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),productCell,true,productQuota);
+                            startupProductMass=Math.addExact(startupProductMass,chemicalMass(batch,world));
+                            startupProductVolume=Math.addExact(startupProductVolume,Math.max(0,mmm.item.MaterialBucketItem.volume(batch)));
+                        }
                     }
-                    int[] bottoms={region.sizeX()-1,0,2};
+                    int[] bottoms=industrialPortCell(region,layout.ports().get(2));
                     var bottomPosition=region.origin().offset(bottoms[0]/2,bottoms[1]/2,bottoms[2]/2);
                     var bottomContact=FluidWorldTargetResolver.transferCell(region,bottomPosition,Direction.EAST,new mmm.api.transfer.TransferQuantity.Liquid(productQuota,OptionalDouble.empty()),true);
                     long bottomQuota=IndustrialOperations.tickQuota(layout.ports().get(2).rate(),tick);
-                    if(trays && !filling && bottomContact!=null && MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(),bottomContact,bottomQuota,0,-1)>0) {
+                    if(trays && !filling && industrialPortPowered(layout.ports().get(2),sensors) && bottomContact!=null && MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(),bottomContact,bottomQuota,0,-1)>0) {
                         var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),bottoms,true,bottomQuota);
                         if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(batch)) {
                             bottomsMass=Math.addExact(bottomsMass,chemicalMass(batch,world));
@@ -1126,11 +1140,12 @@ public final class GpuProcessFlowsValidation {
                 }
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Distillation process step rejected");
                 tick++;
+                if(!filling && !collecting)conditioningStep++;
                 if(trays) {
-                    boolean sealed=distillationSeal(region,0)&&distillationSeal(region,1)&&distillationSeal(region,2);
-                    if(filling && sealed && distillationPoolFilled(region,2))primed=true;
-                    if(!filling && !sealed)sealsMaintained=false;
-                    if(!filling && sealed) {
+                    boolean sealed=distillationSeal(region,trayGeometry.get(0).seal())&&distillationSeal(region,trayGeometry.get(1).seal())&&distillationSeal(region,trayGeometry.get(2).seal());
+                    if(filling && sealed && distillationBlockFilled(region,trayGeometry.get(2).pool()))primed=true;
+                    if(collecting && !sealed)sealsMaintained=false;
+                    if(collecting && sealed) {
                         reflux+=Math.max(0,-region.observeLiquidFlow(refluxPlane))/20.0;
                         for(int stage=0;stage<3;stage++) {
                             upwardGas[stage]+=Math.max(0,region.observeGasFlow(gasFaces[stage]))/20.0;
@@ -1138,12 +1153,12 @@ public final class GpuProcessFlowsValidation {
                         }
                     }
                     if(step%100==0)System.out.println("distillation_stages scenario="+scenario+" step="+step+" gas="+Arrays.toString(upwardGas)+" liquid="+Arrays.toString(downwardLiquid)
-                            +" seals="+distillationSeal(region,0)+","+distillationSeal(region,1)+","+distillationSeal(region,2));
+                            +" seals="+distillationSeal(region,trayGeometry.get(0).seal())+","+distillationSeal(region,trayGeometry.get(1).seal())+","+distillationSeal(region,trayGeometry.get(2).seal()));
                 }
             }
             motion.settlePendingPhaseWork(region);
             if(!trays) {
-                int[] bottoms={region.sizeX()-1,0,2};long quota=50_000_000L;
+                int[] bottoms=industrialPortCell(region,layout.ports().get(2));long quota=50_000_000L;
                 var position=region.origin().offset(bottoms[0]/2,bottoms[1]/2,bottoms[2]/2);
                 var contact=FluidWorldTargetResolver.transferCell(region,position,Direction.EAST,new mmm.api.transfer.TransferQuantity.Liquid(quota,OptionalDouble.empty()),true);
                 if(contact!=null && MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(),contact,quota,0,-1)>0) {
@@ -1166,14 +1181,16 @@ public final class GpuProcessFlowsValidation {
                 ethanol=Math.addExact(ethanol,chemicalAmount(contents,BuiltinChemicalDefinitions.ETHANOL));
                 water=Math.addExact(water,chemicalAmount(contents,BuiltinChemicalDefinitions.H2O));
             }
-            long after=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(feed,world)+productMass+bottomsMass+ventedMass;
+            long after=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(feed,world)+productMass+startupProductMass+bottomsMass+ventedMass;
             long remainingVolume=Math.max(0,mmm.item.MaterialBucketItem.volume(feed));
             for(var batch:priming){after=Math.addExact(after,chemicalMass(batch,world));remainingVolume=Math.addExact(remainingVolume,Math.max(0,mmm.item.MaterialBucketItem.volume(batch)));}
             long feedVolume=Math.subtractExact(suppliedVolume,remainingVolume);
             if(after!=Math.addExact(initial,supplied))throw new AssertionError("Distillation changed combined mass");
-            if(trays)for(int stage=0;stage<3;stage++)if(!sealsMaintained||!distillationSeal(region,stage)||upwardGas[stage]<=0||downwardLiquid[stage]<=0)
-                throw new AssertionError("Distillation stage lacks sealed gas/liquid transport: stage="+stage+" gas="+upwardGas[stage]+" liquid="+downwardLiquid[stage]+" seal="+distillationSeal(region,stage));
+            if(trays)for(int stage=0;stage<3;stage++)if(!sealsMaintained||!distillationSeal(region,trayGeometry.get(stage).seal())||upwardGas[stage]<=0||((stage<2 || scenario==IndustrialLayout.Scenario.DISTILLATION)&&downwardLiquid[stage]<=0))
+                throw new AssertionError("Distillation stage lacks sealed gas/liquid transport: stage="+stage+" gas="+upwardGas[stage]+" liquid="+downwardLiquid[stage]+" seal="+distillationSeal(region,trayGeometry.get(stage).seal()));
             double bottomsFraction=bottomsEthanol+bottomsWater==0?-1:bottomsEthanol/(double)(bottomsEthanol+bottomsWater);
+            System.out.println("distillation_products scenario="+scenario+" startup_nanos="+startupProductVolume+" product_nanos="+productVolume
+                    +" ethanol_fraction="+(ethanol+water==0?0:ethanol/(double)(ethanol+water))+" bottoms_fraction="+bottomsFraction+" reflux="+reflux);
             if(productVolume==0)return new Distillate(0,feedVolume,0,bottomsFraction,reflux,List.of());
             var gas=region.hostSnapshot().captureAuthoritativeState().spatialGas();
             long condensedEthanol=gasPhaseSinkQuanta(gas,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL);
@@ -1182,6 +1199,17 @@ public final class GpuProcessFlowsValidation {
                 throw new AssertionError("Distillate exceeds condensed species: ethanol="+ethanol+"/"+condensedEthanol+" water="+water+"/"+condensedWater);
             return new Distillate(productVolume,feedVolume,ethanol/(double)(ethanol+water),bottomsFraction,reflux,List.copyOf(compositions));
         }
+    }
+    private static double maximumGasPressure(FluidRegion region,CommittedWorldRegistries world) {
+        var host=region.hostSnapshot();var state=host.captureAuthoritativeState().spatialGas();
+        var thermal=new GasThermalModel(world.thermalRegistry(),world.gasRegistry());
+        double maximum=0;
+        for(int cell=0;cell<state.cellCount();cell++) {
+            var inventory=state.cells().get(cell);if(inventory.isEmpty())continue;
+            int x=region.grid().x(cell),y=region.grid().y(cell),z=region.grid().z(cell);
+            maximum=Math.max(maximum,thermal.absolutePressure(inventory,host.cellGasVolume(x,y,z),state.energyAt(cell)));
+        }
+        return maximum;
     }
     private static long noncondensableGasNanos(FluidRegion region) {
         long total=0;
@@ -1220,49 +1248,44 @@ public final class GpuProcessFlowsValidation {
         }
         return false;
     }
-    private static int[][] distillationStageFaces(FluidRegion region,boolean gas) {
-        int[] y={4,10,14},x=gas?new int[]{2,8,2}:new int[]{8,2,8};int z=gas?2:8;
-        int[][] result=new int[3][];
-        for(int stage=0;stage<3;stage++) {
-            var faces=new ArrayList<Integer>();
-            for(int dx=0;dx<2;dx++)for(int dz=0;dz<2;dz++) {
-                int face=region.grid().faceAt(x[stage]+dx,y[stage],z+dz,1);if(face>=0)faces.add(face);
-            }
-            result[stage]=faces.stream().mapToInt(Integer::intValue).toArray();
-        }
+    private static int[] industrialPortCell(FluidRegion region,IndustrialLayout.Port port) {
+        var interior=port.position().relative(port.outward().getOpposite());
+        return new int[]{2*(interior.getX()-region.origin().getX())+Math.max(0,port.outward().getStepX()),
+                2*(interior.getY()-region.origin().getY())+Math.max(0,port.outward().getStepY()),
+                2*(interior.getZ()-region.origin().getZ())+Math.max(0,port.outward().getStepZ())};
+    }
+    private static int[] horizontalBlockFaces(FluidRegion region,BlockPos block,int offsetY) {
+        int x=2*(block.getX()-region.origin().getX()),y=2*(block.getY()-region.origin().getY())+offsetY,
+                z=2*(block.getZ()-region.origin().getZ());
+        int[] result=new int[4];
+        for(int dx=0;dx<2;dx++)for(int dz=0;dz<2;dz++)result[2*dx+dz]=region.grid().faceAt(x+dx,y,z+dz,1);
         return result;
     }
-    private static boolean distillationSeal(FluidRegion region,int stage) {
-        int[] x={8,2,8},y={0,6,12};var host=region.hostSnapshot();
-        for(int dx=0;dx<2;dx++)for(int dy=0;dy<2;dy++)for(int dz=0;dz<2;dz++)
-            if(host.volume(x[stage]+dx,y[stage]+dy,8+dz)<.999f)return false;
+    private static int[][] distillationStageFaces(FluidRegion region,List<IndustrialLayout.Tray> trays,boolean gas) {
+        return trays.stream().map(tray->horizontalBlockFaces(region,gas?tray.gasOpening():tray.downpipe(),0)).toArray(int[][]::new);
+    }
+    private static boolean distillationSeal(FluidRegion region,BlockPos block) {
+        int x=2*(block.getX()-region.origin().getX()),y=2*(block.getY()-region.origin().getY()),z=2*(block.getZ()-region.origin().getZ());
+        var host=region.hostSnapshot();
+        for(int dx=0;dx<2;dx++)for(int dz=0;dz<2;dz++)if(host.volume(x+dx,y,z+dz)<.999f)return false;
         return true;
     }
-    private static boolean distillationPoolFilled(FluidRegion region,int stage) {
-        int[] x={2,8,8},y={6,12,16};var host=region.hostSnapshot();
+    private static boolean distillationBlockFilled(FluidRegion region,BlockPos block) {
+        int x=2*(block.getX()-region.origin().getX()),y=2*(block.getY()-region.origin().getY()),z=2*(block.getZ()-region.origin().getZ());
+        var host=region.hostSnapshot();
         for(int dx=0;dx<2;dx++)for(int dy=0;dy<2;dy++)for(int dz=0;dz<2;dz++)
-            if(host.volume(x[stage]+dx,y[stage]+dy,8+dz)<.999f)return false;
+            if(host.volume(x+dx,y+dy,z+dz)<.999f)return false;
         return true;
     }
     private static void distillationState(FluidRegion region,CommittedWorldRegistries world,IndustrialLayout layout,
             IndustrialLayout.Scenario scenario,int step,int[] productCell) {
         var state=region.hostSnapshot().captureAuthoritativeState();var gas=state.spatialGas();
         long vapor=0,upperVapor=0;
-        int height=region.sizeY();long[] vaporByY=new long[height],gasMassByY=new long[height];
-        double[] temperatureByY=new double[height],pressureByY=new double[height],cellMass=new double[region.grid().cellCount()];int[] gasCellsByY=new int[height];
-        var gasThermal=new GasThermalModel(world.thermalRegistry(),world.gasRegistry());var host=region.hostSnapshot();
-        for(int cell=0;cell<gas.cellCount();cell++) {var component=gas.cells().get(cell).component(BuiltinGasDefinitions.ETHANOL_VAPOR);
-            int y=region.grid().y(cell);var inventory=gas.cells().get(cell);long mass=inventory.totalMassUnits();cellMass[cell]=Mass.kilograms(mass);
-            if(component!=null){vapor=Math.addExact(vapor,component.standardVolumeNanos());vaporByY[y]=Math.addExact(vaporByY[y],component.standardVolumeNanos());if(y>=16)upperVapor=Math.addExact(upperVapor,component.standardVolumeNanos());}
-            if(!inventory.isEmpty()) {gasMassByY[y]=Math.addExact(gasMassByY[y],mass);gasCellsByY[y]++;
-                temperatureByY[y]+=gasThermal.state(inventory,gas.energyAt(cell)).temperatureK();
-                pressureByY[y]+=host.pressure(region.grid().x(cell),y,region.grid().z(cell))+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA;}}
-        for(var stock:state.liquid().physicalStocks())cellMass[stock.key().cell()]+=stock.massKilograms();
-        double[] maximumUp=new double[height],minimumDown=new double[height],momentum=state.momentum().copyY();
-        for(int local=0;local<region.grid().faceCount(1);local++) {
-            int face=region.grid().faceOffset(1)+local,left=region.grid().faceLeft(face),right=region.grid().faceRight(face);
-            if(left<0||right<0)continue;int y=region.grid().y(left);double mass=.5*(cellMass[left]+cellMass[right]);
-            if(mass>0){double speed=momentum[local]/mass;maximumUp[y]=Math.max(maximumUp[y],speed);minimumDown[y]=Math.min(minimumDown[y],speed);}
+        for(int cell=0;cell<gas.cellCount();cell++) {
+            var component=gas.cells().get(cell).component(BuiltinGasDefinitions.ETHANOL_VAPOR);
+            if(component==null)continue;
+            vapor=Math.addExact(vapor,component.standardVolumeNanos());
+            if(region.grid().y(cell)>=16)upperVapor=Math.addExact(upperVapor,component.standardVolumeNanos());
         }
         long evaporated=gasPhaseSinkQuanta(gas,BuiltinGasDefinitions.ETHANOL_VAPOR,BuiltinChemicalDefinitions.ETHANOL);
         var source=gas.phaseSource().component(BuiltinGasDefinitions.ETHANOL_VAPOR);
@@ -1274,16 +1297,13 @@ public final class GpuProcessFlowsValidation {
             if(y>=16)upper+=stock.volume().toDouble();
             if(region.grid().x(cell)==productCell[0] && region.grid().y(cell)/2==productCell[1]/2 && region.grid().z(cell)/2==productCell[2]/2)collector+=stock.volume().toDouble();
         }
-        var cold=layout.walls().stream().filter(wall->wall.position().equals(layout.minimum().offset(6,12,5))).findFirst().orElseThrow();
+        var cold=layout.walls().stream().filter(wall->layout.blocks().get(wall.position()).is(net.minecraft.world.level.block.Blocks.IRON_BLOCK)).findFirst().orElseThrow();
         String prefix=cold.position().asLong()+"@";
         var wall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream().filter(value->value.objectId().startsWith(prefix)).findFirst().orElseThrow();
         System.out.println("distillation_state scenario="+scenario+" step="+step+" vapor_nanos="+vapor+" upper_vapor_nanos="+upperVapor+" evaporated_quanta="+created+" condensed_quanta="+evaporated
                 +" bottom_volume="+bottom+" upper_volume="+upper+" outlet_cell_volume="+collector+" wall_temperature="+SurfaceThermalState.temperature(world.thermalRegistry(),wall)
                 +" wall_energy="+wall.body().internalEnergyJ()+" external_heat_and_feed="+state.thermalOwner().audit().externalSource().toDouble());
-        var layers=new StringBuilder();
-        for(int y=0;y<height;y++)if(gasCellsByY[y]>0)layers.append(" y").append(y).append(':').append(vaporByY[y]).append('/').append(Mass.kilograms(gasMassByY[y]))
-                .append('/').append(temperatureByY[y]/gasCellsByY[y]).append('/').append(pressureByY[y]/gasCellsByY[y]).append('/').append(maximumUp[y]).append('/').append(minimumDown[y]);
-        System.out.println("distillation_layers scenario="+scenario+" step="+step+" format=y:vapor_nanos/gas_kg/K/Pa/max_up_mps/max_down_mps"+layers);
+
     }
     private static int[] coldWallSample(FluidRegion region,CommittedWorldRegistries world,String object){
         var wall=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()

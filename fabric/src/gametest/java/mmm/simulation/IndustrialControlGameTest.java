@@ -83,14 +83,14 @@ public final class IndustrialControlGameTest {
                         "Port settings did not survive block-entity storage");
                 level.setBlockEntity(restoredSensor);level.setBlockEntity(restoredPort);
                 sensors[0]=restoredSensor;ports[0]=restoredPort;
-                restoredSensor.configure(ProcessSensorBlockEntity.Measure.TEMPERATURE,270,280,false,false,first,second);
+                restoredSensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 stage[0]=2;
             } else if(stage[0]==2 && sensor.output()==15 && port.status().equals("运行")
                     && 1_000_000_000L-PartialWaterBucketItem.volume(box.getItem(0))>accepted[0]) {
-                sensor.configure(ProcessSensorBlockEntity.Measure.TEMPERATURE,270,280,true,false,first,second);
+                sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,true,false,first,second);
                 stage[0]=3;
             } else if(stage[0]==3 && sensor.output()==0 && port.status().equals("等待红石")) {
-                sensor.configure(ProcessSensorBlockEntity.Measure.TEMPERATURE,270,280,false,false,first,second);
+                sensor.configure(ProcessSensorBlockEntity.Measure.LIQUID_TEMPERATURE,270,280,false,false,first,second);
                 port.configure(FluidPortBlockEntity.Mode.OUTPUT,FluidPortBlockEntity.Phase.LIQUID,50_000_000L,true);
                 for(int i=0;i<box.getContainerSize();i++)box.setItem(i,MaterialBoxBlockEntity.newBatch(new ItemStack(Items.WATER_BUCKET)));
                 stage[0]=4;
