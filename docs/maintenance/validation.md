@@ -458,4 +458,4 @@ Q(t) = C_eff (T_water,0 − T_iron,0)
 
 ## 单方块物理管道
 
-[管道架构与验证入口](../architecture/physical-pipes.md)集中记录五种管件的几何、拓扑、库存合并与沉积验证。宿主选择 `shape,pipe-network,region-merge,ownership,environment,structure-handoff,protocol`；多源状态与目录分别使用 `:solver:runFluidDomainMergeValidation`、`:app:runApplicationValidation`。四个生产 GPU 场景为 `runGpuPipeFlowValidation`、`runGpuPipeThermalValidation`、`runGpuPipeCondensationValidation`、`runGpuPipeDepositValidation`，分别覆盖压差通流、管壁换热、零初始液体冷凝及沉积清理。
+[管道架构与验证入口](../architecture/physical-pipes.md)记录四种薄壁管材、管阀和管筛的真实几何、独立管腔库存、区域端口交接及共享环境热场。宿主选择 `shape,pipe-network,lifecycle,environment,protocol`；独立管腔使用 `:solver:runPipeLiquidTransportValidation`、`:solver:runPipeWallHeatValidation`。前者覆盖有限分支流量、压差、高差、气液相变、冻结区块和守恒账，后者覆盖真实有限管壁与混合气液弹性能。普通区域保留 GPU 流动、沉积和热场回归，独立管网使用自己的生产求解入口验证。

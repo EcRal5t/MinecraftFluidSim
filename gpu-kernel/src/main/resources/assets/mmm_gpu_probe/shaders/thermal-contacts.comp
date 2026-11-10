@@ -247,7 +247,7 @@ double deviceConductance(int point,int port){
    film=min(.5LF*cellSize(),.5LF*cellSize()*volume/area);
   }
  }
- precise double conductance=seriesConductance(cellSize()*cellSize()*area,readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port),readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port),k,film);return conductance;
+ precise double conductance=seriesConductance(cellSize()*cellSize()*area,readDouble(headerWord(H_PORT_WALL_CONDUCTIVITY)+2*port),readDouble(headerWord(H_PORT_WALL_THICKNESS)+2*port),k,film);return conductance*readDouble(headerWord(H_PORT_AREA_SCALE)+2*port);
 }
 // Port weights are geometry alone. The material conductivity and finite owner temperatures
 // remain in the canonical finite heat exchange for each contact.

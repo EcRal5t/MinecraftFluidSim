@@ -80,6 +80,12 @@ final class FluidRegionOperations implements RegionCheckpointPort {
     void environment(WorldThermalEnvironment environment) throws IOException {
         if(persistence!=null) persistence.environment(environment,manager);
     }
+    java.util.Map<String,mmm.pipe.PipeDimensionState> recoveredPipes() {
+        return persistence==null?java.util.Map.of():persistence.recoveredPipes();
+    }
+    void pipes(java.util.function.Supplier<java.util.Map<String,mmm.pipe.PipeDimensionState>> supplier) {
+        if(persistence!=null)persistence.pipes(supplier);
+    }
 	void advanceTick() { serviceTick++; if (persistence != null) persistence.retainRestores(manager); }
 	void cancelRestore(FluidRegion region) { persistence.cancelRestore(region.id()); }
 	boolean creationLocked() { return creationLocked; }

@@ -27,6 +27,7 @@ public final class WorldThermalEnvironment {
     private final FluidRegionManager regions;
     private final ThermalBoundaryResolver boundaries;
     private final Set<String> configured = new HashSet<>(), dirty = new HashSet<>();
+    private final Map<String,Set<BlockPos>> pipePositions = new HashMap<>();
     private final Map<String, EnvironmentThermalState> states = new HashMap<>();
     private final Map<String, Long> revisions = new HashMap<>();
     private final Map<UUID, EnvironmentBinding> bindings = new HashMap<>();
@@ -44,6 +45,168 @@ public final class WorldThermalEnvironment {
         this.boundaries = new ThermalBoundaryResolver(definitions.thermalRegistry());
     }
     public void worldUpdates(MinecraftWorldUpdates updates) { worldUpdates = Objects.requireNonNull(updates); }
+    public void pipePositions(String dimension,Set<BlockPos> positions) {
+        var next=Set.copyOf(positions);var previous=pipePositions.put(Objects.requireNonNull(dimension),next);
+        if(!next.equals(previous))dirty.add(dimension);
+    }
+    /** The inner contact belongs to the independent pipe inventory; the solid remains world-owned. */
+    public record PipeWall(String dimension,long generation,EnvironmentThermalState.Key key,String materialId,
+                           long massUnits,double energy,double innerArea,double conductivity,double halfThickness) { }
+    public PipeWall pipeWall(String dimension,BlockPos pos,BlockState state) {
+        return pipeWalls(dimension,Map.of(pos,state)).get(pos);
+    }
+    public Map<BlockPos,PipeWall> pipeWalls(String dimension,Map<BlockPos,BlockState> requested) {
+        if(!configured.contains(dimension))return Map.of();
+        var environment=backend.captureEnvironment(dimension);
+        var index=new HashMap<EnvironmentThermalState.Key,EnvironmentThermalState.Node>();
+        for(var node:environment.nodes())if(node.key().kind()==EnvironmentThermalState.Kind.SOLID)index.put(node.key(),node);
+        var result=new HashMap<BlockPos,PipeWall>();var sampled=samples.getOrDefault(dimension,Map.of());
+        for(var entry:requested.entrySet()) {
+            var pos=entry.getKey();var state=entry.getValue();if(!PipeThermalGeometry.isPipe(state))continue;
+            var sample=sampled.get(pos);if(sample==null || !sample.state().equals(state))continue;
+            var key=new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.SOLID,0);
+            var node=index.get(key);if(node==null)continue;
+            var expected=BlockThermalMaterials.resolve(state,definitions.thermalRegistry());
+            if(!node.materialId().equals(expected.thermalMaterialId()) || node.volumeCubicMetres()!=mmm.block.PipeGeometry.wallVolume(state))continue;
+            var material=definitions.thermalRegistry().material(definitions.thermalRegistry().materialHandle(node.materialId()));
+            result.put(pos,new PipeWall(dimension,environment.generation(),key,node.materialId(),node.massUnits(),node.internalEnergyJ(),
+                    mmm.block.PipeGeometry.innerArea(state),material.conductivityWPerMeterK(),.03125));
+        }
+        return Map.copyOf(result);
+    }
+    /** Prepares the world half of an already calculated pipe/wall heat exchange. */
+    public mmm.fluid.PreparedEnvironmentState preparePipeWallExchange(String dimension,long generation,
+            Map<EnvironmentThermalState.Key,Double> energyDeltas) {
+        var current=backend.captureEnvironment(dimension);
+        if(current.generation()!=generation)throw new IllegalStateException("Pipe wall generation changed");
+        var remaining=new HashMap<>(energyDeltas); var nodes=new ArrayList<EnvironmentThermalState.Node>();
+        SignedDyadic exchange=SignedDyadic.ZERO,roundoff=SignedDyadic.ZERO;
+        for(var node:current.nodes()) {
+            Double delta=remaining.remove(node.key());
+            if(delta==null) { nodes.add(node); continue; }
+            var key=node.key(); var pos=new BlockPos(key.x(),key.y(),key.z());
+            var sample=samples.getOrDefault(dimension,Map.of()).get(pos);
+            if(key.kind()!=EnvironmentThermalState.Kind.SOLID || key.component()!=0 || sample==null
+                    || !PipeThermalGeometry.isPipe(sample.state()) || !Double.isFinite(delta))
+                throw new IllegalArgumentException("Invalid pipe wall exchange");
+            double next=node.internalEnergyJ()+delta;
+            nodes.add(node.withEnergy(next)); exchange=exchange.add(SignedDyadic.of(delta));
+            roundoff=roundoff.add(SignedDyadic.of(next).subtract(SignedDyadic.of(node.internalEnergyJ())).subtract(SignedDyadic.of(delta)));
+        }
+        if(!remaining.isEmpty())throw new IllegalArgumentException("Pipe wall node is unavailable");
+        var audit=current.audit();
+        var nextAudit=new EnvironmentThermalState.Audit(audit.initial(),audit.source(),audit.sink(),
+                audit.regionExchange().add(exchange),audit.roundoff().add(roundoff));
+        return backend.prepareEnvironment(new EnvironmentThermalState(dimension,current.generation(),current.registryFingerprint(),
+                nodes,current.contacts(),nextAudit),definitions.definitions());
+    }
+    /** Refreshes cached world state after the prepared pipe and environment commits succeed. */
+    public void pipeWallExchangeAdopted(String dimension) {
+        states.put(dimension,backend.captureEnvironment(dimension)); revisions.merge(dimension,1L,Math::addExact);
+        bindings.clear(); dirty.add(dimension);
+    }
+    public final class PipeAirHandoff implements AutoCloseable {
+        private final mmm.fluid.PreparedEnvironmentState prepared;
+        private final Map<BlockPos,PipeTopologyEdit.Air> acquired;
+        private boolean adopted;
+        private PipeAirHandoff(mmm.fluid.PreparedEnvironmentState prepared,Map<BlockPos,PipeTopologyEdit.Air> acquired) {
+            this.prepared=prepared;this.acquired=Map.copyOf(acquired);
+        }
+        public Map<BlockPos,PipeTopologyEdit.Air> acquired(){return acquired;}
+        public mmm.fluid.PreparedEnvironmentState prepared(){return prepared;}
+        public boolean isCurrent(){return !adopted && prepared.isCurrent();}
+        public void commit(){prepared.commit();adopted();}
+        public void adopted(){
+            if(adopted)throw new IllegalStateException("Pipe air handoff already adopted");
+            states.put(prepared.dimensionId(),backend.captureEnvironment(prepared.dimensionId()));
+            revisions.merge(prepared.dimensionId(),1L,Math::addExact);bindings.clear();dirty.add(prepared.dimensionId());adopted=true;
+        }
+        @Override public void close(){prepared.close();}
+    }
+    /** Stages pipe gas exchange with the finite world air outside mechanical regions. */
+    public PipeAirHandoff preparePipeAir(ServerLevel level,Map<BlockPos,Double> newCavityVolumes,
+                                          Map<BlockPos,PipeTopologyEdit.Air> returned) {
+        String dimension=level.dimension().identifier().toString();
+        return preparePipeAir(dimension,newCavityVolumes,returned,level::getBlockState,
+                pos->MinecraftGroupAvailability.loaded(level,pos),pos->regions.regions().stream().anyMatch(r->r.dimension().equals(level.dimension())
+                        && r.footprint()!=null && r.footprint().containsInterior(pos)));
+    }
+    PipeAirHandoff preparePipeAir(String dimension,Map<BlockPos,Double> newCavityVolumes,
+            Map<BlockPos,PipeTopologyEdit.Air> returned,Function<BlockPos,BlockState> stateAt,Predicate<BlockPos> loaded,
+            Predicate<BlockPos> mechanical) {
+        var positions=new HashSet<BlockPos>(newCavityVolumes.keySet());positions.addAll(returned.keySet());
+        for(var pos:positions) {
+            if(!loaded.test(pos))throw new IllegalStateException("Pipe air chunk is unavailable");
+            if(mechanical.test(pos))throw new IllegalArgumentException("Pipe air belongs to a mechanical region");
+        }
+        if(!configured.contains(dimension)) {
+            var empty=EnvironmentThermalState.initialized(dimension,definitions.thermalRegistry().fingerprint(),List.of(),List.of());
+            backend.configureEnvironment(empty,definitions.definitions());configured.add(dimension);states.put(dimension,empty);
+        }
+        var current=backend.captureEnvironment(dimension); var nodes=new ArrayList<>(current.nodes());
+        var acquired=new HashMap<BlockPos,PipeTopologyEdit.Air>();
+        var model=new GasThermalModel(definitions.thermalRegistry(),definitions.gasRegistry());
+        var exchange=SignedDyadic.ZERO;var roundoff=SignedDyadic.ZERO;
+        for(var entry:newCavityVolumes.entrySet()) {
+            var pos=entry.getKey();double volume=entry.getValue();var state=stateAt.apply(pos);
+            if(!PipeThermalGeometry.isPipe(state) || !Double.isFinite(volume) || volume<=0)
+                throw new IllegalArgumentException("Invalid new pipe cavity");
+            if(Math.abs(PipeWorldGraph.capacity(state)-volume)>1e-10)throw new IllegalArgumentException("Pipe cavity volume differs from geometry");
+            var sample=samples.getOrDefault(dimension,Map.of()).get(pos);
+            var indexes=new ArrayList<Integer>();
+            for(int i=0;i<nodes.size();i++) {var key=nodes.get(i).key();if(key.kind()==EnvironmentThermalState.Kind.AIR
+                    && key.x()==pos.getX()&&key.y()==pos.getY()&&key.z()==pos.getZ())indexes.add(i);}
+            if(indexes.isEmpty()) {
+                if(sample!=null)throw new IllegalStateException("Tracked pipe cavity has no available world air");
+                var gas=model.inventoryAtPressure(volume,mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,TEMPERATURE,definitions.gasRegistry().ambient());
+                acquired.put(pos,new PipeTopologyEdit.Air(gas,model.internalEnergyAtTemperature(gas,TEMPERATURE)));
+                continue;
+            }
+            if(sample!=null && PipeThermalGeometry.isPipe(sample.state()))
+                throw new IllegalStateException("Pipe cavity must be acquired before its world air is rebuilt");
+            var gas=mmm.fluid.air.GasInventory.EMPTY;double energy=0,covered=0;
+            var oldEnergy=SignedDyadic.ZERO;var remainingEnergy=SignedDyadic.ZERO;
+            for(int index:indexes) {
+                var old=nodes.get(index);Long mask=airMasksFor(dimension).get(old.key());
+                if(mask==null)throw new IllegalStateException("Previous world air topology is unavailable");
+                if(Math.abs(old.volumeCubicMetres()-Long.bitCount(mask)/64.0)>1e-12)
+                    throw new IllegalStateException("Pipe cavity must be acquired before its world air is rebuilt");
+                double part=PipeThermalGeometry.cavityOverlap(state,mask);if(part<=0)continue;
+                if(part>old.volumeCubicMetres()+1e-12)throw new IllegalStateException("Pipe cavity exceeds available air");
+                var shares=old.gas().partition(mmm.fluid.air.GasPartitionWeights.of(new double[]{part,Math.max(0,old.volumeCubicMetres()-part)}),definitions.gasRegistry(),definitions.chemicalOrNull());
+                var energies=model.partitionEnergy(old.gas(),old.internalEnergyJ(),shares);
+                if(shares.get(1).isEmpty())throw new IllegalStateException("Pipe acquisition would remove a complete world air component");
+                gas=gas.merge(shares.get(0));energy+=energies[0];covered+=part;
+                nodes.set(index,new EnvironmentThermalState.Node(old.key(),old.materialId(),shares.get(1).totalMassUnits(),old.volumeCubicMetres(),shares.get(1),energies[1],old.surfaces()));
+                oldEnergy=oldEnergy.add(SignedDyadic.of(old.internalEnergyJ()));
+                remainingEnergy=remainingEnergy.add(SignedDyadic.of(energies[1]));
+            }
+            if(Math.abs(covered-volume)>1e-10 || gas.isEmpty())throw new IllegalStateException("Tracked world air does not cover the new pipe cavity");
+            exchange=exchange.subtract(SignedDyadic.of(energy));
+            roundoff=roundoff.add(remainingEnergy.subtract(oldEnergy).add(SignedDyadic.of(energy)));
+            acquired.put(pos,new PipeTopologyEdit.Air(gas,energy));
+        }
+        for(var entry:returned.entrySet()) {
+            var pos=entry.getKey();var air=entry.getValue();if(air.inventory().isEmpty()) {if(air.energy()!=0)throw new IllegalArgumentException("Empty pipe gas has energy");continue;}
+            int index=-1;
+            for(int i=0;i<nodes.size();i++){var key=nodes.get(i).key();if(key.kind()==EnvironmentThermalState.Kind.AIR && key.x()==pos.getX()&&key.y()==pos.getY()&&key.z()==pos.getZ()){
+                if(index>=0)throw new IllegalStateException("Pipe return requires a single external air component");index=i;}}
+            if(index<0) {
+                var state=stateAt.apply(pos);double volume=PipeThermalGeometry.isPipe(state)?PipeThermalGeometry.outsideVolume(state):1.0;
+                var key=new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.AIR,0);
+                nodes.add(new EnvironmentThermalState.Node(key,"mmm:air",air.inventory().totalMassUnits(),volume,air.inventory(),air.energy(),List.of()));
+            } else {
+                var old=nodes.get(index);var gas=old.gas().merge(air.inventory());double energy=old.internalEnergyJ()+air.energy();
+                nodes.set(index,new EnvironmentThermalState.Node(old.key(),old.materialId(),gas.totalMassUnits(),old.volumeCubicMetres(),gas,energy,old.surfaces()));
+                roundoff=roundoff.add(SignedDyadic.of(energy).subtract(SignedDyadic.of(old.internalEnergyJ())).subtract(SignedDyadic.of(air.energy())));
+            }
+            exchange=exchange.add(SignedDyadic.of(air.energy()));
+        }
+        var audit=current.audit();var nextAudit=new EnvironmentThermalState.Audit(audit.initial(),audit.source(),audit.sink(),
+                audit.regionExchange().add(exchange),audit.roundoff().add(roundoff));
+        var next=new EnvironmentThermalState(dimension,current.generation(),current.registryFingerprint(),nodes,current.contacts(),nextAudit);
+        return new PipeAirHandoff(backend.prepareEnvironment(next,definitions.definitions()),acquired);
+    }
     void externalStructures(ExternalMovingStructures external) { externalStructures=Objects.requireNonNull(external); external.environment(this); }
     boolean hasSolid(String dimension, BlockPos position) {
         return configured.contains(dimension) && backend.captureEnvironment(dimension).nodes().stream().anyMatch(node ->
@@ -200,7 +363,7 @@ public final class WorldThermalEnvironment {
         if(!dirty.contains(dimension))return;
         if(externalStructures!=null && externalStructures.pendingThermalPositions(dimension)==null)return;
         var region=regions.regions().stream().filter(r->r.dimension().equals(level.dimension())).findFirst().orElse(null);
-        if(region==null && !configured.contains(dimension))return;
+        if(region==null && !configured.contains(dimension) && pipePositions.getOrDefault(dimension,Set.of()).isEmpty())return;
         dirty.remove(dimension);
         try { rebuild(dimension,region,level::getBlockState,p->MinecraftGroupAvailability.loaded(level,p),level); }
         catch(RuntimeException failure){dirty.add(dimension);throw failure;}
@@ -210,12 +373,14 @@ public final class WorldThermalEnvironment {
         private final EnvironmentThermalState base, candidate;
         private final Map<EnvironmentThermalState.Key,Long> masks;
         private final Map<BlockPos, List<EnvironmentThermalState.Node>> air;
+        private final Map<BlockPos,double[]> pipeVolumes;
         private boolean closed;
         private final long revision;
         private AirHandoff(EnvironmentThermalState base, EnvironmentThermalState candidate,
-                           Map<EnvironmentThermalState.Key,Long> masks, Map<BlockPos, List<EnvironmentThermalState.Node>> air) {
+                           Map<EnvironmentThermalState.Key,Long> masks, Map<BlockPos, List<EnvironmentThermalState.Node>> air,
+                           Map<BlockPos,double[]> pipeVolumes) {
             this.base = base; this.candidate=candidate; this.masks=Map.copyOf(masks);
-            this.air = Map.copyOf(air); this.revision = revisions.getOrDefault(base.dimensionId(),0L);
+            this.air = Map.copyOf(air); this.pipeVolumes=Map.copyOf(pipeVolumes); this.revision = revisions.getOrDefault(base.dimensionId(),0L);
         }
         /** Four-by-four-by-four microboxes, bit index x + 4*y + 16*z. */
         public Map<EnvironmentThermalState.Key, Long> microMasks() {
@@ -247,7 +412,9 @@ public final class WorldThermalEnvironment {
                     int y=(entry.getKey().getY()-origin.getY())*2+sy;
                     int z=(entry.getKey().getZ()-origin.getZ())*2+sz;
                     destinations[sub]=grid.cell(x,y,z);
-                    for(int mz=0;mz<2;mz++)for(int my=0;my<2;my++)for(int mx=0;mx<2;mx++) {
+                    double[] pipe=pipeVolumes.get(entry.getKey());
+                    if(pipe!=null)weights[sub]=pipe[sub];
+                    else for(int mz=0;mz<2;mz++)for(int my=0;my<2;my++)for(int mx=0;mx<2;mx++) {
                         int bit=(sx*2+mx)+4*(sy*2+my)+16*(sz*2+mz);
                         if((mask&(1L<<bit))!=0)weights[sub]++;
                     }
@@ -322,7 +489,10 @@ public final class WorldThermalEnvironment {
             if(acquired.contains(pos))air.computeIfAbsent(pos,ignored->new ArrayList<>()).add(node);
         }
         air.replaceAll((pos,nodes)->List.copyOf(nodes));
-        return new AirHandoff(base,built.state(),built.masks(),air);
+        var pipeVolumes=new HashMap<BlockPos,double[]>();
+        for(var pos:air.keySet()) { var state=stateAt.apply(pos); if(PipeThermalGeometry.isPipe(state))
+            pipeVolumes.put(pos,PipeThermalGeometry.halfCellVolumes(state)); }
+        return new AirHandoff(base,built.state(),built.masks(),air,pipeVolumes);
     }
     /** A nonstandard gas composition must be explicitly vented before region removal. */
     public boolean canReturnAir(FluidRegion region) {
@@ -373,18 +543,32 @@ public final class WorldThermalEnvironment {
         var keys=new ArrayList<EnvironmentThermalState.Key>(); var index=new HashMap<EnvironmentThermalState.Key,Integer>();
         for(var node:state.nodes()) if(node.key().kind()==EnvironmentThermalState.Kind.AIR) {
             var pos=new BlockPos(node.key().x(),node.key().y(),node.key().z());
-            if(region.footprint().containsInterior(pos)){index.put(node.key(),keys.size());keys.add(node.key());}
+            if(region.footprint().containsInterior(pos)) {
+                index.put(node.key(),keys.size());keys.add(node.key());
+            }
         }
-        var weights=new ArrayList<Map<Integer,Integer>>(spatial.cellCount());
+        var weights=new ArrayList<Map<Integer,Double>>(spatial.cellCount());
         for(int i=0;i<spatial.cellCount();i++)weights.add(new HashMap<>());
         for(var key:keys) {
             long bits=built.masks().getOrDefault(key,0L); int dest=index.get(key);
+            var position=new BlockPos(key.x(),key.y(),key.z()); var block=stateAt.apply(position);
+            if(PipeThermalGeometry.isPipe(block)) {
+                double[] volumes=PipeThermalGeometry.halfCellVolumes(block);
+                for(int sub=0;sub<8;sub++) {
+                    int x=(key.x()-region.origin().getX())*2+(sub&1);
+                    int y=(key.y()-region.origin().getY())*2+((sub>>1)&1);
+                    int z=(key.z()-region.origin().getZ())*2+((sub>>2)&1);
+                    int cell=spatial.grid().cell(x,y,z);
+                    if(cell>=0 && volumes[sub]>0)weights.get(cell).merge(dest,volumes[sub],Double::sum);
+                }
+                continue;
+            }
             for(int bit=0;bit<64;bit++)if((bits&(1L<<bit))!=0) {
                 int x=(key.x()-region.origin().getX())*2+(bit%4)/2;
                 int y=(key.y()-region.origin().getY())*2+(bit/4%4)/2;
                 int z=(key.z()-region.origin().getZ())*2+(bit/16)/2;
                 int cell=spatial.grid().cell(x,y,z);
-                if(cell>=0)weights.get(cell).merge(dest,1,Integer::sum);
+                if(cell>=0)weights.get(cell).merge(dest,1.0/64.0,Double::sum);
             }
         }
         var inventories=new ArrayList<mmm.fluid.air.GasInventory>(Collections.nCopies(keys.size(),mmm.fluid.air.GasInventory.EMPTY));
@@ -396,7 +580,7 @@ public final class WorldThermalEnvironment {
             var ids=new ArrayList<>(routes.keySet()); Collections.sort(ids); double[] shares=ids.stream().mapToDouble(routes::get).toArray();
             if(gas.isEmpty()) {
                 for(int i=0;i<ids.size();i++) {
-                    var addition=model.inventoryAtPressure(shares[i]/64.0,mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,TEMPERATURE,definitions.gasRegistry().ambient());
+                    var addition=model.inventoryAtPressure(shares[i],mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,TEMPERATURE,definitions.gasRegistry().ambient());
                     double energy=model.internalEnergyAtTemperature(addition,TEMPERATURE); int dest=ids.get(i);
                     inventories.set(dest,inventories.get(dest).merge(addition));energies[dest]+=energy;newSource=newSource.add(SignedDyadic.of(energy));
                 }
@@ -461,6 +645,7 @@ public final class WorldThermalEnvironment {
                 mechanical.add(region.origin().offset(Math.floorDiv(region.grid().x(i), n), Math.floorDiv(region.grid().y(i), n), Math.floorDiv(region.grid().z(i), n)));
         }
         var positions = new HashSet<>(mechanical);
+        positions.addAll(pipePositions.getOrDefault(dimension,Set.of()));
         if(requested!=null) {
             int requestedN=(int)Math.round(1.0/requested.solverConfig().cellSize());
             for(int i=0;i<requested.grid().cellCount();i++) positions.add(requested.origin().offset(
@@ -560,7 +745,7 @@ public final class WorldThermalEnvironment {
         graph.nodes.addAll(carried);
         var audit = previous == null ? new EnvironmentThermalState.Audit(SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO) : previous.audit();
         for (var node : old.values()) graph.removed = graph.removed.add(SignedDyadic.of(node.internalEnergyJ()));
-        audit = new EnvironmentThermalState.Audit(audit.initial(), audit.source().add(graph.added), audit.sink().add(graph.removed), audit.regionExchange(), audit.roundoff());
+        audit = new EnvironmentThermalState.Audit(audit.initial(), audit.source().add(graph.added), audit.sink().add(graph.removed), audit.regionExchange(), audit.roundoff().add(graph.roundoff));
         long generation = previous == null ? 0 : previous.generation();
         var next = new EnvironmentThermalState(dimension, generation, definitions.thermalRegistry().fingerprint(), graph.nodes, graph.contacts(), audit);
         return new Built(next,graph.airMasks(),Map.copyOf(graph.screenAxes),Map.copyOf(identities),List.copyOf(completed),List.copyOf(members));
@@ -577,15 +762,20 @@ public final class WorldThermalEnvironment {
             var pos = new BlockPos(node.key().x(), node.key().y(), node.key().z());
             var material = definitions.thermalRegistry().material(definitions.thermalRegistry().materialHandle(node.materialId()));
             String type = material.carrierId();
+            var sample=samples.getOrDefault(dimension,Map.of()).get(pos);
+            if(sample!=null && PipeThermalGeometry.isPipe(sample.state()) && node.key().component()!=0)continue;
             Direction.Axis axis = type.equals("mmm:screen") ? screenAxes.getOrDefault(dimension, Map.of()).get(pos) : null;
             if (type.equals("mmm:screen") && axis == null) continue;
-            if (ports(region, pos, type, definitions.thermalRegistry(), cellsPerBlock, axis).isEmpty()) continue;
+            boolean pipe=sample!=null && PipeThermalGeometry.isPipe(sample.state()) && node.key().component()==0;
+            if ((pipe ? pipePorts(region,pos,sample.state(),material) : ports(region, pos, type, definitions.thermalRegistry(), cellsPerBlock, axis)).isEmpty()) continue;
             String id = pos.asLong() + "@" + type + (axis == null ? "" : "@" + axis.name());
             var body = new FiniteThermalBodyState(0, definitions.thermalRegistry().fingerprint(), node.materialId(), node.massUnits(), node.internalEnergyJ());
             devices.add(new FiniteThermalDeviceState(PROVIDER, id, type, body, node.surfaces()));
             refs.add(new EnvironmentBinding.DeviceReference(PROVIDER, id, node.key()));
         }
-        var binding = new EnvironmentBinding(dimension, refs, WorldThermalGasContacts.collect(region,airMasksFor(dimension)));
+        var binding = new EnvironmentBinding(dimension, refs, WorldThermalGasContacts.collect(region,airMasksFor(dimension),pos->{
+            var sample=samples.getOrDefault(dimension,Map.of()).get(pos);return sample==null?null:sample.state();
+        }));
         if (binding.equals(bindings.get(region.id()))) return false;
         var oldAudit = previous.audit(); SignedDyadic removed = SignedDyadic.ZERO, added = SignedDyadic.ZERO;
         for (var d : previous.devices()) if (d.providerId().equals(PROVIDER)) removed = removed.add(SignedDyadic.of(d.body().internalEnergyJ()));
@@ -602,6 +792,10 @@ public final class WorldThermalEnvironment {
         var pos=BlockPos.of(position(device));
         var sample=samples.getOrDefault(region.dimension().identifier().toString(),Map.of()).get(pos);
         if(sample==null)return List.of();
+        if(PipeThermalGeometry.isPipe(sample.state())) {
+            var material=registry.material(registry.materialHandle(device.body().thermalMaterialId()));
+            return pipePorts(region,pos,sample.state(),material);
+        }
         int cellsPerBlock=(int)Math.round(1.0/region.solverConfig().cellSize());
         if(cellsPerBlock!=2)throw new IllegalArgumentException("World microface requires 0.5 m cells");
         var filtered=new ArrayList<FluidDomainContracts.ThermalPortRequest>();
@@ -625,6 +819,22 @@ public final class WorldThermalEnvironment {
                     request.direction(),request.wallThicknessMetres(),request.wallConductivityWPerMetreK(),request.filmThicknessMetres(),mask,false));
         }
         return List.copyOf(filtered);
+    }
+    private static List<FluidDomainContracts.ThermalPortRequest> pipePorts(FluidRegion region,BlockPos pos,BlockState state,ThermalMaterialDefinition material) {
+        if(region.solverConfig().cellSize()!=.5f)throw new IllegalArgumentException("Pipe wall contacts require half-metre cells");
+        var result=new ArrayList<FluidDomainContracts.ThermalPortRequest>();var origin=region.origin();
+        for(var surface:PipeThermalGeometry.outsideSurfaces(state)) {
+            int x=(pos.getX()-origin.getX())*2+surface.x(),y=(pos.getY()-origin.getY())*2+surface.y(),z=(pos.getZ()-origin.getZ())*2+surface.z();
+            if(region.grid().cell(x,y,z)<0)continue;
+            var block=origin.offset(Math.floorDiv(x,2),Math.floorDiv(y,2),Math.floorDiv(z,2));
+            if(region.footprint()!=null&&!region.footprint().containsInterior(block))continue;
+            int mask=surface.mask()&~region.solidMicroMask(x,y,z)&255;if(mask==0)continue;
+            double area=surface.area()*Integer.bitCount(mask)/(double)Integer.bitCount(surface.mask());
+            double scale=area/(Integer.bitCount(mask)*.0625);
+            result.add(new FluidDomainContracts.ThermalPortRequest(x,y,z,surface.direction(),.03125,
+                    material.conductivityWPerMeterK(),.125,mask,true,scale));
+        }
+        return List.copyOf(result);
     }
     private static long position(FiniteThermalDeviceState device){return Long.parseLong(device.objectId().substring(0,device.objectId().indexOf('@')));}
     static List<FluidDomainContracts.ThermalPortRequest> ports(FluidRegion region,FiniteThermalDeviceState device,ThermalRegistry registry){

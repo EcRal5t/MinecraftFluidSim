@@ -13,7 +13,7 @@ final class WorldThermalGasContacts {
     private WorldThermalGasContacts() { }
 
     static List<EnvironmentBinding.GasReference> collect(FluidRegion region,
-                                                        Map<EnvironmentThermalState.Key,Long> airMasks) {
+            Map<EnvironmentThermalState.Key,Long> airMasks, java.util.function.Function<BlockPos,net.minecraft.world.level.block.state.BlockState> stateAt) {
         if (region.solverConfig().cellSize() != .5f)
             throw new IllegalArgumentException("World air contacts require half-metre region cells");
         var byBlock=new HashMap<BlockPos,List<Map.Entry<EnvironmentThermalState.Key,Long>>>();
@@ -28,13 +28,17 @@ final class WorldThermalGasContacts {
             int axis=side/2;
             int[] start={4*origin.getX()+2*grid.x(cell),4*origin.getY()+2*grid.y(cell),4*origin.getZ()+2*grid.z(cell)};
             start[axis]+=(side&1)==0?-1:2;
-            var areas=new HashMap<EnvironmentThermalState.Key,Integer>();
+            var areas=new HashMap<EnvironmentThermalState.Key,Double>();
             for(int u=0;u<2;u++)for(int v=0;v<2;v++) {
                 int[] p=start.clone(); p[(axis+1)%3]+=u; p[(axis+2)%3]+=v;
                 var block=new BlockPos(Math.floorDiv(p[0],4),Math.floorDiv(p[1],4),Math.floorDiv(p[2],4));
                 int bit=Math.floorMod(p[0],4)+4*Math.floorMod(p[1],4)+16*Math.floorMod(p[2],4);
-                for(var entry:byBlock.getOrDefault(block,List.of())) if((entry.getValue()&(1L<<bit))!=0)
-                    areas.merge(entry.getKey(),1,Integer::sum);
+                var state=stateAt.apply(block);
+                double fraction=state!=null && PipeThermalGeometry.isPipe(state)
+                        ? PipeThermalGeometry.outsideFaceFraction(state,axis,(side&1)==0?1:0,
+                                Math.floorMod(p[(axis+1)%3],4),Math.floorMod(p[(axis+2)%3],4)) : 1.0;
+                if(fraction>0)for(var entry:byBlock.getOrDefault(block,List.of())) if((entry.getValue()&(1L<<bit))!=0)
+                    areas.merge(entry.getKey(),fraction,Double::sum);
             }
             final int faceCell=cell,faceSide=side;
             areas.entrySet().stream().sorted(java.util.Comparator.comparingInt(e->e.getKey().component()))

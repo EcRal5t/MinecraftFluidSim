@@ -18,20 +18,25 @@ import java.util.*;
 
 /** Immutable world snapshots published by one atomic HEAD replacement. */
 public final class EnvironmentThermalStore {
-    private static final int MAGIC = 0x4d4d4554, FORMAT = 2, MAX_NODES = 5_000_000, MAX_CONTACTS = 30_000_000;
+    private static final int MAGIC = 0x4d4d4554, FORMAT = 3, MAX_NODES = 5_000_000, MAX_CONTACTS = 30_000_000;
     private final Path root;
     private final ActiveGenerationStore regions;
+    private final ChemicalRegistry chemistry;
 
     public EnvironmentThermalStore(Path worldRoot, ChemicalRegistry chemistry, GranularRegistry granular,
                                    ThermalRegistry thermal, GasRegistry gas) {
         root = worldRoot.toAbsolutePath().normalize().resolve("mmm").resolve("world-thermal");
         regions = new ActiveGenerationStore(chemistry, granular, thermal, gas);
+        this.chemistry=chemistry;
     }
 
     public record Removal(long generation, long checksum) { }
     public record Snapshot(Map<String, EnvironmentThermalState> environments, Map<UUID, RegionState> regions,
-                           Map<UUID, Removal> removals) {
-        public Snapshot { environments = Map.copyOf(environments); regions = Map.copyOf(regions); removals=Map.copyOf(removals); }
+                           Map<UUID, Removal> removals, Map<String,mmm.pipe.PipeDimensionState> pipes) {
+        public Snapshot { environments = Map.copyOf(environments); regions = Map.copyOf(regions); removals=Map.copyOf(removals); pipes=Map.copyOf(pipes); }
+        public Snapshot(Map<String,EnvironmentThermalState> environments,Map<UUID,RegionState> regions,Map<UUID,Removal> removals) {
+            this(environments,regions,removals,Map.of());
+        }
     }
 
     /** Captures a complete same-instant set, then publishes it as the only restore authority. */
@@ -45,8 +50,12 @@ public final class EnvironmentThermalStore {
     }
     public Prepared prepare(Map<String, EnvironmentThermalState> environments, Map<UUID, RegionState> regionStates,
                             Map<UUID, Removal> removals) throws IOException {
+        return prepare(environments,regionStates,removals,Map.of());
+    }
+    public Prepared prepare(Map<String,EnvironmentThermalState> environments,Map<UUID,RegionState> regionStates,
+                            Map<UUID,Removal> removals,Map<String,mmm.pipe.PipeDimensionState> pipes) throws IOException {
         byte[] base = Files.exists(root.resolve("HEAD")) ? Files.readAllBytes(root.resolve("HEAD")) : null;
-        var snapshot = new Snapshot(environments, regionStates, removals);
+        var snapshot = new Snapshot(environments, regionStates, removals,pipes);
         DurableFileOperations.createDirectories(root.resolve("checkpoints"));
         String id = UUID.randomUUID().toString();
         Path temporary = root.resolve("checkpoints").resolve(id + ".tmp");
@@ -80,6 +89,14 @@ public final class EnvironmentThermalStore {
             for(var entry:new TreeMap<>(snapshot.removals()).entrySet()) {
                 if(snapshot.regions().containsKey(entry.getKey()))throw new IOException("Removed region is still active");
                 out.writeUTF(entry.getKey().toString()); out.writeLong(entry.getValue().generation()); out.writeLong(entry.getValue().checksum());
+            }
+            out.writeInt(snapshot.pipes().size());int pipeIndex=0;
+            for(var entry:new TreeMap<>(snapshot.pipes()).entrySet()) {
+                String file="pipes-"+pipeIndex++;Path path=temporary.resolve(file);
+                try(var pipeOut=new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
+                    PipeStateCodec.write(pipeOut,entry.getValue(),chemistry);
+                }
+                DurableFileOperations.forceFile(path);out.writeUTF(entry.getKey());out.writeUTF(file);
             }
         }
         DurableFileOperations.forceFile(temporary.resolve("manifest"));
@@ -117,7 +134,7 @@ public final class EnvironmentThermalStore {
     public boolean isPublished(Prepared prepared) throws IOException {
         if(prepared==null || !Files.exists(root.resolve("HEAD")))return false;
         try(var in=new DataInputStream(Files.newInputStream(root.resolve("HEAD")))) {
-            if(in.readInt()!=MAGIC || in.readInt()!=FORMAT)throw new IOException("Invalid world thermal HEAD");
+            if(in.readInt()!=MAGIC)throw new IOException("Invalid world thermal HEAD");readFormat(in);
             String id=in.readUTF(); if(in.read()!=-1)throw new IOException("Trailing world thermal HEAD data");
             return id.equals(prepared.id);
         }
@@ -128,7 +145,7 @@ public final class EnvironmentThermalStore {
         Path head = root.resolve("HEAD");
         if (!Files.exists(head)) return null;
         try (var in = new DataInputStream(Files.newInputStream(head))) {
-            if (in.readInt() != MAGIC || in.readInt() != FORMAT) throw new IOException("Invalid world thermal HEAD");
+            if (in.readInt() != MAGIC) throw new IOException("Invalid world thermal HEAD");readFormat(in);
             String id = in.readUTF();
             try { if (!UUID.fromString(id).toString().equals(id)) throw new IllegalArgumentException(); }
             catch (IllegalArgumentException e) { throw new IOException("Invalid world checkpoint identity", e); }
@@ -140,7 +157,7 @@ public final class EnvironmentThermalStore {
 
     private Snapshot readSnapshot(Path directory) throws IOException {
         try (var in = new DataInputStream(new BufferedInputStream(Files.newInputStream(directory.resolve("manifest"))))) {
-            if (in.readInt() != MAGIC || in.readInt() != FORMAT) throw new IOException("Invalid world checkpoint manifest");
+            if (in.readInt() != MAGIC) throw new IOException("Invalid world checkpoint manifest");int format=readFormat(in);
             var environments = new LinkedHashMap<String, EnvironmentThermalState>();
             int dimensions = count(in.readInt(), 10000);
             for (int i = 0; i < dimensions; i++) {
@@ -166,8 +183,17 @@ public final class EnvironmentThermalStore {
                 UUID id=UUID.fromString(in.readUTF()); var removal=new Removal(in.readLong(),in.readLong());
                 if(removal.generation()<=0 || states.containsKey(id) || removals.put(id,removal)!=null)throw new IOException("Invalid removed region reference");
             }
+            var pipeStates=new TreeMap<String,mmm.pipe.PipeDimensionState>();
+            if(format>=3)for(int n=count(in.readInt(),10000),i=0;i<n;i++) {
+                String dimension=in.readUTF(),file=in.readUTF();
+                if(!file.equals("pipes-"+i))throw new IOException("Invalid pipe checkpoint file");
+                try(var pipeIn=new DataInputStream(new BufferedInputStream(Files.newInputStream(directory.resolve(file))))) {
+                    if(pipeStates.put(dimension,PipeStateCodec.read(pipeIn,chemistry))!=null)throw new IOException("Duplicate pipe dimension");
+                    if(pipeIn.read()!=-1)throw new IOException("Trailing pipe checkpoint data");
+                }
+            }
             if (in.read() != -1) throw new IOException("Trailing world checkpoint manifest data");
-            return new Snapshot(environments, states, removals);
+            return new Snapshot(environments, states, removals,pipeStates);
         } catch (IllegalArgumentException | ArithmeticException e) { throw new IOException("Invalid world checkpoint", e); }
     }
 
@@ -192,7 +218,7 @@ public final class EnvironmentThermalStore {
     }
 
     private static EnvironmentThermalState readEnvironment(DataInputStream in) throws IOException {
-        if (in.readInt() != MAGIC || in.readInt() != FORMAT) throw new IOException("Invalid environment checkpoint");
+        if (in.readInt() != MAGIC) throw new IOException("Invalid environment checkpoint");readFormat(in);
         String dimension = in.readUTF(); long generation = in.readLong(); String fingerprint = in.readUTF();
         var audit = new EnvironmentThermalState.Audit(readDyadic(in), readDyadic(in), readDyadic(in), readDyadic(in), readDyadic(in));
         int nodeCount = count(in.readInt(), MAX_NODES); var nodes = new ArrayList<EnvironmentThermalState.Node>(nodeCount);
@@ -224,6 +250,9 @@ public final class EnvironmentThermalStore {
         var result = new SignedDyadic(new BigInteger(bytes), exponent);
         if (result.exponent() != exponent || !Arrays.equals(result.significand().toByteArray(), bytes)) throw new IOException("Noncanonical dyadic");
         return result;
+    }
+    private static int readFormat(DataInputStream in) throws IOException {
+        int version=in.readInt();if(version<2||version>FORMAT)throw new IOException("Unsupported world checkpoint format");return version;
     }
     private static int count(int value, int maximum) throws IOException { if (value < 0 || value > maximum) throw new IOException("Checkpoint count out of range"); return value; }
 }

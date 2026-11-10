@@ -60,11 +60,11 @@ final class FluidRenderBackend implements AutoCloseable {
     void invalidate() { invalidated = true; }
 
     void render(java.util.List<ClientRegionSnapshotStore.MaterialFrame> materials,
-            java.util.List<ClientRegionSnapshotStore.GranularFrame> granular, FluidRenderCoordinates coordinates,
+            java.util.List<ClientRegionSnapshotStore.GranularFrame> granular,java.util.List<mmm.network.PipeSnapshotPayload.Segment> pipes, FluidRenderCoordinates coordinates,
             boolean isShadow) {
         if (invalidated) { main.clear(); shadow.clear(); invalidated = false; }
-        if (materials.isEmpty() && granular.isEmpty()) { main.clear(); shadow.clear(); return; }
-        var view = materials.isEmpty() ? granular.getFirst().material().view() : materials.getFirst().view();
+        if (materials.isEmpty() && granular.isEmpty() && pipes.isEmpty()) { main.clear(); shadow.clear(); return; }
+        var view = !materials.isEmpty() ? materials.getFirst().view() : !granular.isEmpty() ? granular.getFirst().material().view() : FluidDisplaySettings.INSTANCE.view();
         boolean textured = isShadow || view.mode() == FluidDisplaySettings.Mode.COMPOSITION;
         var pipeline = textured ? SURFACE : DIAGNOSTIC;
         var batch = isShadow ? shadow : main;
@@ -72,7 +72,7 @@ final class FluidRenderBackend implements AutoCloseable {
         timing.poll();
         var resources = java.util.List.of(sprite("mmm:water"), sprite("mmm:mercury"), sprite("mmm:oil"),
                 IrisFluidCompatibility.materialState());
-        batch.prepare(materials, granular, coordinates, pipeline.getVertexFormatBinding(0), resources, textured, isShadow);
+        batch.prepare(materials, granular, pipes, coordinates, pipeline.getVertexFormatBinding(0), resources, textured, isShadow);
         if (batch.vertices != null) {
             long start = System.nanoTime();
             execute(Minecraft.getInstance(), batch, pipeline, coordinates, timing);

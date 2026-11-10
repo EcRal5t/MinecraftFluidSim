@@ -1,0 +1,213 @@
+{
+  "multipart": [
+    {
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_frame"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "down": "none"
+          },
+          {
+            "down": "open"
+          },
+          {
+            "down": "connected"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_arm_down"
+      }
+    },
+    {
+      "when": {
+        "down": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_sealed_down"
+      }
+    },
+    {
+      "when": {
+        "down": "none"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_cap_down"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "up": "none"
+          },
+          {
+            "up": "open"
+          },
+          {
+            "up": "connected"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_arm_up"
+      }
+    },
+    {
+      "when": {
+        "up": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_sealed_up"
+      }
+    },
+    {
+      "when": {
+        "up": "none"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_cap_up"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "north": "none"
+          },
+          {
+            "north": "open"
+          },
+          {
+            "north": "connected"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_arm_north"
+      }
+    },
+    {
+      "when": {
+        "north": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_sealed_north"
+      }
+    },
+    {
+      "when": {
+        "north": "none"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_cap_north"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "south": "none"
+          },
+          {
+            "south": "open"
+          },
+          {
+            "south": "connected"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_arm_south"
+      }
+    },
+    {
+      "when": {
+        "south": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_sealed_south"
+      }
+    },
+    {
+      "when": {
+        "south": "none"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_cap_south"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "west": "none"
+          },
+          {
+            "west": "open"
+          },
+          {
+            "west": "connected"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_arm_west"
+      }
+    },
+    {
+      "when": {
+        "west": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_sealed_west"
+      }
+    },
+    {
+      "when": {
+        "west": "none"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_cap_west"
+      }
+    },
+    {
+      "when": {
+        "OR": [
+          {
+            "east": "none"
+          },
+          {
+            "east": "open"
+          },
+          {
+            "east": "connected"
+          }
+        ]
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_arm_east"
+      }
+    },
+    {
+      "when": {
+        "east": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_sealed_east"
+      }
+    },
+    {
+      "when": {
+        "east": "none"
+      },
+      "apply": {
+        "model": "mmm:block/insulated_glass_pipe_cap_east"
+      }
+    }
+  ]
+}

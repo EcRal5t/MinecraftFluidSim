@@ -106,6 +106,11 @@ final class GranularTransferPlanner {
 	FluidDomainContracts.GranularInsertion insertExact(
 			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource,
 			Double carriedEnergy
+	) { return insertExact(cellX,cellY,cellZ,ledger,maxRadius,externalSource,carriedEnergy,true); }
+
+	FluidDomainContracts.GranularInsertion insertExact(
+			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource,
+			Double carriedEnergy, boolean reconcileFluid
 	) {
 		if (carriedEnergy != null && (domain.thermalState == null || !Double.isFinite(carriedEnergy)))
 			throw new IllegalArgumentException("Carried granular energy requires thermal state");
@@ -239,7 +244,7 @@ final class GranularTransferPlanner {
 						? domain.thermalState.planExternalActiveInsertions(originalCount, drafts.size(), context)
 						: domain.thermalState.planExternalActiveInsertions(originalCount, drafts.size(), context, carriedEnergy);
 			}
-			displacement = GranularLiquidDisplacement.prepareInsertion(domain, previousSolid, plannedSolid);
+			displacement = reconcileFluid ? GranularLiquidDisplacement.prepareInsertion(domain, previousSolid, plannedSolid) : null;
 			requireInsertionSuccessor( thermalInsertions, displacement);
 		} catch (RuntimeException failure) {
 			for (int index = createdCompositions.size() - 1; index >= 0; index--) {
@@ -339,6 +344,11 @@ final class GranularTransferPlanner {
 	FluidDomainContracts.GranularExtraction extractExact(
 			int cellX, int cellY, int cellZ, long maximumSolidVolumeSvq, int maxRadius, boolean escapedSink,
 			java.util.function.Predicate<GranularTransferLedger> itemAcceptance
+	) { return extractExact(cellX,cellY,cellZ,maximumSolidVolumeSvq,maxRadius,escapedSink,itemAcceptance,true); }
+
+	FluidDomainContracts.GranularExtraction extractExact(
+			int cellX, int cellY, int cellZ, long maximumSolidVolumeSvq, int maxRadius, boolean escapedSink,
+			java.util.function.Predicate<GranularTransferLedger> itemAcceptance, boolean reconcileFluid
 	) {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomainContracts.GranularExtraction.rejected("Granular state is not bound");
@@ -487,7 +497,7 @@ final class GranularTransferPlanner {
 				return FluidDomainContracts.GranularExtraction.rejected("Remaining granular choices have no certified successor at the current liquid inventory");
 			}
 		}
-        var displacement=GranularLiquidDisplacement.prepareExternal(domain,domain.occupiedSolidSvq(),futureSolid);
+        var displacement=reconcileFluid?GranularLiquidDisplacement.prepareExternal(domain,domain.occupiedSolidSvq(),futureSolid):null;
         if(displacement!=null){displacement.inventory.requireCurrent();if(displacement.localGas!=null)displacement.localGas.requireCurrent(domain);}
 
 		for (GranularRemoval removal : removals) if (removal.deposit()) {
@@ -551,7 +561,7 @@ final class GranularTransferPlanner {
 		}
 	}
 
-	private static final class GranularLedgerBuilder {
+	static final class GranularLedgerBuilder {
 		private final TreeMap<String, MutableGranularGroup> groups = new TreeMap<>();
 		boolean canAccept(String materialId) {
 			return groups.containsKey(materialId) || groups.size() < GranularTransferLedger.MAX_GROUPS;

@@ -215,7 +215,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                         int cell = successor.grid().cell(contact.cellX(), contact.cellY(), contact.cellZ());
                         return new VulkanThermalDeviceLayout.Port(port.providerId(), port.objectId(), cell,
                             contact.direction(), contact.wallThicknessMetres(), contact.wallConductivityWPerMetreK(),
-                            contact.filmThicknessMetres(), contact.openMicroMask(), contact.internalFace());
+                            contact.filmThicknessMetres(), contact.openMicroMask(), contact.internalFace(),contact.areaScale());
                     })
                     .toList();
             var codec = new VulkanFluidStateCodec(successor, devices, encodedPorts);
@@ -379,7 +379,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
                         var c = port.contact();
                         return new VulkanThermalDeviceLayout.Port(port.providerId(), port.objectId(),
                             template.grid().cell(c.cellX(), c.cellY(), c.cellZ()), c.direction(),
-                            c.wallThicknessMetres(), c.wallConductivityWPerMetreK(), c.filmThicknessMetres(), c.openMicroMask(), c.internalFace());
+                            c.wallThicknessMetres(), c.wallConductivityWPerMetreK(), c.filmThicknessMetres(), c.openMicroMask(), c.internalFace(),c.areaScale());
                     })
                     .toList();
             var codec = new VulkanFluidStateCodec(template, input.finiteThermalDevices(), encoded);

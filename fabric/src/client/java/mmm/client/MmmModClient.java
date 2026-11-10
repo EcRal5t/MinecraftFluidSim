@@ -59,6 +59,8 @@ public final class MmmModClient implements ClientModInitializer {
 			negotiated.set(negotiation.accepted() ? negotiation : null);
 			context.responseSender().sendPacket(FluidProtocolResponsePayload.from(negotiation));
 		});
+        ClientPlayNetworking.registerGlobalReceiver(mmm.network.PipeSnapshotPayload.TYPE,
+                (payload,context)->renderer.accept(payload,negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(FluidMaterialSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(FluidChemicalSnapshotPayload.TYPE,

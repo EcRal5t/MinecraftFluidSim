@@ -89,6 +89,13 @@ final class DomainCollision {
 	public FlipChemicalParticleState exportChemicalParticleState() { return domain.carriers.exportChemicalParticleState(); }
 	/** Transfer unchanged solid occupation between fixed geometry and moving bodies. */
 	public void handoffCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies) {
+		updateCollisionBodies(edits,bodies,true);
+	}
+	/** Applies a world collision edit and its actual body occupancy in one private candidate. */
+	public void replaceCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies) {
+		updateCollisionBodies(edits,bodies,false);
+	}
+	private void updateCollisionBodies(List<CollisionEdit> edits, EntityBodyState bodies, boolean requireSameOccupancy) {
 		java.util.Objects.requireNonNull(edits);
 		java.util.Objects.requireNonNull(bodies);
 		domain.domainFlowFields.preparePhysicalState();
@@ -112,7 +119,7 @@ final class DomainCollision {
 			for (int cell = 0; cell < domain.cellCount; cell++) {
 				long before = ((long) Integer.bitCount(previousFixed.mask(cell)) << 21) + previousOccupied[cell]-oldGranular[cell];
 				long after = ((long) Integer.bitCount(nextFixed.mask(cell)) << 21) + nextOccupied[cell]-nextGranular[cell];
-				if (before != after) throw new CollisionEditBlockedException(
+				if (requireSameOccupancy && before != after) throw new CollisionEditBlockedException(
 						"Moving-body handoff changes occupied volume at cell " + cell, null);
 			}
 		} finally {
@@ -121,7 +128,7 @@ final class DomainCollision {
 		}
 		var expanded=new ArrayList<CollisionEdit>(edits);var changed=new HashSet<Integer>();
 		for(var edit:edits)changed.add(domain.grid.cell(edit.x(),edit.y(),edit.z()));
-		for(int cell=0;cell<domain.cellCount;cell++)if(nextOccupied[cell]>previousOccupied[cell]&&changed.add(cell))
+		for(int cell=0;cell<domain.cellCount;cell++)if(nextOccupied[cell]!=previousOccupied[cell]&&changed.add(cell))
 			expanded.add(new CollisionEdit(domain.grid.x(cell),domain.grid.y(cell),domain.grid.z(cell),nextFixed.mask(cell)));
 		var relocation=LiquidCollisionEdit.prepare(domain,expanded,null,nextOccupied);
 		if(relocation.localGas!=null)relocation.localGas.requireCurrent(domain);

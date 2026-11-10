@@ -12,6 +12,7 @@ import mmm.thermal.FixedSurfaceState;
 /** Exercises world HEAD publication, complete carrier round trip and failed publication isolation. */
 public final class EnvironmentThermalStoreValidation extends RegionPersistenceValidationSupport {
     public static void main(String[] args) throws Exception {
+        PipeStatePersistenceValidation.run();
         var root = Files.createTempDirectory("mmm-environment-checkpoint-");
         try {
             var store = new EnvironmentThermalStore(root, null, null, null, null);

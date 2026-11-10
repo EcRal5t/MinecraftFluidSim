@@ -12,11 +12,12 @@ public final class GpuPipeThermalValidation {
     private GpuPipeThermalValidation() { }
     public static void main(String[] args) {
         int device=Integer.parseInt(args[0]);
-        double metal=run(device,"mmm:ordinary_metal_wall"),insulated=run(device,"mmm:ordinary_insulation_wall");
+        double metal=run(device,"mmm:ordinary_metal_wall",1),half=run(device,"mmm:ordinary_metal_wall",.5),insulated=run(device,"mmm:ordinary_insulation_wall",1);
         System.out.printf("pipe wall transfer: metal_J=%.9g insulated_J=%.9g%n",metal,insulated);
         if(!(metal>1e-6) || insulated!=0.0)throw new AssertionError("Pipe wall material did not control heat transfer");
+        if(Math.abs(half/metal-.5)>.03)throw new AssertionError("Pipe wall area scaling differs: "+half+" / "+metal);
     }
-    private static double run(int device,String deviceId) {
+    private static double run(int device,String deviceId,double areaScale) {
         var defs=TestFluidDefinitions.load();var thermal=defs.thermal();
         var fluids=new FluidMaterialRegistry(List.of(defs.material().entry("mmm:water").material()));
         var domain=new HostFluidState(3,3,3,new FluidSolverConfig(.5f,0,.5f,200,1e-5f,.002f),defs);
@@ -32,7 +33,7 @@ public final class GpuPipeThermalValidation {
                 new FiniteThermalBodyState(0,thermal.fingerprint(),definition.thermalMaterialId(),mass,energy));
         var devices=new FiniteThermalDeviceInventory(thermal.fingerprint(),List.of(wall));
         // Two liquid microboxes contact the -Y pipe wall, total area 0.125 m².
-        var contact=new FluidDomainContracts.ThermalPortRequest(1,1,1,2,.25,wallMaterial.conductivityWPerMeterK(),.125,0xc0,true);
+        var contact=new FluidDomainContracts.ThermalPortRequest(1,1,1,2,.25,wallMaterial.conductivityWPerMeterK(),.125,0xc0,true,areaScale);
         var port=new FluidStateAccess.DevicePort(wall.providerId(),wall.objectId(),contact);
         var key=new EnvironmentThermalState.Key(1,1,1,EnvironmentThermalState.Kind.SOLID,0);
         var node=new EnvironmentThermalState.Node(key,definition.thermalMaterialId(),mass,.75,GasInventory.EMPTY,energy,List.of());

@@ -18,6 +18,9 @@ public abstract class LevelBlockMutationMixin {
 			CallbackInfoReturnable<Boolean> callback) {
 		if((Object)this instanceof ServerLevel level) {
 			var runtime=MmmRuntimeRegistry.find(level.getServer());
+            if(runtime!=null&&runtime.pipes()!=null&&!runtime.pipes().allowsBlockChange(level,position,state)) {
+                callback.setReturnValue(false);return;
+            }
 			if (!state.is(mmm.block.MmmBlocks.MATERIAL_BOX)
 					&& !mmm.simulation.IndustrialOperations.allowsBoxRemoval(level,position)) {
 				callback.setReturnValue(false); return;
@@ -29,8 +32,12 @@ public abstract class LevelBlockMutationMixin {
 	@Inject(method="destroyBlock(Lnet/minecraft/core/BlockPos;ZLnet/minecraft/world/entity/Entity;I)Z",at=@At("HEAD"),cancellable=true)
 	private void mmm$protectBoxBeforeDrops(BlockPos position,boolean drops,net.minecraft.world.entity.Entity source,int recursion,
 			CallbackInfoReturnable<Boolean> callback) {
-		if((Object)this instanceof ServerLevel level && !mmm.simulation.IndustrialOperations.allowsBoxRemoval(level,position))
-			callback.setReturnValue(false);
+        if((Object)this instanceof ServerLevel level) {
+            var runtime=MmmRuntimeRegistry.find(level.getServer());
+            if(!mmm.simulation.IndustrialOperations.allowsBoxRemoval(level,position)
+                    || runtime!=null&&runtime.pipes()!=null&&!runtime.pipes().allowsBlockChange(level,position,net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()))
+                callback.setReturnValue(false);
+        }
 	}
 	@Inject(method="setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;II)Z",at=@At("RETURN"))
 	private void mmm$recordWorldChange(BlockPos position,BlockState state,int flags,int recursion,

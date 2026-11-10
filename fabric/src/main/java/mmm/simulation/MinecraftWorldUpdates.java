@@ -7,6 +7,8 @@ import net.minecraft.server.level.ServerLevel;
 public final class MinecraftWorldUpdates {
     private final FluidRegionManager regions;
     private WorldThermalEnvironment environment;
+    private PipeRuntime pipes;
+    void pipes(PipeRuntime value) { pipes=value; }
     void environment(WorldThermalEnvironment value) { environment = java.util.Objects.requireNonNull(value); }
 
     public MinecraftWorldUpdates(FluidRegionManager regions) {
@@ -14,11 +16,10 @@ public final class MinecraftWorldUpdates {
     }
 
     FluidRegionManager regions() { return regions; }
-    public void chunksChanged() { regions.topologyChanged(); }
+    public void chunksChanged() { if(pipes!=null)pipes.chunksChanged(); }
 
     public void changed(ServerLevel level, BlockPos position) {
-        if(PipeNetworkPlan.pipe(level.getBlockState(position)) || java.util.Arrays.stream(net.minecraft.core.Direction.values())
-                .anyMatch(face->level.hasChunkAt(position.relative(face))&&PipeNetworkPlan.pipe(level.getBlockState(position.relative(face)))))regions.topologyChanged();
+        if(pipes!=null)pipes.changed(level,position);
         if (environment != null) environment.markDirty(level.dimension().identifier().toString(), position);
         for (var region : regions.regions()) {
             if (!region.dimension().equals(level.dimension())) continue;

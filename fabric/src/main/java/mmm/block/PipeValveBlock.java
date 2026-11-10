@@ -22,6 +22,10 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 /** A sealed pipe shell with three openings resolved on the shared microgrid. */
 public final class PipeValveBlock extends Block {
+    @Override protected void onExplosionHit(BlockState state,ServerLevel level,BlockPos pos,
+            net.minecraft.world.level.Explosion explosion,java.util.function.BiConsumer<net.minecraft.world.item.ItemStack,BlockPos> drops) {
+        if(mmm.simulation.PipeRuntime.allowsRemoval(level,pos))super.onExplosionHit(state,level,pos,explosion,drops);
+    }
     public static final EnumProperty<Direction> FACING=BlockStateProperties.FACING;
     public static final IntegerProperty OPENING=IntegerProperty.create("opening",0,2);
     public static final IntegerProperty SIGNAL=BlockStateProperties.POWER;

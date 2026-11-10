@@ -23,6 +23,8 @@ final class MinecraftSimulationLoop {
 	private final Consumer<List<String>> ownershipIssues;
 	private WorldThermalEnvironment environment;
 	private int thermalTicks;
+    private PipeRuntime pipes;
+    void pipes(PipeRuntime value) { pipes=value; }
 	void environment(WorldThermalEnvironment value) { environment = Objects.requireNonNull(value); }
 
 	MinecraftSimulationLoop(
@@ -49,6 +51,7 @@ final class MinecraftSimulationLoop {
 		operations.advanceTick();
 		containerRecovery.recoverIndexed();
 		takeover.maintainActive(server);
+        if(pipes!=null)pipes.reconcile(server);
 		boolean environmentDue=environment!=null && ++thermalTicks==10;
 		if (environmentDue) {
 			thermalTicks=0;
@@ -69,6 +72,7 @@ final class MinecraftSimulationLoop {
 			});
 		}
 		regionTick.finishServerTick();
+        if(pipes!=null)pipes.tick(server);
 		if (environmentDue) for (var level:server.getAllLevels())
 			environment.flushAdvance(level.dimension().identifier().toString());
 	}
@@ -88,6 +92,7 @@ final class MinecraftSimulationLoop {
 	}
 
 	private void tickRegion(MinecraftServer server, FluidRegion region) {
+        if(pipes!=null&&pipes.blocks(region))return;
 		ServerLevel level = server.getLevel(region.dimension());
 		if (level == null) {
 			operations.cancelRestore(region);
@@ -126,6 +131,7 @@ final class MinecraftSimulationLoop {
     void checkpointWorld(MinecraftServer server) {
         if(environment==null)return;
         try {
+            if(pipes!=null)pipes.reconcile(server);
             for(var level:server.getAllLevels())environment.refreshDirty(level);
             operations.checkpointWorld();
         } catch(java.io.IOException | RuntimeException failure) {

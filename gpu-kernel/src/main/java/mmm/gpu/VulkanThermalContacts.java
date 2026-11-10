@@ -97,7 +97,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         PLIC_CELLS(149), SCREEN_FACES(150),
         CONDUCTION_HEADER(151),
         ACTIVITY_CELLS(152), LIQUID_SPECIES_OFFSETS(153), LIQUID_SPECIES_HANDLES(154),
-        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158), LIQUID_CALORIC(LIQUID_CALORIC_WORD), PORT_INTERNAL_MASK(160);
+        LIQUID_SPECIES_AMOUNTS(155), AQUEOUS_MATERIAL(156), ETHANOL_SPECIES(157), PLIC_WALL_GEOMETRY(158), LIQUID_CALORIC(LIQUID_CALORIC_WORD), PORT_INTERNAL_MASK(160), PORT_AREA_SCALE(161);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -190,7 +190,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         Layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long a){
             this.input=input;this.materials=materials;this.conduction=conduction;owners=input.owners();samples=input.samples();cells=input.liquid().cellCount();
             if(base<Math.max(input.endOffset(),conduction.endOffset())||a<8||(a&(a-1))!=0||materials.conductivity().length!=conduction.tables.materials())throw new IllegalArgumentException("Invalid thermal contacts layout");
-            long[] cursor={base};header=allocate(cursor,161,4,a);
+            long[] cursor={base};header=allocate(cursor,162,4,a);
             for(Field f:Field.values()){
                 int n=switch(f){                    case FACE_FACTORS->Math.multiplyExact(15,cells);case MF_DISPATCH->3;
                     case MF_POW,BATH_COUNTS->samples;case BATH_OFFSETS->samples+1;case BATH_G,BATH_T->conduction.baths;
@@ -206,7 +206,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         VulkanLiquidStateLayout.Column column(Field f){return columns.get(f);}int word(Field f){return Math.toIntExact(column(f).offset()/4);}
         int headerWord(){return Math.toIntExact(header.offset()/4);}long endOffset(){return endOffset;}
         ByteBuffer headerBytes(){
-            int[] d=new int[161];var l=input.liquid();var g=input.gas();var s=input.granular();
+            int[] d=new int[162];var l=input.liquid();var g=input.gas();var s=input.granular();
             d[Header.LIQUID_CAPACITY.word]=l.stockCapacity();d[Header.GAS_CAPACITY.word]=g==null?0:g.nodeCapacity();d[Header.PARTICLE_CAPACITY.word]=s==null?0:s.particleCapacity();d[Header.DEPOSIT_CAPACITY.word]=s==null?0:s.depositCapacity();
             d[Header.CELL_COUNT.word]=cells;d[Header.SIZE_X.word]=l.sizeX();d[Header.SIZE_Y.word]=l.sizeY();d[Header.SIZE_Z.word]=l.sizeZ();d[Header.SAMPLE_CAPACITY.word]=samples;d[Header.OWNER_CAPACITY.word]=owners;d[Header.FIXED_MASKS.word]=input.fixedMasksWord();d[Header.BATH_TEMPERATURES.word]=input.bathTemperaturesWord();d[Header.FACES.word]=input.facesWord();
             d[Header.LIQUID_COUNTS.word]=lw(l,VulkanLiquidStateLayout.Field.COUNTS);d[Header.GAS_COUNTS.word]=g==null?-1:gw(g,VulkanGasStateLayout.Field.COUNTS);d[Header.GRANULAR_COUNTS.word]=s==null?-1:s.word(VulkanGranularStateLayout.Field.COUNTS);
@@ -221,7 +221,7 @@ final class VulkanThermalContacts implements AutoCloseable {
             if(v!=null){var fields=new VulkanThermalDeviceLayout.Field[]{VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY,VulkanThermalDeviceLayout.Field.MASS_UNITS,VulkanThermalDeviceLayout.Field.MATERIAL};
                 for(int i=0;i<fields.length;i++)d[134+i]=v.word(fields[i]);d[Header.DEVICE_TEMPERATURE.word]=columnWord(input.deviceThermal().temperatures());
                 var more=new VulkanThermalDeviceLayout.Field[]{VulkanThermalDeviceLayout.Field.GENERATION,VulkanThermalDeviceLayout.Field.REQUEST_GENERATION,VulkanThermalDeviceLayout.Field.DEVICE_ENERGY_CHANGE,VulkanThermalDeviceLayout.Field.PORT_DEVICE,VulkanThermalDeviceLayout.Field.PORT_CELL,VulkanThermalDeviceLayout.Field.PORT_DIRECTION,VulkanThermalDeviceLayout.Field.PORT_WALL_THICKNESS,VulkanThermalDeviceLayout.Field.PORT_WALL_K,VulkanThermalDeviceLayout.Field.PORT_FILM_THICKNESS};
-                for(int i=0;i<more.length;i++)d[138+i]=v.word(more[i]);d[Header.PORT_CAPACITY.word]=v.portCapacity();d[Header.PORT_INTERNAL_MASK.word]=v.word(VulkanThermalDeviceLayout.Field.PORT_INTERNAL_MASK);}
+                for(int i=0;i<more.length;i++)d[138+i]=v.word(more[i]);d[Header.PORT_CAPACITY.word]=v.portCapacity();d[Header.PORT_INTERNAL_MASK.word]=v.word(VulkanThermalDeviceLayout.Field.PORT_INTERNAL_MASK);d[Header.PORT_AREA_SCALE.word]=v.word(VulkanThermalDeviceLayout.Field.PORT_AREA_SCALE);}
             d[Header.PLIC_PLANES.word]=input.plicPlanesWord();d[Header.PLIC_CELLS.word]=input.plicCellsWord();
             d[Header.SCREEN_FACES.word]=input.screenFacesWord();
             d[Header.CONDUCTION_HEADER.word]=conduction.headerWordOffset();

@@ -100,6 +100,7 @@ final class MinecraftRegionInputs {
 		List<MovingBodyFluidCoupling.Request> requestedBodies = new ArrayList<>(manual
 				? manualBodies(motions, manualPrescribedBodies.apply(region)) : bodyObservations(motions));
 		if (!manual) requestedBodies.addAll(prescribedBodies.apply(region, tick));
+		for(var body:region.entityBodyState().bodies())if(PipeCollisionBodies.isPipeBody(body.bodyId()))requestedBodies.add(body.stationary());
 		if (worldUpdates != null) requestedBodies.addAll(worldUpdates.targetBodies(region));
 		if (external != null) {
 			try {

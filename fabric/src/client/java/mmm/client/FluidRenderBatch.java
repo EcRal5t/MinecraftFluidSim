@@ -20,6 +20,7 @@ final class FluidRenderBatch implements AutoCloseable {
     private final Map<BlockPos, Integer> lighting = new HashMap<>();
     private List<ClientRegionSnapshotStore.MaterialFrame> materials = List.of();
     private List<ClientRegionSnapshotStore.GranularFrame> granular = List.of();
+    private List<mmm.network.PipeSnapshotPayload.Segment> pipes = List.of();
     private BlockPos anchor;
     private Object level;
     private Object resources;
@@ -36,14 +37,15 @@ final class FluidRenderBatch implements AutoCloseable {
     FluidRenderBatch(String name) { this.name = name; }
 
     void prepare(List<ClientRegionSnapshotStore.MaterialFrame> nextMaterials,
-            List<ClientRegionSnapshotStore.GranularFrame> nextGranular, FluidRenderCoordinates coordinates,
+            List<ClientRegionSnapshotStore.GranularFrame> nextGranular,List<mmm.network.PipeSnapshotPayload.Segment> nextPipes, FluidRenderCoordinates coordinates,
             VertexFormat nextFormat, Object nextResources, boolean nextTextured, boolean shadow) {
         var client = Minecraft.getInstance();
         boolean changed = !Objects.equals(anchor, coordinates.anchor()) || format != nextFormat
                 || !Objects.equals(resources, nextResources) || level != client.level || textured != nextTextured
-                || !sameFrames(materials, nextMaterials, granular, nextGranular) || !sameLighting();
+                || !sameFrames(materials, nextMaterials, granular, nextGranular) || !pipes.equals(nextPipes) || !sameLighting();
         materials = nextMaterials;
         granular = nextGranular;
+        pipes = nextPipes;
         resources = nextResources;
         if (changed) {
             releaseBuffers();
@@ -60,6 +62,7 @@ final class FluidRenderBatch implements AutoCloseable {
                 GranularSurfaceGeometry.buildGeometry(coordinates.camera(), builder, frame, textured,
                         FluidRenderBackend::sprite, this::sampleLight);
             }
+            for(var pipe:pipes) PipeSurfaceGeometry.build(coordinates.camera(),builder,pipe,textured,FluidRenderBackend::sprite,this::sampleLight);
             try (var mesh = builder.build()) {
                 if (mesh != null) {
                     sortState = mesh.sortQuads(indexBuilder, sorting(coordinates));
@@ -128,7 +131,7 @@ final class FluidRenderBatch implements AutoCloseable {
     }
     void invalidate() { resources = null; }
     void clear() {
-        releaseBuffers(); materials = List.of(); granular = List.of(); lighting.clear();
+        releaseBuffers(); materials = List.of(); granular = List.of(); pipes=List.of(); lighting.clear();
         anchor = null; resources = null; level = null;
     }
     private void releaseBuffers() {

@@ -38,6 +38,7 @@ public final class SurvivalProgressionGameTest {
         new Craft("gas_container", "minecraft:iron_ingot", " I I IIII", Map.of('I',"minecraft:iron_ingot")),
         new Craft("insulation", "minecraft:slime_ball", "WWWWSWWWW", Map.of('W',"minecraft:white_wool",'S',"minecraft:slime_ball")),
         new Craft("insulating_glass", "mmm:insulation", "IGIGGGIGI", Map.of('I',"mmm:insulation",'G',"minecraft:glass")),
+        new Craft("insulated_glass_pipe", "mmm:insulating_glass", "G GG GG G", Map.of('G',"mmm:insulating_glass")),
         new Craft("fluid_port", "minecraft:iron_block", " I LBL I ", Map.of('I',"minecraft:iron_ingot",'L',"minecraft:lapis_lazuli",'B',"minecraft:iron_block")),
         new Craft("material_box", "minecraft:barrel", "IIIIBIIII", Map.of('I',"minecraft:iron_ingot",'B',"minecraft:barrel")),
         new Craft("process_sensor", "minecraft:comparator", "IRIICIIII", Map.of('I',"minecraft:iron_ingot",'R',"minecraft:redstone",'C',"minecraft:comparator")),
@@ -100,7 +101,7 @@ public final class SurvivalProgressionGameTest {
         var level=test.getLevel(); var player=test.makeMockServerPlayerInLevel();
         player.gameMode.changeGameModeForPlayer(net.minecraft.world.level.GameType.SURVIVAL);
         var relative=new BlockPos(1,2,2); var position=test.absolutePos(relative);
-        for(var block:List.of(MmmBlocks.INSULATION,MmmBlocks.INSULATING_GLASS,MmmBlocks.FLUID_PORT,
+        for(var block:List.of(MmmBlocks.INSULATION,MmmBlocks.INSULATING_GLASS,MmmBlocks.INSULATED_GLASS_PIPE,MmmBlocks.FLUID_PORT,
                 MmmBlocks.MATERIAL_BOX,MmmBlocks.PROCESS_SENSOR,MmmBlocks.VALVE,MmmBlocks.SCREEN,MmmBlocks.MECHANICAL_DRIVER)) {
             test.setBlock(relative,block);
             player.setItemInHand(InteractionHand.MAIN_HAND,new ItemStack(Items.STONE_PICKAXE));

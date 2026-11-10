@@ -14,7 +14,7 @@ public final class HostValidationSuite {
         checks.put("mixture-edits", () -> mmm.fluid.MarkerVelocityTransferValidation.main(new String[0]));
         checks.put("region-manager", () -> mmm.simulation.FluidRegionManagerValidation.main(new String[0]));
         checks.put("region-merge", () -> mmm.simulation.RegionMergePersistenceValidation.main(new String[0]));
-        checks.put("pipe-network", () -> mmm.simulation.PipeNetworkPlanValidation.main(new String[0]));
+        checks.put("pipe-network", () -> mmm.simulation.PipeTopologyValidation.main(new String[0]));
         checks.put("shape", () -> mmm.simulation.FluidCutCellShapeValidation.main(new String[0]));
         checks.put("environment", () -> {
             mmm.simulation.WorldThermalProjectionValidation.main(new String[0]);
@@ -36,6 +36,7 @@ public final class HostValidationSuite {
             mmm.client.ObservationOpenValidation.main(new String[0]);
             mmm.network.ProcessTrendHistoryValidation.main(new String[0]);
             mmm.client.ClientSurfaceValidation.main(new String[0]);
+            mmm.simulation.PipeSnapshotPublisherValidation.run();
             mmm.simulation.CommittedEventHubValidation.main(new String[0]);
             mmm.simulation.ShellFluidQueryValidation.main(new String[0]);
         });

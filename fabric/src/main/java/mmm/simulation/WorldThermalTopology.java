@@ -26,9 +26,13 @@ final class WorldThermalTopology {
     final Map<BlockPos, Integer> screenNodes = new HashMap<>();
     final Map<BlockPos, Double> screenOpen = new HashMap<>();
     final Set<BlockPos> pipeScreens = new HashSet<>();
+    final Map<BlockPos,BlockState> pipeStates = new HashMap<>();
+    final Map<BlockPos,List<net.minecraft.world.phys.AABB>> pipeWallBoxes = new HashMap<>();
+    final Map<BlockPos,Integer> pipeWalls = new HashMap<>(), pipeAir = new HashMap<>();
+    final Set<Integer> pipeWallIds = new HashSet<>();
     final Map<Integer, mmm.fluid.air.GasInventory> defaultAir = new HashMap<>();
     final Map<Integer, Double> defaultAirEnergy = new HashMap<>();
-    SignedDyadic added = SignedDyadic.ZERO, removed = SignedDyadic.ZERO;
+    SignedDyadic added = SignedDyadic.ZERO, removed = SignedDyadic.ZERO, roundoff = SignedDyadic.ZERO;
     WorldThermalTopology(CommittedWorldRegistries definitions, BlockGetter currentWorld, Map<EnvironmentThermalState.Key, EnvironmentThermalState.Node> old) {
         this.definitions=definitions; this.currentWorld=currentWorld;
         this.old = old;
@@ -65,6 +69,11 @@ final class WorldThermalTopology {
             screenNodes.put(pos,addNode(new EnvironmentThermalState.Node(key,def.thermalMaterialId(),Mass.fromKilograms(mass),pipeScreen?.03125:.125,
                     mmm.fluid.air.GasInventory.EMPTY,energy,List.of(),axis.name())));
         }
+        if (PipeThermalGeometry.isPipe(state)) {
+            addPipe(pos,state,ids,mechanical);
+            cells.put(pos,ids);
+            return;
+        }
         if (solidCount > 0 && (!isScreen || pipeScreen)) {
             var def = BlockThermalMaterials.resolve(state, definitions.thermalRegistry());
             // Port covers and the valve shutter remain part of the same body as their shape moves.
@@ -97,6 +106,47 @@ final class WorldThermalTopology {
             }
         }
         cells.put(pos,ids);
+    }
+    private void addPipe(BlockPos pos,BlockState state,int[] ids,boolean mechanical) {
+        var registry=definitions.thermalRegistry(); var def=BlockThermalMaterials.resolve(state,registry);
+        double volume=mmm.block.PipeGeometry.wallVolume(state);
+        long mass=Mass.fromKilograms(def.bodyMassKilograms()*volume);
+        double freshEnergy=new ThermalStateFunction(registry).internalEnergyAtTemperature(
+                registry.materialHandle(def.thermalMaterialId()),Mass.kilograms(mass),Map.of(),TEMPERATURE);
+        var key=new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.SOLID,0);
+        var previous=old.remove(key);
+        double energy=freshEnergy;
+        if(previous!=null && previous.materialId().equals(def.thermalMaterialId())) {
+            double retained=previous.massUnits()<=mass ? previous.internalEnergyJ()
+                    : previous.internalEnergyJ()*(mass/(double)previous.massUnits());
+            double addedEnergy=mass>previous.massUnits()?freshEnergy*(mass-previous.massUnits())/(double)mass:0;
+            energy=retained+addedEnergy;
+            roundoff=roundoff.add(SignedDyadic.of(energy).subtract(SignedDyadic.of(retained)).subtract(SignedDyadic.of(addedEnergy)));
+            removed=removed.add(SignedDyadic.of(previous.internalEnergyJ()).subtract(SignedDyadic.of(retained)));
+            added=added.add(SignedDyadic.of(addedEnergy));
+        } else {
+            if(previous!=null)removed=removed.add(SignedDyadic.of(previous.internalEnergyJ()));
+            added=added.add(SignedDyadic.of(energy));
+        }
+        int wall=nodes.size(); nodes.add(new EnvironmentThermalState.Node(key,def.thermalMaterialId(),mass,volume,
+                mmm.fluid.air.GasInventory.EMPTY,energy,List.of()));
+        pipeStates.put(pos,state);pipeWalls.put(pos,wall);pipeWallIds.add(wall);
+        pipeWallBoxes.put(pos,mmm.block.PipeGeometry.shell(state).toAabbs());
+        if(mechanical)return;
+        double exterior=PipeThermalGeometry.outsideVolume(state);
+        var airKey=new EnvironmentThermalState.Key(pos.getX(),pos.getY(),pos.getZ(),EnvironmentThermalState.Kind.AIR,0);
+        var priorAir=old.remove(airKey); mmm.fluid.air.GasInventory gas; double gasEnergy;
+        if(priorAir!=null) { gas=priorAir.gas();gasEnergy=priorAir.internalEnergyJ(); }
+        else {
+            var model=new GasThermalModel(registry,definitions.gasRegistry());
+            gas=model.inventoryAtPressure(exterior,mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,TEMPERATURE,definitions.gasRegistry().ambient());
+            gasEnergy=model.internalEnergyAtTemperature(gas,TEMPERATURE); added=added.add(SignedDyadic.of(gasEnergy));
+        }
+        int outside=nodes.size(); nodes.add(new EnvironmentThermalState.Node(airKey,"mmm:air",gas.totalMassUnits(),exterior,gas,gasEnergy,List.of()));
+        pipeAir.put(pos,outside);
+        var envelope=mmm.block.PipeGeometry.envelope(state);
+        for(int z=0;z<N;z++)for(int y=0;y<N;y++)for(int x=0;x<N;x++)
+            if(PipeThermalGeometry.outsideCell(envelope,x,y,z))ids[index(x,y,z)]=outside;
     }
     int addNode(EnvironmentThermalState.Node fresh) {
         var prior=old.remove(fresh.key());
@@ -134,6 +184,31 @@ final class WorldThermalTopology {
                 }
             }
         }
+        connectPipeWalls();
+    }
+    private void connectPipeWalls() {
+        for(var entry:pipeStates.entrySet()) {
+            var pos=entry.getKey();var shell=pipeWallBoxes.get(pos);int wall=pipeWalls.get(pos), boundary=0;
+            for(var direction:Direction.values())for(int u=0;u<16;u++)for(int v=0;v<16;v++) {
+                if(!PipeThermalGeometry.boundarySolid(shell,direction,u,v))continue;
+                boundary++;
+                var neighbor=pos.relative(direction);Integer otherWall=pipeWalls.get(neighbor);
+                if(otherWall!=null && PipeThermalGeometry.boundarySolid(pipeWallBoxes.get(neighbor),direction.getOpposite(),u,v)) {
+                    if(wall<otherWall)addEdge(wall,otherWall,conductance(wall,otherWall)/256.0,TEMPERATURE);
+                    continue;
+                }
+                int[] other=cells.get(neighbor);
+                if(other==null) { addEdge(wall,-1,conductance(wall,-1)/256.0,TEMPERATURE);continue; }
+                int[] p=PipeThermalGeometry.boundaryCoordinate(direction.getOpposite(),u/4,v/4,4);
+                int otherNode=other[index(p[0],p[1],p[2])];
+                if(otherNode>=0 && otherNode!=wall)addEdge(wall,otherNode,conductance(wall,otherNode)/256.0,TEMPERATURE);
+            }
+            Integer air=pipeAir.get(pos);
+            if(air!=null) {
+                double area=mmm.block.PipeGeometry.outerArea(entry.getValue())-boundary/256.0;
+                if(area>0)addEdge(wall,air,conductance(wall,air)*area,TEMPERATURE);
+            }
+        }
     }
     double conductance(int a,int b) {
         var left=nodes.get(a); var right=b<0?null:nodes.get(b);
@@ -141,7 +216,7 @@ final class WorldThermalTopology {
         if(la&&ra)return AIR_MIXING;
         double lk=la?0:conductivity(left), rk=ra?0:conductivity(right);
         if(!la&&lk==0 || !ra&&rk==0)return 0;
-        return 1.0/((la?1/FILM:thickness(left)/lk)+(ra?1/FILM:thickness(right)/rk));
+        return 1.0/((la?1/FILM:thickness(a)/lk)+(ra?1/FILM:thickness(b)/rk));
     }
     boolean screenCrossesAt(BlockPos pos,Direction.Axis axis,int x,int y,int z,int xx,int yy,int zz) {
         if(!screenCrosses(axis,x,y,z,xx,yy,zz))return false;
@@ -158,7 +233,7 @@ final class WorldThermalTopology {
         var entity = currentWorld.getBlockEntity(pos);
         return entity instanceof mmm.block.ScreenBlockEntity screen ? screen.openFraction() : 0.6;
     }
-    double thickness(EnvironmentThermalState.Node n){return n.materialId().equals("mmm:screen") ? 0.002 : 0.5;}
+    double thickness(int index){return pipeWallIds.contains(index)?0.03125:nodes.get(index).materialId().equals("mmm:screen") ? 0.002 : 0.5;}
     double conductivity(EnvironmentThermalState.Node n){return definitions.thermalRegistry().material(definitions.thermalRegistry().materialHandle(n.materialId())).conductivityWPerMeterK();}
     void addEdge(int a,int b,double g,double temperature) {if(g<=0)return; if(b>=0&&a>b){int t=a;a=b;b=t;} edges.merge(new EdgeKey(a,b,temperature),g,Double::sum);}
     Map<EnvironmentThermalState.Key,Long> airMasks() {

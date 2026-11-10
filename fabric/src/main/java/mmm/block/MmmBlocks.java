@@ -25,6 +25,7 @@ public final class MmmBlocks {
 	public static final Block METAL_PIPE = register("metal_pipe", PipeBlock::new);
 	public static final Block INSULATED_PIPE = register("insulated_pipe", PipeBlock::new);
 	public static final Block GLASS_PIPE = register("glass_pipe", PipeBlock::new);
+	public static final Block INSULATED_GLASS_PIPE = register("insulated_glass_pipe", PipeBlock::new);
 	public static final Block PIPE_VALVE = register("pipe_valve", PipeValveBlock::new);
 	public static final Block PIPE_SCREEN = register("pipe_screen", PipeScreenBlock::new);
 	public static final Block FLUID_PORT = register("fluid_port", FluidPortBlock::new);

@@ -22,6 +22,7 @@ import net.minecraft.world.phys.Vec3;
 public final class ClientSurfaceValidation {
 	public static void main(String[] args) {
 		InsulatingGlassConnectionsValidation.run();
+        PipeSnapshotValidation.run();
 		interactiveResponses();
 		var store = new ClientRegionSnapshotStore();
 		var negotiation = FluidProtocol.negotiate(FluidProtocol.materialServerOffer());

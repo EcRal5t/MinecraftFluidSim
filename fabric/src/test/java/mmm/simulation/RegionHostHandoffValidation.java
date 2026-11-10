@@ -10,6 +10,7 @@ import net.minecraft.world.level.Level;
 /** Device-to-host handoff keeps current availability and restores one checkpoint generation. */
 final class RegionHostHandoffValidation {
     static void validate() throws Exception {
+        pipeEditsPublishTogether();
         finiteDeviceReloadUsesCheckpoint();
         ordinaryWallContactsSpanBothSides();
         sparseControllerSharesWallInventory();
@@ -18,6 +19,33 @@ final class RegionHostHandoffValidation {
         touchingUnavailableCellKeepsBodyAvailable();
         hostEditsRespectCurrentActivity();
         fullyLoadedPlannerGroupsRemainIndependent();
+    }
+
+    private static void pipeEditsPublishTogether() {
+        var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-5f,1e-4f);
+        var definitions=mmm.fluid.TestFluidDefinitions.load();
+        var backend=new HandoffBackend();
+        var first=region(new HostFluidState(2,2,2,config,definitions));
+        var second=region(new HostFluidState(2,2,2,config,definitions));
+        first.solverBackend(backend);second.solverBackend(backend);
+        first.ensureDeviceResident();second.ensureDeviceResident();
+        long generation=first.solverGeneration();
+        try(var a=new RegionPipeEdit(first,first.beginHostEdit());
+            var b=new RegionPipeEdit(second,second.beginHostEdit())) {
+            backend.commitsBeforeFailure=1;
+            boolean failed=false;
+            try { RegionPipeEdit.commit(List.of(a,b),null); }
+            catch(IllegalStateException expected) { failed=true; }
+            require(failed && first.solverGeneration()==generation && second.solverGeneration()==generation,
+                    "Failed private import published a partial pipe exchange");
+        }
+        backend.commitsBeforeFailure=-1;
+        try(var a=new RegionPipeEdit(first,first.beginHostEdit());
+            var b=new RegionPipeEdit(second,second.beginHostEdit())) {
+            RegionPipeEdit.commit(List.of(a,b),null);
+            require(first.solverGeneration()==generation+1 && second.solverGeneration()==generation+1,
+                    "Successful private imports did not publish both regions");
+        }
     }
 
     private static void processSettingsSurviveRestartAndStop() throws Exception {
@@ -255,6 +283,7 @@ final class RegionHostHandoffValidation {
     /** Read-only committed device observations; no alternate simulation implementation. */
     private static final class HandoffBackend implements FluidSolverBackend {
         FiniteThermalDeviceInventory devices;
+        int commitsBeforeFailure=-1;
         public String id() { return "test:handoff"; }
         public PreparedFluidState prepareState(FluidStateAccess source, FluidDomainState state,
                 FiniteThermalDeviceInventory inventory, List<FluidStateAccess.DevicePort> ports) {
@@ -279,7 +308,11 @@ final class RegionHostHandoffValidation {
             return new PreparedFluidState() {
                 public FluidDomainState.Layout layout() { return state.layout(); }
                 public FluidDomainState exportState() { return state; }
-                public FluidStateAccess commit() { return resident; }
+                public FluidStateAccess commit() {
+                    if(commitsBeforeFailure==0) throw new IllegalStateException("Injected import failure");
+                    if(commitsBeforeFailure>0) commitsBeforeFailure--;
+                    return resident;
+                }
                 public void close() { }
             };
         }

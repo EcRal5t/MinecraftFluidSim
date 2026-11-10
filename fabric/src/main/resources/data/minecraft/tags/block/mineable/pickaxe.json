@@ -10,6 +10,7 @@
     "mmm:screen",
     "mmm:metal_pipe",
     "mmm:insulated_pipe",
+    "mmm:insulated_glass_pipe",
     "mmm:glass_pipe",
     "mmm:pipe_valve",
     "mmm:pipe_screen"

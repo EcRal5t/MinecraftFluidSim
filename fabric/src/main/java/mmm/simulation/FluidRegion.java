@@ -203,8 +203,7 @@ public final class FluidRegion {
 	/** Creates an independent host view of the committed device generation when needed. */
 	public HostFluidState hostSnapshot() {
 		var snapshot = HostFluidState.restoreAuthoritativeState(captureHostState());
-		// Edits use the same effective availability as this region's current GPU request.
-		// It includes device connections and body sweeps that the import template predates.
+		// Use current request availability, including device connections and body sweeps.
 		if (groupAvailability != null) snapshot.prepareGroupAvailability(groupAvailability);
 		else if (residentState != null) {
 			boolean[] available = new boolean[grid().cellCount()];
@@ -224,6 +223,19 @@ public final class FluidRegion {
 	HostFluidState editableHost() {
 		if (residentState != null || domain == null) throw new IllegalStateException("Region has no editable host state");
 		return domain;
+	}
+
+	mmm.fluid.PreparedFluidState preparePipeImport(HostFluidState candidate) {
+		return residentState == null ? null : solverBackend.prepareState(null, candidate.captureAuthoritativeState(),
+				currentFiniteDevices(), finiteThermalPorts, environmentBinding);
+	}
+
+	mmm.fluid.FluidStateAccess adoptPipeImport(HostFluidState candidate, mmm.fluid.FluidStateAccess state,
+			boolean device, long generation, double[] temperatures) {
+		var previous = residentState;
+		residentState = state; domain = device ? null : candidate;
+		boundaryTemperatures = temperatures; boundaryTemperaturesKnown = true; solverGeneration = generation;
+		return previous;
 	}
 
 	/** Creates a private editable successor; the committed generation remains available. */
@@ -837,10 +849,6 @@ public final class FluidRegion {
 		clearLoadedSolverState();
 		committedObservationListener = () -> { };
 	}
-
-    FluidRegion mergedCandidate(HostFluidState host,FluidRegionFootprint footprint,FiniteThermalDeviceInventory devices) {
-        var candidate=resizedCandidate(host,footprint);candidate.finiteThermalDevices=devices;return candidate;
-    }
 
 	void adoptResizedDevice(mmm.fluid.FluidStateAccess state) {
 		if (!(state instanceof mmm.fluid.ResidentFluidState resident))

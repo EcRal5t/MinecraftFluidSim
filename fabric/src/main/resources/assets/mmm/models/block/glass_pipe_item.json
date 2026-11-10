@@ -1,11 +1,11 @@
 {
   "textures": {
     "particle": {
-      "sprite": "mmm:block/insulating_glass",
+      "sprite": "minecraft:block/glass",
       "force_translucent": true
     },
     "side": {
-      "sprite": "mmm:block/insulating_glass",
+      "sprite": "minecraft:block/glass",
       "force_translucent": true
     }
   },
@@ -13,13 +13,13 @@
     {
       "from": [
         0,
-        0,
-        0
+        3,
+        3
       ],
       "to": [
         16,
-        4,
-        16
+        13,
+        4
       ],
       "faces": {
         "down": {
@@ -45,13 +45,13 @@
     {
       "from": [
         0,
-        4,
-        0
+        3,
+        4
       ],
       "to": [
-        4,
         16,
-        16
+        4,
+        13
       ],
       "faces": {
         "down": {
@@ -76,14 +76,14 @@
     },
     {
       "from": [
+        0,
         12,
-        4,
-        0
+        4
       ],
       "to": [
         16,
-        16,
-        16
+        13,
+        13
       ],
       "faces": {
         "down": {
@@ -108,14 +108,14 @@
     },
     {
       "from": [
+        0,
         4,
-        12,
-        0
+        12
       ],
       "to": [
-        12,
         16,
-        16
+        12,
+        13
       ],
       "faces": {
         "down": {

@@ -32,6 +32,9 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
         return material < 0 ? null : frame.payload().materials().get(material).id();
     }
 	private final ClientRegionSnapshotStore snapshots = new ClientRegionSnapshotStore();
+    private final ClientPipeSnapshotStore pipes=new ClientPipeSnapshotStore();
+    private volatile java.util.List<mmm.network.PipeSnapshotPayload.Segment> extractedPipes=java.util.List.of();
+    public void accept(mmm.network.PipeSnapshotPayload payload,FluidProtocol.Negotiation negotiation){pipes.accept(payload,negotiation);}
 	private final FluidRenderBackend backend = new FluidRenderBackend();
 
 
@@ -53,6 +56,7 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
 
 	public void extract(LevelExtractionContext context) {
 		snapshots.extract(context);
+        extractedPipes=pipes.forDimension(context.level().dimension().identifier());
 	}
 
     public void render(LevelRenderContext context) {
@@ -65,12 +69,12 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
     }
 
     private void renderMaterials(net.minecraft.world.phys.Vec3 camera, boolean shadow) {
-        backend.render(snapshots.materialFrames(), snapshots.granularFrames(), FluidRenderCoordinates.at(camera), shadow);
+        backend.render(snapshots.materialFrames(), snapshots.granularFrames(), extractedPipes,FluidRenderCoordinates.at(camera), shadow);
     }
 
     void invalidateResources() { backend.invalidate(); }
 	public void clear() {
-		snapshots.clear();
+		snapshots.clear();pipes.clear();extractedPipes=java.util.List.of();
         backend.invalidate();
 	}
 

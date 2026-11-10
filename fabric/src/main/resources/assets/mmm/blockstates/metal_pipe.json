@@ -12,9 +12,28 @@
             "down": "none"
           },
           {
-            "down": "sealed"
+            "down": "open"
+          },
+          {
+            "down": "connected"
           }
         ]
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_arm_down"
+      }
+    },
+    {
+      "when": {
+        "down": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_sealed_down"
+      }
+    },
+    {
+      "when": {
+        "down": "none"
       },
       "apply": {
         "model": "mmm:block/metal_pipe_cap_down"
@@ -27,9 +46,28 @@
             "up": "none"
           },
           {
-            "up": "sealed"
+            "up": "open"
+          },
+          {
+            "up": "connected"
           }
         ]
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_arm_up"
+      }
+    },
+    {
+      "when": {
+        "up": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_sealed_up"
+      }
+    },
+    {
+      "when": {
+        "up": "none"
       },
       "apply": {
         "model": "mmm:block/metal_pipe_cap_up"
@@ -42,9 +80,28 @@
             "north": "none"
           },
           {
-            "north": "sealed"
+            "north": "open"
+          },
+          {
+            "north": "connected"
           }
         ]
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_arm_north"
+      }
+    },
+    {
+      "when": {
+        "north": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_sealed_north"
+      }
+    },
+    {
+      "when": {
+        "north": "none"
       },
       "apply": {
         "model": "mmm:block/metal_pipe_cap_north"
@@ -57,9 +114,28 @@
             "south": "none"
           },
           {
-            "south": "sealed"
+            "south": "open"
+          },
+          {
+            "south": "connected"
           }
         ]
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_arm_south"
+      }
+    },
+    {
+      "when": {
+        "south": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_sealed_south"
+      }
+    },
+    {
+      "when": {
+        "south": "none"
       },
       "apply": {
         "model": "mmm:block/metal_pipe_cap_south"
@@ -72,9 +148,28 @@
             "west": "none"
           },
           {
-            "west": "sealed"
+            "west": "open"
+          },
+          {
+            "west": "connected"
           }
         ]
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_arm_west"
+      }
+    },
+    {
+      "when": {
+        "west": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_sealed_west"
+      }
+    },
+    {
+      "when": {
+        "west": "none"
       },
       "apply": {
         "model": "mmm:block/metal_pipe_cap_west"
@@ -87,9 +182,28 @@
             "east": "none"
           },
           {
-            "east": "sealed"
+            "east": "open"
+          },
+          {
+            "east": "connected"
           }
         ]
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_arm_east"
+      }
+    },
+    {
+      "when": {
+        "east": "sealed"
+      },
+      "apply": {
+        "model": "mmm:block/metal_pipe_sealed_east"
+      }
+    },
+    {
+      "when": {
+        "east": "none"
       },
       "apply": {
         "model": "mmm:block/metal_pipe_cap_east"

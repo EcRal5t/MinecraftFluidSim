@@ -79,7 +79,8 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
                             && piston.getMovedState().getBlock() instanceof net.minecraft.world.level.block.piston.PistonBaseBlock)
                         shape = Shapes.block();
                     else shape = Shapes.empty();
-                } else shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
+                } else if(PipeThermalGeometry.isPipe(state)) shape=Shapes.empty();
+                else shape=state.isCollisionShapeFullBlock(level,position) ? Shapes.block() : state.getCollisionShape(level,position);
                 block=shapeMasks.computeIfAbsent(shape,value->sampleBlockMasks(value,n));
                 blockMasks.put(position,block);
             }

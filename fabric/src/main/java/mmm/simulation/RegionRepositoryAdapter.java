@@ -45,6 +45,7 @@ final class RegionRepositoryAdapter {
     private EnvironmentThermalStore.Snapshot worldSnapshot;
     private WorldThermalEnvironment environment;
     private FluidRegionManager manager;
+    private java.util.function.Supplier<java.util.Map<String,mmm.pipe.PipeDimensionState>> pipes;
     private boolean mirroringWorld;
     private java.util.function.Predicate<UUID> worldCheckpointBarrier = id -> false;
     private final java.util.Map<UUID,mmm.thermal.EnvironmentThermalState> stagedEnvironment = new java.util.HashMap<>();
@@ -148,6 +149,13 @@ final class RegionRepositoryAdapter {
         if(environment!=null)publishWorldCheckpoint(null,null);
     }
 
+    java.util.Map<String,mmm.pipe.PipeDimensionState> recoveredPipes() {
+        return worldSnapshot==null?java.util.Map.of():worldSnapshot.pipes();
+    }
+    void pipes(java.util.function.Supplier<java.util.Map<String,mmm.pipe.PipeDimensionState>> value) {
+        pipes=Objects.requireNonNull(value);
+    }
+
     private void publishWorldCheckpoint(RegionState target, RemovedRegionManifest removal) throws IOException {
         if(mirroringWorld || environment==null)return;
         UUID targetId=target!=null?target.manifest().regionId():removal!=null?removal.regionId():null;
@@ -182,7 +190,7 @@ final class RegionRepositoryAdapter {
         }
         boolean external=externalEnvironmentCandidates.contains(targetId);
         try(var prepared = override == null || external ? null : environment.prepareCheckpoint(override)) {
-            var candidate=worldStore.prepare(environments,regions,removals);
+            var candidate=worldStore.prepare(environments,regions,removals,pipes==null?recoveredPipes():pipes.get());
             if(prepared!=null && !prepared.isCurrent())throw new IOException("Environment candidate changed before world publication");
             try { worldStore.commit(candidate); }
             catch (IOException failure) {

@@ -25,8 +25,9 @@ public final class WorldThermalSamplingValidation {
         var tags=new HashMap<TagKey<Block>,List<net.minecraft.core.Holder<Block>>>();
         registry.getTags().forEach(tag->tags.put(tag.key(),tag.stream().toList()));
         tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_wood_thermal_walls")),List.of(Blocks.OAK_TRAPDOOR.builtInRegistryHolder()));
-        tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_insulation_thermal_walls")),List.of(mmm.block.MmmBlocks.INSULATING_GLASS.builtInRegistryHolder()));
-        tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_metal_thermal_walls")),List.of(mmm.block.MmmBlocks.PIPE_SCREEN.builtInRegistryHolder()));
+        tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_insulation_thermal_walls")),List.of(mmm.block.MmmBlocks.INSULATING_GLASS.builtInRegistryHolder(),mmm.block.MmmBlocks.INSULATED_PIPE.builtInRegistryHolder(),mmm.block.MmmBlocks.INSULATED_GLASS_PIPE.builtInRegistryHolder()));
+        tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_glass_thermal_walls")),List.of(mmm.block.MmmBlocks.GLASS_PIPE.builtInRegistryHolder()));
+        tags.put(TagKey.create(Registries.BLOCK,Identifier.parse("mmm:ordinary_metal_thermal_walls")),List.of(mmm.block.MmmBlocks.PIPE_SCREEN.builtInRegistryHolder(),mmm.block.MmmBlocks.METAL_PIPE.builtInRegistryHolder(),mmm.block.MmmBlocks.PIPE_VALVE.builtInRegistryHolder()));
         registry.prepareTagReload(new net.minecraft.tags.TagLoader.LoadResult<>(Registries.BLOCK,tags)).apply();
         var d=ProductionRegistries.load();
         var startup=WorldStartupCoordinator.start(Files.createTempDirectory("mmm-world-sampling-"),()->new mmm.simulation.persistence.WorldCapabilityBundleStore.Definitions(
@@ -34,6 +35,7 @@ public final class WorldThermalSamplingValidation {
         var world=new CommittedWorldRegistries(startup);
         pipeScreenTopology(world);
         pipeMovingPartsRetainHeat(world);
+        pipeWallGeometry(world);
         var manager=new FluidRegionManager(startup.config().limits());
         var environments=new HashMap<String,EnvironmentThermalState>();
         var backend=(FluidSolverBackend)Proxy.newProxyInstance(FluidSolverBackend.class.getClassLoader(),new Class<?>[]{FluidSolverBackend.class},(proxy,method,argv)->switch(method.getName()) {
@@ -53,6 +55,8 @@ public final class WorldThermalSamplingValidation {
             }
             default -> throw new UnsupportedOperationException(method.getName());
         });
+        pipeAirHandoff(world,backend,manager);
+        pipeAirExchange(world,backend,manager);
         var origin=BlockPos.ZERO; var footprint=mmm.simulation.controller.FluidRegionFootprint.box(origin,origin);
         var config=new FluidSolverConfig(0.5F,9.81F,1F/20F,48,1e-4F,2e-3F);
         var host=new HostFluidState(2,2,2,config,world.definitions());
@@ -84,8 +88,8 @@ public final class WorldThermalSamplingValidation {
         var wall=region.finiteThermalDevices(world.thermalRegistry().fingerprint()).devices().stream().filter(device->device.objectId().startsWith(origin.asLong()+"@")).findFirst().orElseThrow();
         if(env.portsFor(region,wall,world.thermalRegistry()).stream().noneMatch(FluidDomainContracts.ThermalPortRequest::internalFace))throw new AssertionError("Partial wall lost internal microface");
         manager.observeGeometry(env::regionGeometryChanged);
-        var replacement=region.mergedCandidate(HostFluidState.restoreAuthoritativeState(region.hostSnapshot().captureAuthoritativeState()),
-                footprint,FiniteThermalDeviceInventory.empty(world.thermalRegistryFingerprint()));
+        var replacement=new FluidRegion(region.id(),region.dimension(),region.origin(),
+                HostFluidState.restoreAuthoritativeState(region.hostSnapshot().captureAuthoritativeState()),footprint);
         if(replacement.environmentBinding()!=null || !replacement.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().isEmpty())
             throw new AssertionError("Replacement fixture retained its old projection");
         if(!manager.adoptResize(region,replacement).accepted())throw new AssertionError("Same-id replacement was rejected");
@@ -147,21 +151,7 @@ public final class WorldThermalSamplingValidation {
         refreshed.add(pos,state,masks,false);
         if(refreshed.nodes.stream().noneMatch(n->n.equals(savedShell)) || refreshed.nodes.stream().noneMatch(n->n.equals(savedMembrane)))
             throw new AssertionError("Pipe screen refresh reset thermal inventory");
-        var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-4f,.002f);
-        var host=new HostFluidState(2,2,2,config,world.definitions());
-        for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++)host.setSolidMicroMask(x,y,z,Byte.toUnsignedInt(masks[(z*2+y)*2+x]));
-        var footprint=mmm.simulation.controller.FluidRegionFootprint.box(pos,pos);
-        var region=new FluidRegion(UUID.randomUUID(),Level.OVERWORLD,pos,host,footprint);
-        var device=new FiniteThermalDeviceState(WorldThermalEnvironment.PROVIDER,pos.asLong()+"@mmm:screen@"+membrane.owner(),"mmm:screen",
-                new FiniteThermalBodyState(0,world.thermalRegistryFingerprint(),membrane.materialId(),membrane.massUnits(),membrane.internalEnergyJ()));
-        var ports=WorldThermalEnvironment.ports(region,device,world.thermalRegistry());
-        int area=0;
-        for(var port:ports) {
-            int solid=region.solidMicroMask(port.cellX(),port.cellY(),port.cellZ());
-            int axis=port.direction()/2,side=port.direction()%2;
-            for(int micro=0;micro<8;micro++)if((solid&(1<<micro))==0 && ((micro>>axis)&1)==side)area++;
-        }
-        if(area!=8)throw new AssertionError("Pipe screen contact area differs from two quarter-block faces: "+area);
+        if(shell.volumeCubicMetres()!=mmm.block.PipeGeometry.wallVolume(state))throw new AssertionError("Pipe screen shell volume differs");
     }
 
     private static void pipeMovingPartsRetainHeat(CommittedWorldRegistries world) {
@@ -177,12 +167,119 @@ public final class WorldThermalSamplingValidation {
                 var topology=new WorldThermalTopology(world,EmptyBlockGetter.INSTANCE,old);
                 topology.add(pos,state,masks,true);
                 var solid=topology.nodes.stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.SOLID).findFirst().orElseThrow();
+                if(solid.volumeCubicMetres()!=mmm.block.PipeGeometry.wallVolume(state))throw new AssertionError("Pipe wall volume differs");
                 if(heated==null)heated=solid.withEnergy(solid.internalEnergyJ()+12345);
-                else if(solid.massUnits()!=heated.massUnits() || solid.volumeCubicMetres()!=.875
-                        || solid.internalEnergyJ()!=heated.internalEnergyJ())
-                    throw new AssertionError("Moving pipe parts changed thermal inventory");
+                else {
+                    var expected=mmm.units.SignedDyadic.of(heated.internalEnergyJ()).add(topology.added)
+                            .subtract(topology.removed).add(topology.roundoff);
+                    if(!expected.equals(mmm.units.SignedDyadic.of(solid.internalEnergyJ())))
+                        throw new AssertionError("Pipe shape update lost heat accounting");
+                    heated=solid;
+                }
                 old=new HashMap<>();old.put(heated.key(),heated);
             }
+        }
+    }
+
+    private static void pipeWallGeometry(CommittedWorldRegistries world) {
+        var pos=BlockPos.ZERO;
+        var blocks=List.of(mmm.block.MmmBlocks.METAL_PIPE,mmm.block.MmmBlocks.GLASS_PIPE,
+                mmm.block.MmmBlocks.INSULATED_PIPE,mmm.block.MmmBlocks.INSULATED_GLASS_PIPE);
+        for(var block:blocks) {
+            var state=block.defaultBlockState();var topology=new WorldThermalTopology(world,EmptyBlockGetter.INSTANCE,new HashMap<>());
+            var masks=MinecraftCollisionWorldPort.sampleBlockMasks(state.getCollisionShape(EmptyBlockGetter.INSTANCE,pos),2);
+            topology.add(pos,state,masks,false);
+            for(var direction:net.minecraft.core.Direction.values())topology.add(pos.relative(direction),Blocks.AIR.defaultBlockState(),new byte[8],false);
+            topology.connect();
+            var wall=topology.nodes.stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.SOLID).findFirst().orElseThrow();
+            var air=topology.nodes.stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.AIR).findFirst().orElseThrow();
+            double outside=PipeThermalGeometry.outsideVolume(state),parts=Arrays.stream(PipeThermalGeometry.halfCellVolumes(state)).sum();
+            if(wall.volumeCubicMetres()!=mmm.block.PipeGeometry.wallVolume(state) || air.volumeCubicMetres()!=outside
+                    || Math.abs(outside-parts)>1e-12)throw new AssertionError("Pipe material/air volume differs");
+            double projected=PipeThermalGeometry.outsideSurfaces(state).stream().mapToDouble(PipeThermalGeometry.Surface::area).sum();
+            if(Math.abs(projected-mmm.block.PipeGeometry.outerArea(state))>1e-12)
+                throw new AssertionError("Pipe mechanical wall surface area differs");
+            var expected=BlockThermalMaterials.resolve(state,world.thermalRegistry());
+            if(!wall.materialId().equals(expected.thermalMaterialId())
+                    || wall.massUnits()!=mmm.units.Mass.fromKilograms(expected.bodyMassKilograms()*wall.volumeCubicMetres()))
+                throw new AssertionError("Pipe wall material or mass differs");
+            int wallIndex=topology.nodes.indexOf(wall);
+            double conductance=topology.contacts().stream().filter(c->c.a()==wallIndex||c.b()==wallIndex)
+                    .mapToDouble(EnvironmentThermalState.Contact::conductanceWPerK).sum();
+            double k=world.thermalRegistry().material(world.thermalRegistry().materialHandle(wall.materialId())).conductivityWPerMeterK();
+            double expectedConductance=k==0?0:mmm.block.PipeGeometry.outerArea(state)/(1.0/5+.03125/k);
+            if(Math.abs(conductance-expectedConductance)>1e-9)throw new AssertionError("Pipe outside wall conductance differs");
+        }
+        var straight=mmm.block.MmmBlocks.METAL_PIPE.defaultBlockState()
+                .setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.WEST),mmm.block.PipeBlock.Port.OPEN)
+                .setValue(mmm.block.PipeBlock.port(net.minecraft.core.Direction.EAST),mmm.block.PipeBlock.Port.OPEN);
+        double faceAir=0;
+        for(int u=0;u<4;u++)for(int v=0;v<4;v++)faceAir+=PipeThermalGeometry.outsideFaceFraction(straight,0,0,u,v)/16.0;
+        if(Math.abs(faceAir-(1-.625*.625))>1e-12)throw new AssertionError("Pipe outside face includes cavity or wall");
+    }
+
+    private static void pipeAirHandoff(CommittedWorldRegistries world,FluidSolverBackend backend,FluidRegionManager manager) {
+        var pos=new BlockPos(20,0,0);var state=mmm.block.MmmBlocks.METAL_PIPE.defaultBlockState();
+        var blocks=Map.of(pos,state); var config=new FluidSolverConfig(.5f,9.81f,.05f,48,1e-4f,.002f);
+        var host=new HostFluidState(2,2,2,config,world.definitions());world.bindConfiguredState(host,8);
+        var footprint=mmm.simulation.controller.FluidRegionFootprint.box(pos,pos);
+        var candidate=new FluidRegion(UUID.randomUUID(),Level.OVERWORLD,pos,host,footprint);
+        var env=new WorldThermalEnvironment(backend,world,manager);var handoff=env.prepareRange(candidate,Set.of(pos),blocks);
+        var transfer=handoff.split(pos,candidate.grid());var total=GasInventory.EMPTY;
+        for(var gas:transfer.cells())total=total.merge(gas);
+        var model=new GasThermalModel(world.thermalRegistry(),world.gasRegistry());
+        var expected=model.inventoryAtPressure(PipeThermalGeometry.outsideVolume(state),GasRegistry.STANDARD_PRESSURE_PA,293.15,world.gasRegistry().ambient());
+        if(!total.equals(expected))throw new AssertionError("Pipe outside air handoff changed inventory");
+        var current=host.captureAuthoritativeState().spatialGas();
+        var gas=new SpatialGasState(candidate.grid(),current.registryFingerprint(),current.chemicalRegistryFingerprint(),transfer.cells(),transfer.energy(),
+                transfer.source(),GasAuditLedger.EMPTY,GasAuditLedger.EMPTY,GasAuditLedger.EMPTY);
+        try(var prepared=handoff.prepare()) { prepared.commit(); } handoff.adopted();
+        String dimension=Level.OVERWORLD.identifier().toString();var wall=env.pipeWall(dimension,pos,state);
+        if(wall==null || wall.innerArea()!=mmm.block.PipeGeometry.innerArea(state) || wall.halfThickness()!=.03125)
+            throw new AssertionError("Pipe wall snapshot is missing");
+        if(!wall.equals(env.pipeWalls(dimension,Map.of(pos,state)).get(pos)))throw new AssertionError("Batch wall snapshot differs");
+        try(var prepared=env.preparePipeWallExchange(dimension,wall.generation(),Map.of(wall.key(),-10.0))) {
+            if(!prepared.capture().exactEnergy().equals(prepared.capture().audit().expectedEnergy()))throw new AssertionError("Pipe wall exchange audit differs");
+            prepared.commit();
+        }
+        env.pipeWallExchangeAdopted(dimension);
+        if(env.pipeWall(dimension,pos,state).energy()!=wall.energy()-10.0)throw new AssertionError("Pipe wall heat was not committed");
+        var initial=FluidDomainInitialGas.replace(host.captureAuthoritativeState(),gas,transfer.roundoff());
+        var region=new FluidRegion(candidate.id(),Level.OVERWORLD,pos,HostFluidState.restoreAuthoritativeState(initial),footprint);
+        if(!manager.add(region).accepted())throw new AssertionError("Pipe region admission failed");
+        try(var returned=env.prepareAirReturn(region,blocks)) {
+            var after=returned.snapshot().nodes().stream().filter(n->n.key().kind()==EnvironmentThermalState.Kind.AIR
+                    && n.key().x()==pos.getX() && n.key().y()==pos.getY() && n.key().z()==pos.getZ()).findFirst().orElseThrow();
+            if(!after.gas().equals(expected))throw new AssertionError("Pipe outside air return changed inventory");
+        }
+        manager.remove(region.id());
+    }
+    private static void pipeAirExchange(CommittedWorldRegistries world,FluidSolverBackend backend,FluidRegionManager manager) {
+        var pos=new BlockPos(40,0,0);String dimension=Level.OVERWORLD.identifier().toString();
+        var env=new WorldThermalEnvironment(backend,world,manager);env.pipePositions(dimension,Set.of(pos));
+        env.refreshDirty(dimension,Map.of());var old=env.current(dimension);var nodes=new ArrayList<>(old.nodes());
+        int index=-1;for(int i=0;i<nodes.size();i++){var key=nodes.get(i).key();
+            if(key.kind()==EnvironmentThermalState.Kind.AIR&&key.x()==pos.getX()&&key.y()==pos.getY()&&key.z()==pos.getZ()){index=i;break;}}
+        if(index<0)throw new AssertionError("Pipe-only dimension did not initialize world air");
+        var before=nodes.get(index);var gas=world.gasRegistry().createMixture(100_000_000L,List.of(
+                new GasRegistry.AmbientFraction("mmm:oxygen",mmm.chemistry.ExactRational.ONE)));
+        var model=new GasThermalModel(world.thermalRegistry(),world.gasRegistry());double energy=model.internalEnergyAtTemperature(gas,330);
+        nodes.set(index,new EnvironmentThermalState.Node(before.key(),before.materialId(),gas.totalMassUnits(),before.volumeCubicMetres(),gas,energy,List.of()));
+        backend.configureEnvironment(EnvironmentThermalState.initialized(dimension,old.registryFingerprint(),nodes,old.contacts()),world.definitions());
+        var state=mmm.block.MmmBlocks.METAL_PIPE.defaultBlockState();double volume=PipeWorldGraph.capacity(state);
+        var planned=env.preparePipeAir(dimension,Map.of(pos,volume),Map.of(),p->state,p->true,p->false);
+        var acquired=planned.acquired().get(pos);var successor=planned.prepared().capture();
+        var remaining=successor.nodes().stream().filter(n->n.key().equals(before.key())).findFirst().orElseThrow();
+        if(!remaining.gas().merge(acquired.inventory()).equals(gas)
+                || Math.abs(remaining.internalEnergyJ()+acquired.energy()-energy)>1e-8
+                || !successor.exactEnergy().equals(successor.audit().expectedEnergy()))
+            throw new AssertionError("Pipe acquisition lost finite world gas or energy");
+        planned.commit();planned.close();
+        try(var returned=env.preparePipeAir(dimension,Map.of(),Map.of(pos,acquired),p->Blocks.AIR.defaultBlockState(),p->true,p->false)) {
+            var restored=returned.prepared().capture();var node=restored.nodes().stream().filter(n->n.key().equals(before.key())).findFirst().orElseThrow();
+            if(!node.gas().equals(gas)||Math.abs(node.internalEnergyJ()-energy)>1e-8
+                    || !restored.exactEnergy().equals(restored.audit().expectedEnergy()))
+                throw new AssertionError("Pipe gas return changed finite world inventory");
         }
     }
 

@@ -54,7 +54,7 @@ final class CarrierThermalConduction {
 					double k = access.material(owner).conductivityWPerMeterK();
 					if (k == 0 || coverage[family] == 0) continue;
 					double share = access.volume(owner) / Integer.bitCount(support) / coverage[family];
-					double g = h * h * area[family] * share
+					double g = h * h * area[family] * share * request.areaScale()
 							/ (request.wallThicknessMetres() / request.wallConductivityWPerMetreK() + request.filmThicknessMetres() / k);
 					if (g > 0) conductance.computeIfAbsent(cell, ignored -> new java.util.TreeMap<>()).merge(owner, g, Double::sum);
 				}

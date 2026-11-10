@@ -27,6 +27,10 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 /** Axis-aligned pipe with automatic compatible ports and independently controlled ends. */
 public final class PipeBlock extends Block {
+    @Override protected void onExplosionHit(BlockState state,ServerLevel level,BlockPos pos,
+            net.minecraft.world.level.Explosion explosion,java.util.function.BiConsumer<net.minecraft.world.item.ItemStack,BlockPos> drops) {
+        if(mmm.simulation.PipeRuntime.allowsRemoval(level,pos))super.onExplosionHit(state,level,pos,explosion,drops);
+    }
     public enum Port implements StringRepresentable {
         NONE, CONNECTED, OPEN, SEALED;
         @Override public String getSerializedName() { return name().toLowerCase(java.util.Locale.ROOT); }
@@ -44,13 +48,20 @@ public final class PipeBlock extends Block {
     public static int openFaces(BlockState state) {
         int mask=0; for(var face:Direction.values())if(state.getValue(port(face)).open())mask|=PipeGeometry.bit(face); return mask;
     }
-    public static VoxelShape collision(BlockState state) { return PipeGeometry.shell(openFaces(state)); }
+    public static int armFaces(BlockState state) {
+        int mask=0;for(var face:Direction.values())if(state.getValue(port(face))!=Port.SEALED)mask|=PipeGeometry.bit(face);return mask;
+    }
+    public static VoxelShape collision(BlockState state) { return PipeGeometry.shell(armFaces(state),openFaces(state)); }
     @Override protected void createBlockStateDefinition(StateDefinition.Builder<Block,BlockState> builder) {
         for(var face:Direction.values())builder.add(port(face));
     }
     @Override public BlockState getStateForPlacement(BlockPlaceContext context) {
+        return placementState(context.getClickedFace(), face -> context.getLevel().getBlockState(context.getClickedPos().relative(face)));
+    }
+    BlockState placementState(Direction clickedFace,java.util.function.Function<Direction,BlockState> neighbors) {
         var state=defaultBlockState();
-        for(var face:Direction.values())state=state.setValue(port(face),automatic(context.getLevel().getBlockState(context.getClickedPos().relative(face)),face));
+        for(var face:Direction.values())state=state.setValue(port(face),face.getAxis()==clickedFace.getAxis()
+                ?automatic(neighbors.apply(face),face):Port.SEALED);
         return state;
     }
     static Port automatic(BlockState neighbor,Direction face) {
@@ -60,7 +71,7 @@ public final class PipeBlock extends Block {
             return neighbor.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING).getAxis()==face.getAxis()?Port.CONNECTED:Port.NONE;
         if(neighbor.is(MmmBlocks.FINITE_HEAT_EXCHANGER))return face.getAxis()==Direction.Axis.Z?Port.CONNECTED:Port.NONE;
         if(neighbor.is(MmmBlocks.THERMAL_RESERVOIR))return Port.CONNECTED;
-        if(neighbor.is(MmmBlocks.FLUID_PORT))return neighbor.getValue(FluidPortBlock.FACING)==face?Port.CONNECTED:Port.NONE;
+        if(neighbor.is(MmmBlocks.FLUID_PORT))return neighbor.getValue(FluidPortBlock.FACING)==face.getOpposite()?Port.CONNECTED:Port.NONE;
         return Port.NONE;
     }
     static Port nextManual(Port current,BlockState neighbor,Direction face) {

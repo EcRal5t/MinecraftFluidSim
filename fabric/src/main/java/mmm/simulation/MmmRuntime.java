@@ -39,6 +39,7 @@ public final class MmmRuntime {
 	private final MinecraftWorldUpdates worldUpdates;
 	private final ExternalMovingStructures externalStructures;
 	private final WorldThermalEnvironment environment;
+    private final PipeRuntime pipes;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -68,8 +69,9 @@ public final class MmmRuntime {
 			mmm.fluid.FluidSolverBackend solverBackend,
 			MinecraftProcessOperations processes, IndustrialOperations industrial, MinecraftWorldUpdates worldUpdates,
 			ExternalMovingStructures externalStructures,
-			WorldThermalEnvironment environment
+			WorldThermalEnvironment environment, PipeRuntime pipes
 	) {
+        this.pipes=pipes;
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
 		this.farmlandMoisture = Objects.requireNonNull(farmlandMoisture);
@@ -134,6 +136,7 @@ public final class MmmRuntime {
 		processes.tick(server);
 		simulationLoop.tick(server);
 	}
+    public PipeRuntime pipes() { return pipes; }
 
     public void checkpointWorld(MinecraftServer server) {
         if(!closed && worldRecoveryCompleted) simulationLoop.checkpointWorld(server);

@@ -1,18 +1,18 @@
 {
   "textures": {
     "particle": {
-      "sprite": "mmm:block/insulating_glass",
+      "sprite": "minecraft:block/glass",
       "force_translucent": true
     },
     "side": {
-      "sprite": "mmm:block/insulating_glass",
+      "sprite": "minecraft:block/glass",
       "force_translucent": true
     }
   },
   "elements": [
     {
       "from": [
-        12,
+        15,
         4,
         4
       ],

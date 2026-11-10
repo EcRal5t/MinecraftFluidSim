@@ -78,6 +78,10 @@ public final class IndustrialOperations {
         if(entity instanceof FluidPortBlockEntity port){IndustrialDialogs.port(player,port);return true;}
         if(entity instanceof ProcessSensorBlockEntity sensor){IndustrialDialogs.sensor(player,sensor);return true;}
         if(entity instanceof ScreenBlockEntity screen){IndustrialDialogs.screen(player,screen,screenDepositMass(player.level(),screen));return true;}
+        if(state.getBlock() instanceof PipeBlock) {
+            var pipes=MmmRuntimeRegistry.require(player.level().getServer()).pipes();
+            player.sendSystemMessage(net.minecraft.network.chat.Component.literal(pipes==null?"当前世界需要启用热物性以运行管腔":pipes.describe(player.level(),position)));return true;
+        }
         return false;
     }
     public String configure(ServerPlayer player,BlockPos position,String settings){
@@ -144,6 +148,12 @@ public final class IndustrialOperations {
     }
     private String changeGeometry(ServerLevel level,BlockPos position,net.minecraft.world.level.block.state.BlockState next,
                                   net.minecraft.world.phys.shapes.VoxelShape shape){
+        if(PipeThermalGeometry.isPipe(next)) {
+            var pipes=MmmRuntimeRegistry.require(level.getServer()).pipes();
+            if(pipes==null)return "当前世界需要启用热物性以运行管腔";
+            if(!pipes.allowsBlockChange(level,position,next))return "管内库存超过新管腔容量，请先排空或清理沉积";
+            return level.setBlock(position,next,net.minecraft.world.level.block.Block.UPDATE_ALL)?null:"管道正在进行物质交接";
+        }
         var region=targets.regionAtBlock(level,position);
         if(region!=null){
             if(!region.solverLoaded()||!availability.ensure(level,region)||!phaseWork.settle(level,region))return "等待区域恢复";
