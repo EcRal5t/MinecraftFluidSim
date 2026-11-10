@@ -459,7 +459,7 @@ final class VulkanRegionReactions implements AutoCloseable {
             stage=stageTime("gas-liquid",stage);
             if (error != 0)
                 return error;
-            remaining -= massTransferKernel.completedPhaseBatches();
+            remaining -= massTransferKernel.completedPhaseOperations();
             boolean inspectCondensed=phaseEnabled && remaining>0 && layout.condensedPhase()!=null && layout.condensedPhase().enabled();
             if (inspectCondensed) {
             var refreshed = candidate

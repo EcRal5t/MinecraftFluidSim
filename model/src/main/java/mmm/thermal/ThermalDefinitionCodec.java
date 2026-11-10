@@ -93,7 +93,6 @@ public final class ThermalDefinitionCodec {
 				"lower_volume_svq_per_batch", "upper_volume_svq_per_batch", "mass_kg_per_batch",
 				"interface_requirement", "equilibrium_curve"));
 		if (root.has("species_id")) fields.add("species_id");
-		if (root.has("transfer_velocity_m_per_s")) fields.add("transfer_velocity_m_per_s");
 		requireOnly(root, fields.toArray(String[]::new));
 		ThermalPhaseTransition.InterfaceRequirement requirement;
 		try { requirement = ThermalPhaseTransition.InterfaceRequirement.valueOf(string(root, "interface_requirement")); }
@@ -114,7 +113,6 @@ public final class ThermalDefinitionCodec {
 		}
 		return new ThermalPhaseTransition(stableId, string(root, "lower_energy_material"),
 				string(root, "upper_energy_material"), root.has("species_id") ? string(root, "species_id") : null,
-				root.has("transfer_velocity_m_per_s") ? finiteDouble(root, "transfer_velocity_m_per_s") : null,
 				exactLong(root, "lower_volume_svq_per_batch"), exactLong(root, "upper_volume_svq_per_batch"),
 				ExactRational.parse(string(root, "mass_kg_per_batch")), requirement, curve);
 	}

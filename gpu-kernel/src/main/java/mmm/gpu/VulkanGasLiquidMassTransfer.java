@@ -40,7 +40,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         ACTIVITY_CELLS(30),
         ACTIVITY_FACES(31),
         PHASE_ENABLED(32),
-        MAXIMUM_PHASE_BATCHES(33), AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
+        MAXIMUM_PHASE_OPERATIONS(33), AMBIENT_MASS_UNITS(34), WALL_COUNTS(36), WALL_PORT_DEVICE(37), WALL_PORT_CELL(38), WALL_PORT_DIRECTION(39), WALL_TEMPERATURE(40), WALL_CALORIC(41), WALL_MATERIAL(42), WALL_MASS(43), WALL_ENERGY(44), WALL_GENERATION(45), WALL_REQUEST_GENERATION(46), WALL_ENERGY_CHANGE(47), WALL_PORT_CAPACITY(48), WALL_CAPACITY(49),
         SURFACE_RULE_COUNT(50),SURFACE_AMOUNTS(51),SURFACE_RESIDUALS(52),SURFACE_INTERCEPT(53),SURFACE_CAPACITY(54),SCREEN_FACES(55);
         final int word;
         Header(int word) {
@@ -72,9 +72,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         NEXT(4),
         GAS_TO_LIQUID_MASS(8),
         LIQUID_TO_GAS_MASS(8),
-        KG(8),
-        TEMP(8),
-        GAS_TEMP(8),
+        AREA(8),
         OLD_MASS(8),
         NEW_MASS(8),
         OLD_GAS_U(8),
@@ -188,7 +186,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                 long quantum=Math.max(1,Math.round((double)batch.massUnits()/unit/t.lowerVolumeSvqPerBatch()));
                 double reference=t.equilibriumTemperatureK(101325),slope=phaseModel.saturationSlopePaPerKelvin(t,reference,101325)*reference*reference/101325;
                 ruleBytes.putInt(material).putInt(component).putInt(species).putInt(config.definitions().identity().rules().indexOf(t.id())).putLong(unit);
-                ruleBytes.putDouble(reference).putDouble(slope).putDouble(t.transferVelocityMPerS()).putDouble(1).putDouble(100000).putDouble(0).putDouble(0).putDouble(0);
+                ruleBytes.putDouble(reference).putDouble(slope).putDouble(0).putDouble(1).putDouble(100000).putDouble(0).putDouble(0).putDouble(0);
                 ruleBytes.putInt(1).putInt(0).putLong(quantum).putLong(1).putLong(0).putLong(0);
             }
             ruleBytes.flip();
@@ -207,7 +205,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
                     case FACE_HEAT -> 2 * faces;
                     case PENDING_TIME, PENDING_RESIDUAL, PENDING_SLOT -> Math.multiplyExact(cells, rules);
                     case LIQUID_QUANTA -> rows.rows;
-                    case NEXT, KG, TEMP, GAS_TEMP -> scratchProposals;
+                    case NEXT, AREA -> scratchProposals;
                     case WALL_RESERVATION, SURFACE_TEMPERATURE, SURFACE_CHANGED -> wallDevices;
                     case WALL_DELTA -> Math.multiplyExact(2,wallDevices);
                     case WALL_PENDING -> dryProposals==0?0:Math.multiplyExact(cells,rules);
@@ -319,8 +317,8 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
     private final FlipKernelBindings exchangeBindings;
     private final VulkanLiquidPhaseRows rows;
     private VulkanStageTimings timings;
-    private int completedPhaseBatches;
-    int completedPhaseBatches(){return completedPhaseBatches;}
+    private int completedPhaseOperations;
+    int completedPhaseOperations(){return completedPhaseOperations;}
     private final VulkanCommandTemplates templates;
     VulkanGasLiquidMassTransfer(VulkanDeviceContext c) {
         templates = new VulkanCommandTemplates(c);
@@ -370,7 +368,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         exchangeBindings.rebindRanges(List.of(arena, errors, arena));
         rows.rebindRanges(arena, errors);
     }
-    int execute(VulkanRegionStorage.Candidate candidate, Layout l, double duration, boolean phaseEnabled,int maximumPhaseBatches,VulkanGasThermodynamics.Layout eos,
+    int execute(VulkanRegionStorage.Candidate candidate, Layout l, double duration, boolean phaseEnabled,int maximumPhaseOperations,VulkanGasThermodynamics.Layout eos,
         VulkanGasGeometry.Layout geometry) {
         if (!(Double.isFinite(duration) && duration >= 0))
             throw new IllegalArgumentException("Invalid film duration");
@@ -380,7 +378,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
             var h = l.headerBytes();
             h.putInt(4 * Header.GAS_HEADER.word, eos.headerWordOffset())
                 .putInt(4 * Header.GEOMETRY_HEADER.word, geometry.headerWordOffset())
-                .putInt(4 * Header.PHASE_ENABLED.word,phaseEnabled?1:0).putInt(4 * Header.MAXIMUM_PHASE_BATCHES.word,maximumPhaseBatches)
+                .putInt(4 * Header.PHASE_ENABLED.word,phaseEnabled?1:0).putInt(4 * Header.MAXIMUM_PHASE_OPERATIONS.word,maximumPhaseOperations)
                 .putDouble(4 * Header.DURATION.word, duration);
             vkCmdUpdateBuffer(command, output.handle(), l.column(Field.HEADER).offset(), h);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -399,7 +397,7 @@ final class VulkanGasLiquidMassTransfer implements AutoCloseable {
         var result = candidate
             .continueBatch(
                 (command, input, output, errors, staging, stack) -> recordPublish(command, l), l.feedbackOffset(), 28);
-        completedPhaseBatches=result.error()==0?result.feedback().getInt(24):0;
+        completedPhaseOperations=result.error()==0?result.feedback().getInt(24):0;
         if(timings!=null){
             double contact=0;
             for(var sample:timings.read()){

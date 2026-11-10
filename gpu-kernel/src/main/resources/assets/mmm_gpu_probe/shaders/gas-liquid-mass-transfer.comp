@@ -359,7 +359,7 @@ void clearUnavailablePending(int c) {
            readDouble(workField(FIELD_PENDING_RESIDUAL)+2*at)==0.0LF)continue;
         int r=workField(FIELD_RULES)+32*k,sp=int(words[r+2]);
         bool vapor=words[r+22]!=0u;
-        if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_BATCHES)<=0))continue;
+        if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_OPERATIONS)<=0))continue;
         if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),row(c,int(words[r])),sp)>0l)continue;
         bool available=false;
         for(int pass=0;pass<7 && !available;pass++){
@@ -411,15 +411,15 @@ int propose(int c) {
         for(int k=0;k<rules;k++){
             int r=workField(FIELD_RULES)+32*k;if(int(words[r])!=m)continue;
             int sp=int(words[r+2]),at=c*rules+k;bool vapor=words[r+22]!=0u;
-            if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_BATCHES)<=0))continue;
+            if(vapor && (headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_OPERATIONS)<=0))continue;
             int gs=gasSpecies(component(node,int(words[r+1])),sp);
             if(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp)==0l &&
                     (gs<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)==0l))continue;
             if(area<0.0LF)area=contactArea(c,node,p.maximum,lr);
             if(area<=0.0LF && !(p.maximum==0 && vapor && readDouble(geometryHeaderWord(GEO_H_DRY_VOLUMES)+2*c)==0.0LF))continue;
             if(!vapor && (mass<=0l || words[phaseRowField(headerWord(H_PHASE_ROWS_HEADER),LP_FIELD_MIXTURE)+lr]==0u))continue;
-            writeDouble(workField(FIELD_PENDING_TIME)+2*at,readDouble(workField(FIELD_PENDING_TIME)+2*at)+readDouble(p.header+H_DURATION));
-            writeDouble(workField(FIELD_TEMP)+2*at,area);
+            if(!vapor)writeDouble(workField(FIELD_PENDING_TIME)+2*at,readDouble(workField(FIELD_PENDING_TIME)+2*at)+readDouble(p.header+H_DURATION));
+            writeDouble(workField(FIELD_AREA)+2*at,area);
             words[workField(FIELD_NEXT)+at]=uint(head);head=at;
         }
     }
@@ -478,58 +478,18 @@ double dryWallArea(int c,int direction){
     return area*porosity;
 }
 void proposeDryWall(int index){
-    if(headerWord(H_WALL_COUNTS)<0 || headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_BATCHES)<=0)return;
+    if(headerWord(H_WALL_COUNTS)<0 || headerWord(H_PHASE_ENABLED)==0 || headerWord(H_MAXIMUM_PHASE_OPERATIONS)<=0)return;
     int rules=headerWord(H_RULE_COUNT),port=index/rules,k=index%rules;
     if(port>=int(words[headerWord(H_WALL_COUNTS)+1]))return;
     int r=workField(FIELD_RULES)+32*k;if(words[r+22]==0u)return;
     int c=int(words[headerWord(H_WALL_PORT_CELL)+port]),device=int(words[headerWord(H_WALL_PORT_DEVICE)+port]);
     if(c<0 || c>=headerWord(H_CELL_COUNT) || device<0 || device>=int(words[headerWord(H_WALL_COUNTS)]) || !activeCell(c))return;
-    int m=int(words[r]),sp=int(words[r+2]),lr=row(c,m);
-    int64_t liquidMass=phaseRowMass(headerWord(H_PHASE_ROWS_HEADER),lr);
+    int sp=int(words[r+2]);
     int gs=gasSpecies(component(c,int(words[r+1])),sp);
     if(gs<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)<=0l)return;
     int direction=int(words[headerWord(H_WALL_PORT_DIRECTION)+port]);
     if(direction<0 || direction>5)return;
     double area=dryWallArea(c,direction);if(area<=0.0LF)return;
-    double temperature=readDouble(headerWord(H_WALL_TEMPERATURE)+2*device),gasTemperature,gasCapacity;
-    if(!gasCaloricState(c,readDouble(gasField(GAS_INTERNAL_ENERGY)+2*c),gasTemperature,gasCapacity))return;
-    if(!(temperature>0.0LF && gasTemperature>0.0LF))return;
-    double nanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*c));
-    if(nanos<=0.0LF)return;
-    double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,int(words[r+1]))));
-    double pressure=currentPressure(c,readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c),nanos,gasTemperature);
-    int64_t quantum=readQuantity(r+24);if(quantum<=0l){reportInvalid();return;}
-    double totalSpecies=double(readQuantity(workField(FIELD_LIQUID_QUANTA)+2*lr));
-    double partial=pressure*target/nanos,fraction=0.0LF;
-    if(liquidMass>0l && totalSpecies>0.0LF)fraction=double(phaseRowSpecies(headerWord(H_PHASE_ROWS_HEADER),lr,sp))/totalSpecies;
-    else {
-        double supersaturation=0.0LF,ownRatio=0.0LF;
-        for(int otherRule=0;otherRule<rules;otherRule++){
-            int other=workField(FIELD_RULES)+32*otherRule;
-            if(words[other+22]==0u || int(words[other])!=m)continue;
-            double otherNanos=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,int(words[other+1]))));
-            double saturation=101325.0LF*double(exp(float(readDouble(other+8)*(1.0LF/readDouble(other+6)-1.0LF/temperature))));
-            if(!(saturation>0.0LF))continue;
-            double ratio=pressure*otherNanos/(nanos*saturation);
-            supersaturation+=ratio;if(otherRule==k)ownRatio=ratio;
-        }
-        if(supersaturation<=1.0LF)return;
-        fraction=ownRatio/supersaturation;
-    }
-    double equilibrium=fraction*101325.0LF*double(exp(float(readDouble(r+8)*(1.0LF/readDouble(r+6)-1.0LF/temperature))));
-    if(partial<=equilibrium)return;
-    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h,reference=readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c)*h3;
-    double capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*c+2))*h3;
-    double addNanos=double(quantum)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF);
-    double response=vaporResponse(capacity,reference,nanos,target,gasTemperature,pressure,addNanos,
-                                  -min(reference,1.0LF/134217728.0LF),double(quantum)*1e-6LF);
-    double seconds=readDouble(p.header+H_DURATION);
-    double conductance=readDouble(r+10)*area*h*h,rt=8.31446261815324LF*temperature;
-    double rate=conductance*(partial-equilibrium)/(rt+seconds*conductance*response);
-    if(!(isFinite(rate)&&rate>0.0LF))return;
-    writeDouble(workField(FIELD_KG)+2*index,rate);
-    writeDouble(workField(FIELD_TEMP)+2*index,temperature);
-    writeDouble(workField(FIELD_GAS_TEMP)+2*index,fraction);
     words[workField(FIELD_NEXT)+index]=atomicExchange(words[workField(FIELD_HEAD)+c],uint(index));
 }
 // Device sensible energy over a temperature interval uses the same segment tables as the caloric solver.
@@ -571,42 +531,62 @@ double liquidSpeciesEnergy(int material,int species,int64_t unit,double temperat
     return double(unit)*massUnit()*specific+
         readDouble(liquidCaloricWord(CAL_SPECIES_REFERENCE)+2*(material*liquidCaloricWord(CAL_SPECIES_STRIDE)+species));
 }
+// Current dry-wall equilibrium for a newly formed liquid mixture.
+double dryWallDemand(int c,int material,int r,double wallTemperature,double gasTemperature,
+                     out double partial,out double fraction){
+    double nanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*c));
+    partial=0.0LF;fraction=0.0LF;
+    if(nanos<=0.0LF)return 0.0LF;
+    double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,int(words[r+1]))));
+    if(target<=0.0LF)return 0.0LF;
+    double h=readDouble(p.header+H_CELL_SIZE),h3=h*h*h;
+    double reference=readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c)*h3;
+    double capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*c+2))*h3;
+    double pressure=currentPressure(c,reference/h3,nanos,gasTemperature);
+    partial=pressure*target/nanos;
+    double supersaturation=0.0LF,ownRatio=0.0LF;
+    for(int k=0;k<headerWord(H_RULE_COUNT);k++){
+        int other=workField(FIELD_RULES)+32*k;
+        if(words[other+22]==0u || int(words[other])!=material)continue;
+        double amount=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,int(words[other+1]))));
+        double saturation=101325.0LF*double(exp(float(readDouble(other+8)*(1.0LF/readDouble(other+6)-1.0LF/wallTemperature))));
+        if(!(saturation>0.0LF))continue;
+        double ratio=pressure*amount/(nanos*saturation);
+        supersaturation+=ratio;if(other==r)ownRatio=ratio;
+    }
+    if(supersaturation<=1.0LF || ownRatio<=0.0LF)return 0.0LF;
+    fraction=ownRatio/supersaturation;
+    double equilibrium=fraction*101325.0LF*double(exp(float(readDouble(r+8)*(1.0LF/readDouble(r+6)-1.0LF/wallTemperature))));
+    int64_t quantum=readQuantity(r+24);if(quantum<=0l){reportInvalid();return 0.0LF;}
+    double addNanos=double(quantum)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF);
+    double response=vaporResponse(capacity,reference,nanos,target,gasTemperature,pressure,addNanos,
+            -min(reference,1.0LF/134217728.0LF),double(quantum)*1e-6LF);
+    if(!(isFinite(response)&&response>0.0LF)){reportInvalid();return 0.0LF;}
+    return max(0.0LF,(partial-equilibrium)/response);
+}
 int64_t reserveWall(int device,int r,int c,int64_t requested,int64_t quantum,int64_t unit,
-                    double gasEnergyPerQuantum,double gasTemperature,double initialWallTemperature,double fraction,bool indivisible,out double liquidPerQuantum){
+                    double gasEnergyPerQuantum,double gasTemperature,double initialWallTemperature,double residual,bool indivisible,out double liquidPerQuantum){
     int address=workField(FIELD_WALL_RESERVATION)+2*device;
     int64_t raw=atomicAdd(longs[address/2],0l);
-    int gm=int(words[r+1]),species=int(words[r+2]),material=int(words[r]);
-    double nanos=0.0LF;
-    for(int componentId=0;componentId<gasHeaderWord(GAS_H_COMPONENT_COUNT);componentId++)
-        nanos+=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,componentId)));
-    double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(c,gm)));
-    double pressure=currentPressure(c,readDouble(workField(FIELD_LIQUID_REFERENCE_NEXT)+2*c),nanos,gasTemperature);
-    double partial=nanos>0.0LF?pressure*target/nanos:0.0LF;
-    if(partial<=0.0LF)return 0l;
-    double slope=readDouble(r+8),referenceTemperature=readDouble(r+6),saturationTemperature=0.0LF;
-    if(fraction>0.0LF){
-        double inverse=1.0LF/referenceTemperature-double(log(float(partial/(101325.0LF*fraction))))/slope;
-        if(!(inverse>0.0LF))return 0l;
-        saturationTemperature=1.0LF/inverse;
-    }
-    double initialEquilibrium=fraction*101325.0LF*double(exp(float(slope*(1.0LF/referenceTemperature-1.0LF/initialWallTemperature))));
+    int species=int(words[r+2]),material=int(words[r]);
+    double slope=readDouble(r+8),referenceTemperature=readDouble(r+6);
     while(true){
         uint64_t bits=uint64_t(raw);
         double reserved=packDouble2x32(uvec2(uint(bits),uint(bits>>32)));
-        double wallTemperature=wallTemperatureAfter(device,initialWallTemperature,reserved);
-        if(fraction>0.0LF && !(wallTemperature<saturationTemperature))return 0l;
-        double wallEquilibrium=fraction*101325.0LF*double(exp(float(slope*(1.0LF/referenceTemperature-1.0LF/wallTemperature))));
-        double ratio=clamp((partial-wallEquilibrium)/max(partial-initialEquilibrium,1e-300LF),0.0LF,1.0LF);
+        double wallTemperature=wallTemperatureAfter(device,initialWallTemperature,reserved),partial,fraction;
+        double equilibriumDemand=dryWallDemand(c,material,r,wallTemperature,gasTemperature,partial,fraction);
+        if(equilibriumDemand<=0.0LF)return 0l;
+        double inverse=1.0LF/referenceTemperature-double(log(float(partial/(101325.0LF*fraction))))/slope;
+        if(!(inverse>0.0LF))return 0l;
+        double saturationTemperature=1.0LF/inverse;
+        if(!(wallTemperature<saturationTemperature))return 0l;
         double liquidEnergy=liquidSpeciesEnergy(material,species,unit,wallTemperature);
         double released=gasEnergyPerQuantum-liquidEnergy;
         if(!(isFinite(released)&&released>0.0LF))return 0l;
-        int64_t thermalBatches=requested/quantum;
-        if(fraction>0.0LF){
-            double heatLimit=wallHeatBetween(device,wallTemperature,saturationTemperature);
-            thermalBatches=int64_t(min(9e15LF,floor(heatLimit/(released*double(quantum)))));
-        }
-        int64_t kineticBatches=int64_t(min(9e15LF,floor(double(requested/quantum)*ratio)));
-        int64_t accepted=min(requested/quantum,min(thermalBatches,kineticBatches))*quantum;
+        double heatLimit=wallHeatBetween(device,wallTemperature,saturationTemperature);
+        int64_t thermalBatches=int64_t(min(9e15LF,floor(heatLimit/(released*double(quantum)))));
+        int64_t equilibriumBatches=int64_t(min(9e15LF,floor(max(0.0LF,equilibriumDemand+residual)*1e6LF/double(quantum))));
+        int64_t accepted=min(requested/quantum,min(thermalBatches,equilibriumBatches))*quantum;
         if(indivisible && accepted<requested)return 0l;
         if(accepted<=0l)return 0l;
         double next=reserved+double(accepted)*released;
@@ -761,11 +741,18 @@ uvec4 exchange(int node, int first) {
         if(!gasCaloricState(node,energy,gasTemperature,gasCapacity))return counts;
         double liquidCapacity,liquidTemperature=liquidRowTemperature(lr,m,liquidCapacity);
         bool vapor=words[r+22]!=0u;
-        double seconds=readDouble(p.header+H_DURATION)+readDouble(workField(FIELD_PENDING_TIME)+2*pending);
+        double seconds;
         double demand;
         if(wall){
+            int device=int(words[headerWord(H_WALL_PORT_DEVICE)+port]);
+            int address=workField(FIELD_WALL_RESERVATION)+2*device;
+            uint64_t bits=uint64_t(atomicAdd(longs[address/2],0l));
+            double reserved=packDouble2x32(uvec2(uint(bits),uint(bits>>32)));
+            double wallTemperature=wallTemperatureAfter(device,readDouble(headerWord(H_WALL_TEMPERATURE)+2*device),reserved),partial,fraction;
+            demand=dryWallDemand(node,m,r,wallTemperature,gasTemperature,partial,fraction);
+            if(demand<=0.0LF)continue;
+            demand+=readDouble(workField(FIELD_PENDING_RESIDUAL)+2*pending);
             words[workField(FIELD_WALL_PENDING)+pending]=1u;
-            demand=readDouble(workField(FIELD_KG)+2*at)*seconds+readDouble(workField(FIELD_PENDING_RESIDUAL)+2*pending);
             writeDouble(workField(FIELD_PENDING_TIME)+2*pending,0.0LF);
             if(demand<=0.0LF){writeDouble(workField(FIELD_PENDING_RESIDUAL)+2*pending,demand);continue;}
         }else{
@@ -780,7 +767,7 @@ uvec4 exchange(int node, int first) {
             double gasNanos=double(readQuantity(workField(FIELD_GAS_NANOS)+2*node));
             double target=double(readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*component(node,gm)));
             double pressure=currentPressure(node,gasReference,gasNanos,gasTemperature);
-            double area=readDouble(workField(FIELD_TEMP)+2*at);
+            double area=readDouble(workField(FIELD_AREA)+2*at);
             double partial=gasNanos>0.0LF?pressure*target/gasNanos:0.0LF;
             double capacity=readDouble(geometryHeaderWord(GEO_H_CELLS)+2*(4*node+2))*h3;
             double scale=(LIQUID_BULK+LIQUID_REFERENCE_PRESSURE-pressure)/LIQUID_BULK;
@@ -812,9 +799,8 @@ uvec4 exchange(int node, int first) {
                     double compliance=reference/LIQUID_BULK+rgas*limit/(LIQUID_BULK*pressure*pressure);
                     if(compliance>0.0LF)response+=max(0.0LF,(target/gasNanos)*scale*n*8.31446261815324LF*derivative/(pressure*compliance));
                 }
-                if(area==0.0LF && node==c && gasVolume==0.0LF && equilibrium>partial)area=1.0LF;
-                double conductance=readDouble(r+10)*area*h*h,rt=8.31446261815324LF*liquidTemperature;
-                demand=seconds*conductance*(partial-equilibrium)/(rt+seconds*conductance*response);
+                if(!(isFinite(response)&&response>0.0LF)){reportInvalid();return counts;}
+                demand=(partial-equilibrium)/response;
             }else{
                 if(!(liquidVolume>0.0LF && gasVolume>0.0LF))continue;
                 double henry=readDouble(r+8)*exp(float(readDouble(r+10)*(1.0LF/liquidTemperature-1.0LF/readDouble(r+6))));
@@ -876,22 +862,19 @@ uvec4 exchange(int node, int first) {
             q = coldLimit(
                 q, energy - gasCold(node),
                 carried - double(unit) * massUnit() * specificGas(gm, readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE)) - reference);
-        uint reservedBatches=0u;
+        uint reservedOperation=0u;
         if(vapor){
             if (!dissolve) q = limitVaporByVolume(lr, sp, q, quantum, unit, oldMass);
             q=(q/quantum)*quantum;
-            uint requested=uint(min(q/quantum,2147483647l)),granted=0u;
-            if(requested>0u){
-                uint limit=uint(headerWord(H_MAXIMUM_PHASE_BATCHES)),used=words[workField(FIELD_CONTROL)+6];
+            if(q>0l){
+                uint limit=uint(headerWord(H_MAXIMUM_PHASE_OPERATIONS)),used=words[workField(FIELD_CONTROL)+6];
                 while(used<limit){
-                    uint offered=min(requested,limit-used);
-                    uint previous=atomicCompSwap(words[workField(FIELD_CONTROL)+6],used,used+offered);
-                    if(previous==used){granted=offered;break;}
+                    uint previous=atomicCompSwap(words[workField(FIELD_CONTROL)+6],used,used+1u);
+                    if(previous==used){reservedOperation=1u;break;}
                     used=previous;
                 }
+                if(reservedOperation==0u)q=0l;
             }
-            q=int64_t(granted)*quantum;
-            reservedBatches=granted;
         }
         int64_t mass = q * unit,
                 nanos = q > 0l
@@ -916,10 +899,8 @@ uvec4 exchange(int node, int first) {
             int device=int(words[headerWord(H_WALL_PORT_DEVICE)+port]);
             bool indivisible=nanos==readQuantity(gasField(GAS_STANDARD_VOLUME_NANOS)+2*comp) && nanos==1l;
             int64_t before=q;
-            q=reserveWall(device,r,c,q,quantum,unit,carried,gasTemperature,readDouble(workField(FIELD_TEMP)+2*at),readDouble(workField(FIELD_GAS_TEMP)+2*at),indivisible,liquidCarried);
-            uint acceptedBatches=uint(q/quantum);
-            if(reservedBatches>acceptedBatches)atomicAdd(words[workField(FIELD_CONTROL)+6],uint(-int(reservedBatches-acceptedBatches)));
-            reservedBatches=acceptedBatches;
+            q=reserveWall(device,r,c,q,quantum,unit,carried,gasTemperature,readDouble(headerWord(H_WALL_TEMPERATURE)+2*device),readDouble(workField(FIELD_PENDING_RESIDUAL)+2*pending),indivisible,liquidCarried);
+            if(q==0l && reservedOperation>0u){atomicAdd(words[workField(FIELD_CONTROL)+6],uint(-1));reservedOperation=0u;}
             if(q!=before){
                 mass=q*unit;
                 nanos=q>0l?max(1l,int64_t(floor(double(q)*(8.31446261815324LF*293.15LF/101325.0LF*1000.0LF)+.5LF))):0l;
@@ -931,7 +912,7 @@ uvec4 exchange(int node, int first) {
             demand - (dissolve ? 1.0LF : -1.0LF) * double(requestedQ) * 1e-6LF);
         writeDouble(workField(FIELD_PENDING_TIME) + 2 * pending, 0.0);
         if (q == 0l){
-            if(reservedBatches>0u)atomicAdd(words[workField(FIELD_CONTROL)+6],uint(-int(reservedBatches)));
+            if(reservedOperation>0u)atomicAdd(words[workField(FIELD_CONTROL)+6],uint(-int(reservedOperation)));
             continue;
         }
         if(oldMass==0l)createPhaseRow(headerWord(H_PHASE_ROWS_HEADER),c,m,(~int(words[geometryHeaderWord(GEO_H_MASKS)+c]))&255);
