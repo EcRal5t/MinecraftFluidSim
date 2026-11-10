@@ -65,26 +65,13 @@ public final class ClientFluidVolumeRenderer implements AutoCloseable {
     }
 
     private void renderMaterials(net.minecraft.world.phys.Vec3 camera, boolean shadow) {
-        var materials = snapshots.materialFrames();
-        var granular = snapshots.granularFrames();
-        if (materials.isEmpty() && granular.isEmpty()) return;
-        var view = materials.isEmpty() ? granular.getFirst().material().view() : materials.getFirst().view();
-        boolean textured = shadow || view.mode() == FluidDisplaySettings.Mode.COMPOSITION;
-        var coordinates = FluidRenderCoordinates.at(camera);
-        {
-            java.util.function.Consumer<com.mojang.blaze3d.vertex.VertexConsumer> geometry = vertices -> {
-                for (var frame : materials) MaterialSurfaceGeometry.buildGeometry(camera, vertices, frame, shadow, textured);
-                for (var frame : granular) {
-                    MaterialSurfaceGeometry.buildGeometry(camera, vertices, frame.material(), shadow, textured);
-                    GranularSurfaceGeometry.buildGeometry(camera, vertices, frame, textured);
-                }
-            };
-            if (shadow) backend.renderShadow(coordinates, geometry);
-            else backend.render(textured, coordinates, geometry);
-        }
+        backend.render(snapshots.materialFrames(), snapshots.granularFrames(), FluidRenderCoordinates.at(camera), shadow);
     }
+
+    void invalidateResources() { backend.invalidate(); }
 	public void clear() {
 		snapshots.clear();
+        backend.invalidate();
 	}
 
 	@Override

@@ -278,5 +278,6 @@
   "block.mmm.screen": "筛",
   "item.mmm.co2_adsorbent": "CO₂ 吸附材料",
   "item.mmm.hydration_catalyst": "水合催化材料",
-  "item.mmm.creative_source.source.granular.fine_silt": "细粉砂源模板"
+  "item.mmm.creative_source.source.granular.fine_silt": "细粉砂源模板",
+  "item.mmm.container.sample_analysis": "潜行对空使用：样品分析"
 }

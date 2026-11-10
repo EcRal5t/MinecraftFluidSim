@@ -23,6 +23,7 @@ public final class GasContainerItem extends Item {
 	@Override public void appendHoverText(ItemStack stack, TooltipContext context,
 			net.minecraft.world.item.component.TooltipDisplay display,
 			java.util.function.Consumer<net.minecraft.network.chat.Component> tooltip, net.minecraft.world.item.TooltipFlag flag) {
+		tooltip.accept(net.minecraft.network.chat.Component.translatable("item.mmm.container.sample_analysis").withStyle(net.minecraft.ChatFormatting.GRAY));
 		var contents = contents(stack);
 		if (contents == null) return;
 		for (var component : contents.inventory().components())

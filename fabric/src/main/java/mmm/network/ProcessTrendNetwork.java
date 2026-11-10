@@ -17,6 +17,7 @@ public final class ProcessTrendNetwork {
     public static void open(ServerPlayer player, ProcessSensorBlockEntity sensor) { send(player,sensor,true); }
     private static void reply(ServerPlayer player, ProcessTrendRequest request) {
         var pos=request.position(); var level=player.level();
+        if (!level.dimension().identifier().toString().equals(request.dimension())) return;
         if (!level.hasChunkAt(pos) || player.distanceToSqr(pos.getX()+.5,pos.getY()+.5,pos.getZ()+.5)>64
                 || !(level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor)) {
             if(ServerPlayNetworking.canSend(player,ProcessTrendPayload.TYPE))

@@ -23,9 +23,21 @@ final class GranularSurfaceGeometry {
 	static void buildGeometry(Vec3 camera, VertexConsumer vertices,
 			ClientRegionSnapshotStore.GranularFrame frame, boolean textured,
 			java.util.function.Function<String, TextureAtlasSprite> sprites) {
+        buildGeometry(camera, vertices, frame, textured, sprites, position -> {
+            var client = Minecraft.getInstance();
+            var level = client == null ? null : client.level;
+            return level == null ? 0 : level.getBrightness(LightLayer.BLOCK,position)<<4
+                    | level.getBrightness(LightLayer.SKY,position)<<20;
+        });
+    }
+
+    static void buildGeometry(Vec3 camera, VertexConsumer vertices,
+            ClientRegionSnapshotStore.GranularFrame frame, boolean textured,
+            java.util.function.Function<String, TextureAtlasSprite> sprites,
+            java.util.function.ToIntFunction<BlockPos> lights) {
 		FluidGranularSnapshotPayload payload = frame.payload();
 		FluidMaterialSnapshotPayload state = payload.material();
-		Emitter emitter = new Emitter(vertices, camera, state, textured, sprites);
+		Emitter emitter = new Emitter(vertices, camera, state, textured, sprites, lights);
 		float h = state.cellSize();
 		var grid = state.geometry().grid();
         for (int cell = 0; cell < grid.cellCount(); cell++) {
@@ -130,11 +142,14 @@ final class GranularSurfaceGeometry {
         final boolean textured;
         final java.util.function.Function<String, TextureAtlasSprite> sprites;
         TextureAtlasSprite sprite;
+        final java.util.function.ToIntFunction<BlockPos> lights;
         final BlockPos anchor;
         final double ox,oy,oz;
 
         Emitter(VertexConsumer vertices, Vec3 camera, FluidMaterialSnapshotPayload state, boolean textured,
-                java.util.function.Function<String, TextureAtlasSprite> sprites) {
+                java.util.function.Function<String, TextureAtlasSprite> sprites,
+                java.util.function.ToIntFunction<BlockPos> lights) {
+            this.lights=lights;
             this.vertices=vertices;
             this.state=state;
             this.textured=textured;
@@ -152,10 +167,7 @@ final class GranularSurfaceGeometry {
             BlockPos position=BlockPos.containing(state.origin().getX()+(axis==0 ? plane : axis==1 ? centerV : centerU),
                     state.origin().getY()+(axis==0 ? centerU : axis==1 ? plane : centerV),
                     state.origin().getZ()+(axis==0 ? centerV : axis==1 ? centerU : plane));
-            var client=Minecraft.getInstance();
-            var level=client==null ? null : client.level;
-            int light=level==null ? 0 : level.getBrightness(LightLayer.BLOCK,position)<<4
-                    | level.getBrightness(LightLayer.SKY,position)<<20;
+            int light=lights.applyAsInt(position);
             FluidRenderBackend.beginMaterial(vertices,"mmm:granular",position.getX()-anchor.getX(),
                     position.getY()-anchor.getY(),position.getZ()-anchor.getZ());
             for (int i=0;i<4;i++) {

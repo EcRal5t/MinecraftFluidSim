@@ -278,5 +278,6 @@
   "block.mmm.screen": "Screen",
   "item.mmm.co2_adsorbent": "CO₂ Adsorbent",
   "item.mmm.hydration_catalyst": "Hydration Catalyst",
-  "item.mmm.creative_source.source.granular.fine_silt": "Fine Silt Source Template"
+  "item.mmm.creative_source.source.granular.fine_silt": "Fine Silt Source Template",
+  "item.mmm.container.sample_analysis": "Sneak-use in air: sample analysis"
 }

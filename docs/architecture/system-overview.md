@@ -222,6 +222,17 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 区域观察读取已提交代的库存摘要、液位、热设备及实体接触；展示快照传给客户端生成液面、颗粒与显色。登录、切换维度及复活时向玩家补发当前维度的已加载区域快照，暂停和休眠区域也参与补发。查询不改变设备代。容器与接口使用实际接受量及同代库存，比较器按固定开放容量展示液位；水湿接触在成功提交后应用灭火效果。入口：[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)、[VulkanRegionObservation](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionObservation.java)、[VulkanRegionDisplay](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionDisplay.java)。详见[展示](fluid-presentation.md)与[外部 API](external-api.md)。
 
+### 样品分析与工艺曲线
+
+容器分析从手持物品的实际载荷生成服务端只读摘要，沿匹配的世界定义把组成与内能换算为展示数量。液体浓度以样品总体积计算，气体体积与浓度注明标准态；完整物种库存提供摩尔分数。客户端支持滚动和两份样品并排比较，基准在维度切换与断线时清除。分析保持区域与物品库存，使用时无需区域回读。
+
+传感器在原有观测完成后追加有界会话记录。区域在成功机械步或独立热步后累计仿真时长；暂停、测点不可用和物理组缺失使曲线断开，暂停时的手动步留下独立观测点。配置和区域实例改变后清空旧序列。界面按需读取已保存读数，关闭、换维或测点卸载后停止请求；记录随方块实体会话释放。
+
+- [SampleAnalysis](../../fabric/src/main/java/mmm/simulation/SampleAnalysis.java)、[SampleAnalysisPayload](../../fabric/src/main/java/mmm/network/SampleAnalysisPayload.java)、[SampleAnalysisScreen](../../fabric/src/client/java/mmm/client/SampleAnalysisScreen.java)：载荷分析、展示摘要与比较界面。
+- [ProcessTrendHistory](../../fabric/src/main/java/mmm/network/ProcessTrendHistory.java)、[ProcessTrendNetwork](../../fabric/src/main/java/mmm/network/ProcessTrendNetwork.java)、[ProcessTrendScreen](../../fabric/src/client/java/mmm/client/ProcessTrendScreen.java)：测点记录、只读请求与曲线。
+- [FluidRenderBatch](../../fabric/src/client/java/mmm/client/FluidRenderBatch.java)、[FluidRenderTiming](../../fabric/src/client/java/mmm/client/FluidRenderTiming.java)：持久绘制数据、透明排序与异步 GPU 计时。
+- 验证入口：`protocol` 中的 `ClientSurfaceValidation`、`SampleAnalysisValidation`、`SampleComparisonValidation` 与 `ProcessTrendHistoryValidation`。
+
 <a id="gameplay"></a>
 ## 游戏入口
 

@@ -10,8 +10,8 @@ final class FluidRenderCoordinatesValidation {
 	static void run(ClientRegionSnapshotStore.MaterialFrame material, ClientRegionSnapshotStore.GranularFrame granular) {
 		Vec3 camera = new Vec3(2.25, -1.5, -3.75);
 		var coordinates = FluidRenderCoordinates.at(camera);
-		require(coordinates.anchor().getX() == 2 && coordinates.anchor().getY() == -2
-				&& coordinates.anchor().getZ() == -4, "Camera anchor uses floor for negative coordinates");
+		require(coordinates.anchor().getX() == 0 && coordinates.anchor().getY() == -16
+				&& coordinates.anchor().getZ() == -16, "Section anchor uses floor for negative coordinates");
 		check(material, granular, Vec3.ZERO, camera, coordinates);
 	}
 
@@ -33,8 +33,8 @@ final class FluidRenderCoordinatesValidation {
 		}
 		var transformed = new Matrix4f().translate(-coordinates.cameraX(), -coordinates.cameraY(), -coordinates.cameraZ())
 				.transform(new Vector4f(4.5F, -2.5F, 6.5F, 1));
-		require(Math.abs(transformed.x - 4.25F) < 1e-6 && Math.abs(transformed.y + 3.0F) < 1e-6
-				&& Math.abs(transformed.z - 6.25F) < 1e-6, "Model transform applies the fractional camera offset");
+		require(Math.abs(transformed.x - 2.25F) < 1e-6 && Math.abs(transformed.y + 17.0F) < 1e-6
+				&& Math.abs(transformed.z + 5.75F) < 1e-6, "Model transform applies the fractional camera offset");
 	}
 
 	private static void require(boolean condition, String message) {

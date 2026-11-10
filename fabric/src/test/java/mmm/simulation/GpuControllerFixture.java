@@ -172,7 +172,7 @@ final class GpuControllerFixture {
     }
 
     /** The offline Java launcher performs vanilla bootstrap without Fabric's registry setup. */
-    private static synchronized void initializeItems() {
+    static synchronized void initializeItems() {
         if (componentsInitialized) return;
         net.minecraft.SharedConstants.tryDetectVersion();
         net.minecraft.server.Bootstrap.bootStrap();

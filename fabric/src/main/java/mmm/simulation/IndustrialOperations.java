@@ -134,9 +134,8 @@ public final class IndustrialOperations {
         if(first==null){first=sensor.getBlockPos().relative(sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getOpposite());second=first;}
         var region=targets.regionAtBlock(level,first);
         if(region==null||!region.solverLoaded()||region.availabilityFailure()!=null||targets.regionAtBlock(level,second)!=region){sensor.history().breakSeries();sensor.signal(0);return;}
-        sensor.history().region(region);
+        sensor.history().region(region.id(),region.networkGeneration());
         boolean active=!region.paused();
-        if(!active)sensor.history().breakSeries("已暂停");
         observeSensor(region,sensor,first,second,active);
     }
     static void observeSensor(FluidRegion region,ProcessSensorBlockEntity sensor,BlockPos first,BlockPos second){
@@ -150,14 +149,20 @@ public final class IndustrialOperations {
             var axis=sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getAxis();int a=axis==net.minecraft.core.Direction.Axis.X?0:axis==net.minecraft.core.Direction.Axis.Y?1:2;
             max[a]=min[a]+1;var faces=new java.util.ArrayList<Integer>();
             for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
-                int face=region.grid().faceAt(x,y,z,a);if(face>=0)faces.add(face);
+                int face=region.grid().faceAt(x,y,z,a);
+                if(face>=0){
+                    int left=region.grid().faceLeft(face),right=region.grid().faceRight(face);
+                    if((left>=0&&!region.groupAvailable(left))||(right>=0&&!region.groupAvailable(right))){sensor.history().breakSeries();sensor.signal(0);return;}
+                    faces.add(face);
+                }
             }
             sensor.observe(region.observeLiquidFlow(faces.stream().mapToInt(Integer::intValue).toArray())*1000);
-            if(record)sensor.history().sample(region.sessionSimulationSeconds(),sensor.reading());return;
+            recordSensorSample(region,sensor,record);return;
         }
         double sum=0,weight=0;var host=sensor.measure()==ProcessSensorBlockEntity.Measure.PRESSURE?region.hostSnapshot():null;
         for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
-            int cell=region.grid().cell(x,y,z);if(cell<0||!region.groupAvailable(cell))continue;
+            int cell=region.grid().cell(x,y,z);if(cell<0)continue;
+            if(!region.groupAvailable(cell)){sensor.history().breakSeries();sensor.signal(0);return;}
             var liquid=region.observeCellInventory(x,y,z);
             switch(sensor.measure()){
                 case LEVEL->{sum+=liquid==null?0:liquid.liquidVolumeCubicMetres();weight+=Integer.bitCount((~region.solidMicroMask(x,y,z))&255)*h*h*h/8;}
@@ -167,8 +172,12 @@ public final class IndustrialOperations {
                 case FLOW->throw new IllegalStateException("Flow is sampled from accepted faces");
             }
         }
-        if(weight>0){sensor.observe(sum/weight);if(record)sensor.history().sample(region.sessionSimulationSeconds(),sensor.reading());}
-        else {if(record)sensor.history().breakSeries();sensor.signal(0);}
+        if(weight>0){sensor.observe(sum/weight);recordSensorSample(region,sensor,record);}
+        else {sensor.history().breakSeries();sensor.signal(0);}
+    }
+    private static void recordSensorSample(FluidRegion region,ProcessSensorBlockEntity sensor,boolean running){
+        if(running)sensor.history().sample(region.sessionSimulationSeconds(),sensor.reading());
+        else sensor.history().samplePaused(region.sessionSimulationSeconds(),sensor.reading());
     }
     public void tickPort(ServerLevel level,FluidPortBlockEntity port){
         if(port.mode()==FluidPortBlockEntity.Mode.STOPPED)return;

@@ -57,6 +57,12 @@ public final class ClientSurfaceValidation {
 		require(FluidColorMapping.color(new FluidDisplaySettings.View(FluidDisplaySettings.Mode.PH, 273.15, 373.15),
 				null, null, first, 0, 0, 0xff197ae8) == FluidColorMapping.NO_DATA,
 				"Missing pH differs from neutral");
+        require(FluidRenderBatch.sameFrames(List.of(initial), List.of(initial), List.of(), List.of()),
+                "Static frames reuse the uploaded batch");
+        require(!FluidRenderBatch.sameFrames(List.of(initial), List.of(ph), List.of(), List.of()),
+                "Diagnostic color changes invalidate the uploaded batch");
+        require(!FluidRenderBatch.sameFrames(List.of(initial), List.of(), List.of(), List.of()),
+                "Region removal invalidates the uploaded batch");
 		emission(initial, ph);
 		System.out.println("Client surface validation passed");
 	}
@@ -82,7 +88,8 @@ public final class ClientSurfaceValidation {
 			java.util.function.Function<String, TextureAtlasSprite> lookup = id -> sprite;
 			vertices = new RecordingVertices();
 			MaterialSurfaceGeometry.buildGeometry(Vec3.ZERO, vertices, composition, false, true, lookup);
-			require(vertices.count > 0 && vertices.textured == vertices.count * 3, "Composition emits complete block vertices");
+			require(vertices.count == composition.triangles().size() * 8 && vertices.textured == vertices.count * 3,
+                    "Both material sides emit complete block vertices for back-face culling");
 			vertices = new RecordingVertices();
 			MaterialSurfaceGeometry.buildGeometry(Vec3.ZERO, vertices, diagnostic, true, true, lookup);
 			GranularSurfaceGeometry.buildGeometry(Vec3.ZERO, vertices, nonempty, true, lookup);

@@ -19,8 +19,11 @@ public final class ProcessTrendScreen extends Screen {
     }
     @Override public boolean isPauseScreen() { return false; }
     @Override public void tick() {
-        if (++ticks % 10 == 0 && minecraft.player != null && ClientPlayNetworking.canSend(ProcessTrendRequest.TYPE))
-            ClientPlayNetworking.send(new ProcessTrendRequest(data.position()));
+        if (minecraft.level == null || !data.dimension().equals(minecraft.level.dimension().identifier().toString())) {
+            onClose(); return;
+        }
+        if (data.available() && ++ticks % 10 == 0 && minecraft.player != null && ClientPlayNetworking.canSend(ProcessTrendRequest.TYPE))
+            ClientPlayNetworking.send(new ProcessTrendRequest(data.position(),data.dimension()));
     }
     @Override public void extractRenderState(GuiGraphicsExtractor g,int mouseX,int mouseY,float partialTick) {
         super.extractRenderState(g,mouseX,mouseY,partialTick);
@@ -35,7 +38,8 @@ public final class ProcessTrendScreen extends Screen {
         double minT=points.getFirst().seconds(), maxT=points.getLast().seconds();
         double min=Double.POSITIVE_INFINITY,max=Double.NEGATIVE_INFINITY;
         for(var p:points){ min=Math.min(min,p.value()); max=Math.max(max,p.value()); }
-        if(max==min){double padding=Math.max(1,Math.abs(max)*.05);min-=padding;max+=padding;}
+        double padding=Math.max(1e-6,Math.max(Math.abs(min),Math.abs(max))*.05);
+        if(max-min<2*padding){double center=(max+min)*.5;min=center-padding;max=center+padding;}
         double span=Math.max(1e-9,maxT-minT);
         g.fill(left,top,right+1,top+1,0xff777777); g.fill(left,bottom,right+1,bottom+1,0xff777777);
         int lastX=0,lastY=0; boolean previous=false;
