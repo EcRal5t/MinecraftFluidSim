@@ -146,13 +146,31 @@ q_ji = -q_ij
 
 `FiniteThermalBodyState` 保存设备材料、质量、总内能、注册表指纹和代次。有限换热器的设备库存由区域持有，定位信息由 `FiniteThermalDeviceState` 保存。世界固体、环境空气及墙面装填的热库存由 [WorldThermalEnvironment](../../fabric/src/main/java/mmm/simulation/WorldThermalEnvironment.java) 按维度和方块坐标持有；多个区域的接触引用同一世界节点。
 
-[WorldThermalTopology](../../fabric/src/main/java/mmm/simulation/WorldThermalTopology.java) 按碰撞微盒计算固体体积、连通空气及实际接触。铁、铜、金、石、木材、玻璃和绝热材料由方块标签与世界热学定义选择，未配置的固体采用默认石材。新增、拆除与移动按实际库存结算；绝热材料的导热率为零。预热和表面装填读取共享墙的当前库存，再共同提交环境与区域候选。
+[WorldThermalTopology](../../fabric/src/main/java/mmm/simulation/WorldThermalTopology.java) 按碰撞微盒计算固体体积、连通空气及实际接触，每个固体的材料按下节[方块热材料](#方块热材料)选择。新增、拆除与移动按实际库存结算；绝热材料的导热率为零。预热和表面装填读取共享墙的当前库存，再共同提交环境与区域候选。
 
 `VulkanThermalContacts` 将有限设备及世界墙投影与流体端口纳入接触图，`VulkanThermalConduction` 按载体质量、参考能、内能和比热曲线计算换热。区域与环境候选共同采用，世界 HEAD 保存同一时点的环境和区域 checkpoint。环境内部扩散和远场交换使用共享环境热账。
 
 `FiniteHeatExchangerOperations` 在模拟区域相邻的空位安装有限换热器；区域定位与热接触读取定义中的端口方向，默认设备具有北／南端口。`HostFluidState.finiteThermalPortContacts` 提供宿主端口视图，设备端口与载体内能随 GPU 完整候选共同提交。区域成功步采用同一逻辑时长推进设备，暂停、不可用或有待恢复事务时保留库存；设备成本纳入区域原有完整步调度。
 
 `FiniteHeatExchangerBlockEntity` 只保存区域和世界槽位定位；区域库存保存已安装设备的质量、内能、材料、指纹与代次。拆卸物品经 `FiniteThermalDeviceItemCodec` 携带完整设备状态，再安装按目标槽位定位，保持原热库存。创造栏空硬件首次安装按世界定义初始化。安装、拆卸和破坏交接见[世界与容器事务](world-ownership-and-containers.md#有限换热器安装与拆卸)。
+
+### 方块热材料
+
+[BlockThermalMaterials](../../fabric/src/main/java/mmm/simulation/BlockThermalMaterials.java) 按方块标签 `data/mmm/tags/block/ordinary_<材料>_thermal_walls.json` 为固体选择有限墙定义 `data/mmm/mmm/finite_thermal_devices/ordinary_<材料>_wall.json`。每格墙的质量与初温来自定义文件，初温统一为 293.15 K。一个方块同时列入两个标签时加载报错。
+
+| 标签 | 墙体质量 | 包含方块 |
+|---|---|---|
+| `metal` | 7800 kg | 铁块；本 Mod 的金属管、管道阀、管道筛网、阀门、机械驱动器、物料箱 |
+| `copper` | 8960 kg | 全部铜块与切制铜块（含各氧化阶段、涂蜡、台阶和楼梯） |
+| `gold` | 19300 kg | 金块 |
+| `stone` | 2500 kg | 石头、圆石、石砖、深板岩、深板岩圆石、红砖块 |
+| `wood` | 600 kg | 木板、原木、木台阶、木楼梯、木栅栏、木活板门、木门 |
+| `glass` | 2500 kg | 玻璃、染色玻璃、玻璃板及其染色变体、本 Mod 的玻璃管 |
+| `insulation` | 100 kg，导热率为零 | 本 Mod 的绝热块、绝热玻璃、绝热管、绝热玻璃管、流体端口、工艺传感器 |
+
+以下方块使用专属定义：筛网及管道筛网的筛网部件使用 `mmm:screen`，有限换热器使用 `finite_heat_exchanger` 设备库存，`thermal_reservoir` 是设定温度的恒温面。
+
+其余与流体接触的固体都按 `mmm:ordinary_stone_wall` 结算，例如泥土、沙子、砂岩、混凝土和其他模组方块。这些方块各带 2500 kg、293.15 K 的石质热库存，会从热流体吸热、向冷流体放热；在蒸气空间里，室温石墙成为额外冷凝面，凝液积在这些墙边，蒸馏或冷凝装置流入产品口的液量随之减少。装置出现预期之外的吸热或冷凝时，先用 [ApparatusDiagnostics](../../fabric/src/test/java/mmm/simulation/ApparatusDiagnostics.java) 列出逐墙能量变化与逐格液量，再给相应方块补标签。
 
 ### 固定表面吸附与催化
 

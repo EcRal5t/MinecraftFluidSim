@@ -4,6 +4,9 @@
     "minecraft:iron_block",
     "mmm:metal_pipe",
     "mmm:pipe_valve",
-    "mmm:pipe_screen"
+    "mmm:pipe_screen",
+    "mmm:valve",
+    "mmm:mechanical_driver",
+    "mmm:material_box"
   ]
 }

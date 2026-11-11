@@ -4,6 +4,16 @@
 有 95% 把握的改动跳过额外验证、校验和测试；物理主干改动按范围选择完整步生产预算，展示改动分别记录快照与客户端成本。
 有具体未知风险时，从下列入口选择能回答该问题的最小场景，复用同一次构建产物。
 
+| 任务 | 先读章节 | 入口 |
+|---|---|---|
+| 排错某物理现象 | [仿真能力验证](#simulation-capabilities)中对应职责的任务表；装置内出现意外吸热或冷凝时读[工业装置](#工业装置)的装置诊断 | `:gpu-kernel:runGpu*`；`ApparatusDiagnostics` |
+| 改工业装置 | [工业装置](#工业装置)、[实际容器组合工艺](#实际容器组合工艺) | `:fabric:runGpuProcessFlowsValidation -PgpuProcessScenario=...` |
+| 改 GPU 着色器 | [GPU 短链与单元验收](#gpu-短链与单元验收)、[GPU 内核基准](#gpu)、[完整生产步预算](#完整生产步预算) | `:gpu-kernel:` 验证与基准任务 |
+| 改交互、演示或客户端 | [GPU 演示与场景验证](#gpu-演示完整流程)、[演示与客户端交互自动化](#演示与客户端交互自动化) | `:fabric:runDemoInteractionValidation`、`:fabric:runGameTest` |
+| 改类职责或模块依赖 | [架构与编译检查](#architecture) | `verifyArchitecture` |
+
+最新运行结果集中在[当前验证基线与状态](#当前验证证据)。
+
 <a id="gpu-演示完整流程"></a>
 ## GPU 演示与场景验证
 
@@ -86,7 +96,9 @@ uv run pytool/distillation_reference.py
 
 壁面接触热导与有限交换热量同解析解闭合，有限墙与流体热账平衡。结晶析出量与溶解度、扩散速率一致；固定表面吸附与解吸量与有限速率动力学参照一致，质量和内能闭合；可逆化学反应进度与解析解一致；气体绝热路径的压力功积分与内能变化、公开转移持久化检查均通过。
 
-装置诊断使用 `industrial_distillation_probe`、`industrial_heat_probe` 和 `industrial_heat_stone_probe`。参数表示从首次 tick 开始的总步数，包含充液；结束后结算物料与能量并标记 `process_diagnostic_complete`。蒸馏短诊断记录料池和冷凝端的液量、温度、蒸气库存与控制信号，并定期列出明显吸放热的墙体设备和装置内部各格液量，用于定位意外冷凝面；完整流程比较实际有限批次与 Rayleigh 参照。`industrial_distillation_warm` 可按已经完成的冷壁工况时长单独运行暖壁。逆流流程使用 `industrial_heat` 配对比较：铜壁达到 5 K 出口温升后结束供料观察，石墙使用相同时长，两者随后检查停止热料后的蓄热释放；`industrial_heat_metal` 和 `industrial_heat_stone` 可单独运行。
+装置诊断使用 `industrial_distillation_probe`、`industrial_heat_probe` 和 `industrial_heat_stone_probe`。参数表示从首次 tick 开始的总步数，包含充液；结束后结算物料与能量并标记 `process_diagnostic_complete`。蒸馏短诊断记录料池和冷凝端的液量、温度、蒸气库存与控制信号；完整流程比较实际有限批次与 Rayleigh 参照。`industrial_distillation_warm` 可按已经完成的冷壁工况时长单独运行暖壁。逆流流程使用 `industrial_heat` 配对比较：铜壁达到 5 K 出口温升后结束供料观察，石墙使用相同时长，两者随后检查停止热料后的蓄热释放；`industrial_heat_metal` 和 `industrial_heat_stone` 可单独运行。
+
+[ApparatusDiagnostics](../../fabric/src/test/java/mmm/simulation/ApparatusDiagnostics.java) 为任意 `IndustrialLayout` 装置定位意外的吸热面和冷凝面。投料前用区域、世界注册表和布局构造，记录每台有限墙设备的初始内能；运行中调用 `print(前缀, 阈值J)`，输出两类行：`<前缀>_device rel=x, y, z id=... dE_J=...` 列出能量变化超过阈值的墙体，坐标相对布局原点；`<前缀>_block rel=x,y,z liquid_m3=...` 列出外壳内部存液超过 1 cm³ 的方块。蒸馏与逆流诊断场景每 400 步以 2×10⁵ J 阈值调用一次，新装置诊断照此加入一行调用。墙体材料的选取规则见[方块热材料](../architecture/thermal-state.md#方块热材料)。
 
 GPU 进程串行运行，复用同一次构建。直接运行 JVM 时将 `java.io.tmpdir` 指向项目 `build` 下的临时目录，场景世界与玩家存档分开保存。
 
@@ -96,7 +108,7 @@ GPU 进程串行运行，复用同一次构建。直接运行 JVM 时将 `java.i
 
 逆流场景两侧各装填 500 L，以 2 L/s 对向流动，核对双侧组成隔离、出口温升趋势以及停止供料后的有限墙蓄热释放，流体与有限墙热账闭合。
 
-蒸馏由 100 L 含乙醇原料开始，乙醇摩尔分率 0.236。单级冷壁约 50 s 切取 20 L，馏分 0.363，Rayleigh 平衡切割参照 0.380，釜残 0.203；暖壁同时长只冷凝约 1 L。串级第二台以第一台实际馏分为进料，28 s 切取 4 L，馏分 0.493，参照 0.537，两段共计 78 s。冷凝热进入铁质冷墙，绝热外壳与填充不承接冷凝；有限排气量由预置气体箱容纳，质量、元素、容器携能和有限墙热账守恒闭合。
+蒸馏由 100 L 含乙醇原料开始，乙醇摩尔分率 0.236。单级冷壁约 50 s 切取 20 L，馏分 0.359，Rayleigh 平衡切割参照 0.380，釜残 0.204；暖壁同时长只冷凝约 1 L。串级第二台以第一台实际馏分为进料，29 s 切取 4 L，馏分 0.466，参照 0.530，两段共计 79 s。冷凝热进入铁质冷墙，外壳、填充与压力传感器均为绝热材料；传感器改用石材时成为塔顶分凝面，第二台馏分升至 0.512。有限排气量由预置气体箱容纳，质量、元素、容器携能和有限墙热账守恒闭合。
 
 
 GameTest 在实际服务器中运行传感器红石控制、箱端口装取、方块实体设置恢复、筛的放置转向拆除、原版活塞运动与双阀泵送。默认测试世界位于 `fabric/build/gametest/world`，独立于玩家存档。重复测试可用 `-PgameTestRunDir=build/gametest-<本轮名称>` 选择全新目录，避免已有区域占用测试世界的区域额度。路径相对于 `fabric` 模块；GPU 场景与游戏服务器串行运行。

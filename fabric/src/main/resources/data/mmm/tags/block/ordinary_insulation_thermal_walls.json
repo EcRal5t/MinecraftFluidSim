@@ -5,6 +5,7 @@
     "mmm:insulating_glass",
     "mmm:insulated_pipe",
     "mmm:insulated_glass_pipe",
-    "mmm:fluid_port"
+    "mmm:fluid_port",
+    "mmm:process_sensor"
   ]
 }

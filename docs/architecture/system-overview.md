@@ -1,6 +1,17 @@
 # 当前设计书
 
-本文按完整职责链组织当前模型、数据归属和代码索引。开发时阅读本文及[当前实施计划](../roadmap/solver-consolidation-plan.md)，按改动范围查阅[验证指南](../maintenance/validation.md)。稳定公式和字段详见各专题；待办由实施计划维护，验证方法与预算由验证指南维护。
+本文按完整职责链组织当前模型、数据归属和代码索引。稳定公式和字段详见各专题；待办由[当前实施计划](../roadmap/solver-consolidation-plan.md)维护，验证方法与预算由[验证指南](../maintenance/validation.md)维护。
+
+## 阅读导航
+
+先读本节和[模块职责](#模块职责)，再按任务类型阅读相应章节。
+
+| 任务 | 本文章节 | 专题 | 代码入口 |
+|---|---|---|---|
+| 排错某物理现象 | [完整计算步](#physics)及其设备阶段索引；热墙与环境见[从游戏输入到设备候选](#runtime)第三至五段 | [热状态](thermal-state.md)、[流体求解](fluid-solver.md)、[气体](gas-state.md) | `VulkanRegionReactions`、`VulkanThermalContacts`、`VulkanGasLiquidMassTransfer`；装置级定位用 `ApparatusDiagnostics` |
+| 改工业装置 | [从游戏输入到设备候选](#runtime)中物料箱、接口、阀门、传感器、筛与工业布局各段及主要入口 | [方块热材料](thermal-state.md#方块热材料)、[世界与容器事务](world-ownership-and-containers.md) | `IndustrialLayout` 与各装置布局类、`IndustrialOperations`、`IndustrialWorkbench`、`GpuControllerFixture` |
+| 改 GPU 着色器 | [完整计算步](#physics)的设备阶段索引 | [GPU 执行原则](gpu-execution-principles.md)、相应物理专题 | `gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/`、`VulkanShaderLayout` 与对应 `Vulkan*` 阶段类 |
+| 跑验证 | 各章末尾的验证入口 | [验证指南](../maintenance/validation.md)开头导航 | `fabric/src/test/java/mmm/simulation/` 下的 `*Validation` 主类 |
 
 当前支持最多四个空间选区或有界静水池区域。默认格长为 0.5 m；液体采用单元有限体积与 MAC 动量，气体采用逐格组分与内能，液气共用 MAC 运动和局部有限压缩状态方程，颗粒采用活动代表粒子与床层。固定碰撞每个求解单元保留一个连通开放空间，隔墙以求解网格解析。
 
@@ -117,7 +128,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
 5. 日常查询与展示读取设备观察；checkpoint 和宿主编辑显式导出所需代次。
 
-固定世界方块与域外有限空气由维度共享热场持有。原版方块标签选择材料，未配置方块采用默认石材；铁、铜、金、木材、玻璃及绝热材料复用世界热学定义。每个固体按实际占据体积保存质量与内能，同格空气按微盒连通分量保存实际组成、质量与内能。区域设备行引用唯一世界节点，多个区域可共同加热同一面墙。
+固定世界方块与域外有限空气由维度共享热场持有。方块标签为每个固体选择铁、铜、金、石、木材、玻璃或绝热材料，未列入标签的固体采用石材，清单与影响见[方块热材料](thermal-state.md#方块热材料)。每个固体按实际占据体积保存质量与内能，同格空气按微盒连通分量保存实际组成、质量与内能。区域设备行引用唯一世界节点，多个区域可共同加热同一面墙。
 
 空间选区由探针两角确认，碰撞与容器独立。液体或颗粒接近边缘时，既有 GPU 观察输出六方向标志；运行入口先做预算、区块与重叠预检，再按 8³ 计算块生成更大候选，搬迁库存、气体、动量、几何及待处理任务。环境空气交给新气格、原版水接管及区域布局沿同一候选和世界发布记录采用。
 
@@ -161,7 +172,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [IndustrialOperations](../../fabric/src/main/java/mmm/simulation/IndustrialOperations.java)、[IndustrialDialogs](../../fabric/src/main/java/mmm/simulation/IndustrialDialogs.java)：物料箱、端口调度、阀门占容、传感器与原生交互面板。
 - [MaterialBoxItemStorage](../../fabric/src/main/java/mmm/simulation/MaterialBoxItemStorage.java)：九槽实际容器的 Fabric 自动化入口，完整物品组件、嵌套事务回滚和箱体占用；区域交接继续走持久容器事务。契约见[外部 API](external-api.md#fabric-物料箱自动化)。
 - [MaterialBoxBlockEntity](../../fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java)、[GasContents](../../model/src/main/java/mmm/transfer/GasContents.java)：有限批次与气体载荷。
-- [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)、[IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：共享三维方块布局、有限墙初始化与工艺验证；离线夹具按正式碰撞采样入口生成微盒占据。
+- [IndustrialLayout](../../fabric/src/main/java/mmm/simulation/IndustrialLayout.java)：装置布局记录、`Scenario` 分派，以及共用的外壳、端口与物料箱、有限墙放置。各装置的方块布局分别位于 [DistillationLayout](../../fabric/src/main/java/mmm/simulation/DistillationLayout.java)（蒸馏）、[CounterflowLayout](../../fabric/src/main/java/mmm/simulation/CounterflowLayout.java)（逆流换热及充液容量）、[ScreeningLayout](../../fabric/src/main/java/mmm/simulation/ScreeningLayout.java)（筛分与冷壁结晶）、[SurfaceChannelLayout](../../fabric/src/main/java/mmm/simulation/SurfaceChannelLayout.java)（吸附与催化）和 [ConnectedTanksLayout](../../fabric/src/main/java/mmm/simulation/ConnectedTanksLayout.java)（双罐阀门与液位控制）。
+- [IndustrialWorkbench](../../fabric/src/main/java/mmm/simulation/IndustrialWorkbench.java)、[GpuControllerFixture](../../fabric/src/test/java/mmm/simulation/GpuControllerFixture.java)：游戏内建造与离线夹具共用布局和有限墙初始化；离线夹具按正式碰撞采样入口生成微盒占据。
+- [GpuProcessFlowsValidation](../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)：`-PgpuProcessScenario` 场景分派与控制器小流程。工业场景按装置族分文件：[IndustrialPortFlows](../../fabric/src/test/java/mmm/simulation/IndustrialPortFlows.java)（物料箱、端口与阀门）、[CounterflowFlows](../../fabric/src/test/java/mmm/simulation/CounterflowFlows.java)、[SurfaceProcessFlows](../../fabric/src/test/java/mmm/simulation/SurfaceProcessFlows.java)、[ScreeningFlows](../../fabric/src/test/java/mmm/simulation/ScreeningFlows.java)、[DistillationFlows](../../fabric/src/test/java/mmm/simulation/DistillationFlows.java)；[ProcessFlowSupport](../../fabric/src/test/java/mmm/simulation/ProcessFlowSupport.java) 提供料液、质量合计与端口接触格，[ApparatusDiagnostics](../../fabric/src/test/java/mmm/simulation/ApparatusDiagnostics.java) 输出任意装置的逐墙设备能量变化和逐格液量。
 - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)：调度与提交；[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 的 `manualStep` 负责原生单步输入和实体响应，失败采用共同暂停分类。
 - [FluidRegion](../../fabric/src/main/java/mmm/simulation/FluidRegion.java)：已提交代、`hostSnapshot`、`beginHostEdit/commitHostEdit` 和设备候选采用。
 - [VulkanFluidSolverBackend](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidSolverBackend.java)、[VulkanFluidStateCodec](../../gpu-kernel/src/main/java/mmm/gpu/VulkanFluidStateCodec.java)：设备请求、导入与导出。

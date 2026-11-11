@@ -4,6 +4,14 @@
 
 本页维护当前交付和下一轮范围。模型、数据归属与代码入口见[设计书](../architecture/system-overview.md)，操作与运行命令见[验证指南](../maintenance/validation.md)，长期范围见[产品路线](product-roadmap.md)。
 
+| 任务 | 本页章节 | 代码入口 |
+|---|---|---|
+| 排错某物理现象 | [计算链简化与耗时](#计算链简化与耗时)、[空间选区与环境热场](#空间选区与环境热场) | `FluidRegion`、`WorldThermalEnvironment`、`gpu-kernel` 的 `Vulkan*` 阶段 |
+| 改工业装置 | [工业玩法交付](#工业玩法交付)、[工艺效能与验证反馈](#工艺效能与验证反馈)、[薄壁管道](#薄壁管道) | `IndustrialLayout` 与各 `*Layout`、`MmmBlocks`、方块热材料标签 |
+| 改 GPU 着色器 | [计算链简化与耗时](#计算链简化与耗时) | `gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders` 与对应 `Vulkan*` 类 |
+| 改交互、演示或客户端 | [演示运行](#演示运行)、[客户端展示与测量](#客户端展示与测量) | `/mmm demo`、客户端渲染与界面 |
+| 跑验证 | 各章末尾的验证结论 | 命令见验证指南开头导航 |
+
 ## 空间选区与环境热场
 
 [空间选区与环境热场方案](../archive/proposals/region-and-environment-heat-plan.md)的生产职责链已实现：探针指定两个角点并预览、确认创建，普通方块的碰撞决定流体空间。区域由 UUID 和名称标识，探针与过程传感器负责状态、操作和红石测量；演示和物料接口使用同一选区流程。原版水体通过世界归属事务接管和归还。
