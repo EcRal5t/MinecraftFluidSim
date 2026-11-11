@@ -230,7 +230,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="persistence"></a>
 ## 保存和故障恢复
 
-保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。碰撞刷新受阻按世界输入失败暂停，保留刷新请求，世界条件恢复后重新规划。有限设备恢复读取原子发布的正式 WAL，中断发布留下的普通临时文件保留在磁盘并跳过。公开转移的持久化收据在 WAL 扫描完整且缺少对应日志时归类为未提交；扫描存在存储问题时保持待恢复状态。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
+保存显式捕获已提交设备代，完整写入同代库存、动量、内能与待处理状态。冷恢复按 HEAD 和 WAL 分类未决事务，读取完整同代数据和世界定义，准备碰撞并导入设备。碰撞刷新受阻按世界输入失败暂停，保留刷新请求，世界条件恢复后重新规划。有限设备恢复读取原子发布的正式 WAL，中断发布留下的普通临时文件保留在磁盘并跳过。公开转移的持久化收据在 WAL 扫描完整且缺少对应日志时归类为未提交；扫描存在存储问题时保持待恢复状态。宿主几何编辑的气体挤排按连通域有效气容建立线性供需匹配，实际物种、内能和动量沿同一转移记录交接。普通候选失败保留原代；设备丢失时暂停受影响区域，按事务与最近一致 checkpoint 恢复。HEAD 损坏或事务成员不明确时保留具体暂停原因。协议见[区域存档](region-state.md)与[世界归属和容器](world-ownership-and-containers.md)。
 
 - [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)：捕获与恢复。
 - [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)：区域生命周期与持久化协调；卸载区域的运行意图由 `setUnloadedRunIntent` 同步读取完整 checkpoint、提交新代并释放宿主状态，保留原有可用性，未完成事务先执行恢复。

@@ -145,6 +145,7 @@ public final class GpuProductionDemoValidation {
 				long coldStart = System.nanoTime();
 				prepareAvailability(region);
 				require(motion.step(region, List.of()).accepted(), "Air topology initialization rejected");
+				motion.settlePendingPhaseWork(region);
 				System.out.printf("stage=air-prime-motion cold_import_scope_ms=%.3f%n", (System.nanoTime() - coldStart) / 1e6);
 				long editGeneration = region.solverGeneration();
 				var editable = region.beginHostEdit();
@@ -324,8 +325,9 @@ public final class GpuProductionDemoValidation {
 		long reagentQuanta = Long.getLong("mmm.demoValidationReagentQuanta", precipitation ? 1_000_000_000L : 1_000_000L);
 		require(reagentQuanta > 0, "Tank reagent amount must be positive");
 		UUID id = region.id();
-		require(region.sizeX() == 4 && region.sizeY() == 4 && region.sizeZ() == 4,
-				"Demo tank must have a two-block interior");
+		int size=ControllerDemoLayout.OUTER_SIZE*FluidRegionFactory.CELLS_PER_BLOCK;
+		require(region.sizeX()==size && region.sizeY()==size && region.sizeZ()==size,
+				"Demo tank footprint does not match the controller layout");
 		var snapshots = new FluidSnapshotPublisher(world.profile(), world.chemicalRegistry(), world.granularRegistry(), world.thermalRegistry());
 		try (var backend = MmmRuntimeFactory.createSolverBackend()) {
 			MmmRuntimeFactory.prepareSolverBackend(backend, startup, world);

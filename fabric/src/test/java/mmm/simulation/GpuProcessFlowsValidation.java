@@ -259,17 +259,17 @@ public final class GpuProcessFlowsValidation {
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.SCREENING);
         var region=fixture.region;var screens=region.hostSnapshot().captureAuthoritativeState().fixedGeometry().screens();
         if(screens.isEmpty())throw new AssertionError("Screen blocks did not configure shared faces");
-        ItemStack remainder=fixture.transferBoxDurable(new ItemStack(Items.WATER_BUCKET),fixture.portCell,false,50_000_000L);
+        ItemStack remainder=fixture.transferBoxDurable(new ItemStack(Items.WATER_BUCKET),fixture.portCell,Direction.WEST,false,50_000_000L);
         long accepted=1_000_000_000L-mmm.item.PartialWaterBucketItem.volume(remainder);
         var host=region.hostSnapshot();long liquid=host.totalMassUnits();
         long actual=MinecraftContainerTransferOperations.cellVolumeToNanos(host.unitScale(),host.totalVolumeExact());
         long expectedMass=Mass.fromKilograms(host.unitScale().cubicMeters(host.totalVolumeExact())*world.resolveMaterial("mmm:water").referenceDensity());
         if(accepted<=0 || accepted>50_000_000L || actual!=accepted || liquid!=expectedMass)
             throw new AssertionError("Box input settlement differs: requested=50000000 accepted="+accepted+" actual="+actual+" mass="+liquid+" expected="+expectedMass);
-        var gas=fixture.transferBoxDurable(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),fixture.portCell,true,10_000_000L);
+        var gas=fixture.transferBoxDurable(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),fixture.portCell,Direction.WEST,true,10_000_000L);
         var gasContents=mmm.item.GasContainerItem.contents(gas);
         if(gasContents==null||gasContents.inventory().isEmpty())throw new AssertionError("Box output did not retain the gas mixture");
-        fixture.transferBoxDurable(gas,fixture.portCell,false,gasContents.inventory().standardVolumeNanos());
+        fixture.transferBoxDurable(gas,fixture.portCell,Direction.WEST,false,gasContents.inventory().standardVolumeNanos());
         long initialMass=processMass(region.hostSnapshot().captureAuthoritativeState());
 
             var app=new mmm.application.RegionApplicationService(backend,new FluidRegionRepository(manager),operations);
@@ -309,16 +309,28 @@ public final class GpuProcessFlowsValidation {
         try(var backend=MmmRuntimeFactory.createSolverBackend()) {
             MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.TWO_TANKS);
-        var region=fixture.region;int plane=11;var faceList=new ArrayList<Integer>();
-        for(int y=0;y<4;y++)for(int z=0;z<4;z++)faceList.add(region.grid().faceAt(plane,y,z,0));
+        var region=fixture.region;var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.TWO_TANKS);
+        var valves=layout.blocks().entrySet().stream().filter(entry->entry.getValue().is(mmm.block.MmmBlocks.VALVE)).toList();
+        var faceList=new ArrayList<Integer>();
+        for(var valve:valves) {
+            int bx=2*(valve.getKey().getX()-region.origin().getX());
+            int by=2*(valve.getKey().getY()-region.origin().getY());
+            int bz=2*(valve.getKey().getZ()-region.origin().getZ());
+            for(int y=0;y<2;y++)for(int z=0;z<2;z++)faceList.add(region.grid().faceAt(bx+1,by+y,bz+z,0));
+        }
         int[] faces=faceList.stream().mapToInt(Integer::intValue).toArray();
         if(closed) {
             var state=mmm.block.MmmBlocks.VALVE.defaultBlockState().setValue(mmm.block.ValveBlock.FACING,Direction.EAST).setValue(mmm.block.ValveBlock.OPENING,0);
-            var edits=new ArrayList<FluidDomainContracts.CollisionEdit>();
-            for(int by=0;by<2;by++)for(int bz=0;bz<2;bz++)for(int x=0;x<2;x++)for(int y=0;y<2;y++)for(int z=0;z<2;z++)
-                edits.add(new FluidDomainContracts.CollisionEdit(10+x,2*by+y,2*bz+z,
-                        FluidRegionWorldInteraction.sampleCutCellMask(mmm.block.ValveBlock.shutter(state),x,y,z,2,1e-7)));
-            var generation=region.solverGeneration();var candidate=region.beginHostEdit();candidate.applyCollisionEdits(edits);region.adoptCollisionCandidate(generation,candidate);
+            var generation=region.solverGeneration();var candidate=region.beginHostEdit();var edits=new ArrayList<FluidDomainContracts.CollisionEdit>();
+            for(var valve:valves)for(int x=0;x<2;x++)for(int y=0;y<2;y++)for(int z=0;z<2;z++) {
+                int cx=2*(valve.getKey().getX()-region.origin().getX())+x;
+                int cy=2*(valve.getKey().getY()-region.origin().getY())+y;
+                int cz=2*(valve.getKey().getZ()-region.origin().getZ())+z;
+                int mask=FluidRegionWorldInteraction.sampleCutCellMask(mmm.block.ValveBlock.shutter(state),x,y,z,2,1e-7);
+                if(candidate.solidMicroMask(cx,cy,cz)!=mask)edits.add(new FluidDomainContracts.CollisionEdit(cx,cy,cz,mask));
+            }
+            if(edits.isEmpty())throw new AssertionError("Closing the valve did not change its collision geometry");
+            candidate.applyCollisionEdits(edits);region.adoptCollisionCandidate(generation,candidate);
         }
         ItemStack batch=new ItemStack(Items.WATER_BUCKET);double flow=0;long output=0,inputMass=0,outputMass=0;
         long initialMass=processMass(region.hostSnapshot().captureAuthoritativeState());
@@ -332,16 +344,16 @@ public final class GpuProcessFlowsValidation {
                     motion.settlePendingPhaseWork(region);
                     if(batch.is(Items.BUCKET))batch=new ItemStack(Items.WATER_BUCKET);
                     long beforeInput=processMass(region.hostSnapshot().captureAuthoritativeState());
-                    batch=fixture.transferBox(batch,fixture.portCell,false,IndustrialOperations.tickQuota(50_000_000L,step));available(region);
+                    batch=fixture.transferBox(batch,fixture.portCell,Direction.WEST,false,IndustrialOperations.tickQuota(50_000_000L,step));available(region);
                     inputMass=Math.addExact(inputMass,processMass(region.hostSnapshot().captureAuthoritativeState())-beforeInput);
                 }
                 motion.settlePendingPhaseWork(region);
-                int[] outlet={region.sizeX()-1,0,0};long quota=IndustrialOperations.tickQuota(50_000_000L,step);
+                int[] outlet=industrialPortCell(region,layout.ports().get(1));long quota=IndustrialOperations.tickQuota(50_000_000L,step);
                 var block=region.origin().offset(outlet[0]/2,outlet[1]/2,outlet[2]/2);
                 var contact=FluidWorldTargetResolver.transferCell(region,block,Direction.EAST,new mmm.api.transfer.TransferQuantity.Liquid(quota,OptionalDouble.empty()),true);
                 if(contact!=null && MinecraftContainerTransferOperations.extractableNanos(region.hostSnapshot(),contact,quota,0,-1)>0) {
                     long beforeOutput=processMass(region.hostSnapshot().captureAuthoritativeState());
-                    var product=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),outlet,true,quota);
+                    var product=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),outlet,Direction.EAST,true,quota);
                     long accepted=mmm.item.MaterialBucketItem.volume(product);if(accepted>0)output=Math.addExact(output,accepted);available(region);
                     outputMass=Math.addExact(outputMass,beforeOutput-processMass(region.hostSnapshot().captureAuthoritativeState()));
                 }
@@ -675,7 +687,9 @@ public final class GpuProcessFlowsValidation {
             MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.ABSORPTION);
         var region=fixture.region;
-        int[] treatedIn=fixture.portCell,controlIn={0,0,8},treatedOut={region.sizeX()-1,0,0},controlOut={region.sizeX()-1,0,8};
+        var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.ABSORPTION);
+        int[] treatedIn=industrialPortCell(region,layout.ports().get(0)),treatedOut=industrialPortCell(region,layout.ports().get(1));
+        int[] controlIn=industrialPortCell(region,layout.ports().get(2)),controlOut=industrialPortCell(region,layout.ports().get(3));
         ItemStack treated=gasFeed(world),control=gasFeed(world);
         ItemStack treatedProduct=null,controlProduct=null;
         var products=new ArrayList<ItemStack>();
@@ -693,19 +707,19 @@ public final class GpuProcessFlowsValidation {
                     if(mmm.item.GasContainerItem.contents(treated)==null){treated=gasFeed(world);supplied=Math.addExact(supplied,gasMass(treated));}
                     if(mmm.item.GasContainerItem.contents(control)==null){control=gasFeed(world);supplied=Math.addExact(supplied,gasMass(control));}
                     long quota=IndustrialOperations.tickQuota(1_000_000_000L,step);
-                    treated=fixture.transferBox(treated,treatedIn,false,quota);
-                    control=fixture.transferBox(control,controlIn,false,quota);
+                    treated=fixture.transferBox(treated,treatedIn,Direction.WEST,false,quota);
+                    control=fixture.transferBox(control,controlIn,Direction.WEST,false,quota);
                     {
                         var gasRequest=new mmm.api.transfer.TransferQuantity.Gas(quota,0);
                         var treatedBlock=region.origin().offset(treatedOut[0]/2,treatedOut[1]/2,treatedOut[2]/2);
                         var controlBlock=region.origin().offset(controlOut[0]/2,controlOut[1]/2,controlOut[2]/2);
                         ItemStack a=null,b=null;
                         if(FluidWorldTargetResolver.transferCell(region,treatedBlock,Direction.EAST,gasRequest,true)!=null) {
-                            var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),treatedOut,true,quota);
+                            var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),treatedOut,Direction.EAST,true,quota);
                             if(mmm.item.GasContainerItem.contents(batch)!=null){a=batch;products.add(batch);}
                         }
                         if(FluidWorldTargetResolver.transferCell(region,controlBlock,Direction.EAST,gasRequest,true)!=null) {
-                            var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),controlOut,true,quota);
+                            var batch=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),controlOut,Direction.EAST,true,quota);
                             if(mmm.item.GasContainerItem.contents(batch)!=null){b=batch;products.add(batch);}
                         }
                         if(a!=null && b!=null) {
@@ -749,7 +763,7 @@ public final class GpuProcessFlowsValidation {
                 long quota=IndustrialOperations.tickQuota(1_000_000_000L,step);
                 var outlet=region.origin().offset(treatedOut[0]/2,treatedOut[1]/2,treatedOut[2]/2);
                 if(FluidWorldTargetResolver.transferCell(region,outlet,Direction.EAST,new mmm.api.transfer.TransferQuantity.Gas(quota,0),true)!=null) {
-                    recovered.add(fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),treatedOut,true,quota));available(region);
+                    recovered.add(fixture.transferBox(new ItemStack(mmm.item.MmmItems.GAS_CONTAINER),treatedOut,Direction.EAST,true,quota));available(region);
                 }
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Adsorbent regeneration step rejected");
             }
@@ -764,7 +778,7 @@ public final class GpuProcessFlowsValidation {
                 progress("readsorption",step,600);
                 motion.settlePendingPhaseWork(region);
                 if(mmm.item.GasContainerItem.contents(treated)==null){treated=gasFeed(world);supplied=Math.addExact(supplied,gasMass(treated));}
-                treated=fixture.transferBox(treated,treatedIn,false,IndustrialOperations.tickQuota(1_000_000_000L,step));
+                treated=fixture.transferBox(treated,treatedIn,Direction.WEST,false,IndustrialOperations.tickQuota(1_000_000_000L,step));
                 available(region);
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Adsorbent reuse step rejected");
             }
@@ -879,7 +893,9 @@ public final class GpuProcessFlowsValidation {
             MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,scenario);
         var region=fixture.region;
-        int[] treatedIn=fixture.portCell,controlIn={0,0,8},treatedOut={region.sizeX()-1,0,0},controlOut={region.sizeX()-1,0,8};
+        var layout=IndustrialLayout.at(new BlockPos(14,64,20),scenario);
+        int[] treatedIn=industrialPortCell(region,layout.ports().get(0)),treatedOut=industrialPortCell(region,layout.ports().get(1));
+        int[] controlIn=industrialPortCell(region,layout.ports().get(2)),controlOut=industrialPortCell(region,layout.ports().get(3));
         ItemStack treated=catalysisFeed(world),control=catalysisFeed(world);
         int earlyStep=-1;var products=new ArrayList<ItemStack>();
         long sampleVolume=ContainerFluidLedger.NANOS_PER_BLOCK;
@@ -902,14 +918,14 @@ public final class GpuProcessFlowsValidation {
                     var c=FluidWorldTargetResolver.transferCell(region,controlBlock,Direction.EAST,request,true);
                     var host=region.hostSnapshot();
                     if(t!=null && MinecraftContainerTransferOperations.extractableNanos(host,t,quota,0,-1)>0) {
-                        var a=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),treatedOut,true,quota);
+                        var a=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),treatedOut,Direction.EAST,true,quota);
                         if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(a)) {
                             products.add(a);var contents=mmm.item.ContainerItemStacks.chemicalContents(a,world.chemicalRegistry());
                             treatedSamples.add(contents);treatedVolume=Math.addExact(treatedVolume,contents.totalVolumeNanos());
                         }
                     }
                     if(c!=null && MinecraftContainerTransferOperations.extractableNanos(host,c,quota,0,-1)>0) {
-                        var b=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),controlOut,true,quota);
+                        var b=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),controlOut,Direction.EAST,true,quota);
                         if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(b)) {
                             products.add(b);var contents=mmm.item.ContainerItemStacks.chemicalContents(b,world.chemicalRegistry());
                             controlSamples.add(contents);controlVolume=Math.addExact(controlVolume,contents.totalVolumeNanos());
@@ -921,9 +937,9 @@ public final class GpuProcessFlowsValidation {
                     var inA=region.origin().offset(treatedIn[0]/2,treatedIn[1]/2,treatedIn[2]/2);
                     var inB=region.origin().offset(controlIn[0]/2,controlIn[1]/2,controlIn[2]/2);
                     if(FluidWorldTargetResolver.transferCell(region,inA,Direction.WEST,request,false)!=null)
-                        treated=fixture.transferBox(treated,treatedIn,false,quota);
+                        treated=fixture.transferBox(treated,treatedIn,Direction.WEST,false,quota);
                     if(FluidWorldTargetResolver.transferCell(region,inB,Direction.WEST,request,false)!=null)
-                        control=fixture.transferBox(control,controlIn,false,quota);
+                        control=fixture.transferBox(control,controlIn,Direction.WEST,false,quota);
                     available(region);
                 }
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Catalysis process step rejected");
@@ -951,7 +967,8 @@ public final class GpuProcessFlowsValidation {
         try(var backend=MmmRuntimeFactory.createSolverBackend()) {
             MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.CATALYSIS);
-        var region=fixture.region;int[] treatedIn=fixture.portCell,controlIn={0,0,8};
+        var region=fixture.region;var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.CATALYSIS);
+        int[] treatedIn=industrialPortCell(region,layout.ports().get(0)),controlIn=industrialPortCell(region,layout.ports().get(2));
         ItemStack treated=catalysisFeed(world),control=catalysisFeed(world);
         long initial=processMass(region.hostSnapshot().captureAuthoritativeState())+chemicalMass(treated,world)+chemicalMass(control,world);
         long catalyst=region.finiteThermalDevices(world.thermalRegistryFingerprint()).surfaceLoadingMassUnits();
@@ -962,8 +979,8 @@ public final class GpuProcessFlowsValidation {
             for(int step=0;step<600 && (!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(treated)||!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(control));step++) {
                 progress("catalysis_closed_fill",step,600);motion.settlePendingPhaseWork(region);
                 long quota=IndustrialOperations.tickQuota(1_000_000_000L,step);
-                if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(treated))treated=fixture.transferBox(treated,treatedIn,false,quota);
-                if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(control))control=fixture.transferBox(control,controlIn,false,quota);
+                if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(treated))treated=fixture.transferBox(treated,treatedIn,Direction.WEST,false,quota);
+                if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(control))control=fixture.transferBox(control,controlIn,Direction.WEST,false,quota);
                 available(region);if(!motion.step(region,List.of()).accepted())throw new AssertionError("Closed catalysis filling rejected");
             }
             if(!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(treated)||!mmm.item.MaterialBucketItem.isEmptyMaterialBucket(control))
@@ -989,7 +1006,7 @@ public final class GpuProcessFlowsValidation {
         int material=world.thermalRegistry().materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water");
         double forward=0,reverse=0,h=region.solverConfig().cellSize();
         for(var stock:state.liquid().physicalStocks()) {
-            if((region.grid().z(stock.key().cell())<6)!=treated || stock.mixture()==null || stock.massUnits()==0)continue;
+            if((region.grid().z(stock.key().cell())<region.sizeZ()/2)!=treated || stock.mixture()==null || stock.massUnits()==0)continue;
             var amounts=stock.mixture().stableAmounts(world.chemicalRegistry());
             double volume=stock.volumeFraction()*h*h*h;
             double temperature=thermal.stateForInternalEnergy(material,stock.massKilograms(),amounts,stock.internalEnergy()).temperatureK();
@@ -1007,7 +1024,7 @@ public final class GpuProcessFlowsValidation {
     private static Hydration hydrationInventory(FluidDomainState state,FluidRegion region,boolean treated) {
         long co2=0,bicarbonate=0;
         for(var stock:state.liquid().physicalStocks()) {
-            int z=region.grid().z(stock.key().cell());if((z<6)!=treated || stock.mixture()==null)continue;
+            int z=region.grid().z(stock.key().cell());if((z<region.sizeZ()/2)!=treated || stock.mixture()==null)continue;
             var species=stock.mixture().stableAmounts(state.chemicalRegistry());
             co2=Math.addExact(co2,species.getOrDefault(BuiltinChemicalDefinitions.CO2,0L));
             bicarbonate=Math.addExact(bicarbonate,species.getOrDefault(BuiltinChemicalDefinitions.HCO3_MINUS,0L));
@@ -1028,8 +1045,9 @@ public final class GpuProcessFlowsValidation {
         try(var backend=MmmRuntimeFactory.createSolverBackend()) {
             MmmRuntimeFactory.prepareSolverBackend(backend,startup,world);manager.solverBackend(backend);
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.SCREENING);
-        var region=fixture.region;int[] solidInput={0,6,0},solidOutput={0,4,0};
+        var region=fixture.region;
         var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.SCREENING);
+        int[] solidInput=industrialPortCell(region,layout.ports().get(2)),solidOutput=industrialPortCell(region,layout.ports().get(3));
         double pore=layout.screens().getFirst().poreDiameter();
         double fineDiameter=world.granularRegistry().material(world.granularRegistry().materialHandle(BuiltinGranularDefinitions.FINE_SILT)).primaryGrainDiameterMeters();
         double coarseDiameter=world.granularRegistry().material(world.granularRegistry().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).primaryGrainDiameterMeters();
@@ -1043,32 +1061,39 @@ public final class GpuProcessFlowsValidation {
             var motion=new MinecraftMotionExecutor(app,world,new MinecraftRuntimePolicy(startup,manager));
             region.setPaused(false);available(region);
             double beforeFlow=0,beforePressure=0;int[] screenFaces=region.fixedGeometry().screens().stream().mapToInt(ScreenFace::face).toArray();
+            int[] cloggedFaces=null;
             int duration=Math.max(800,steps);
             for(int step=0;step<duration;step++) {
                 progress("screening",step,duration);
                 {
                     motion.settlePendingPhaseWork(region);
                     if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(water))water=saltedWater(world,293.15);
-                    water=fixture.transferBox(water,fixture.portCell,false,IndustrialOperations.tickQuota(50_000_000L,step));available(region);
+                    water=fixture.transferBox(water,fixture.portCell,Direction.WEST,false,IndustrialOperations.tickQuota(50_000_000L,step));available(region);
                 }
                 if(!seeded) {
                     var solidBlock=region.origin().offset(solidInput[0]/2,solidInput[1]/2,solidInput[2]/2);
                     var solidContact=FluidWorldTargetResolver.transferCell(region,solidBlock,Direction.NORTH,new mmm.api.transfer.TransferQuantity.Granular(262_144L),false);
                     if(solidContact!=null && region.hostSnapshot().volume(solidContact[0],solidContact[1],solidContact[2])>0) {
                         motion.settlePendingPhaseWork(region);
-                        remaining=fixture.transferBox(source,solidInput,false,262_144L);seeded=true;available(region);
+                        remaining=fixture.transferBox(source,solidInput,Direction.NORTH,false,262_144L);seeded=true;available(region);
                     }
                 }
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Screen process step rejected");
-                if(step>=duration-40){beforeFlow+=Math.abs(region.observeLiquidFlow(screenFaces));beforePressure+=screenPressureDifference(region,screenFaces);}
+                if(step==duration-40) {
+                    var deposits=region.hostSnapshot().exportGranularState().depositGroups().stream().map(deposit->deposit.cell()).collect(java.util.stream.Collectors.toSet());
+                    cloggedFaces=java.util.Arrays.stream(screenFaces).filter(face->deposits.contains(region.grid().faceLeft(face)) || deposits.contains(region.grid().faceRight(face))).toArray();
+                    if(cloggedFaces.length==0)throw new AssertionError("Screen has no deposited cake to clean");
+                }
+                if(step>=duration-40){beforeFlow+=Math.abs(region.observeLiquidFlow(cloggedFaces));beforePressure+=screenPressureDifference(region,cloggedFaces);}
             }
             motion.settlePendingPhaseWork(region);
             if(!seeded)throw new AssertionError("Liquid did not reach the screening feed port");
             var state=region.hostSnapshot().exportGranularState();
             for(var deposit:state.depositGroups())System.out.println("screen_deposit material="+state.materialPalette().get(deposit.materialPaletteIndex())
                     +" cell="+region.grid().x(deposit.cell())+","+region.grid().y(deposit.cell())+","+region.grid().z(deposit.cell())+" svq="+deposit.solidVolumeSvq());
-            long fine=downstreamSolid(state,region,BuiltinGranularDefinitions.FINE_SILT,5);
-            long coarse=downstreamSolid(state,region,BuiltinGranularDefinitions.FINE_SAND,5);
+            int plane=region.grid().faceCoordinate(screenFaces[0],1);
+            long fine=downstreamSolid(state,region,BuiltinGranularDefinitions.FINE_SILT,plane);
+            long coarse=downstreamSolid(state,region,BuiltinGranularDefinitions.FINE_SAND,plane);
             if(!(fine>0 && coarse==0))throw new AssertionError("Screen did not follow its particle-size cutoff: fine="+fine+" coarse="+coarse);
             var output=fixture.transferBox(new ItemStack(mmm.item.MmmItems.GRANULAR_CONTAINER),solidOutput,Direction.NORTH,true,262_144L);
             var collected=mmm.item.GranularContainerItem.unvalidatedContents(output);
@@ -1082,15 +1107,15 @@ public final class GpuProcessFlowsValidation {
             for(int step=0;step<40;step++) {
                 {
                     motion.settlePendingPhaseWork(region);if(mmm.item.MaterialBucketItem.isEmptyMaterialBucket(water))water=saltedWater(world,293.15);
-                    water=fixture.transferBox(water,fixture.portCell,false,IndustrialOperations.tickQuota(50_000_000L,step));available(region);
+                    water=fixture.transferBox(water,fixture.portCell,Direction.WEST,false,IndustrialOperations.tickQuota(50_000_000L,step));available(region);
                 }
                 if(!motion.step(region,List.of()).accepted())throw new AssertionError("Cleaned screen process step rejected");
-                afterFlow+=Math.abs(region.observeLiquidFlow(screenFaces));afterPressure+=screenPressureDifference(region,screenFaces);
+                afterFlow+=Math.abs(region.observeLiquidFlow(cloggedFaces));afterPressure+=screenPressureDifference(region,cloggedFaces);
             }
             if(!(beforePressure>0 && afterPressure>0 && afterFlow/afterPressure>beforeFlow/beforePressure))
                 throw new AssertionError("Screen cleaning did not restore conductance: before="+beforeFlow+"/"+beforePressure+" after="+afterFlow+"/"+afterPressure);
             motion.settlePendingPhaseWork(region);
-            var solution=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),new int[]{region.sizeX()-1,0,0},true,50_000_000L);
+            var solution=fixture.transferBox(new ItemStack(mmm.item.MmmItems.MATERIAL_BUCKET),industrialPortCell(region,layout.ports().get(1)),Direction.EAST,true,50_000_000L);
             var dissolved=mmm.item.ContainerItemStacks.chemicalContents(solution,world.chemicalRegistry());
             if(chemicalAmount(dissolved,BuiltinChemicalDefinitions.NACL)+chemicalAmount(dissolved,BuiltinChemicalDefinitions.NA_PLUS)<=0)
                 throw new AssertionError("Dissolved salt did not pass through the screen");
@@ -1136,7 +1161,8 @@ public final class GpuProcessFlowsValidation {
         var fixture=GpuControllerFixture.createIndustrial(startup,world,manager,operations,IndustrialLayout.Scenario.SCREENING_CRYSTALLIZATION);
         var region=fixture.region;var layout=IndustrialLayout.at(new BlockPos(14,64,20),IndustrialLayout.Scenario.SCREENING_CRYSTALLIZATION);
         var wall=layout.walls().getFirst();
-        int[] solidInput={0,2,0},solidOutput={0,2,0};ItemStack feed=coolableSaltWater(world,310,wall.temperatureK(),2_000_000L),seed=saltSeed(world,2);
+        int[] solidInput=industrialPortCell(region,layout.ports().get(2)),solidOutput=solidInput;
+        ItemStack feed=coolableSaltWater(world,310,wall.temperatureK(),2_000_000L),seed=saltSeed(world,2);
         var reaction=world.granularRegistry().reactions().stream().filter(r->r.solidMaterialId().equals(BuiltinGranularDefinitions.PRECIPITATE)).findFirst().orElseThrow();
         var solubility=reaction.solubility();
         double hotRatio=solubility.ratio()+solubility.slopePerK()*(310-solubility.referenceTemperatureK());
@@ -1205,12 +1231,14 @@ public final class GpuProcessFlowsValidation {
             if(productRemainder!=null && productRemainder.totalSolidVolumeSvq()==cakeVolume)throw new AssertionError("Collected crystals did not return to the washing chamber");
             var valve=layout.minimum().offset(3,2,1);
             var open=mmm.block.MmmBlocks.VALVE.defaultBlockState().setValue(mmm.block.ValveBlock.FACING,Direction.EAST).setValue(mmm.block.ValveBlock.OPENING,4);
-            var edits=new ArrayList<FluidDomainContracts.CollisionEdit>();
+            var generation=region.solverGeneration();var candidate=region.beginHostEdit();var edits=new ArrayList<FluidDomainContracts.CollisionEdit>();
             for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<2;x++) {
                 int cx=(valve.getX()-region.origin().getX())*2+x,cy=(valve.getY()-region.origin().getY())*2+y,cz=(valve.getZ()-region.origin().getZ())*2+z;
-                edits.add(new FluidDomainContracts.CollisionEdit(cx,cy,cz,FluidRegionWorldInteraction.sampleCutCellMask(mmm.block.ValveBlock.shutter(open),x,y,z,2,1e-7)));
+                int mask=FluidRegionWorldInteraction.sampleCutCellMask(mmm.block.ValveBlock.shutter(open),x,y,z,2,1e-7);
+                if(candidate.solidMicroMask(cx,cy,cz)!=mask)edits.add(new FluidDomainContracts.CollisionEdit(cx,cy,cz,mask));
             }
-            var generation=region.solverGeneration();var candidate=region.beginHostEdit();candidate.applyCollisionEdits(edits);region.adoptCollisionCandidate(generation,candidate);available(region);
+            if(edits.isEmpty())throw new AssertionError("Opening the valve did not change its collision geometry");
+            candidate.applyCollisionEdits(edits);region.adoptCollisionCandidate(generation,candidate);available(region);
             long crystalBefore=region.hostSnapshot().exportGranularState().totalMassUnits();
             var wash=pureWater(world,293.15);supplied=Math.addExact(supplied,chemicalMass(wash,world));
             for(int step=0;step<600;step++) {

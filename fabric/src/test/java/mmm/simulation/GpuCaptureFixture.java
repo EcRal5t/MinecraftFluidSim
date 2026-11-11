@@ -44,6 +44,7 @@ final class GpuCaptureFixture {
         try {
             FluidRegionFactory.bindDefaultMaterialState(domain, registries.materialRegistry());
             int wetCells = FluidRegionFactory.captureWater(region, world::waterHeight);
+            domain = region.editableHost();
             float sourceHeight = Blocks.WATER.defaultBlockState().getFluidState().getOwnHeight();
             double expectedVolume = 128.0 + 64.0 + 64.0 * (2.0 * sourceHeight - 1.0);
             double volume = domain.totalVolumeExact();

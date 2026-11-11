@@ -394,6 +394,9 @@ final class GpuControllerFixture {
     ItemStack transferBoxDurable(ItemStack batch, int[] cell, boolean extract, long maximum) throws IOException {
         return transferBox(batch,cell,boxOutward(cell),extract,maximum,true);
     }
+    ItemStack transferBoxDurable(ItemStack batch, int[] cell, Direction outward, boolean extract, long maximum) throws IOException {
+        return transferBox(batch,cell,outward,extract,maximum,true);
+    }
     private Direction boxOutward(int[] cell) {
         return cell[0]==0?Direction.WEST:cell[0]==region.sizeX()-1?Direction.EAST:cell[2]==0?Direction.NORTH:cell[2]==region.sizeZ()-1?Direction.SOUTH:cell[1]==0?Direction.DOWN:Direction.UP;
     }

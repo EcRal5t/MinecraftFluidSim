@@ -47,8 +47,8 @@ final class VulkanLiquidWorkspaceSections {
                 material.weights(),material.remainingQuanta(),material.densities(),material.densityExponents(),
                 material.activeCounts(),material.scanWorkspace()));
         var accepted=transport.accepted;
-        free.addAll(List.of(accepted.descriptors(),accepted.volumeOffsets(),accepted.volumeSigns(),
-                accepted.volumeExponents(),accepted.volumeLimbs(),accepted.counts(),accepted.measurements(),accepted.scanWorkspace()));
+        free.addAll(List.of(accepted.volumeOffsets(),accepted.volumeSigns(),accepted.volumeExponents(),
+                accepted.counts(),accepted.measurements(),accepted.scanWorkspace()));
         free.add(pressureColumns.get(PressureField.WORK));
         free.add(pressureColumns.get(PressureField.PARTIALS));
         if(transport.gas!=null)for(var field:List.of(VulkanLocalGasTransport.Field.NANOS,

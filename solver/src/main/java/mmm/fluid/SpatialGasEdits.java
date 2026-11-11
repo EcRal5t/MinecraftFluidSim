@@ -62,6 +62,8 @@ final class SpatialGasEdits {
         }
         var futurePhase=futurePhase(domain,future,futureOccupied,futureMasks,scale);
         var connectivity=connectedReceivers(domain,oldPhase,futurePhase,displaced,free,oldState);
+        var allocators=new ReceiverAllocator[connectivity.groups().size()];
+        for(int i=0;i<allocators.length;i++)allocators[i]=new ReceiverAllocator(connectivity.groups().get(i));
         var inventories=new java.util.ArrayList<>(state.cells());
         double[] energy=state.internalEnergy(), volume=new double[domain.cellCount];
         for(int cell=0;cell<domain.cellCount;cell++) volume[cell]=oldState[cell].gasVolumeM3();
@@ -72,24 +74,23 @@ final class SpatialGasEdits {
         SignedDyadic escaped=SignedDyadic.ZERO,roundoff=SignedDyadic.ZERO,gasWork=SignedDyadic.ZERO;
         for(int cell:changed)if(displaced[cell]){
             var source=state.cells().get(cell);double initialVolume=oldState[cell].gasVolumeM3();
-            var receivers=connectivity.groups().get(connectivity.labels()[cell]);
-			var targetList=new java.util.ArrayList<Integer>();var areaList=new java.util.ArrayList<Double>();
-			for(int i=0;i<receivers.targets().length;i++)if(receivers.targets()[i]!=cell){
-				targetList.add(receivers.targets()[i]);areaList.add(receivers.volumes()[i]);
-			}
-			if(targetList.isEmpty()&&receivers.exterior()){targetList.add(-1);areaList.add(1.0);}
-			int[] targets=targetList.stream().mapToInt(Integer::intValue).toArray();
-			double[] areas=areaList.stream().mapToDouble(Double::doubleValue).toArray();int count=targets.length;
-            if(count==0){
-                if(capacity(domain,cell,futureOccupied,futureMasks)<=0)
-                    throw new GasTopologyBlockedException("Gas has no open neighboring cell or exterior at cell "+cell);
-                continue;
+            int group=connectivity.labels()[cell];var receivers=connectivity.groups().get(group);
+            var allocation=allocators[group].allocate(cell,Math.max(0.0,initialVolume-free[cell]));
+            int[] targets=allocation.targets();double[] amounts=allocation.volumes();
+            if(targets.length==0){
+                if(!receivers.exterior()){
+                    if(capacity(domain,cell,futureOccupied,futureMasks)<=0)
+                        throw new GasTopologyBlockedException("Gas has no open neighboring cell or exterior at cell "+cell);
+                    continue;
+                }
+                targets=new int[]{-1};amounts=new double[]{1.0};
             }
-            double retained=Math.min(1.0,Math.max(0.0,free[cell]/initialVolume)),totalArea=0;
-            for(int i=0;i<count;i++)totalArea+=areas[i];
-            double[] weights=new double[count+1];weights[0]=retained;
-            for(int i=0;i<count;i++)weights[i+1]=(1-retained)*areas[i]/totalArea;
-            var portions=source.partition(mmm.fluid.air.GasPartitionWeights.of(weights),domain.gasState.network.registry(),domain.chemistry==null?null:domain.chemistry.registry());
+            double retained=Math.min(1.0,Math.max(0.0,free[cell]/initialVolume)),total=0.0;
+            for(double amount:amounts)total+=amount;
+            double[] weights=new double[targets.length+1];weights[0]=retained;
+            for(int i=0;i<targets.length;i++)weights[i+1]=(1.0-retained)*amounts[i]/total;
+            var portions=source.partition(mmm.fluid.air.GasPartitionWeights.of(weights),
+                    domain.gasState.network.registry(),domain.chemistry==null?null:domain.chemistry.registry());
             double[] energies=model.partitionEnergy(source,state.energyAt(cell),portions);
             roundoff=roundoff.add(SignedDyadic.sum(energies).subtract(SignedDyadic.of(state.energyAt(cell))));
             inventories.set(cell,portions.get(0));energy[cell]=energies[0];
@@ -98,8 +99,8 @@ final class SpatialGasEdits {
             int last=-1;for(int i=1;i<portions.size();i++)if(!portions.get(i).isEmpty())last=i;
             for(int i=1;i<portions.size();i++)if(!portions.get(i).isEmpty()){
                 var part=portions.get(i);double partVolume=i==last?remainingVolume:initialVolume*part.standardVolumeNanos()/source.standardVolumeNanos();
-                remainingVolume-=partVolume;int target=targets[i-1];
-                transfers.add(new Transfer(cell,target,part.totalMassUnits()));movedInventories.add(part);movedEnergy.add(energies[i]);movedVolume.add(partVolume);
+                remainingVolume-=partVolume;transfers.add(new Transfer(cell,targets[i-1],part.totalMassUnits()));
+                movedInventories.add(part);movedEnergy.add(energies[i]);movedVolume.add(partVolume);
             }
         }
         var sink=state.escapedSink();
@@ -160,7 +161,7 @@ final class SpatialGasEdits {
         }
         return area;
     }
-    private record Receivers(int[] targets,double[] volumes,boolean exterior) { }
+    private record Receivers(int[] targets,double[] volumes,boolean exterior,double demand) { }
     private record Connectivity(int[] labels,List<Receivers> groups) { }
     private static Connectivity connectedReceivers(HostFluidState domain,FlipPressurePhaseGeometry oldPhase,
             FlipPressurePhaseGeometry futurePhase,boolean[] displaced,double[] free,mmm.thermal.MixtureVolumeModel.State[] oldState){
@@ -184,9 +185,42 @@ final class SpatialGasEdits {
                 int cell=queue[i];if(!(free[cell]>0))continue;
                 targets.add(cell);volumes.add(free[cell]);
             }
-            groups.add(new Receivers(targets.stream().mapToInt(Integer::intValue).toArray(),volumes.stream().mapToDouble(Double::doubleValue).toArray(),exterior));
+            groups.add(new Receivers(targets.stream().mapToInt(Integer::intValue).toArray(),volumes.stream().mapToDouble(Double::doubleValue).toArray(),exterior,demand));
         }
         return new Connectivity(labels,List.copyOf(groups));
+    }
+    private record Allocation(int[] targets,double[] volumes) { }
+    private static final class ReceiverAllocator {
+        private final Receivers receivers;
+        private final java.util.ArrayDeque<Integer> pending=new java.util.ArrayDeque<>();
+        private final double[] remaining;
+        ReceiverAllocator(Receivers receivers){
+            this.receivers=receivers;remaining=new double[receivers.targets().length];double total=0.0;
+            for(double volume:receivers.volumes())total+=volume;
+            if(total>0.0)for(int i=0;i<remaining.length;i++){
+                remaining[i]=receivers.demand()*receivers.volumes()[i]/total;
+                if(remaining[i]>0.0)pending.addLast(i);
+            }
+        }
+        Allocation allocate(int source,double demand){
+            var targets=new java.util.ArrayList<Integer>();var volumes=new java.util.ArrayList<Double>();
+            while(demand>0.0 && !pending.isEmpty()){
+                int index=pending.removeFirst(),target=receivers.targets()[index];
+                if(target==source){
+                    pending.addLast(index);
+                    if(pending.size()==1)break;
+                    continue;
+                }
+                double amount=Math.min(demand,remaining[index]);
+                if(amount>0.0){targets.add(target);volumes.add(amount);demand-=amount;remaining[index]-=amount;}
+                if(remaining[index]>0.0)pending.addFirst(index);
+            }
+            if(demand>0.0){
+                for(int target:receivers.targets())if(target!=source){targets.add(target);volumes.add(demand);break;}
+            }
+            return new Allocation(targets.stream().mapToInt(Integer::intValue).toArray(),
+                    volumes.stream().mapToDouble(Double::doubleValue).toArray());
+        }
     }
     private static int neighbor(HostFluidState domain,int cell,int side){
         return domain.grid.neighbor(cell,side);

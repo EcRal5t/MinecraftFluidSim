@@ -35,6 +35,9 @@ public final class MinecraftDebugFixtures {
 		/** Runs one synchronous logical motion step through the complete candidate boundary. */
 		void stepMotion(FluidRegion region);
 
+		/** Commits phase-driven displacement before editing gas inventory. */
+		void settlePendingPhaseWork(FluidRegion region);
+
 		/** Binds the committed world capability registries to a freshly allocated domain. */
 		void bindCapabilityState(HostFluidState domain);
 		CommittedWorldRegistries worldRegistries();
@@ -217,6 +220,7 @@ public final class MinecraftDebugFixtures {
 			runtime.bindCapabilityState(domain);
 			regions.selected().commitHostEdit(generation, domain);
 			runtime.stepMotion(regions.selected());
+			runtime.settlePendingPhaseWork(regions.selected());
 			generation = regions.selected().solverGeneration();
 			domain = regions.selected().beginHostEdit();
 			if (DebugScenarioInitialization.presetAirPressure(domain, pressure) < 0)

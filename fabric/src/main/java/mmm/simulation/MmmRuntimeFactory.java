@@ -148,6 +148,7 @@ public final class MmmRuntimeFactory {
 						}
 					}
 					@Override public void stepMotion(FluidRegion region) { motion.step(region, List.of()); }
+					@Override public void settlePendingPhaseWork(FluidRegion region) { motion.settlePendingPhaseWork(region); }
 					@Override public CommittedWorldRegistries worldRegistries() { return worldRegistries; }
 					@Override public void bindCapabilityState(HostFluidState domain) {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep());

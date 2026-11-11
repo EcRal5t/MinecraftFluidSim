@@ -116,6 +116,13 @@ try {
 }
 ```
 
+### 演示运行检查（2026-11-11）
+
+水箱三配方、水流池、油水、大型溃坝和常压／加压／低压气管通过 120 步完整流程，包含暂停、手动步、checkpoint 恢复和编辑后续算。控制器完成 20 步完整流程；微量液滴完成短重放，世界水体采样完成 40 步恢复与释放。工作台预设切换、重置、移除重建、协议和生命周期检查通过。
+
+气压初始化在修改气体库存前结算待推进相变。宿主气体挤排按连通域有效气容进行线性供需匹配，保存实际物种、内能和动量交接；大场景采用 3 GiB Java 堆。设备接受体积描述和尾数保留至提交后流量观测。工业夹具从实际布局和区域原点推导阀门、筛面及端口坐标。阀门完整开闭对照通过：开启时流量与出液为正，关闭时均为零，质量闭合。
+
+独立 `chemistry` 场景完成 120 步推进后，中和结果断言失败，待定位。筛分已完成粒径分离与粗颗粒提取，清洗后的导通量对照仍待复核。高浓析晶、润湿和其余工业长流程尚未完成本轮重放。日志位于 `build/demo-screening/`、`build/industrial-valve-flow-observation.log`；最终构建与测试源码编译见 `build/demo-delivery-build.log`。
 ### 演示选择器与场景参数
 
 - `-PgpuDemo`：指定场景，支持 `tank`、`flow`、`ambient`、`air`、`vacuum`、`controller`、`precipitation`、`tension`、`demo`、`material`、`chemistry`、`capture`、`takeover`、`droplet`、`droplet-tail`。
