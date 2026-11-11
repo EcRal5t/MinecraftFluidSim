@@ -22,6 +22,7 @@ import net.minecraft.world.phys.Vec3;
 public final class ClientSurfaceValidation {
 	public static void main(String[] args) {
 		DebugDiagnosticsValidation.run();
+        CompositionNamesValidation.run();
         ProcessTrendPlotValidation.run();
 		InsulatingGlassConnectionsValidation.run();
         PipeSnapshotValidation.run();

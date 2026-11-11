@@ -38,6 +38,14 @@
 
 支持时间窗口、前后平移、冻结视图及输入模拟时间起止值。冻结保留客户端快照，服务器继续记录。每条曲线保留最近 256 个样本，每 4 游戏刻采样；横轴使用区域模拟时间。每个观察会话最多选择 16 条曲线，选择按会话独立维护。传感器配置指标持续记录，成分按订阅采集；未选择成分时每 20 刻更新一次可用目录。关闭界面释放本会话，断线后的租约在 40 刻内到期。请求和响应采用 v3 通道。
 
+## 物质显示数据
+
+客户端显示登记位于 `assets/<namespace>/mmm/substances/<id>.json`，资源路径决定稳定物质 ID。`name` 是必填的后备显示名，`translation_key` 可覆盖默认的 `substance.<namespace>.<id>`，`aliases` 是共享该名称的完整物质 ID 列表。例如 `h2o.json` 将水、冰和水蒸气映射到同一个 H2O 显示定义。不同 namespace 的新物质同样通过文件登记。未知 ID 保留原样显示。
+
+`assets/mmm/mmm/composition/phase_icons.json` 为液体、气体、颗粒和连贯固体指定现有工业图集图标。显示登记随客户端资源重载更新，资源包优先级决定覆盖结果；移除资源包会清除其登记，重复或冲突别名使本次重载失败并保留上一份完整登记。
+
+物理登记继续使用服务端数据包：`data/<namespace>/mmm/species/` 定义元素组成、电荷和摩尔质量，`fluid_materials/`、`gas_components/`、`particulate_materials/` 与 `thermal_materials/` 定义对应物性。离子标识从已提交的物种电荷生成，显示资源只控制名称和图标。新增物质时分别提供服务端物理定义与客户端显示定义，无需修改 `CompositionNames.java`。
+
 ## 调试 HUD 与文件日志
 
 调试面板是独立的屏幕空间 HUD，默认常驻右上角，不接管鼠标，不暂停游戏。F8 显隐，F9 切换简洁／展开，按键可在原版控制设置中修改。偏好保存在 `config/mmm-debug-display.properties`，菜单打开时不覆盖菜单。
