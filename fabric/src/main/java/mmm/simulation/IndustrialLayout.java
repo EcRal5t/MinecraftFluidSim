@@ -99,8 +99,8 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
     private static IndustrialLayout counterflow(BlockPos min,boolean stone) {
         var blocks=shell(min,4,5,9);
         for(int x=1;x<=2;x++)for(int y=1;y<4;y++) {
-            blocks.put(min.offset(x,y,4),Blocks.WOOL.white().defaultBlockState());
-            for(int z:new int[]{1,2,6,7})blocks.put(min.offset(x,y,z),Blocks.WOOL.white().defaultBlockState());
+            blocks.put(min.offset(x,y,4),MmmBlocks.INSULATION.defaultBlockState());
+            for(int z:new int[]{1,2,6,7})blocks.put(min.offset(x,y,z),MmmBlocks.INSULATION.defaultBlockState());
         }
         var walls=new ArrayList<Wall>();
         for(int x=1;x<=2;x++) {
@@ -133,7 +133,8 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         return Math.round(volume*mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK);
     }
     private static IndustrialLayout distillation(BlockPos min,boolean warm) {
-        var blocks=shell(min,6,5,4);var ports=new ArrayList<Port>();var thermal=new ArrayList<Wall>();
+        // An insulated shell keeps vapour from condensing anywhere except the cooled condenser walls.
+        var blocks=shell(min,6,5,4,MmmBlocks.INSULATING_GLASS.defaultBlockState());var ports=new ArrayList<Port>();var thermal=new ArrayList<Wall>();
         addPort(blocks,ports,min.offset(0,1,2),Direction.WEST,FluidPortBlockEntity.Mode.INPUT);
         var feed=ports.removeLast();
         ports.add(new Port(feed.position(),feed.outward(),feed.mode(),feed.phase(),10_000_000L,false));
@@ -144,14 +145,13 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         var vent=ports.removeLast();
         ports.add(new Port(vent.position(),vent.outward(),vent.mode(),vent.phase(),1_000_000_000L,true));
 
+        // The pot, vapour passage and condenser stay as open air; every other interior block is insulation.
         var open=List.of(min.offset(1,1,2),min.offset(1,2,2),min.offset(2,2,2),min.offset(3,2,2));
         for(int y=1;y<4;y++)for(int x=1;x<5;x++)for(int z=1;z<3;z++) {
             var position=min.offset(x,y,z);
             if(!open.contains(position) && !position.equals(product.position()) && !position.equals(vent.position()))
-                blocks.put(position,Blocks.WOOL.white().defaultBlockState());
+                blocks.put(position,MmmBlocks.INSULATION.defaultBlockState());
         }
-        for(var passage:open)blocks.put(passage,MmmBlocks.VALVE.defaultBlockState()
-                .setValue(ValveBlock.FACING,Direction.UP).setValue(ValveBlock.OPENING,1));
 
         for(var wall:List.of(min.offset(4,2,2),min.offset(3,1,2))) {
             blocks.put(wall,Blocks.IRON_BLOCK.defaultBlockState());
@@ -168,7 +168,7 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         var sensors=List.of(
                 new Sensor(pressureSensor,mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE,100_000,110_000,false,condenser,condenser));
         var controller=min.offset(1,2,1);
-        blocks.put(controller,Blocks.IRON_BLOCK.defaultBlockState());
+        blocks.put(controller,MmmBlocks.INSULATION.defaultBlockState());
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),sensors,thermal,List.of());
     }
     private static IndustrialLayout surfaceChannel(BlockPos min,boolean adsorption,boolean partial) {
@@ -192,10 +192,13 @@ public record IndustrialLayout(BlockPos minimum, BlockPos controller, Map<BlockP
         return new IndustrialLayout(min,controller,blocks,ports,List.of(),List.of(),List.of(),coatings);
     }
     private static LinkedHashMap<BlockPos,BlockState> shell(BlockPos min,int sx,int sy,int sz) {
+        return shell(min,sx,sy,sz,Blocks.GLASS.defaultBlockState());
+    }
+    private static LinkedHashMap<BlockPos,BlockState> shell(BlockPos min,int sx,int sy,int sz,BlockState wall) {
         var blocks=new LinkedHashMap<BlockPos,BlockState>();
         for(int x=0;x<sx;x++)for(int y=0;y<sy;y++)for(int z=0;z<sz;z++)
             if(x==0||x==sx-1||y==0||y==sy-1||z==0||z==sz-1)
-                blocks.put(min.offset(x,y,z),Blocks.GLASS.defaultBlockState());
+                blocks.put(min.offset(x,y,z),wall);
         return blocks;
     }
     private static void addPort(Map<BlockPos,BlockState> blocks,List<Port> ports,BlockPos position,Direction outward,FluidPortBlockEntity.Mode mode) {

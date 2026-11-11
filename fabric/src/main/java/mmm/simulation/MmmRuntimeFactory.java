@@ -154,12 +154,11 @@ public final class MmmRuntimeFactory {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep());
 					}
 					@Override public void bindTensionPalette(HostFluidState domain, int angleDegrees) {
-						DebugScenarioInitialization.bindTensionPalette(domain,
-								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
+						DebugScenarioInitialization.bindTensionPalette(domain, domain.definitions().material());
 					}
 					@Override public void bindTensionCapabilityState(HostFluidState domain, int angleDegrees) {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep(),
-								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
+								domain.definitions().material());
 					}
 					@Override public MinecraftDebugFixtures.ControllerActivation activateController(
 							net.minecraft.server.level.ServerPlayer player, net.minecraft.core.BlockPos minimum, net.minecraft.core.BlockPos maximum

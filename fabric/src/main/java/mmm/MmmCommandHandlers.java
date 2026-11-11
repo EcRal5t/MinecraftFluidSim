@@ -160,7 +160,7 @@ final class MmmCommandHandlers {
 		if (!fixtures.createTensionDemo(player, angleDegrees)) {
 			return fail(source, "无法创建表面张力测试域：" + fixtures.lastFailure());
 		}
-		return succeed(source, "已创建暂停的表面张力球形冠液滴（演示用世界材料表面张力、g=0.981 m/s²，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；各角度从相同半球开始，用 /mmm step 或 /mmm run 比较接触面的变化", 1);
+		return succeed(source, "已创建暂停的表面张力球形冠液滴（演示毛细长度为两个单元、g=0.981 m/s²，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；各角度从相同半球开始，用 /mmm step 或 /mmm run 比较接触面的变化", 1);
 	}
 
 	static int createAirDemo(CommandSourceStack source, String mode)

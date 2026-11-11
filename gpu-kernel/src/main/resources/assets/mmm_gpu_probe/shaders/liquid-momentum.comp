@@ -351,17 +351,23 @@ void finalizeFace(int faceId) {
 }
 void gatherHeat(int cellId) {
     double heat = 0;
+    int64_t cellMass = cellMassUnits(cellId, true);
     for (int axis = 0; axis < 3; axis++)
         for (int side = 0; side < 2; side++) {
             int faceId = gridFace(cellId, 2*axis+side);
             int64_t dualMass = dualMassUnits(faceId);
-            if (dualMass <= int64_t(0))
+            if (dualMass <= int64_t(0) || cellMass == int64_t(0))
                 continue;
             double faceEnergy = getDouble(headerWord(H_FACE_HEAT) + 2 * faceId);
-            int lowerCell = side == 0 ? gridNeighbor(cellId,2*axis) : cellId;
-            double lowerShare = faceEnergy * (double(cellMassUnits(lowerCell, true)) / double(dualMass));
+            int neighbor = gridNeighbor(cellId, 2*axis+side);
+            if (neighbor >= 0 && cellMassUnits(neighbor, true) == int64_t(0)) {
+                heat += faceEnergy;
+                continue;
+            }
+            int lowerCell = side == 0 ? neighbor : cellId;
+            precise double lowerShare = faceEnergy * (double(cellMassUnits(lowerCell, true)) / double(dualMass));
             heat += side == 0 && lowerCell < 0
-                        ? faceEnergy * (double(cellMassUnits(cellId, true)) / double(dualMass))
+                        ? faceEnergy * (double(cellMass) / double(dualMass))
                         : side == 0 ? faceEnergy - lowerShare : lowerShare;
         }
     putDouble(headerWord(H_CELL_HEAT) + 2 * cellId, headerWord(H_ACTIVITY_CELLS) >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cellId] == 0u ? 0.0 : heat);

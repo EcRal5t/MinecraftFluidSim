@@ -514,6 +514,8 @@ void proposeDryWall(int index){
     if(gs<0 || readQuantity(gasField(GAS_SPECIES_AMOUNTS)+2*gs)<=0l)return;
     int direction=int(words[headerWord(H_WALL_PORT_DIRECTION)+port]);
     if(direction<0 || direction>5)return;
+    // Latent heat leaves the gas through the wall body; an insulating face has no such path.
+    if(!(readDouble(headerWord(H_WALL_PORT_K)+2*port)>0.0LF))return;
     int internal=int(words[headerWord(H_WALL_PORT_INTERNAL_MASK)+port]);
     double area=dryWallArea(c,direction,internal);if(area<=0.0LF)return;
     words[workField(FIELD_NEXT)+index]=atomicExchange(words[workField(FIELD_HEAD)+c],uint(index));

@@ -6,13 +6,15 @@ import mmm.fluid.HostFluidState;
 public final class DebugScenarioInitialization {
 	private DebugScenarioInitialization() { }
 
-	/** Applies the requested contact angle to the world water definition. */
-	public static mmm.fluid.MaterialRegistry tensionDefinitions(mmm.fluid.MaterialRegistry original, int angleDegrees) {
+	/** Sets a two-cell capillary length and the requested contact angle for the demonstration. */
+	public static mmm.fluid.MaterialRegistry tensionDefinitions(mmm.fluid.MaterialRegistry original, int angleDegrees,
+			float cellSize, float gravity) {
 		var entries = original.entries().stream().map(entry -> {
 			var material = entry.material();
 			if (material.id().equals("mmm:water")) {
 				material = new mmm.fluid.FluidMaterial(material.id(), material.referenceDensity(),
-						material.miscibilityGroup(), material.surfaceTension(), Math.toRadians(angleDegrees), material.displayArgb());
+						material.miscibilityGroup(), material.referenceDensity() * gravity * Math.pow(2.0 * cellSize, 2),
+						Math.toRadians(angleDegrees), material.displayArgb());
 			}
 			return new mmm.fluid.MaterialRegistry.MaterialEntry(material, entry.viscosity(), entry.thermalExpansion());
 		}).toList();

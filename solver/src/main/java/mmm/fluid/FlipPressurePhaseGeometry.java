@@ -152,10 +152,9 @@ final class FlipPressurePhaseGeometry {
 			if(captured!=null&&sameOccupancyInputs(cell,x,y,z,state,pore,captured,capacity)){
 				copyCell(captured,cell);occupancyCells[cell]=captured.occupancyCells[cell];continue;
 			}
-			float fallback=(float)fill;
-			float gx=(float)coarseSample(x-1,y,z,fallback)-(float)coarseSample(x+1,y,z,fallback);
-			float gy=(float)coarseSample(x,y-1,z,fallback)-(float)coarseSample(x,y+1,z,fallback);
-			float gz=(float)coarseSample(x,y,z-1,fallback)-(float)coarseSample(x,y,z+1,fallback);
+			float gx=coarseGradient(x,y,z,1,0,0,fill);
+			float gy=coarseGradient(x,y,z,0,1,0,fill);
+			float gz=coarseGradient(x,y,z,0,0,1,fill);
 			int axis=1;if(Math.abs(gx)>Math.abs(gy))axis=0;
 			if(Math.abs(gz)>Math.abs(axis==0?gx:gy))axis=2;
 			float gradient=axis==0?gx:axis==1?gy:gz,sign=gradient<0?-1:1;
@@ -201,6 +200,13 @@ final class FlipPressurePhaseGeometry {
 	private double coarseSample(int x,int y,int z,double fallback) {
 		if(!inside(x,y,z))return fallback;
 		int cell=cellIndex(x,y,z);return poreVolumes[cell].signum()>0?fraction[cell]:fallback;
+	}
+	private float coarseGradient(int x,int y,int z,int dx,int dy,int dz,double fallback) {
+		int lx=x-dx,ly=y-dy,lz=z-dz,ux=x+dx,uy=y+dy,uz=z+dz;
+		float lower=(float)coarseSample(lx,ly,lz,fallback),upper=(float)coarseSample(ux,uy,uz,fallback);
+		if(!inside(lx,ly,lz))lower=upper;
+		if(!inside(ux,uy,uz))upper=lower;
+		return lower-upper;
 	}
 	void copyLiquidMicroVolumes(double[] target){
 		for(int cell=0;cell<fraction.length;cell++)for(int bit=0;bit<8;bit++)

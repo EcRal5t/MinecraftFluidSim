@@ -752,7 +752,7 @@ public final class WorldThermalEnvironment {
     }
     private boolean project(FluidRegion region, String dimension, int cellsPerBlock) {
         if (bindings.containsKey(region.id()) && bindings.get(region.id()).equals(region.environmentBinding())) return false;
-        var state = states.get(dimension);
+        var state = backend.captureEnvironment(dimension);
         var previous = region.finiteThermalDevices(definitions.thermalRegistry().fingerprint());
         var devices = new ArrayList<FiniteThermalDeviceState>();
         for (var device : previous.devices()) if (!device.providerId().equals(PROVIDER)) devices.add(device);
@@ -776,7 +776,6 @@ public final class WorldThermalEnvironment {
         var binding = new EnvironmentBinding(dimension, refs, WorldThermalGasContacts.collect(region,airMasksFor(dimension),pos->{
             var sample=samples.getOrDefault(dimension,Map.of()).get(pos);return sample==null?null:sample.state();
         }));
-        if (binding.equals(bindings.get(region.id()))) return false;
         var oldAudit = previous.audit(); SignedDyadic removed = SignedDyadic.ZERO, added = SignedDyadic.ZERO;
         for (var d : previous.devices()) if (d.providerId().equals(PROVIDER)) removed = removed.add(SignedDyadic.of(d.body().internalEnergyJ()));
         for (var d : devices) if (d.providerId().equals(PROVIDER)) added = added.add(SignedDyadic.of(d.body().internalEnergyJ()));

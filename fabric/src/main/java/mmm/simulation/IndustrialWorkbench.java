@@ -49,6 +49,8 @@ public final class IndustrialWorkbench {
                         IndustrialLayout.at(minimum.offset(8,0,0),IndustrialLayout.Scenario.DISTILLATION_SINGLE))
                 :java.util.List.of(IndustrialLayout.at(minimum,scenario));
         for(var layout:layouts)requireBuildSpace(player.level(),layout);
+        MmmRuntimeRegistry.require(player.level().getServer()).regionActivation()
+                .preflightSelections(player.level(),layouts.stream().map(IndustrialWorkbench::selectionCorners).toList());
         var regions=new ArrayList<String>();
         for(var layout:layouts){buildUnit(player,layout);regions.add(layout.minimum().toShortString());}
         return "装置已建立："+scenario+"；区域起点 "+String.join("、",regions)
@@ -67,10 +69,9 @@ public final class IndustrialWorkbench {
     }
     private static void buildUnit(ServerPlayer player,IndustrialLayout layout) {
         var level=player.level();var runtime=MmmRuntimeRegistry.require(level.getServer());var blocks=layout.blocks();
-        var selection=blocks.entrySet().stream().filter(e->!e.getValue().is(mmm.block.MmmBlocks.MATERIAL_BOX)).map(java.util.Map.Entry::getKey).toList();
-        int minX=selection.stream().mapToInt(BlockPos::getX).min().orElseThrow(),maxX=selection.stream().mapToInt(BlockPos::getX).max().orElseThrow();
-        int minY=selection.stream().mapToInt(BlockPos::getY).min().orElseThrow(),maxY=selection.stream().mapToInt(BlockPos::getY).max().orElseThrow();
-        int minZ=selection.stream().mapToInt(BlockPos::getZ).min().orElseThrow(),maxZ=selection.stream().mapToInt(BlockPos::getZ).max().orElseThrow();
+        var corners=selectionCorners(layout);
+        int minX=corners[0].getX(),minY=corners[0].getY(),minZ=corners[0].getZ();
+        int maxX=corners[1].getX(),maxY=corners[1].getY(),maxZ=corners[1].getZ();
         var placed=new ArrayList<BlockPos>();
         try {
             for(var entry:blocks.entrySet()) {
@@ -128,6 +129,13 @@ public final class IndustrialWorkbench {
                 }
             } catch(IllegalArgumentException ignored) { }
         }
+    }
+    private static BlockPos[] selectionCorners(IndustrialLayout layout) {
+        var selection=layout.blocks().entrySet().stream().filter(e->!e.getValue().is(mmm.block.MmmBlocks.MATERIAL_BOX)).map(java.util.Map.Entry::getKey).toList();
+        int minX=selection.stream().mapToInt(BlockPos::getX).min().orElseThrow(),maxX=selection.stream().mapToInt(BlockPos::getX).max().orElseThrow();
+        int minY=selection.stream().mapToInt(BlockPos::getY).min().orElseThrow(),maxY=selection.stream().mapToInt(BlockPos::getY).max().orElseThrow();
+        int minZ=selection.stream().mapToInt(BlockPos::getZ).min().orElseThrow(),maxZ=selection.stream().mapToInt(BlockPos::getZ).max().orElseThrow();
+        return new BlockPos[]{new BlockPos(minX,minY,minZ),new BlockPos(maxX,maxY,maxZ)};
     }
     static void initializeThermal(FluidRegion region,IndustrialLayout layout,mmm.thermal.ThermalRegistry registry,
                                   WorldThermalEnvironment environment) {

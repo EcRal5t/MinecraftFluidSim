@@ -36,6 +36,8 @@ final class GpuControllerFixture {
     final ContainerJournalFileStore journal;
     final Actor actor;
     final CommittedWorldRegistries world;
+    final WorldThermalEnvironment environment;
+    final IndustrialLayout industrial;
     private mmm.fluid.HostFluidState transferEdit;
     private FluidRegion transferCandidate;
     private long transferGeneration;
@@ -61,31 +63,27 @@ final class GpuControllerFixture {
     }
 
     private GpuControllerFixture(FluidRegion region, int[] portCell, MinecraftContainerTransactionAdapter transactions,
-            ContainerRecoveryCoordinator recovery, ContainerJournalFileStore journal, Actor actor, CommittedWorldRegistries world) {
+            ContainerRecoveryCoordinator recovery, ContainerJournalFileStore journal, Actor actor, CommittedWorldRegistries world,
+            WorldThermalEnvironment environment, IndustrialLayout industrial) {
         this.region = region; this.portCell = portCell; this.transactions = transactions;
-        this.recovery = recovery; this.journal = journal; this.actor = actor; this.world = world;
+        this.recovery = recovery; this.journal = journal; this.actor = actor; this.world = world; this.environment = environment; this.industrial = industrial;
     }
 
     static GpuControllerFixture create(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
             FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
-        return create(startup, world, manager, operations, false, false);
-    }
-
-    static GpuControllerFixture createDistillation(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
-            FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
-        return create(startup, world, manager, operations, true, false);
+        return create(startup, world, manager, operations, false);
     }
 
     static GpuControllerFixture createCrossBlockProcess(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
-            FluidRegionManager manager, FluidRegionOperations operations, boolean distillation) throws IOException {
-        return create(startup, world, manager, operations, distillation, true);
+            FluidRegionManager manager, FluidRegionOperations operations) throws IOException {
+        return create(startup, world, manager, operations, true);
     }
 
     private static GpuControllerFixture create(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
-            FluidRegionManager manager, FluidRegionOperations operations, boolean distillation, boolean crossBlock) throws IOException {
+            FluidRegionManager manager, FluidRegionOperations operations, boolean crossBlock) throws IOException {
         initializeItems();
-        var layout = crossBlock ? crossBlockLayout(distillation) : distillation ? distillationLayout() : ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
-        return createLayout(startup,world,manager,operations,layout,distillation,crossBlock,null);
+        var layout = crossBlock ? crossBlockLayout() : ControllerDemoLayout.at(new BlockPos(16, 64, 16), Direction.SOUTH);
+        return createLayout(startup,world,manager,operations,layout,null);
     }
 
     static GpuControllerFixture createIndustrial(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
@@ -97,12 +95,12 @@ final class GpuControllerFixture {
         var shell=industrial.blocks().entrySet().stream().filter(e->e.getValue().isCollisionShapeFullBlock(net.minecraft.world.level.EmptyBlockGetter.INSTANCE,e.getKey())).map(Map.Entry::getKey).toList();
         var layout=new ControllerDemoLayout(industrial.minimum(),industrial.controller(),first.position(),first.outward(),
                 List.copyOf(industrial.blocks().keySet()),shell);
-        return createLayout(startup,world,manager,operations,layout,false,false,industrial);
+        return createLayout(startup,world,manager,operations,layout,industrial);
     }
 
     private static GpuControllerFixture createLayout(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
             FluidRegionManager manager, FluidRegionOperations operations, ControllerDemoLayout layout,
-            boolean distillation, boolean crossBlock, IndustrialLayout industrial) throws IOException {
+            IndustrialLayout industrial) throws IOException {
         var selected=industrial==null?layout.occupied():industrial.blocks().entrySet().stream()
                 .filter(entry->!entry.getValue().is(mmm.block.MmmBlocks.MATERIAL_BOX)).map(Map.Entry::getKey).toList();
         int maxX = selected.stream().mapToInt(BlockPos::getX).max().orElseThrow();
@@ -114,14 +112,14 @@ final class GpuControllerFixture {
                 () -> null, candidate -> {
                     if (industrial != null) installIndustrialGeometry(candidate,industrial);
                     else installShellGeometry(candidate, layout);
-                    if (distillation) installDistillationWalls(candidate, crossBlock ? 6 : 0);
                     world.bindConfiguredState(candidate.editableHost(), startup.config().maximumThermalSubstepsPerStep());
                 },
                 operations::checkpoint);
         if (result.failure() != null) throw new IllegalStateException("controller creation: " + result.failure());
         FluidRegion region = result.region();
+        WorldThermalEnvironment environment=null;
         if(industrial!=null && region.hasThermalState() && manager.solverBackend()!=null) {
-            var environment=new WorldThermalEnvironment(manager.solverBackend(),world,manager);
+            environment=new WorldThermalEnvironment(manager.solverBackend(),world,manager);
             environment.refresh(region,FluidRegionFactory.CELLS_PER_BLOCK,industrial.blocks());
             IndustrialWorkbench.initializeThermal(region,industrial,world.thermalRegistry(),environment);
             attachOrdinaryWallPorts(region,world.thermalRegistry());
@@ -136,7 +134,12 @@ final class GpuControllerFixture {
         var recovery = new ContainerRecoveryCoordinator(journal, actor, Map.of(), Set.of());
         var transactions = new MinecraftContainerTransactionAdapter(manager, operations, recovery,
                 world.profile().profileFingerprint(), world.thermalRegistryFingerprint());
-        return new GpuControllerFixture(region, cell, transactions, recovery, journal, actor, world);
+        return new GpuControllerFixture(region, cell, transactions, recovery, journal, actor, world, environment, industrial);
+    }
+
+    void restoreThermal() {
+        if(environment!=null)environment.refresh(region,FluidRegionFactory.CELLS_PER_BLOCK,industrial.blocks());
+        attachOrdinaryWallPorts(region,world.thermalRegistry());
     }
 
     private static void installShellGeometry(FluidRegion region, ControllerDemoLayout layout) {
@@ -174,9 +177,9 @@ final class GpuControllerFixture {
         }
     }
 
-    private static ControllerDemoLayout crossBlockLayout(boolean distillation) {
+    private static ControllerDemoLayout crossBlockLayout() {
         var minimum = new BlockPos(14,64,20);
-        int outerX = 8, outerY = distillation ? 5 : 4, outerZ = distillation ? 5 : 4;
+        int outerX = 8, outerY = 4, outerZ = 4;
         var occupied = new java.util.ArrayList<BlockPos>(); var shell = new java.util.ArrayList<BlockPos>();
         for (int z=0; z<outerZ; z++) for (int y=0; y<outerY; y++) for (int x=0; x<outerX; x++) {
             var position = minimum.offset(x,y,z); occupied.add(position);
@@ -184,28 +187,6 @@ final class GpuControllerFixture {
         }
         return new ControllerDemoLayout(minimum, minimum.offset(4,1,0), minimum.offset(4,0,1),
                 Direction.DOWN, List.copyOf(occupied), List.copyOf(shell));
-    }
-
-    private static ControllerDemoLayout distillationLayout() {
-        var minimum = new BlockPos(14, 64, 20);
-        var occupied = new java.util.ArrayList<BlockPos>();
-        var shell = new java.util.ArrayList<BlockPos>();
-        for (int z = 0; z < 5; z++) for (int y = 0; y < 5; y++) for (int x = 0; x < 5; x++) {
-            var pos = minimum.offset(x, y, z); occupied.add(pos);
-            if (x == 0 || x == 4 || y == 0 || y == 4 || z == 0 || z == 4) shell.add(pos);
-        }
-        return new ControllerDemoLayout(minimum, minimum.offset(2, 1, 0), minimum.offset(1, 0, 1),
-                Direction.DOWN, List.copyOf(occupied), List.copyOf(shell));
-    }
-
-    private static void installDistillationWalls(FluidRegion region, int shift) {
-        var host = region.editableHost();
-        // A hot pool and a one-cell gas passage connect to a separately supported cold film.
-        for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < region.sizeX() - 4; x++) {
-            boolean hotPool = x >= shift && x < shift + 2 && y < 4 && z < 2;
-            boolean gasPassage = x >= shift && y == 4 && z == 1;
-            if (!hotPool && !gasPassage) host.setSolid(x + 2, y + 2, z + 2, true);
-        }
     }
 
     /** The offline Java launcher performs vanilla bootstrap without Fabric's registry setup. */
@@ -240,7 +221,7 @@ final class GpuControllerFixture {
         var registry=net.minecraft.core.registries.BuiltInRegistries.BLOCK;
         var tags=new java.util.HashMap<net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block>,java.util.List<net.minecraft.core.Holder<net.minecraft.world.level.block.Block>>>();
         registry.getTags().forEach(tag->tags.put(tag.key(),tag.stream().toList()));
-        for(String material:java.util.List.of("stone","metal","glass")) {
+        for(String material:java.util.List.of("stone","metal","glass","insulation")) {
             String id="ordinary_"+material+"_thermal_walls";
             String resource="/data/mmm/tags/block/"+id+".json";
             try(var stream=GpuControllerFixture.class.getResourceAsStream(resource)) {
@@ -378,10 +359,6 @@ final class GpuControllerFixture {
         transfer(before, false);
     }
 
-    void transferAt(ItemStack before, int[] cell) throws IOException {
-        transfer(before, false, cell);
-    }
-
     /** Offline box slot using the production bounded transfer plan. */
     ItemStack transferBox(ItemStack batch, int[] cell, boolean extract, long maximum) throws IOException {
         return transferBox(batch,cell,boxOutward(cell),extract,maximum,false);
@@ -470,17 +447,6 @@ final class GpuControllerFixture {
             boxActor.persist();
         });
         return new BoxAttempt(result,boxActor,boxRecovery,adapter,identity,cell);
-    }
-
-    void ventGas() throws IOException {
-        region.setPaused(true);
-        var candidate = region.beginHostEdit();
-        var removed = candidate.commitOperatorVentSealedGas(candidate.planOperatorVentSealedGas());
-        var staged = actor.operations.stageLifecycleCheckpoint(region, candidate, Math.addExact(region.checkpointGeneration(), 1));
-        long generation = actor.operations.commitStagedLifecycleCheckpoint(staged);
-        region.adoptLifecycleCandidateDomain(candidate, generation, true);
-        System.out.println("distillation_vent nanos=" + removed.removed().standardVolumeNanos()
-                + " internal_j=" + removed.internalEnergy().toDouble());
     }
 
     private void transfer(ItemStack before, boolean creative) throws IOException {

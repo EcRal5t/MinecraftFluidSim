@@ -8,7 +8,7 @@
 | 用途 | 命令或操作 |
 |---|---|
 | 打开演示面板 | `demo`、`demos`；快速入门手册中的“演示” |
-| 创建空演示水箱 | `controllerdemo` |
+| 准备清水演示水箱 | `tankdemo` |
 | 大型溃坝与世界采样诊断 | `damdemo`、`capture`、`takeover` |
 | 为当前区域命名 | `regionname <名称>` |
 | 列出、选择和保存区域 | `regions list`、`regions select <uuid>`、`regions checkpoint` |

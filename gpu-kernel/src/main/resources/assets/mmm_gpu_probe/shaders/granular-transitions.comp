@@ -13,7 +13,6 @@ const int MATERIAL_CRITICAL_SHIELDS = 4;
 const int MATERIAL_EROSION_RATE = 5;
 const int MATERIAL_MAX_PARCEL_VOLUME = 6;
 const int LIQUID_VOLUME = 0;
-const int LIQUID_MASS = 1;
 const int LIQUID_OPEN_VOLUME = 2;
 const int FACE_MASS = 0;
 const int FACE_VELOCITY = 1;
@@ -575,7 +574,14 @@ void wakeSurface(int column, int c) {
     double speed = length(dvec2(vx, vz));
     if (speed == 0.0)
         return;
-    double density = liquidComponent(sampleCell, LIQUID_MASS) / (liquidVolume * p.cellSize * p.cellSize * p.cellSize),
+    int first = int(words[headerValue(H_LIQUID_OFFSETS) + sampleCell]);
+    int last = int(words[headerValue(H_LIQUID_OFFSETS) + sampleCell + 1]);
+    double liquidMass = 0.0;
+    for (int stock = first; stock < last; stock++)
+        liquidMass += double(readInt64(headerValue(H_LIQUID_MASSES) + 2 * stock)) * MASS_UNIT_KG;
+    if (liquidMass == 0.0)
+        return;
+    double density = liquidMass / (liquidVolume * p.cellSize * p.cellSize * p.cellSize),
            viscosity = readDouble(headerValue(H_VISCOSITY) + 2 * sampleCell);
     if (!(density > 0.0 && viscosity > 0.0)) {
         reportInvalidState();

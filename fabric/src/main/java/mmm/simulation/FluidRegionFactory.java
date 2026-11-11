@@ -70,11 +70,16 @@ final class FluidRegionFactory {
 	}
 
 	/** Scaled wetting demonstration: two-cell capillary length with unchanged world cell size. */
-	static HostFluidState createTensionDomain(CommittedWorldRegistries world) {
+	static HostFluidState createTensionDomain(CommittedWorldRegistries world, int angleDegrees) {
+		var base = world.definitions();
+		var config = new FluidSolverConfig(0.5F, 0.981F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F);
+		var definitions = new mmm.fluid.FluidDefinitions(
+				DebugScenarioInitialization.tensionDefinitions(base.material(), angleDegrees, config.cellSize(), config.gravity()),
+				base.chemistry(), base.gas(), base.granular(), base.thermal());
 		return new HostFluidState(MinecraftDebugFixtures.BLOCK_SIZE_X * CELLS_PER_BLOCK,
 				MinecraftDebugFixtures.BLOCK_SIZE_Y * CELLS_PER_BLOCK,
 				MinecraftDebugFixtures.BLOCK_SIZE_Z * CELLS_PER_BLOCK,
-				new FluidSolverConfig(0.5F, 0.981F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F), world.definitions());
+				config, definitions);
 	}
 
 	/**

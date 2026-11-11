@@ -236,6 +236,31 @@ public final class MinecraftRegionActivation {
         }
     }
 
+    void preflightSelections(ServerLevel level, java.util.List<BlockPos[]> selections) {
+        long[] cells = new long[selections.size()];
+        int index = 0;
+        for (var corners : selections) {
+            var footprint = selectionFootprint(level, new Selection(level.dimension(), corners[0], corners[1], true));
+            var grid = FluidRegionFactory.grid(footprint);
+            var admission = regions.previewAdd(level.dimension(), footprint, grid);
+            if (!admission.accepted()) throw new IllegalStateException(admission.failure());
+            cells[index++] = grid.cellCount();
+        }
+        checkSelectionBudget(regions.usage(), regions.limits(), cells);
+    }
+
+    static void checkSelectionBudget(mmm.application.RegionCatalog.BudgetUsage usage,
+            mmm.application.RegionCatalog.Limits limits, long[] cells) {
+        if (usage.regionCount() + cells.length > limits.maximumRegions())
+            throw new IllegalStateException("区域数量达到上限，请先移除其他区域");
+        long total = usage.reservedCells();
+        for (long size : cells) {
+            if (size > limits.maximumCellsPerRegion()) throw new IllegalStateException("选区超出区域单元预算");
+            total = Math.addExact(total, size);
+        }
+        if (total > limits.maximumTotalCells()) throw new IllegalStateException("区域总单元预算不足");
+    }
+
     private Result createSelection(ServerPlayer player, FluidRegionFootprint footprint) {
         if (!controllerFeatureEnabled.getAsBoolean()) return Result.DISABLED;
         if (!startup.authoritativeWritesReady()) return Result.failed(authoritativeWriteFailure("创建区域"));

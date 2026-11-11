@@ -23,6 +23,7 @@ import net.minecraft.world.level.Level;
 public final class DemoInteractionValidation {
 	private DemoInteractionValidation() { }
 	public static void main(String[] args) throws Exception {
+		validatePlantBudget();
 		var manager = new FluidRegionManager(new RegionCatalog.Limits(8, 65536, 131072));
 		var root = Files.createTempDirectory("mmm-demo-interaction-");
 		var store = new DemoWorkbenchStore(root);
@@ -122,6 +123,16 @@ public final class DemoInteractionValidation {
 		var rejected = request(mismatched, host, invalid, DemoPreset.WATER, DemoAction.REMOVE);
 		require(rejected.failure() != null && manager.region(mismatchId) == mismatch, "Mismatched identity changed a live region");
 		System.out.println("Demo interaction validation passed");
+	}
+	private static void validatePlantBudget() {
+		var limits = new RegionCatalog.Limits(4, 2048, 4096);
+		MinecraftRegionActivation.checkSelectionBudget(new RegionCatalog.BudgetUsage(2, 2048), limits, new long[]{1024, 1024});
+		for (var usage : java.util.List.of(new RegionCatalog.BudgetUsage(3, 1024), new RegionCatalog.BudgetUsage(2, 3072))) {
+			boolean rejected = false;
+			try { MinecraftRegionActivation.checkSelectionBudget(usage, limits, new long[]{1024, 1024}); }
+			catch (IllegalStateException expected) { rejected = true; }
+			require(rejected, "Two-unit plant exceeded the available region budget");
+		}
 	}
 	private static void validateAllPresets(DemoWorkbench workbench, TestHost host) {
 		for (var preset : DemoPreset.values()) {

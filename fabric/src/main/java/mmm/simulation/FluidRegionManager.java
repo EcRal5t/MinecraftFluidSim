@@ -53,6 +53,18 @@ public final class FluidRegionManager {
 		return catalog.previewAdd(requiredCells);
 	}
 
+	RegionCatalog.AdmissionResult previewAdd(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+			mmm.simulation.controller.FluidRegionFootprint footprint, mmm.spatial.SpatialGrid grid) {
+		var min = footprint.minimumInterior();
+		var max = footprint.maximumInterior();
+		var blocks = footprint.interiorBlocks().stream().map(net.minecraft.core.BlockPos::of)
+				.map(p -> new RegionCatalog.Descriptor.Block(p.getX(), p.getY(), p.getZ()))
+				.collect(java.util.stream.Collectors.toUnmodifiableSet());
+		return catalog.previewAdd(new RegionCatalog.Descriptor(UUID.randomUUID(), dimension.identifier().toString(),
+				min.getX(), min.getY(), min.getZ(), max.getX() + 1.0, max.getY() + 1.0, max.getZ() + 1.0,
+				grid.cellCount(), blocks));
+	}
+
 	RegionCatalog.AdmissionResult previewResize(FluidRegion previous,
 			mmm.simulation.controller.FluidRegionFootprint footprint, mmm.spatial.SpatialGrid grid) {
 		var min = footprint.minimumInterior();

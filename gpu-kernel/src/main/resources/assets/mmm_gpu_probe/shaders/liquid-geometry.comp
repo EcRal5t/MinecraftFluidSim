@@ -171,9 +171,14 @@ void reconstructInterface(int cell) {
     double sign = 1.0, cut = fill <= 0.0 ? 0.0 : 1.0;
     if (fill > 0.0 && fill < 1.0 && support != 0u) {
         vec3 gradient;
-        for (int a = 0; a < 3; a++)
-            gradient[a] = -(sampleCellFill(gridNeighbor(cell,2*a+1), float(fill))
-                    - sampleCellFill(gridNeighbor(cell,2*a), float(fill)));
+        for (int a = 0; a < 3; a++) {
+            int lower = gridNeighbor(cell,2*a), upper = gridNeighbor(cell,2*a+1);
+            float lowerFill = sampleCellFill(lower, float(fill));
+            float upperFill = sampleCellFill(upper, float(fill));
+            if (lower < 0) lowerFill = upperFill;
+            if (upper < 0) upperFill = lowerFill;
+            gradient[a] = -(upperFill - lowerFill);
+        }
         if (abs(gradient.x) > abs(gradient.y)) axis = 0;
         if (abs(gradient.z) > abs(gradient[axis])) axis = 2;
         sign = gradient[axis] < 0.0 ? -1.0 : 1.0;

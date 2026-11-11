@@ -192,7 +192,7 @@ public final class MinecraftDebugFixtures {
 		}
 		ServerLevel level = player.level();
 		BlockPos origin = aimedOrigin(player);
-		return runTransient(level, origin, TransientKind.TENSION, context -> {
+		return runTransient(level, origin, TransientKind.TENSION, angleDegrees, context -> {
 			scaffolding.placeTensionFloor(level, origin);
 			runtime.refreshCollisions(level);
 			long generation = regions.selected().solverGeneration();
@@ -296,6 +296,9 @@ public final class MinecraftDebugFixtures {
 
 	/** Prepares one candidate and either publishes it or restores the previous selection and scaffold. */
 	private boolean runTransient(ServerLevel level, BlockPos origin, TransientKind kind, TransientWork work) {
+		return runTransient(level, origin, kind, 0, work);
+	}
+	private boolean runTransient(ServerLevel level, BlockPos origin, TransientKind kind, int tensionAngle, TransientWork work) {
 		FluidRegion previous = regions.selected();
 		FluidRegion replaced = previous != null && !previous.hasSelectedVolume() ? previous
 				: regions.regions().stream().filter(region -> !region.hasSelectedVolume()).findFirst().orElse(null);
@@ -313,7 +316,7 @@ public final class MinecraftDebugFixtures {
 		HostFluidState domain = switch (kind) {
 			case FLOW -> FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z, runtime.worldRegistries());
 			case AIR -> FluidRegionFactory.createAirDomain(runtime.worldRegistries());
-			case TENSION -> FluidRegionFactory.createTensionDomain(runtime.worldRegistries());
+			case TENSION -> FluidRegionFactory.createTensionDomain(runtime.worldRegistries(), tensionAngle);
 			case NORMAL -> FluidRegionFactory.createDomain(BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z, runtime.worldRegistries());
 		};
 		FluidRegion candidate = new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain);

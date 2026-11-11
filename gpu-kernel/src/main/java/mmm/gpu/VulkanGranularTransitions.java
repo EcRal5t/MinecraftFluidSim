@@ -36,11 +36,11 @@ final class VulkanGranularTransitions implements AutoCloseable {
         GEOMETRY_OFFSETS(17),
         GEOMETRY_ENTRIES(18),
         FIXED_SVQ(19),
-        ACTIVITY_CELLS(20), SCREEN_CAPTURED(21), SCREEN_FACES(22);
+        ACTIVITY_CELLS(20), SCREEN_CAPTURED(21), SCREEN_FACES(22), LIQUID_OFFSETS(23), LIQUID_MASSES(24);
         final int word;
         Header(int word) { this.word = word; }
     }
-    private static final int WORK_FIELDS = 72, TARGET_FIELDS = 24, SOURCE_FIELDS = 48;
+    private static final int WORK_FIELDS = 72, TARGET_FIELDS = 28, SOURCE_FIELDS = 48;
     private static String shaderLayout() {
         var result = new StringBuilder();
         for (var field : Header.values()) result.append("#define H_").append(field.name()).append(' ').append(field.word).append('\n');
@@ -103,7 +103,8 @@ final class VulkanGranularTransitions implements AutoCloseable {
                     state.rowCapacity(),state.speciesCapacity(),state.definitions().materialIds().size(),state.definitions().speciesIds().size(),
                     hashSize,word(masks),word(cells),word(faces),word(viscosity),
                     word(liquid.column(VulkanLiquidStateLayout.Field.MOMENTUM_X)),word(liquid.column(VulkanLiquidStateLayout.Field.MOMENTUM_Z)),
-                    geometry.word(VulkanGranularGeometry.Field.OFFSETS),geometry.word(VulkanGranularGeometry.Field.ENTRIES),geometry.word(VulkanGranularGeometry.Field.FIXED_SVQ),-1,-1,-1};
+                    geometry.word(VulkanGranularGeometry.Field.OFFSETS),geometry.word(VulkanGranularGeometry.Field.ENTRIES),geometry.word(VulkanGranularGeometry.Field.FIXED_SVQ),-1,-1,-1,
+                    word(liquid.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS)),word(liquid.column(VulkanLiquidStateLayout.Field.MASS_UNITS))};
         }
         void bindActivity(int cellWord) { inputs[Header.ACTIVITY_CELLS.word] = cellWord; }
         void bindScreenCaptured(int word) { inputs[Header.SCREEN_CAPTURED.word] = word; }

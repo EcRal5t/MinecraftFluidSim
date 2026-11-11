@@ -22,11 +22,13 @@ import net.minecraft.resources.ResourceKey;
 /** Offline production services with an empty, fully loaded world input. */
 public final class GpuProductionDemoValidation {
 	private GpuProductionDemoValidation() { }
+	private static final Set<String> STAGES = Set.of("initial", "motion", "scheduled", "complete");
 	private static PhysicalObservation lastOutcome;
 	private static MassBaseline massBaseline;
 	private static double bulkWaterTemperatureK;
 	private static double bulkGasTemperatureK, hottestGasTemperatureK, hottestGasMassFraction;
 	private static long reactionWaterQuanta;
+	private static long reactionBicarbonateQuanta;
 	private static FluidRegionOperations phaseRestoreOperations;
 	private static HostFluidState phaseRestoreCandidate;
 	private static boolean phaseRestoreCompleted;
@@ -43,7 +45,7 @@ public final class GpuProductionDemoValidation {
 			variants[0] = "tension120";
 			run(variants);
 			var steep = lastOutcome;
-			String stop = args.length < 3 ? "complete" : args[2];
+			String stop = stopStage(args);
 			if (stop.equals("complete")) {
 				require(shallow != null && steep != null && shallow.wetArea() > steep.wetArea()
 						&& shallow.waterY() < steep.waterY(),
@@ -60,10 +62,18 @@ public final class GpuProductionDemoValidation {
 		lastOutcome = null;
 		phaseRestoreOperations = null; phaseRestoreCandidate = null; phaseRestoreCompleted = false;
 		String scenario = args.length == 0 ? "demo" : args[0];
-		int steps = args.length < 2 ? 1 : Integer.parseInt(args[1]);
-		String stop = args.length < 3 ? "complete" : args[2];
+		boolean defaultSteps = args.length < 2 || STAGES.contains(args[1]);
+		int steps = defaultSteps ? switch (scenario) {
+			case "tank", "material", "chemistry" -> 120;
+			case "controller" -> 20;
+			case "capture", "takeover" -> 40;
+			case "tension30", "tension120" -> 200;
+			case "droplet", "droplet-tail" -> 12;
+			default -> 500;
+		} : Integer.parseInt(args[1]);
+		String stop = stopStage(args);
 		if (!Set.of("demo", "flow", "tank", "precipitation", "material", "chemistry", "tension30", "tension120", "air", "ambient", "vacuum", "controller", "capture", "takeover", "droplet", "droplet-tail").contains(scenario)
-				|| !Set.of("initial", "motion", "scheduled", "complete").contains(stop) || steps < 1 || args.length > 3)
+				|| !STAGES.contains(stop) || steps < 1 || args.length > (defaultSteps ? 2 : 3))
 			throw new IllegalArgumentException("Expected a supported demo scenario (including tank/precipitation), positive step count, and initial/motion/scheduled/complete");
 		if (Set.of("demo", "flow").contains(scenario) && stop.equals("complete") && steps < 13)
 			throw new IllegalArgumentException("Complete demo requires at least 13 scheduled steps for player entry, movement and exit");
@@ -90,7 +100,7 @@ public final class GpuProductionDemoValidation {
 			return;
 		}
 		var domain = scenario.startsWith("droplet") ? FluidRegionFactory.createDomain(2, 2, 2, world)
-				: scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain(world)
+				: scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain(world, scenario.equals("tension30") ? 30 : 120)
 				: isAirScenario(scenario) ? FluidRegionFactory.createAirDomain(world)
 				: scenario.equals("flow") ? FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X,
 						DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z, world)
@@ -104,8 +114,7 @@ public final class GpuProductionDemoValidation {
 		captureCollisions(region, scenario);
 		domain = region.editableHost();
 		if (scenario.startsWith("tension")) {
-			int angle = scenario.equals("tension30") ? 30 : 120;
-			var material = DebugScenarioInitialization.tensionDefinitions(world.materialRegistry(), angle);
+			var material = domain.definitions().material();
 			DebugScenarioInitialization.bindTensionPalette(domain, material);
 			DebugScenarioInitialization.fillTensionCap(domain);
 			world.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep(), material);
@@ -322,7 +331,7 @@ public final class GpuProductionDemoValidation {
 				registries.thermal(), registries.gas(), startup.config().maximumThermalSubstepsPerStep(), registries.material());
 		var fixture = GpuControllerFixture.create(startup, world, manager, operations);
 		var region = fixture.region;
-		long reagentQuanta = Long.getLong("mmm.demoValidationReagentQuanta", precipitation ? 1_000_000_000L : 1_000_000L);
+		long reagentQuanta = Long.getLong("mmm.demoValidationReagentQuanta", precipitation ? 15_000_000_000L : 1_000_000L);
 		require(reagentQuanta > 0, "Tank reagent amount must be positive");
 		UUID id = region.id();
 		int size=ControllerDemoLayout.OUTER_SIZE*FluidRegionFactory.CELLS_PER_BLOCK;
@@ -395,8 +404,8 @@ public final class GpuProductionDemoValidation {
 				scheduledAdvance(startup, region, snapshots, ticks, steps, mass, "tank");
 				try (var capture = region.captureSolverState()) {
 					var after = measure(capture.exportState(), "chemistry");
-					System.out.printf("stage=tank-physical recipe=%s before=%s after=%s reaction_water=%d water_temperature_k=%.6f%n",
-							recipe, before, after, reactionWaterQuanta, bulkWaterTemperatureK);
+					System.out.printf("stage=tank-physical recipe=%s before=%s after=%s reaction_water=%d reaction_bicarbonate=%d water_temperature_k=%.6f%n",
+							recipe, before, after, reactionWaterQuanta, reactionBicarbonateQuanta, bulkWaterTemperatureK);
 					if (steps >= 12 && recipe == DemoTankOperations.Recipe.WATER)
 						require(after.waterY() < before.waterY(), "Water demo did not flow from its initial elevated state");
 					if (steps >= 12 && recipe == DemoTankOperations.Recipe.OIL_WATER)
@@ -404,7 +413,8 @@ public final class GpuProductionDemoValidation {
 								"Oil and water did not settle into visible layers");
 					if (steps >= 12 && recipe == DemoTankOperations.Recipe.ACID_BASE) {
 						long acid = before.acid() - after.acid(), base = before.base() - after.base();
-						require(acid > 0 && acid == base && reactionWaterQuanta == acid,
+						require(acid > 0 && reactionWaterQuanta == acid
+								&& base == Math.addExact(acid, reactionBicarbonateQuanta),
 								"Tank acid/base did not produce balanced reaction water");
 						if (precipitation) require(baselineMass(capture.exportState()).granular() > 0,
 								"Concentrated saline mixture did not create solid precipitate");
@@ -754,6 +764,7 @@ public final class GpuProductionDemoValidation {
 		changes.forEach((id, amount) -> expectedSpecies.merge(id, amount, Math::addExact));
 		expectedSpecies.values().removeIf(amount -> amount == 0);
 		reactionWaterQuanta = Math.subtractExact(afterSpecies.getOrDefault("mmm:h2o", 0L), expectedSpecies.getOrDefault("mmm:h2o", 0L));
+		reactionBicarbonateQuanta = Math.subtractExact(afterSpecies.getOrDefault("mmm:hco3_minus", 0L), expectedSpecies.getOrDefault("mmm:hco3_minus", 0L));
 		boolean speciesReconciled = expectedSpecies.equals(afterSpecies) || elementTotals(state.chemicalRegistry(), expectedSpecies)
 						.equals(elementTotals(state.chemicalRegistry(), afterSpecies));
 		long expectedMass = Math.addExact(Math.addExact(chemicalExchange, gasExternalExchange), granularExchange);
@@ -997,9 +1008,10 @@ public final class GpuProductionDemoValidation {
 					&& end.oilY() > end.waterY(), "Both layers must move while lighter oil remains above water");
 			case "chemistry" -> {
 				long acidConsumed = initial.acid() - end.acid(), baseConsumed = initial.base() - end.base();
-				System.out.printf("stage=neutralization acid_quanta=%d base_quanta=%d reaction_water_quanta=%d liquid_water_change=%d%n",
-						acidConsumed, baseConsumed, reactionWaterQuanta, end.waterQuanta() - initial.waterQuanta());
-				require(end.waterX() > initial.waterX() && acidConsumed > 0 && acidConsumed == baseConsumed && reactionWaterQuanta == acidConsumed,
+				System.out.printf("stage=neutralization acid_quanta=%d base_quanta=%d reaction_water_quanta=%d reaction_bicarbonate_quanta=%d liquid_water_change=%d%n",
+						acidConsumed, baseConsumed, reactionWaterQuanta, reactionBicarbonateQuanta, end.waterQuanta() - initial.waterQuanta());
+				require(end.waterX() > initial.waterX() && acidConsumed > 0 && reactionWaterQuanta == acidConsumed
+						&& baseConsumed == Math.addExact(acidConsumed, reactionBicarbonateQuanta),
 						"Mixed acid and base did not undergo balanced neutralization");
 			}
 			case "tension30", "tension120" -> require(end.wetArea() > 0, "Water no longer contacts the wetting floor");
@@ -1016,6 +1028,10 @@ public final class GpuProductionDemoValidation {
 
 	private static boolean isAirScenario(String scenario) {
 		return Set.of("air", "ambient", "vacuum").contains(scenario);
+	}
+
+	private static String stopStage(String[] args) {
+		return args.length > 1 && STAGES.contains(args[1]) ? args[1] : args.length < 3 ? "complete" : args[2];
 	}
 
 	private static void require(boolean condition, String message) {

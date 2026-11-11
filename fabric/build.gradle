@@ -188,6 +188,18 @@ tasks.register('runMaterialBoxStorageValidation', JavaExec) {
     doFirst { validationWorkDir.mkdirs() }
 }
 
+tasks.register('runDemoInteractionValidation', JavaExec) {
+	group = 'verification'
+	description = 'Runs the demo workbench presets, lifecycle and plant admission checks.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'mmm.simulation.DemoInteractionValidation'
+	enableAssertions = true
+	def workDir = layout.buildDirectory.dir('demo-interaction-work').get().asFile
+	workingDir workDir
+	doFirst { workDir.mkdirs() }
+}
+
 tasks.register('runGpuProcessFlowsValidation', JavaExec) {
     group = 'verification'
     description = 'Runs actual finite-wall, gas-contact or precipitation controller processes through feed, sampling, extraction and checkpoint recovery.'
@@ -211,12 +223,14 @@ tasks.register('runGpuProductionDemoValidation', JavaExec) {
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'mmm.simulation.GpuProductionDemoValidation'
-	jvmArgs '-ea', '--enable-native-access=ALL-UNNAMED', '-Xmx1g'
+	jvmArgs '-ea', '--enable-native-access=ALL-UNNAMED', '-Xmx3g'
 	systemProperty 'mmm.solverBackend', 'vulkan'
 	systemProperty 'mmm.gpuDevice', providers.gradleProperty('gpuProbeDevice').getOrElse('0')
 	systemProperty 'mmm.gpuDeviceName', providers.gradleProperty('gpuProbeDeviceName').getOrElse('')
 	systemProperty 'mmm.demoLiquidDiagnostic', providers.gradleProperty('gpuDemoLiquidDiagnostic').getOrElse('false')
-	args providers.gradleProperty('gpuDemo').getOrElse('demo'), providers.gradleProperty('gpuDemoSteps').getOrElse('1'), providers.gradleProperty('gpuDemoStage').getOrElse('complete')
+	args providers.gradleProperty('gpuDemo').getOrElse('demo')
+	if (providers.gradleProperty('gpuDemoSteps').isPresent()) args providers.gradleProperty('gpuDemoSteps').get()
+	args providers.gradleProperty('gpuDemoStage').getOrElse('complete')
 	def workDir = layout.buildDirectory.dir('gpu-production-demo-work').get().asFile
 	workingDir workDir
 	doFirst {

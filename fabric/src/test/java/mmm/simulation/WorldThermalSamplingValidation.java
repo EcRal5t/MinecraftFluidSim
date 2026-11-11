@@ -87,6 +87,27 @@ public final class WorldThermalSamplingValidation {
             throw new AssertionError("Insulating glass conducts heat");
         var wall=region.finiteThermalDevices(world.thermalRegistry().fingerprint()).devices().stream().filter(device->device.objectId().startsWith(origin.asLong()+"@")).findFirst().orElseThrow();
         if(env.portsFor(region,wall,world.thermalRegistry()).stream().noneMatch(FluidDomainContracts.ThermalPortRequest::internalFace))throw new AssertionError("Partial wall lost internal microface");
+        var binding=region.environmentBinding();
+        var savedState=region.hostSnapshot().captureAuthoritativeState();
+        var savedDevices=region.finiteThermalDevices(world.thermalRegistryFingerprint());
+        if(!region.recordPublishedCheckpoint(1) || !region.releaseSolverAfterCheckpoint(1))
+            throw new AssertionError("World thermal checkpoint did not unload");
+        region.restoreAuthoritativeSolver(savedState,1);
+        region.restoreFiniteThermalDevices(savedDevices,world.thermalRegistry(),1);
+        var nodes=new ArrayList<>(state.nodes());
+        var heated=wood.withEnergy(wood.internalEnergyJ()+1234);
+        nodes.set(nodes.indexOf(wood),heated);
+        var audit=state.audit();
+        var updatedSource=audit.source().add(mmm.units.SignedDyadic.of(heated.internalEnergyJ()).subtract(mmm.units.SignedDyadic.of(wood.internalEnergyJ())));
+        var current=new EnvironmentThermalState(state.dimensionId(),state.generation()+1,state.registryFingerprint(),nodes,state.contacts(),
+                new EnvironmentThermalState.Audit(audit.initial(),updatedSource,audit.sink(),audit.regionExchange(),audit.roundoff()));
+        environments.put(state.dimensionId(),current);
+        if(!env.refresh(region,2,blocks) || !binding.equals(region.environmentBinding()) || !env.current(state.dimensionId()).equals(current))
+            throw new AssertionError("Checkpoint restore did not rebind the existing world environment");
+        var rebound=region.finiteThermalDevices(world.thermalRegistryFingerprint()).devices().stream()
+                .filter(device->device.objectId().equals(wall.objectId())).findFirst().orElseThrow();
+        if(rebound.body().internalEnergyJ()!=heated.internalEnergyJ())
+            throw new AssertionError("Checkpoint restore used an outdated world wall inventory");
         manager.observeGeometry(env::regionGeometryChanged);
         var replacement=new FluidRegion(region.id(),region.dimension(),region.origin(),
                 HostFluidState.restoreAuthoritativeState(region.hostSnapshot().captureAuthoritativeState()),footprint);
