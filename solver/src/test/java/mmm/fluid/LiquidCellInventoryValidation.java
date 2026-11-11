@@ -208,6 +208,22 @@ public final class LiquidCellInventoryValidation {
         long waterMass = pure.massUnits(chemistry);
         projector.portion("test:residual", FluidComposition.Phase.COHERENT,
                 waterMass + 100, .75, List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.H2O, 1000)), 300);
+        var statistics = new FluidCompositionProjector(chemistry);
+        for (double temperature : new double[]{280, 300, 310})
+            statistics.portion(BuiltinChemicalDefinitions.H2O, FluidComposition.Phase.GAS,
+                    waterMass, .5, List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.H2O, 1000)), temperature);
+        var statistic = statistics.result().rows().get(0);
+        require(statistic.minimumTemperatureK() == 280 && statistic.maximumTemperatureK() == 310
+                        && statistic.medianTemperatureK() == 300 && Math.abs(statistic.amountMoles() - .003) < 1e-12,
+                "Composition did not preserve gas amount and observed weighted median");
+        var ionProjector = new FluidCompositionProjector(chemistry);
+        long ionMass = chemistry.speciesMassUnits(chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS), 1000);
+        ionProjector.portion(BuiltinChemicalDefinitions.NA_PLUS, FluidComposition.Phase.LIQUID, ionMass, .1,
+                List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.NA_PLUS, 1000)), 300);
+        require(ionProjector.result().rows().get(0).ion()
+                        && Double.isNaN(ionProjector.result().rows().get(0).volumeCubicMetres()),
+                "Charged species lost ion identity or gained a volume");
+        require(domain.observeComposition(cell -> false).rows().isEmpty(), "Composition filter included excluded cells");
         var phases = projector.result().rows();
         require(phases.size() == 4 && phases.stream().anyMatch(row -> row.phase() == FluidComposition.Phase.LIQUID && row.volumeCubicMetres() == .25)
                 && phases.stream().anyMatch(row -> row.phase() == FluidComposition.Phase.GAS && row.volumeCubicMetres() == .5),

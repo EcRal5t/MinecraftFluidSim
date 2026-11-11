@@ -167,7 +167,11 @@ public record ControllerSummary(
     public enum Phase { LIQUID, GAS, GRANULAR, COHERENT }
 
     public record ComponentRow(String id, Phase phase, double massKilograms, double volumeCubicMetres,
-                               TemperatureRange temperatureRange, boolean residualMass) {
+                               TemperatureRange temperatureRange, boolean residualMass, double amountMoles, boolean ion, double medianTemperatureK) {
+        public ComponentRow(String id, Phase phase, double massKilograms, double volumeCubicMetres,
+                            TemperatureRange temperatureRange, boolean residualMass) {
+            this(id, phase, massKilograms, volumeCubicMetres, temperatureRange, residualMass, Double.NaN, false, Double.NaN);
+        }
         public ComponentRow(String id, Phase phase, double massKilograms, double volumeCubicMetres,
                             TemperatureRange temperatureRange) {
             this(id, phase, massKilograms, volumeCubicMetres, temperatureRange, false);
@@ -175,7 +179,9 @@ public record ControllerSummary(
         public ComponentRow {
             if (id == null || id.isBlank() || id.length() > 128 || phase == null
                     || !(Double.isNaN(massKilograms) || Double.isFinite(massKilograms) && massKilograms >= 0)
-                    || !(Double.isNaN(volumeCubicMetres) || Double.isFinite(volumeCubicMetres) && volumeCubicMetres >= 0) || temperatureRange == null)
+                    || !(Double.isNaN(volumeCubicMetres) || Double.isFinite(volumeCubicMetres) && volumeCubicMetres >= 0) || temperatureRange == null
+                    || !(Double.isNaN(amountMoles) || Double.isFinite(amountMoles) && amountMoles >= 0)
+                    || !(Double.isNaN(medianTemperatureK) || temperatureRange.available() && medianTemperatureK >= temperatureRange.minimumK() && medianTemperatureK <= temperatureRange.maximumK()))
                 throw new IllegalArgumentException("Invalid controller component row");
         }
     }

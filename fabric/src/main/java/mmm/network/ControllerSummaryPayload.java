@@ -157,6 +157,9 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
             buffer.writeDouble(row.massKilograms());
             buffer.writeDouble(row.volumeCubicMetres());
             buffer.writeBoolean(row.residualMass());
+            buffer.writeDouble(row.amountMoles());
+            buffer.writeBoolean(row.ion());
+            buffer.writeDouble(row.medianTemperatureK());
             buffer.writeBoolean(row.temperatureRange().available());
             buffer.writeDouble(row.temperatureRange().minimumK());
             buffer.writeDouble(row.temperatureRange().maximumK());
@@ -184,8 +187,11 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
             var phase = buffer.readEnum(ControllerSummary.Phase.class);
             double mass = buffer.readDouble(), volume = buffer.readDouble();
             boolean residual = buffer.readBoolean();
+            double amount = buffer.readDouble();
+            boolean ion = buffer.readBoolean();
+            double median = buffer.readDouble();
             var componentRange = new ControllerSummary.TemperatureRange(buffer.readBoolean(), buffer.readDouble(), buffer.readDouble());
-            components.add(new ControllerSummary.ComponentRow(id, phase, mass, volume, componentRange, residual));
+            components.add(new ControllerSummary.ComponentRow(id, phase, mass, volume, componentRange, residual, amount, ion, median));
         }
 		return new ControllerSummary.Inventory(live, liquidVolume, liquidMass,
 				species, granularVolume, granularMass, coherentVolume, coherentMass,

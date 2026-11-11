@@ -83,7 +83,9 @@ public final class SampleAnalysis {
             mass = Mass.kilograms(contents.inventory().totalMassUnits());
             energy = contents.internalEnergy();
             for (var c : contents.inventory().components()) {
-                materials.add(new SampleAnalysisPayload.Material(c.componentId(), c.standardVolumeNanos() * 1e-9, Mass.kilograms(c.massUnits())));
+                double amount = c.massResidualUnits() == 0 && !c.species().isEmpty()
+                        ? c.species().stream().mapToDouble(s -> (double) s.amountQuanta() / ChemicalLimits.QUANTA_PER_MOL).sum() : Double.NaN;
+                materials.add(new SampleAnalysisPayload.Material(c.componentId(), c.standardVolumeNanos() * 1e-9, Mass.kilograms(c.massUnits()), amount));
                 if (c.massResidualUnits() != 0 || c.species().isEmpty()) completeSpecies = false;
                 for (var s : c.species()) species.merge(s.speciesId(), s.amountQuanta(), Math::addExact);
             }
@@ -157,11 +159,11 @@ public final class SampleAnalysis {
         // A container may have several carrier groups for the same material.
         var totals = new TreeMap<String, double[]>();
         for (var material : materials) {
-            var total = totals.computeIfAbsent(material.id(), id -> new double[2]);
-            total[0] += material.volumeM3(); total[1] += material.massKg();
+            var total = totals.computeIfAbsent(material.id(), id -> new double[3]);
+            total[0] += material.volumeM3(); total[1] += material.massKg(); total[2] += material.amountMol();
         }
         var carrierRows = totals.entrySet().stream().map(e -> new SampleAnalysisPayload.Material(
-                e.getKey(), e.getValue()[0], e.getValue()[1])).toList();
+                e.getKey(), e.getValue()[0], e.getValue()[1], e.getValue()[2])).toList();
         return new SampleAnalysisPayload(phase, volume, mass, temperature, energy,
                 completeSpecies && !species.isEmpty(), carrierRows, composition);
     }

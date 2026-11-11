@@ -25,12 +25,20 @@ public final class MultiplayerObservationGameTest {
         b.setPos(absolute.getX()+2,absolute.getY()+1,absolute.getZ()+1);
         var dimension=test.getLevel().dimension().identifier().toString();
         var first=UUID.randomUUID(); var second=UUID.randomUUID();
+        var levelKey=new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.LEVEL);
+        sensor.trendCatalog(java.util.List.of(levelKey));
         var requestA=new ProcessTrendRequest(absolute,dimension,first,0,true);
         var requestB=new ProcessTrendRequest(absolute,dimension,second,3,false);
         var responseA=ProcessTrendNetwork.response(a,requestA); var responseB=ProcessTrendNetwork.response(b,requestB);
-        test.assertTrue(responseA.available() && responseB.available() && responseA.points().equals(responseB.points())
+        test.assertTrue(responseA.available() && responseB.available() && responseA.series().equals(responseB.series())
             && responseA.session().equals(first) && responseB.session().equals(second) && responseB.sequence()==3,
             "Concurrent observers did not receive independent sessions and shared samples");
+        ProcessTrendNetwork.response(a,new ProcessTrendRequest(absolute,dimension,first,1,false,java.util.List.of(),false));
+        test.assertTrue(sensor.hasTrendObservers() && sensor.trendKeys().contains(levelKey),"Empty selection disturbed another observer");
+        ProcessTrendNetwork.response(b,new ProcessTrendRequest(absolute,dimension,second,4,false,java.util.List.of(),true));
+        test.assertTrue(sensor.hasTrendObservers() && sensor.trendKeys().isEmpty(),"Closing another observer removed empty catalog subscription");
+        ProcessTrendNetwork.response(a,new ProcessTrendRequest(absolute,dimension,first,2,false,java.util.List.of(),true));
+        test.assertTrue(!sensor.hasTrendObservers(),"Closed observers retained subscriptions");
         test.assertTrue(ProcessTrendNetwork.response(a,new ProcessTrendRequest(absolute,"minecraft:the_nether",first,0,true))==null,
             "Request crossed dimensions");
         b.setPos(absolute.getX()+40,absolute.getY(),absolute.getZ());

@@ -24,10 +24,10 @@ public final class ProcessTrendNetwork {
         if (!level.hasChunkAt(pos) || player.distanceToSqr(pos.getX()+.5,pos.getY()+.5,pos.getZ()+.5)>64
                 || !(level.getBlockEntity(pos) instanceof ProcessSensorBlockEntity sensor))
             return new ProcessTrendPayload(pos,request.dimension(),request.session(),request.sequence(),"","不可用",request.open(),false,List.of());
-        sensor.refreshTrendLease(level.getGameTime());
+        sensor.subscribeTrend(new ProcessSensorBlockEntity.TrendObserver(player.getUUID(),request.session()),request.sequence(),level.getGameTime(),request.selected(),request.close());
         return new ProcessTrendPayload(pos,request.dimension(),request.session(),request.sequence(),
                 sensor.snapshot().measure().name(),sensor.snapshot().status().name(),request.open(),true,
-                java.util.Arrays.stream(mmm.api.sensor.ProcessSensorSnapshot.Measure.values())
-                        .map(metric -> new ProcessTrendPayload.Series(metric,sensor.history(metric).points())).toList());
+                sensor.trendCatalog(), request.selected().stream()
+                        .map(key -> new ProcessTrendPayload.Series(key,sensor.trendHistory(key).points())).toList());
     }
 }

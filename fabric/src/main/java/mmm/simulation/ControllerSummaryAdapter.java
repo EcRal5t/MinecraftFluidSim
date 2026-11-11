@@ -106,7 +106,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
                 row.id(), ControllerSummary.Phase.valueOf(row.phase().name()), row.massKilograms(), row.volumeCubicMetres(),
                 Double.isFinite(row.minimumTemperatureK()) ? ControllerSummary.TemperatureRange.available(
                         row.minimumTemperatureK(), row.maximumTemperatureK()) : ControllerSummary.TemperatureRange.unavailable(),
-                row.residualMass())).toList();
+                row.residualMass(), row.amountMoles(), row.ion(), row.medianTemperatureK())).toList();
         return new ControllerSummary.Inventory(base.live(), base.liquidVolumeCubicMetres(), base.liquidMassKilograms(),
                 base.speciesQuanta(), base.granularSolidVolumeSvq(), base.granularMassKilograms(),
                 base.coherentSolidVolumeSvq(), base.coherentMassKilograms(), base.gasStandardVolumeNanos(),

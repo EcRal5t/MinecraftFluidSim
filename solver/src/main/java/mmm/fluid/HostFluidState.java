@@ -478,6 +478,9 @@ public final class HostFluidState {
 	public boolean hasPendingPhaseMotionWork() { return domainPhaseInventory.hasPendingPhaseMotionWork(); }
 	public double densityInCell(int x, int y, int z) { return domainPhaseInventory.densityInCell(x, y, z); }
     public FluidComposition observeComposition() { return FluidCompositionProjector.observe(this); }
+    public FluidComposition observeComposition(java.util.function.IntPredicate cellFilter) {
+        return FluidCompositionProjector.observe(this, java.util.Objects.requireNonNull(cellFilter));
+    }
 
 	public FluidCellInventoryView observeCellInventory(int x, int y, int z) { return domainPhaseInventory.observeCellInventory(x, y, z); }
 	public CellCarrierInventoryView observeCellCarriers(int x, int y, int z) { return domainPhaseInventory.observeCellCarriers(x, y, z); }

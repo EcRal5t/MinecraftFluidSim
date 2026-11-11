@@ -96,6 +96,10 @@ public final class FluidNetworkProtocolValidation {
                                 List.of(new ProcessTrendHistory.Point(.05,.2,false),new ProcessTrendHistory.Point(.1,.3,true))),
                         new ProcessTrendPayload.Series(mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE,
                                 List.of(new ProcessTrendHistory.Point(.05,101325,false)))));
+        var ionKey=new ProcessTrendPayload.SeriesKey("chem:h_plus","LIQUID",ProcessTrendPayload.Metric.AMOUNT,true,false);
+        var residualKey=new ProcessTrendPayload.SeriesKey("mmm:water","LIQUID",ProcessTrendPayload.Metric.MASS,false,true);
+        var selectedRequest=new ProcessTrendRequest(position,dimension,session,8,false,List.of(ionKey,residualKey));
+        var selectedTrend=new ProcessTrendPayload(position,dimension,session,8,"LEVEL","RUNNING",false,true,List.of(ionKey,residualKey),List.of(new ProcessTrendPayload.Series(ionKey,List.of(new ProcessTrendHistory.Point(1,2,false)))));
         var sampleRequest=new SampleAnalysisRequest(session,dimension,net.minecraft.world.InteractionHand.MAIN_HAND);
         var sample=new SampleAnalysisPayload(session, dimension, SampleAnalysisPayload.Phase.LIQUID, 1, 1000, 293.15, 1234, false,
                 List.of(new SampleAnalysisPayload.Material("mmm:water", 1, 1000)),
@@ -104,6 +108,10 @@ public final class FluidNetworkProtocolValidation {
         try {
             ProcessTrendRequest.CODEC.encode(buffer,trendRequest); require(trendRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"trend request codec");
             ProcessTrendPayload.CODEC.encode(buffer,trend); require(trend.equals(ProcessTrendPayload.CODEC.decode(buffer)),"trend response codec");
+            ProcessTrendRequest.CODEC.encode(buffer,selectedRequest); require(selectedRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"selected trend request codec");
+            var closeRequest=new ProcessTrendRequest(position,dimension,session,9,false,List.of(),true);
+            ProcessTrendRequest.CODEC.encode(buffer,closeRequest); require(closeRequest.equals(ProcessTrendRequest.CODEC.decode(buffer)),"closing a trend view is distinct from an empty selection");
+            ProcessTrendPayload.CODEC.encode(buffer,selectedTrend); require(selectedTrend.equals(ProcessTrendPayload.CODEC.decode(buffer)),"selected trend response codec");
             SampleAnalysisRequest.CODEC.encode(buffer,sampleRequest); require(sampleRequest.equals(SampleAnalysisRequest.CODEC.decode(buffer)),"sample request codec");
             SampleAnalysisPayload.CODEC.encode(buffer,sample); require(sample.equals(SampleAnalysisPayload.CODEC.decode(buffer)),"sample response codec");
         } finally { buffer.release(); }
@@ -235,9 +243,9 @@ public final class FluidNetworkProtocolValidation {
                                 new ControllerSummary.ComponentRow("mmm:h2o", ControllerSummary.Phase.LIQUID, 740.5, Double.NaN,
                                         ControllerSummary.TemperatureRange.available(278.5, 300.0)),
                                 new ControllerSummary.ComponentRow("mmm:h2o", ControllerSummary.Phase.GAS, 0.42, 321e-9,
-                                        ControllerSummary.TemperatureRange.available(341.25, 341.25)),
+                                        ControllerSummary.TemperatureRange.available(341.25, 341.25), false, 0.75, false, 341.25),
                                 new ControllerSummary.ComponentRow("mmm:solute", ControllerSummary.Phase.LIQUID, 0.4, Double.NaN,
-                                        ControllerSummary.TemperatureRange.available(278.5, 300.0)),
+                                        ControllerSummary.TemperatureRange.available(278.5, 300.0), false, 0.1, true, 290.0),
                                 new ControllerSummary.ComponentRow("mmm:water", ControllerSummary.Phase.LIQUID, 0.1, Double.NaN,
                                         ControllerSummary.TemperatureRange.available(278.5, 300.0), true))),
 				new ControllerSummary.Gates(true, false, true, true, false),

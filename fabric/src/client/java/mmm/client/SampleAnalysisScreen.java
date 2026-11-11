@@ -78,11 +78,12 @@ public final class SampleAnalysisScreen extends Screen {
         boolean paired = base != null;
         header("quantity", paired ? new String[]{"baseline", "current", "change"} : new String[]{"current"});
         quantity("mass", base == null ? Double.NaN : base.massKg(), sample.massKg(), "kg", true);
-        quantity("volume", base == null ? Double.NaN : base.volumeM3(), sample.volumeM3(), "m³",
-                base == null || base.phase() == sample.phase());
+        quantityByPhase(base, sample);
         quantity("temperature", base == null ? Double.NaN : base.temperatureK(), sample.temperatureK(), "K", true);
         quantity("energy", base == null ? Double.NaN : base.internalEnergyJ() / 1e6, sample.internalEnergyJ() / 1e6, "MJ", true);
-        header("materials", paired ? new String[]{"mass", "volume", "mass", "volume"} : new String[]{"mass", "volume"});
+        String currentMeasure = sample.phase() == SampleAnalysisPayload.Phase.GAS ? "amount" : "volume";
+        String baselineMeasure = base != null && base.phase() == SampleAnalysisPayload.Phase.GAS ? "amount" : "volume";
+        header("materials", paired ? new String[]{"mass", baselineMeasure, "mass", currentMeasure} : new String[]{"mass", currentMeasure});
         var materials = new TreeSet<String>();
         sample.materials().forEach(m -> materials.add(m.id()));
         if (base != null) base.materials().forEach(m -> materials.add(m.id()));
@@ -117,10 +118,23 @@ public final class SampleAnalysisScreen extends Screen {
         if (comparison.baseline() != null) cells.add(new Cell(comparable ? signed(current - baseline) + " " + unit : "—"));
         rows.add(new Row(text(key), cells, false));
     }
+    private void quantityByPhase(SampleAnalysisPayload baseline, SampleAnalysisPayload current) {
+        boolean gas = current.phase() == SampleAnalysisPayload.Phase.GAS;
+        boolean baselineGas = baseline != null && baseline.phase() == SampleAnalysisPayload.Phase.GAS;
+        var cells = new ArrayList<Cell>();
+        double currentValue = gas ? current.amountMol() : current.volumeM3();
+        double baselineValue = baseline == null ? Double.NaN : baselineGas ? baseline.amountMol() : baseline.volumeM3();
+        if (baseline != null) cells.add(new Cell(number(baselineValue) + (baselineGas ? " mol" : " m³")));
+        cells.add(new Cell(number(currentValue) + (gas ? " mol" : " m³")));
+        if (baseline != null) cells.add(new Cell(gas == baselineGas ? signed(currentValue - baselineValue) + (gas ? " mol" : " m³") : "—"));
+        rows.add(new Row(text(baseline != null && gas != baselineGas ? "volume_amount" : gas ? "amount_total" : "volume"), cells, false));
+    }
     private static void materialCells(List<Cell> cells, SampleAnalysisPayload value, String id) {
         var material = value.materials().stream().filter(m -> m.id().equals(id)).findFirst().orElse(null);
         cells.add(new Cell(number(material == null ? 0 : material.massKg()) + " kg"));
-        cells.add(new Cell(number(material == null ? 0 : material.volumeM3()) + " m³"));
+        if (value.phase() == SampleAnalysisPayload.Phase.GAS)
+            cells.add(new Cell(number(material == null ? value.completeSpecies() ? 0 : Double.NaN : material.amountMol()) + " mol"));
+        else cells.add(new Cell(number(material == null ? 0 : material.volumeM3()) + " m³"));
     }
     private static void speciesCells(List<Cell> cells, SampleAnalysisPayload value, String id) {
         var species = value.species().stream().filter(s -> s.id().equals(id)).findFirst().orElse(null);
@@ -132,11 +146,10 @@ public final class SampleAnalysisScreen extends Screen {
         cells.add(new Cell(number(moles)));
         cells.add(new Cell(number(species.massFraction() * 100), species.massFraction()));
         cells.add(new Cell(number(species.moleFraction() * 100)));
-        cells.add(new Cell(number(value.volumeM3() > 0 ? moles / value.volumeM3() : Double.NaN)));
+        cells.add(new Cell(number(value.phase() != SampleAnalysisPayload.Phase.GAS && value.volumeM3() > 0 ? moles / value.volumeM3() : Double.NaN)));
     }
     private int tableTop() {
-        return sample.phase() == SampleAnalysisPayload.Phase.GAS
-                || comparison.baseline() != null && comparison.baseline().phase() == SampleAnalysisPayload.Phase.GAS ? 62 : 50;
+        return 50;
     }
     private int visibleRows() { return Math.max(1, (height - tableTop() - 40) / 21); }
     private int maxOffset() { return Math.max(0, rows.size() - visibleRows()); }
@@ -193,9 +206,6 @@ public final class SampleAnalysisScreen extends Screen {
             case SOLID -> IndustrialUi.Icon.SOLID;
         }, x, 35, 14);
         g.text(font, heading, x + 20, 36, IndustrialUi.CYAN, false);
-        String phase = text(value.phase().name().toLowerCase(Locale.ROOT)).getString();
-        g.text(font, phase, x + w - 8 - font.width(phase), 36, IndustrialUi.MUTED, false);
-        if (value.phase() == SampleAnalysisPayload.Phase.GAS) g.text(font, text("standard"), x + 20, 48, IndustrialUi.MUTED, false);
     }
     private static String number(double value) {
         if (!Double.isFinite(value)) return "—";

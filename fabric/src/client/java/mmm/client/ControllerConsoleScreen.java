@@ -175,11 +175,7 @@ public final class ControllerConsoleScreen extends Screen {
         int volumeX = left + contentWidth * 57 / 100, tempX = left + contentWidth * 77 / 100;
         graphics.text(font, Component.translatable("screen.mmm.controller.column_component"), nameX, 82, IndustrialUi.MUTED, false);
         graphics.text(font, Component.translatable("screen.mmm.controller.column_mass"), massX, 82, IndustrialUi.MUTED, false);
-        graphics.text(font, Component.translatable("screen.mmm.controller.column_volume"), volumeX, 82, IndustrialUi.MUTED, false);
-        graphics.pose().pushMatrix();
-        graphics.pose().scale(0.75f, 0.75f);
-        graphics.text(font, Component.translatable("screen.mmm.controller.column_standard"), (int)(volumeX / 0.75f), 124, IndustrialUi.MUTED, false);
-        graphics.pose().popMatrix();
+        graphics.text(font, Component.translatable("screen.mmm.controller.column_quantity"), volumeX, 82, IndustrialUi.MUTED, false);
         graphics.text(font, Component.translatable("screen.mmm.controller.column_temperature"), tempX, 82, IndustrialUi.MUTED, false);
         var rows = summary.inventory().components();
         int visible = dashboardVisibleRows();
@@ -187,14 +183,33 @@ public final class ControllerConsoleScreen extends Screen {
         for (int i = scroll; i < Math.min(rows.size(), scroll + visible); i++) {
             var row = rows.get(i); int y = 106 + (i - scroll) * 16;
             graphics.fill(left, y, right, y + 16, i % 2 == 0 ? 0xff202f35 : 0xff19262c);
-            String phase = Component.translatable("screen.mmm.controller.phase_" + row.phase().name().toLowerCase(Locale.ROOT)).getString();
             String name = CompositionNames.label(row.id()).getString();
             if (row.residualMass()) name += " " + Component.translatable("screen.mmm.controller.residual_mass").getString();
-            tableText(graphics, name + " (" + phase + ")", nameX, massX - 4, y + 4);
+            var icon = CompositionNames.phaseIcon(row.phase(), row.ion());
+            if (icon != null) IndustrialUi.icon(graphics, icon, nameX, y + 2, 12);
+            tableText(graphics, name, nameX + (icon == null ? 0 : 14), massX - 4, y + 4);
             tableText(graphics, Double.isNaN(row.massKilograms()) ? "—" : decimal(row.massKilograms()) + " kg", massX, volumeX - 4, y + 4);
-            tableText(graphics, Double.isNaN(row.volumeCubicMetres()) ? "—" : UnitFormat.volume(row.volumeCubicMetres()), volumeX, tempX - 4, y + 4);
+            String quantity = row.ion() ? "" : row.phase() == ControllerSummary.Phase.GAS
+                    ? (Double.isNaN(row.amountMoles()) ? "—" : decimal(row.amountMoles()) + " mol")
+                    : (Double.isNaN(row.volumeCubicMetres()) ? "—" : UnitFormat.volume(row.volumeCubicMetres()));
+            tableText(graphics, quantity, volumeX, tempX - 4, y + 4);
             var range = row.temperatureRange();
-            tableText(graphics, range.available() ? decimal(range.minimumK()) + " – " + decimal(range.maximumK()) + " K" : "—", tempX, right - 2, y + 4);
+            if (range.available() && Double.isFinite(row.medianTemperatureK())) {
+                String center = decimal(row.medianTemperatureK());
+                String upper = "+" + temperatureDeviation(range.maximumK() - row.medianTemperatureK());
+                String lower = "−" + temperatureDeviation(row.medianTemperatureK() - range.minimumK());
+                tableText(graphics, center, tempX, right - 2, y + 4);
+                int deviationX = tempX + font.width(center) + 2;
+                graphics.enableScissor(deviationX, y, Math.max(deviationX + 1, right - 2), y + 16);
+                graphics.pose().pushMatrix();
+                graphics.pose().scale(.65f, .65f);
+                graphics.text(font, upper, (int)(deviationX / .65f), (int)(y / .65f), IndustrialUi.TEXT, false);
+                graphics.text(font, lower, (int)(deviationX / .65f), (int)((y + 9) / .65f), IndustrialUi.TEXT, false);
+                graphics.pose().popMatrix();
+                graphics.disableScissor();
+                int unitX = deviationX + (int)Math.ceil(Math.max(font.width(upper), font.width(lower)) * .65) + 2;
+                tableText(graphics, "K", unitX, right - 2, y + 4);
+            } else tableText(graphics, "—", tempX, right - 2, y + 4);
         }
         if (!summary.inventory().live()) graphics.text(font, Component.translatable("screen.mmm.controller.inventory_unloaded"), nameX, 110, IndustrialUi.MUTED, false);
         else if (rows.isEmpty()) graphics.text(font, Component.translatable("screen.mmm.controller.inventory_empty"), nameX, 110, IndustrialUi.MUTED, false);
@@ -202,7 +217,7 @@ public final class ControllerConsoleScreen extends Screen {
         String energy = inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—";
         graphics.text(font, Component.translatable("screen.mmm.controller.total_energy", energy), left + 4,
                 height - 70, IndustrialUi.TEXT, false);
-        if (rows.stream().anyMatch(row -> Double.isNaN(row.volumeCubicMetres())))
+        if (rows.stream().anyMatch(row -> !row.ion() && row.phase() != ControllerSummary.Phase.GAS && Double.isNaN(row.volumeCubicMetres())))
             graphics.text(font, Component.translatable("screen.mmm.controller.volume_unavailable"),
                     left + contentWidth / 2, height - 70, IndustrialUi.MUTED, false);
         IndustrialUi.scrollbar(graphics, width - 17, 106, visible * 16, scroll, visible, rows.size());
@@ -288,6 +303,9 @@ public final class ControllerConsoleScreen extends Screen {
 	private static Component localized(String family, Enum<?> value) {
 		return Component.translatable("screen.mmm." + family + "." + value.name().toLowerCase(Locale.ROOT));
 	}
+    private static String temperatureDeviation(double value) {
+        return String.format(Locale.ROOT, "%.2f", value).replaceAll("0+$", "").replaceAll("\\.$", "");
+    }
 	private static String decimal(double value) {
         String text = String.format(Locale.ROOT, "%.6g", value);
         int exponent = Math.max(text.indexOf('e'), text.indexOf('E'));

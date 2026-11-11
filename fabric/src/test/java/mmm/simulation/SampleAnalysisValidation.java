@@ -48,6 +48,40 @@ public final class SampleAnalysisValidation {
             throw new AssertionError("out-of-range mass fraction accepted");
         } catch (IllegalArgumentException expected) { }
         require(net.minecraft.world.item.ItemStack.matches(before, stack), "analysis changed the held container");
+        require(SampleAnalysisPayload.empty(SampleAnalysisPayload.Phase.GAS).amountMol() == 0,
+                "empty gas container did not report zero amount");
+        var gasRegistry = world.gasRegistry();
+        var gas = new mmm.fluid.air.GasInventory(gasRegistry.standardAmbientInventory().components().stream()
+                .map(c -> new mmm.fluid.air.GasComponentAmount(c.componentId(), c.standardVolumeNanos(),
+                        c.massUnits() - c.massResidualUnits(), c.species(), 0)).toList());
+        double gasEnergy = new mmm.thermal.GasThermalModel(world.thermalRegistry(), gasRegistry).internalEnergyAtTemperature(gas, 293.15);
+        var gasStack = world.bindActualContainerProfile(ContainerItemStacks.toStack(new mmm.transfer.GasContents(
+                gasRegistry.fingerprint(), world.chemicalRegistry().fingerprint(), gas, gasEnergy)));
+        var gasSample = SampleAnalysis.analyze(gasStack, world);
+        double expectedMoles = gas.components().stream().flatMap(c -> c.species().stream())
+                .mapToDouble(s -> (double) s.amountQuanta() / ChemicalLimits.QUANTA_PER_MOL).sum();
+        require(gasSample.completeSpecies() && Math.abs(gasSample.amountMol() - expectedMoles) < 1e-9,
+                "gas total did not use recorded species amounts");
+        for (var component : gas.components()) {
+            var row = gasSample.materials().stream().filter(m -> m.id().equals(component.componentId())).findFirst().orElseThrow();
+            double expected = component.species().stream().mapToDouble(s -> (double) s.amountQuanta() / ChemicalLimits.QUANTA_PER_MOL).sum();
+            require(Math.abs(row.amountMol() - expected) < 1e-9, "gas carrier amount did not use its species");
+        }
+        var original = gas.components().getFirst();
+        var incompleteComponent = new mmm.fluid.air.GasComponentAmount(original.componentId(), original.standardVolumeNanos(),
+                original.massUnits(), original.species(), 1);
+        var incompleteGas = new mmm.fluid.air.GasInventory(List.of(incompleteComponent));
+        double incompleteEnergy = new mmm.thermal.GasThermalModel(world.thermalRegistry(), gasRegistry).internalEnergyAtTemperature(incompleteGas, 293.15);
+        var incompleteStack = world.bindActualContainerProfile(ContainerItemStacks.toStack(new mmm.transfer.GasContents(
+                gasRegistry.fingerprint(), world.chemicalRegistry().fingerprint(), incompleteGas, incompleteEnergy)));
+        var incompleteSample = SampleAnalysis.analyze(incompleteStack, world);
+        require(!incompleteSample.completeSpecies() && Double.isNaN(incompleteSample.amountMol())
+                && Double.isNaN(incompleteSample.materials().getFirst().amountMol()), "incomplete gas amount was invented");
+        var gasBuffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            SampleAnalysisPayload.CODEC.encode(gasBuffer, gasSample);
+            require(gasSample.equals(SampleAnalysisPayload.CODEC.decode(gasBuffer)), "gas amounts changed during packet round-trip");
+        } finally { gasBuffer.release(); }
         var buffer = new FriendlyByteBuf(Unpooled.buffer());
         try {
             SampleAnalysisPayload.CODEC.encode(buffer, sample);

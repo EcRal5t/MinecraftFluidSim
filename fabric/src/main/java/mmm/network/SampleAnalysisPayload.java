@@ -15,8 +15,15 @@ public record SampleAnalysisPayload(UUID session, String dimension, Phase phase,
         boolean completeSpecies, List<Material> materials, List<Species> species) implements CustomPacketPayload {
     private static final int MAX_ROWS = 512;
     public enum Phase { LIQUID, GAS, SOLID }
-    public record Material(String id, double volumeM3, double massKg) {
-        public Material { identifier(id); nonnegative(volumeM3); nonnegative(massKg); }
+    public record Material(String id, double volumeM3, double massKg, double amountMol) {
+        public Material {
+            identifier(id); nonnegative(volumeM3); nonnegative(massKg);
+            if (!Double.isNaN(amountMol)) nonnegative(amountMol);
+        }
+        public Material(String id, double volumeM3, double massKg) { this(id, volumeM3, massKg, Double.NaN); }
+    }
+    public double amountMol() {
+        return completeSpecies ? species.stream().mapToDouble(s -> (double) s.amountQuanta() / mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).sum() : Double.NaN;
     }
     public record Species(String id, long amountQuanta, double massFraction, double moleFraction) {
         public Species {
@@ -25,7 +32,7 @@ public record SampleAnalysisPayload(UUID session, String dimension, Phase phase,
             fraction(massFraction); fraction(moleFraction);
         }
     }
-    public static final Type<SampleAnalysisPayload> TYPE = new Type<>(MmmMod.id("sample_analysis_v3"));
+    public static final Type<SampleAnalysisPayload> TYPE = new Type<>(MmmMod.id("sample_analysis_v4"));
     public static final StreamCodec<FriendlyByteBuf, SampleAnalysisPayload> CODEC = StreamCodec.of(
             SampleAnalysisPayload::encode, SampleAnalysisPayload::decode);
     public SampleAnalysisPayload {
@@ -50,14 +57,14 @@ public record SampleAnalysisPayload(UUID session, String dimension, Phase phase,
                 completeSpecies, materials, species);
     }
     public static SampleAnalysisPayload empty(Phase phase) {
-        return new SampleAnalysisPayload(phase, 0, 0, Double.NaN, Double.NaN, false, List.of(), List.of());
+        return new SampleAnalysisPayload(phase, 0, 0, Double.NaN, Double.NaN, true, List.of(), List.of());
     }
     @Override public Type<SampleAnalysisPayload> type() { return TYPE; }
     private static void encode(FriendlyByteBuf b, SampleAnalysisPayload p) {
         b.writeUUID(p.session); b.writeUtf(p.dimension, 256); b.writeEnum(p.phase);
         b.writeDouble(p.volumeM3); b.writeDouble(p.massKg); b.writeDouble(p.temperatureK); b.writeDouble(p.internalEnergyJ);
         b.writeBoolean(p.completeSpecies); b.writeVarInt(p.materials.size());
-        for (var m : p.materials) { b.writeUtf(m.id, 128); b.writeDouble(m.volumeM3); b.writeDouble(m.massKg); }
+        for (var m : p.materials) { b.writeUtf(m.id, 128); b.writeDouble(m.volumeM3); b.writeDouble(m.massKg); b.writeDouble(m.amountMol); }
         b.writeVarInt(p.species.size());
         for (var s : p.species) { b.writeUtf(s.id, 128); b.writeVarLong(s.amountQuanta); b.writeDouble(s.massFraction); b.writeDouble(s.moleFraction); }
     }
@@ -67,7 +74,7 @@ public record SampleAnalysisPayload(UUID session, String dimension, Phase phase,
         boolean complete = b.readBoolean();
         int count = count(b);
         var materials = new ArrayList<Material>(count);
-        for (int i = 0; i < count; i++) materials.add(new Material(b.readUtf(128), b.readDouble(), b.readDouble()));
+        for (int i = 0; i < count; i++) materials.add(new Material(b.readUtf(128), b.readDouble(), b.readDouble(), b.readDouble()));
         count = count(b);
         var species = new ArrayList<Species>(count);
         for (int i = 0; i < count; i++) species.add(new Species(b.readUtf(128), b.readVarLong(), b.readDouble(), b.readDouble()));
