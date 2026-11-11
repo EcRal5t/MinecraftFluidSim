@@ -48,19 +48,6 @@
 
 执行方式见 [验证指南](../maintenance/validation.md#host)。
 
-## 本文内容
-
-- [世界能力包](#世界能力包)
-- [启动判定](#启动判定)
-- [文件与职责边界](#文件与职责边界)
-- [提交模型](#提交模型)
-- [完整代次](#完整代次)
-- [功能布局](#功能布局)
-- [读取与 admission](#读取与-admission)
-- [恢复](#恢复)
-- [发布前同步](#发布前同步)
-- [故障、清理与删除](#故障清理与删除)
-
 ## 世界能力包
 
 `mmm/world-capabilities/` 保存世界唯一的世界能力包：五个 world registry snapshot 加一份 `profile.nbt`。它是已有库存的唯一解释——区域载荷里的 stable ID 只能按这个包的 registry 解析，区域 section 不复制 registry。
@@ -119,9 +106,9 @@ manifest/section/extension 不引用 `BlockPos`、`ResourceKey`、live region �
 `RegionCheckpointAssembler` 按 pure/material/chemical/granular/thermal layout 组装完整 section、extension 和总账，`RegionCheckpointValidator` 审计跨 section
 identity/ownership/ledger，`RegionCheckpointRestorer` 只重建既有 immutable solver state。
 
-`RegionState` 只是 durable store 的 27 行 DTO adapter，不 capture 或 reconstruct live runtime。
-`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止原始数据；
-`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C。
+`RegionState` 作为持久化存储的 DTO 适配器，承接 NBT 序列化数据；运行时状态的捕获与重构分别由 `MinecraftRegionCheckpointSource` 和 `RegionCheckpointRestorer` 负责。
+`RegionStateCodec` 负责编解码 ACTIVE 状态的 NBT；`RemovedRegionManifest` 记录已移除区域的零库存终止元数据；
+`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C 校验码。
 
 `RegionGenerationStore` 独占 prepare/commit/abort/read/discover 状态机和 HEAD 发布顺序。
 它组合 package-private `RegionHeadStore`、`ActiveGenerationStore`、`RemovedGenerationStore`、`RemovedQuarantineStore` 与 `RegionDiscovery`：子 store

@@ -1,6 +1,6 @@
 # 空间选区与环境热场重设计
 
-本文给出空间选区、原版材料和附近环境温度的实施方案。实施状态归[当前计划](solver-consolidation-plan.md)，成本实测归[验证指南](../maintenance/validation.md#environment-thermal-cost)。运行入口已切换为空间选区、世界共享热库存和共同 checkpoint；当前测量记录见验证指南。
+本文给出空间选区、原版材料和附近环境温度的实施方案。实施状态归[当前计划](../../roadmap/solver-consolidation-plan.md)，成本实测归[验证指南](../../maintenance/validation.md#environment-thermal-cost)。运行入口已切换为空间选区、世界共享热库存和共同 checkpoint；当前测量记录见验证指南。
 
 ## 玩家操作与计算空间
 

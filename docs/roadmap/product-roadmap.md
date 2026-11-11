@@ -6,7 +6,7 @@
 
 ## 自由构造工业玩法
 
-按[后续实施计划](emergent-industrial-gameplay-plan.md)的 P0—P6 推进物料箱、连续进出料、阀门、传感控制、活塞适配、筛分、固定表面吸附及催化。每种工艺由基础方块、真实几何和共同物理规则组成，三维操作与判定见[测试规格](industrial-simulation-test-plan.md)。
+按[后续实施计划](../archive/proposals/emergent-industrial-gameplay-plan.md)的 P0—P6 推进物料箱、连续进出料、阀门、传感控制、活塞适配、筛分、固定表面吸附及催化。每种工艺由基础方块、真实几何和共同物理规则组成，三维操作与判定见[测试规格](../archive/proposals/industrial-simulation-test-plan.md)。
 
 机构建造和驱动复用原版或外部 Mod。能源生产、消耗品能源、传动轴、电网、叶轮、风机、浮顶与涡轮按后续独立需求安排；气固流化、燃烧、气化和炼油网络按目标工艺收益评审。
 

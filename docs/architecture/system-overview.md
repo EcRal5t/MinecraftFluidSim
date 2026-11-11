@@ -265,7 +265,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [PipeRuntime](../../fabric/src/main/java/mmm/simulation/PipeRuntime.java)、[PipeRegionExchange](../../fabric/src/main/java/mmm/simulation/PipeRegionExchange.java)：世界管网、区域交接与生命周期。
 - 验证入口：`pipe-network`、`PipeLiquidTransportValidation` 与 `PipeWallHeatValidation`。
 
-区域创建与环境热场的完整方案见[空间选区与环境热场](../roadmap/region-and-environment-heat-plan.md)，涵盖空间选择、范围增长及世界坐标热库存；实施状态由当前计划维护。
+区域创建与环境热场的完整方案见[空间选区与环境热场](../archive/proposals/region-and-environment-heat-plan.md)，涵盖空间选择、范围增长及世界坐标热库存；实施状态由当前计划维护。
 
 <a id="performance"></a>
 <a id="diagnosis"></a>

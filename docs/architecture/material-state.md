@@ -32,15 +32,6 @@
 
 执行方式见 [验证指南](../maintenance/validation.md#host)。
 
-## 本文内容
-
-- [权威数据](#权威数据)
-- [Registry 与运行时 handle](#registry-与运行时-handle)
-- [求解器边界](#求解器边界)
-- [表面与展示](#表面与展示)
-- [跨层表示](#跨层表示)
-- [功能配置](#功能配置)
-
 ## 权威数据
 
 - `LiquidCellInventory.Stock` 按单元、材料和固定开放分量保存体积、整数质量、组成、内能。

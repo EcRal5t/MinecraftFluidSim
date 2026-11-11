@@ -22,13 +22,13 @@
 
 Fabric 事务可模拟、嵌套、提交和回滚；存储实现需在事务最终提交前保存快照，回滚恢复全部槽位，只有最终提交才通知持久化。测试覆盖空槽、满槽、不支持的物品、逐个容器、组件保留、嵌套回滚及锁定槽。对应入口为 `fabric/src/main/java/mmm/block/MaterialBoxBlockEntity.java`、`fabric/src/main/java/mmm/simulation/IndustrialOperations.java`，区域和容器事务见 `fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java`、`OwnershipTransactionCoordinator.java`。
 
-上游 `content/kinetics/mechanicalArm/ArmInteractionPoint.java:102,107–123` 和 `foundation/blockEntity/behaviour/inventory/InvManipulationBehaviour.java:63–66,94–104` 使用 Fabric 物品存储。本轮验证 Fabric 26.2 存储接口，Create 实际调用须待对应版本发布后验证。Create 不作为本轮编译或运行的硬依赖。
+上游 `content/kinetics/mechanicalArm/ArmInteractionPoint.java` 和 `foundation/blockEntity/behaviour/inventory/InvManipulationBehaviour.java` 使用 Fabric 物品存储。本轮验证 Fabric 26.2 存储接口，Create 实际调用须待对应版本发布后验证。Create 不作为本轮编译或运行的硬依赖。
 
-上游 `AllArmInteractionPointTypes` 登记各类专用目标，机械臂通过 `ArmInteractionPointType.getPrimaryType` 选择可用交互点。物料箱提供 `ItemStorage` 后可准备漏斗与箱体的搬运路径，机械臂可经漏斗间接操作；直接选择箱体需在真实 Create 版本注册相应交互点类型。上游 `ItemCountDisplaySource.java:44–49` 在事务中模拟逐槽提取来计数，因此该显示代表当前可提取数量，受未决事务锁保护的槽不计入该数值。
+上游 `AllArmInteractionPointTypes` 登记各类专用目标，机械臂通过 `ArmInteractionPointType.getPrimaryType` 选择可用交互点。物料箱提供 `ItemStorage` 后可准备漏斗与箱体的搬运路径，机械臂可经漏斗间接操作；直接选择箱体需在真实 Create 版本注册相应交互点类型。上游 `ItemCountDisplaySource.java` 在事务中模拟逐槽提取来计数，因此该显示代表当前可提取数量，受未决事务锁保护的槽不计入该数值。
 
 ## 流体管道与物质账
 
-上游 `content/fluids/FluidNetwork.java:185–240` 在嵌套事务中模拟，再于外层事务提交输入与输出；`content/fluids/transfer/GenericItemFilling.java` 和 `GenericItemEmptying.java` 使用 `FluidStorage.ITEM` 与容器上下文。Fabric 26.2 的 `FluidConstants.BUCKET` 为 81000 droplets，本项目一桶为 10⁹ nanos，即 81 droplets 对应 10⁶ nanos（1 L）。若开放低于该量子的物质交接，必须为双方保存可恢复的精确余数。
+上游 `content/fluids/FluidNetwork.java` 在嵌套事务中模拟，再于外层事务提交输入与输出；`content/fluids/transfer/GenericItemFilling.java` 和 `GenericItemEmptying.java` 使用 `FluidStorage.ITEM` 与容器上下文。Fabric 26.2 的 `FluidConstants.BUCKET` 为 81000 droplets，本项目一桶为 10⁹ nanos，即 81 droplets 对应 10⁶ nanos（1 L）。若开放低于该量子的物质交接，必须为双方保存可恢复的精确余数。
 
 `FluidVariant` 可携带组件，其数量可能被拆分和合并；把整批物种、质量或内能直接复制到每份 variant 会重复库存。接入前要选定明确可表示的材料、组成、温度和剩余量规则，分份与合并共用项目的整数库存和能量结算。普通水也要记录来源和能量；不同组成或温度的流体按已定义混合模型处理。
 
@@ -40,19 +40,19 @@ MMM 的 `ProcessSensorSnapshot` 保存测量种类、状态、可选读数、区
 
 聊天提示、配置对话和曲线摘要共同使用快照。方块实体初始包和更新包携带同一有界摘要，状态／数值／实例变化即时通知，相同数值仅代次或时间变化时最多每 20 tick 更新。观测不写入世界存档，重载回到等待；重新配置清除旧测点结果。详细字段和同步契约见[外部 API](../architecture/external-api.md)。
 
-上游 `api/behaviour/display/DisplaySource.java:41–48,146–152` 登记来源并生成文本，`content/redstone/displayLink/DisplayLinkBlockEntity.java:71–132` 调度目标更新。Create 26.2 可用后，服务端 Display Link 直接读取传感器当前已接受的读数和状态；配置和刷新间隔遵循实际版本接口。
+上游 `api/behaviour/display/DisplaySource.java` 登记来源并生成文本，`content/redstone/displayLink/DisplayLinkBlockEntity.java` 调度目标更新。Create 26.2 可用后，服务端 Display Link 直接读取传感器当前已接受的读数和状态；配置和刷新间隔遵循实际版本接口。
 
-上游 `content/equipment/goggles/GoggleOverlayRenderer.java:97–111` 从客户端方块实体读取 `api/equipment/goggles/IHaveGoggleInformation` 提示。联动适配器可以读取已同步的 `ProcessSensorBlockEntity.snapshot()`；Create 的接口实现和注册位于版本绑定层。阈值开关读取整数范围，物理量的缩放和极值须结合实际版本与支持量程选定。测试侧的 `FakeCreateDisplayValidation` 消费正式服务端快照与客户端摘要，覆盖正常读数、单位、暂停、无样品、不可用、重配置与重载。
+上游 `content/equipment/goggles/GoggleOverlayRenderer.java` 从客户端方块实体读取 `api/equipment/goggles/IHaveGoggleInformation` 提示。联动适配器可以读取已同步的 `ProcessSensorBlockEntity.snapshot()`；Create 的接口实现和注册位于版本绑定层。阈值开关读取整数范围，物理量的缩放和极值须结合实际版本与支持量程选定。测试侧的 `FakeCreateDisplayValidation` 消费正式服务端快照与客户端摘要，覆盖正常读数、单位、暂停、无样品、不可用、重配置与重载。
 
 ## 运动结构与流体
 
 ### 组装、采样和拆解
 
-上游 `content/contraptions/piston/MechanicalPistonBlockEntity.java:49–88` 组装并从世界移除方块后创建运动实体；`bearing/MechanicalBearingBlockEntity.java:167–195` 采用相同职责链。`Contraption.java:1062,1154` 负责移除和放回，`AbstractContraptionEntity.java:668–695` 停止、还原并移除实体。
+上游 `content/contraptions/piston/MechanicalPistonBlockEntity.java` 组装并从世界移除方块后创建运动实体；`bearing/MechanicalBearingBlockEntity.java` 采用相同职责链。`Contraption.java` 负责移除和放回，`AbstractContraptionEntity.java` 停止、还原并移除实体。
 
 MMM 的 `MinecraftWorldUpdates` 负责原版活塞运动和固定碰撞交接；接入 Create 时扩展同一职责链：组装时把固定形状交给运动体，拆解时把已接受运动形状交还固定碰撞。已接受代、世界当前状态和挂起的目标运动共同决定交接时点；遇到不可用区域保留已接受状态。停止、区块卸载、重新加载和结构删除也要处理完整生命周期。
 
-上游 `Contraption.getBlocks()` 提供局部方块，`getContraptionWorld()` 提供查询碰撞所需的局部世界；`Contraption.java:1482–1501` 根据各方块 `getCollisionShape` 生成局部方盒。实体局部到世界的变换见 `AbstractContraptionEntity.toGlobalVector/toLocalVector`（:344–370），旋转中心为局部 `(0.5, 0.5, 0.5)`，再叠加实体 anchor。适配器在服务端保存上一次已接受位姿及当前实际位姿，按区域时间推进采集累计运动；停机时保留位置。局部形状以实体 UUID、局部坐标和确定排序的形状分片建立稳定身份。
+上游 `Contraption.getBlocks()` 提供局部方块，`getContraptionWorld()` 提供查询碰撞所需的局部世界；`Contraption.java` 根据各方块 `getCollisionShape` 生成局部方盒。实体局部到世界的变换见 `AbstractContraptionEntity.toGlobalVector/toLocalVector`，旋转中心为局部 `(0.5, 0.5, 0.5)`，再叠加实体 anchor。适配器在服务端保存上一次已接受位姿及当前实际位姿，按区域时间推进采集累计运动；停机时保留位置。局部形状以实体 UUID、局部坐标和确定排序的形状分片建立稳定身份。
 
 `MinecraftRegionInputs.captureEntities` 当前将普通实体的大包围盒作为运动体。Create 结构接入时需从普通实体路径排除，再提交其实际局部形状，避免重复占容。区域每步现有 `MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP=256` 覆盖所有运动体；大结构需按完整结构设计形状合并和预算，使用明确的支持范围，保持全部实际碰撞，超出时给出可观察结果。
 

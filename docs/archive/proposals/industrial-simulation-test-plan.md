@@ -8,7 +8,7 @@
 - 直通主流道优先留约 2 m 可解析截面；筛和阀门使用各自声明的通流面。气体上升与液体下降的窄通道在空间上分开。
 - 几何由盒体、管道、隔板、真实阀门／筛和有限热墙组合，沿正式建域、碰撞采集与材料定义加载建立状态。
 - 端口和物料箱通过正式计划／提交交接物质。普通热源、运动提供器是明确的外部热／功输入，收支包含这些来源。
-- 核心小型验证放在现有 GPU／model 测试目录；三维流程优先扩展 [GpuProcessFlowsValidation](../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)。真实方块动作、交互与持久事务放在 Fabric 测试层。活塞场景使用真实 ServerLevel、原版红石与移动方块实体。
+- 核心小型验证放在现有 GPU／model 测试目录；三维流程优先扩展 [GpuProcessFlowsValidation](../../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)。真实方块动作、交互与持久事务放在 Fabric 测试层。活塞场景使用真实 ServerLevel、原版红石与移动方块实体。
 - 各场景只选择能回答新增风险的检查：物质与元素按整数闭合，能量按现有离散误差口径，局部容量及受阻状态有明确解释。共享账检查沿现有入口复用。
 - 装置沿正式时间步、在线端口配额和暂停策略推进。功能交付检查实际物料、动作与收支；完整步预算、诊断导出及存档成本在下一轮专项优化中分别计量。
 

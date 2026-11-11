@@ -60,32 +60,4 @@ HUD 使用 0.8 倍字号。系统读数与区域求解读数分组，标签左�
 
 `:fabric:runHostValidation -PhostValidation=protocol,audit,lifecycle,sensor-display` 覆盖成分投影、样品数值与协议、多指标历史及区间、显示状态隔离、诊断快照和日志。`:fabric:assemble :fabric:runArchitectureValidation` 检查资源打包、客户端／专服编译边界和模块结构。
 
-实机使用隔离目录 `build/validation/ui-live/run`；截图与本轮结果保存在 `build/validation/ui-density/`。验收固定 1600×900、GUI 缩放 2，检查控制器成分表、双样品对照、多指标曲线／时间区间及 F8／F9。
-
-### 成分与同图曲线验证（2026-11-11）
-
-源码及离线逻辑验证通过：质量加权中位数、成分 mol、离子体积排除、统一名称、共同坐标量程、数据包编解码，以及真实库存的双成分采样和空间范围筛选。会话测试覆盖两名玩家使用相同会话编号时的隔离、空选择、关闭、到期和重新选择。完整构建、游戏测试源码编译与架构检查通过，记录位于 `build/validation/component-trends/`。本轮未启动游戏、查看图片或截图。
-
-### 前轮实机记录（2026-11-11）
-
-协议、日志、生命周期、传感器验证以及完整构建通过。最新客户端布局使用独立输出目录编译，客户端状态验证及架构检查通过，记录位于 `build/validation/ui-density/`。
-
-实机观察到控制器成分／残余质量行、样品对照表、F8／F9 显隐和展开、三项连续曲线、冻结查看与 90–100 秒自定义区间。`final/controller.png` 为前轮控制器截图；`sample-observed.png`、`trend-range-observed.png` 与 `hud-expanded.png` 保存已观察的界面。最后的样品紧凑排版、调试面板栏位平衡及曲线数字／区间标签整理已编译，补拍在用户按 Esc 中止实机操作后停止。客户端保留原状态。
-
-运行日志保存在 `runtime-observed.log`。旧测试区域 `03567bd8` 的已有 `status=32` 数值故障受到保护性暂停，区域 `43544a7c` 用于本轮连续读数验证；该数值故障不在界面变更范围内。
-
-## 生成提示词
-
-### 独立徽标
-
-> Use case: logo-brand. Asset type: final transparent pixel-art emblem for Minecraft industrial science mod 'Matter, Motion & Mechanics' (MMM), mod-list icon and game GUI. Primary request: romantic starry exploration meets humble industrial machinery. ONE compact centered emblem: a broad copper orbital ring around a deep midnight-blue miniature planet, a small warm ivory four-point guiding star above, a thin cyan light path through the center. Subtle dark-steel mechanical brackets make the orbit feel engineered, but poetic, quiet, hopeful, not military or corporate. Strong simple silhouette readable at 32px, designed on a precise 64x64 pixel grid enlarged with nearest-neighbor square pixels. Restrained palette of midnight steel #141f29, slate #344955, oxidized copper #bd8c5b, muted cyan #6fc8cc, ivory #e1ddc7. Flat orthographic sprite, 2-3 shade ramps only, no smooth gradients, no blur, no tiny noise, no 3D render. Transparent actual alpha around the emblem; fully isolated, balanced square composition, generous 6% transparent padding. No lettering, no words, no border around canvas, no mockup, no watermark. This will be paired with a separate precise MMM pixel wordmark by the application.
-
-### 工业图标
-
-> Use case: stylized-concept. Asset type: production pixel-art industrial GUI icon sprite sheet for Minecraft mod. Exactly 4 columns and 4 rows of separate icons, 16 total, evenly spaced, each centered within one equal square cell, all on ACTUAL TRANSPARENT ALPHA. No grid lines or labels. Canvas square. Keep every glyph within inner 65% of its cell with generous clear padding. Designed at conceptual 128x128 pixels (each icon tile 32x32), enlarged nearest-neighbor: simple bold 1-2 pixel strokes, clean hard square pixels. Row 1 from left: thermometer with amber bulb; circular cyan pressure dial; cyan rightward flow arrow with three stream lines; blue liquid droplet. Row 2: pale cyan gas puff of three squares; ochre pile of solid grains; glass sample vial with cyan contents; copper pipe handwheel valve. Row 3: cyan play triangle; copper pause two bars; amber warning triangle with exclamation; red octagonal fault stop with exclamation. Row 4: cyan rising line chart with axes; steel settings cog with copper hub; ivory lightning bolt; cyan three-line log/document icon. Cohesive palette deep steel outline #1c2c37, subdued cyan #6fc8cc, copper #bd8c5b, ivory #e1ddc7, amber #d6a34e, red #d66c61. Flat orthographic small game sprites, clear distinct silhouettes, no words, no typography besides the two exclamation marks, no decorative backgrounds, no panels, no perspective, no blur, no smooth gradients, no outer shadows. Every icon should be readable at 16 to 24 screen pixels. Uniform size and shared industrial visual language.
-
-### MMM 字标
-
-以独立徽标原图为身份参考。
-
-> Use case: logo-brand. Create a transparent horizontal pixel-art logo lockup using the attached orbital planet/star emblem as the exact identity reference. Left 35%: preserve the compact copper orbit, cyan trajectory, midnight planet, steel mechanism and ivory north star, simplify only enough to align cleanly to square pixels. Right 60%: large highly legible custom pixel letters exactly 'MMM' (three capital M letters, M M M), ivory faces with dark-steel one-pixel outline and restrained copper lower edges. Leave a calm gap between emblem and letters, centered vertically, generous transparent padding. Wide composition roughly 3:1 aspect ratio. Strict game pixel art, like a 192x64 pixel design enlarged nearest-neighbor; flat orthographic, hard square pixels, simple readable silhouette. Actual alpha transparency. No additional text, no subtitle, no landscape, no vignette, no blur, no gradients, no mockup or watermark. Romantic scientific exploration, matching the attached mark.
+实机验收固定 1600×900、GUI 缩放 2，检查控制器成分表、双样品对照、多指标曲线／时间区间及 F8／F9 诊断 HUD。

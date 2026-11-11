@@ -49,19 +49,6 @@
 
 执行方式见 [验证指南](../maintenance/validation.md#host)。 Jade 入口分为[服务端](../../fabric/src/main/java/mmm/compat/jade/)和[客户端](../../fabric/src/client/java/mmm/compat/jade/)。
 
-## 本文内容
-
-- [当前稳定范围](#当前稳定范围)
-- [请求](#请求)
-- [结果和失败语义](#结果和失败语义)
-- [Observation](#observation)
-- [测点只读摘要](#测点只读摘要)
-- [外部规定运动结构](#外部规定运动结构)
-- [内置探针与控制界面](#内置探针与控制界面)
-- [Jade 观察适配](#jade-观察适配)
-- [Committed event](#committed-event)
-- [受控转移](#受控转移)
-
 ## 当前稳定范围
 
 同步 Query API 读取已提交区域；Transfer API 通过持久容器执行液体与颗粒转移；committed-event API 发布容器耐久提交完成通知。

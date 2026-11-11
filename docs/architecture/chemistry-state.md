@@ -22,16 +22,6 @@
   - 测试选择器：`region-state`
 
 执行方式见 [验证指南](../maintenance/validation.md#host)。
-
-## 本文内容
-
-- [Registry](#registry)
-- [独立保存的数据](#独立保存的数据)
-- [反应模型](#反应模型)
-- [求解顺序](#求解顺序)
-- [跨层边界](#跨层边界)
-- [功能布局](#功能布局)
-
 单位与内部编码统一见[设计书](system-overview.md#units)。
 
 ## Registry

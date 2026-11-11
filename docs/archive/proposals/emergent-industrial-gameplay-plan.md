@@ -2,7 +2,7 @@
 
 近期目标是用少量基础方块形成连续的分离、换热、过滤、吸附与催化工艺。新增内容集中于阀门、筛、传感器、抽象物料箱及其交互；普通墙、填料和真实流道承担装置结构。活动机构由原版活塞或外部 Mod 提供，MMM 完成几何、流体作用、惯量响应和机械功交接。
 
-当前实现与源码索引见[设计书](../architecture/system-overview.md)，进度由[主实施计划](solver-consolidation-plan.md)维护，验证方法与预算见[验证指南](../maintenance/validation.md)。本计划对应的三维场景及操作规格见[工业装置仿真测试规格](industrial-simulation-test-plan.md)。
+当前实现与源码索引见[设计书](../../architecture/system-overview.md)，进度由[主实施计划](../../roadmap/solver-consolidation-plan.md)维护，验证方法与预算见[验证指南](../../maintenance/validation.md)。本计划对应的三维场景及操作规格见[工业装置仿真测试规格](industrial-simulation-test-plan.md)。
 
 ## 实施顺序
 
@@ -136,14 +136,14 @@
 
 ## 当前代码入口
 
-- [MmmBlocks](../../fabric/src/main/java/mmm/block/MmmBlocks.java)：新增基础方块及既有接口注册。
-- [MinecraftProcessOperations](../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、局部取样与停止操作。
-- [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)：有限转移、持久回执与恢复。
-- [FluidRegionWorldInteraction](../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java)：批碰撞刷新和私有后继。
-- [MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)：静态 VoxelShape 与活塞移动形状采集。
-- [MovingBodyFluidCoupling](../../model/src/main/java/mmm/world/MovingBodyFluidCoupling.java)：形状、中心、线速度、角速度与轴向逆惯量响应。
-- [VulkanEntityBodyCoupling](../../gpu-kernel/src/main/java/mmm/gpu/VulkanEntityBodyCoupling.java)：占据、压力和剪切。
-- [VulkanMixturePressure](../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixturePressure.java)：共同压力和有限质量响应。
-- [VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：热化学及表面交换阶段归属。
-- [ChemicalReaction](../../model/src/main/java/mmm/chemistry/ChemicalReaction.java)：计量和正逆动力学。
-- [GpuProcessFlowsValidation](../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)：共享工业布局、实际箱转移、组合工艺与恢复流程。
+- [MmmBlocks](../../../fabric/src/main/java/mmm/block/MmmBlocks.java)：新增基础方块及既有接口注册。
+- [MinecraftProcessOperations](../../../fabric/src/main/java/mmm/simulation/MinecraftProcessOperations.java)：规定运动、局部取样与停止操作。
+- [FabricTransferApi](../../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)：有限转移、持久回执与恢复。
+- [FluidRegionWorldInteraction](../../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java)：批碰撞刷新和私有后继。
+- [MinecraftCollisionWorldPort](../../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)：静态 VoxelShape 与活塞移动形状采集。
+- [MovingBodyFluidCoupling](../../../model/src/main/java/mmm/world/MovingBodyFluidCoupling.java)：形状、中心、线速度、角速度与轴向逆惯量响应。
+- [VulkanEntityBodyCoupling](../../../gpu-kernel/src/main/java/mmm/gpu/VulkanEntityBodyCoupling.java)：占据、压力和剪切。
+- [VulkanMixturePressure](../../../gpu-kernel/src/main/java/mmm/gpu/VulkanMixturePressure.java)：共同压力和有限质量响应。
+- [VulkanRegionReactions](../../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：热化学及表面交换阶段归属。
+- [ChemicalReaction](../../../model/src/main/java/mmm/chemistry/ChemicalReaction.java)：计量和正逆动力学。
+- [GpuProcessFlowsValidation](../../../fabric/src/test/java/mmm/simulation/GpuProcessFlowsValidation.java)：共享工业布局、实际箱转移、组合工艺与恢复流程。

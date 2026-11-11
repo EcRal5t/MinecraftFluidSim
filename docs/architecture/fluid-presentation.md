@@ -29,15 +29,15 @@
 
 ## Iris 26.2 接口依据
 
-本地 `Iris` 仓库的 `origin/26.2` 提供 `IrisApi.assignPipeline(RenderPipeline, IrisProgram)`。
-`IrisProgram.TRANSLUCENT` 经 `ProgramId.fromAPI` 映射到 `gbuffers_water`；匹配还涉及管线顶点格式。
-当前实现依据本地 `origin/26.2` 提交 `8f3a7a35d`：Minecraft 26.2、Iris 1.11.2、Sodium 0.9.1。该分支的阴影集成使用内部接口，版本调用集中在 `IrisFluidCompatibility` 和 `IrisFluidShadowMixin`。
-兼容实现通过反射读取已安装 Iris，依赖仍为可选；接口不匹配时保留具体调用与异常原因。`IrisPipelines.copyPipeline(TRANSLUCENT_TERRAIN, materialPipeline)` 同时复制主画面和阴影程序映射，使水与其他材料沿 `gbuffers_water`／`shadow_water` 的材质分支执行。诊断管线通过公开 `assignPipeline(..., BASIC)` 注册。
+当前展示管线以 Iris 1.11.2 和 Sodium 0.9.1（对应 Minecraft 26.2）为基准实现。
+Iris 公开 API `IrisApi.assignPipeline(RenderPipeline, IrisProgram)` 将 `IrisProgram.TRANSLUCENT` 经 `ProgramId.fromAPI` 映射到 `gbuffers_water`，匹配时需核对管线顶点格式。
+阴影集成与材质上下文依赖 Iris 内部接口。对这些内部接口的反射调用与版本兼容适配集中封装在 `IrisFluidCompatibility` 与 `IrisFluidShadowMixin` 中。
 
-`IrisFluidShadowMixin` 在 `ShadowRenderer.renderShadows` 的透明区块组绘制之后，使用同一材料网格与主相机坐标提交。调用位于包允许的透明阴影流程中。Iris 的 `MixinGlCommandEncoder` 在阴影阶段保持阴影 viewport 和 framebuffer，实际目标由阴影程序接管；后端通过标准 Blaze3D pass 提交顶点。
+兼容实现通过反射探测已安装的 Iris，依赖仍为可选：未安装 Iris 时平稳回退到原生透明渲染；若内部接口不匹配，抛出包含具体调用位置与异常原因的诊断信息。`IrisPipelines.copyPipeline(TRANSLUCENT_TERRAIN, materialPipeline)` 同时复制主画面和阴影程序映射，使水与其他材料沿 `gbuffers_water`／`shadow_water` 的材质分支执行；诊断管线通过公开的 `assignPipeline(..., BASIC)` 注册。
 
-`WorldRenderingSettings.getBlockStateIds()` 提供当前包的方块状态分类映射，`BlockSensitiveBufferBuilder` 提供顶点材料上下文。
-这些属于内部接口。兼容实现每次从当前映射读取分类，水使用原版水状态，汞使用铁块状态，油及其他材料使用白色染色玻璃状态；表面颜色与纹理仍由各自材料决定。光影切换后下一次绘制读取新映射。`BLOCK` 顶点由 Iris 自动扩展，补充材质、纹理中心、切线与方块中心属性；每个表面通过 `beginBlock` 设置材料上下文。材料与颗粒顶点、方块中心坐标共同减去相机的区段锚点，模型矩阵补偿剩余相机偏移；主画面、阴影和透明排序共用这一坐标约定。
+`IrisFluidShadowMixin` 在 `ShadowRenderer.renderShadows` 的透明区块组绘制之后，使用同一材料网格与主相机坐标提交顶点。Iris 的 `MixinGlCommandEncoder` 在阴影阶段保持阴影视口和帧缓冲区，实际目标由阴影程序接管；后端通过标准 Blaze3D 渲染通道提交。
+
+`WorldRenderingSettings.getBlockStateIds()` 提供当前光影包的方块状态分类映射，`BlockSensitiveBufferBuilder` 提供顶点材料上下文。兼容实现从当前映射读取分类：水使用原版水状态，汞使用铁块状态，油及其他材料使用白色染色玻璃状态；表面颜色与纹理仍由各自材料决定。光影切换后下一次绘制读取新映射。`BLOCK` 顶点由 Iris 自动扩展，补充材质、纹理中心、切线与方块中心属性；每个表面通过 `beginBlock` 设置材料上下文。材料与颗粒顶点、方块中心坐标共同减去相机的区段锚点，模型矩阵补偿剩余相机偏移；主画面、阴影和透明排序共用这一坐标约定。
 `CommonUniforms.isEyeInWater` 从相机 `getFluidInCamera()` 读取浸没状态；动态液面绘制与相机介质查询需要共同接入。
 `FluidCameraMixin` 通过已接受几何的 `materialAt` 查询，将水内相机设为 `FogType.WATER`，同时供原版雾效与 Iris 使用。原版熔岩、细雪及水的已有判定优先；油、汞当前采用空气介质信号和各自表面外观。
 
