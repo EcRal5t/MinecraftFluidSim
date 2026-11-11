@@ -29,6 +29,12 @@ final class VulkanLiquidWorkspaceSections {
 
     private long align(long value) { return Math.addExact(value, liquid.alignment() - 1) & -liquid.alignment(); }
 
+    VulkanMixtureState.Layout liquidOnlyMixture(long base){
+        int cells=liquid.cellCount(),cellWord=word(geometry.get(GeometryField.CELLS));
+        return VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,cellWord,4,cellWord+2,4,cellWord+4,4,
+                null,region.requestCellSize,cellWord),base,liquid.alignment());
+    }
+
     /** Flow temporaries are dead before thermochemistry; ledger terms and reusable geometry stay separate. */
     List<VulkanLiquidStateLayout.Column> flowScratch(VulkanLiquidWorkspace.Transport transport) {
         var free=new ArrayList<VulkanLiquidStateLayout.Column>();

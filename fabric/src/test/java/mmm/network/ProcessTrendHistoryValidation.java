@@ -24,6 +24,9 @@ public final class ProcessTrendHistoryValidation {
         history.sample(2,1); history.sample(1,2);
         check(history.points().size()==1 && !history.points().getFirst().connected(), "clock reset");
         history.reset(); check(history.points().isEmpty(), "configuration reset");
+        check(ProcessTrendRange.valid(1.25,2.75) && !ProcessTrendRange.valid(2,2)
+                && !ProcessTrendRange.valid(3,2) && !ProcessTrendRange.valid(-1,1)
+                && !ProcessTrendRange.valid(Double.NaN,1) && !ProcessTrendRange.valid(0,Double.POSITIVE_INFINITY), "custom time interval");
     }
     private static void check(boolean value,String description) {
         if(!value) throw new AssertionError(description);

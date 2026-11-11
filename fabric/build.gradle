@@ -40,6 +40,9 @@ loom {
         'mmm_gametest' { sourceSet sourceSets.gametest }
 	}
     runs {
+        client {
+            programArgs '--width', '1600', '--height', '900'
+        }
         gameTest {
             server()
             source sourceSets.gametest

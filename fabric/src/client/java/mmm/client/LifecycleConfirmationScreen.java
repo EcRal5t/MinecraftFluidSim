@@ -111,7 +111,7 @@ public final class LifecycleConfirmationScreen extends Screen {
 	private static Component blockers(List<LifecycleOperationPreview.Blocker> blockers) {
 		var result = Component.empty();
 		for (int index = 0; index < blockers.size(); index++) {
-			if (index > 0) result.append(Component.literal(" · "));
+			if (index > 0) result.append(Component.literal("\n"));
 			result.append(localized("blocker", blockers.get(index)));
 		}
 		return result;

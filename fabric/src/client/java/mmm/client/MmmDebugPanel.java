@@ -29,12 +29,11 @@ final class MmmDebugPanel {
     private static String dimension;
     private static Path settings;
     private static int ticks;
-    private static int eventScroll;
-    private record Line(String text, int color, int column) { }
-    private record Layout(List<Line> rows, List<Line> readings, int used, int eventLimit,
-                          int localWidth, int readingX, boolean columns) { }
+
+    private record Line(String label, String value, int color) { }
+    private record Layout(List<Line> left, List<Line> right, String notice, int noticeColor) { }
     private static Layout cachedLayout;
-    private static int cachedWidth, cachedHeight, cachedScroll;
+    private static int cachedWidth, cachedHeight;
     private static boolean cachedExpanded;
     private static long cacheTime;
     private static String fps = "FPS --", frame = "Frame --", heap = "Heap --";
@@ -44,8 +43,6 @@ final class MmmDebugPanel {
         load();
         var toggle = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mmm.debug.toggle", GLFW.GLFW_KEY_F8, KeyMapping.Category.DEBUG));
         var detail = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mmm.debug.expand", GLFW.GLFW_KEY_F9, KeyMapping.Category.DEBUG));
-        var older = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mmm.debug.older", GLFW.GLFW_KEY_PAGE_UP, KeyMapping.Category.DEBUG));
-        var newer = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.mmm.debug.newer", GLFW.GLFW_KEY_PAGE_DOWN, KeyMapping.Category.DEBUG));
         ClientPlayNetworking.registerGlobalReceiver(DebugDiagnosticPayload.TYPE, (payload, context) ->
                 context.client().execute(() -> {
                     var client = context.client();
@@ -66,90 +63,104 @@ final class MmmDebugPanel {
             }
             while (toggle.consumeClick()) if (client.gui.screen() == null) { visible = !visible; save(); }
             while (detail.consumeClick()) if (client.gui.screen() == null) { expanded = !expanded; save(); }
-            while (older.consumeClick()) if (client.gui.screen() == null && expanded) eventScroll++;
-            while (newer.consumeClick()) if (client.gui.screen() == null && expanded) eventScroll = Math.max(0, eventScroll - 1);
         });
         ClientConfigurationConnectionEvents.START.register((handler, client) -> clear());
         ClientConfigurationConnectionEvents.DISCONNECT.register((handler, client) -> clear());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> clear());
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, MmmMod.id("debug_panel"), (g, tick) -> render(g));
     }
-    private static void clear() { DATA.clear(); dimension = null; eventScroll = 0; cachedLayout = null; }
+    private static void clear() { DATA.clear(); dimension = null; cachedLayout = null; }
     private static void observeDimension(Minecraft client) {
         String next = client.level == null ? null : client.level.dimension().identifier().toString();
-        if (!java.util.Objects.equals(dimension, next)) { DATA.clear(); dimension = next; eventScroll = 0; cachedLayout = null; }
+        if (!java.util.Objects.equals(dimension, next)) { DATA.clear(); dimension = next; cachedLayout = null; }
     }
+    private static final float SCALE = 0.8f;
     private static void render(GuiGraphicsExtractor g) {
         Minecraft client = Minecraft.getInstance();
         if (!visible || client.level == null || client.gui.screen() != null) return;
-        int w = Math.min(expanded ? 480 : 220, Math.max(1, g.guiWidth() - 12));
-        int x = g.guiWidth() - w - 6, y = 6;
+        int w = expanded ? 430 : 220;
         long now = System.nanoTime();
         if (cachedLayout == null || cachedWidth != w || cachedHeight != g.guiHeight()
-                || cachedExpanded != expanded || cachedScroll != eventScroll || now - cacheTime >= 500_000_000L) {
-            cachedLayout = buildLayout(client, w, g.guiHeight());
-            cachedWidth = w; cachedHeight = g.guiHeight(); cachedExpanded = expanded;
-            cachedScroll = eventScroll; cacheTime = now;
+                || cachedExpanded != expanded || now - cacheTime >= 500_000_000L) {
+            cachedLayout = buildLayout();
+            cachedWidth = w; cachedHeight = g.guiHeight(); cachedExpanded = expanded; cacheTime = now;
         }
         Layout layout = cachedLayout;
-        int h = 27 + (layout.used() + layout.eventLimit()) * 11;
+        int x = (int) (g.guiWidth() / SCALE) - w - 7, y = 7;
+        int count = expanded ? Math.max(layout.left().size(), layout.right().size()) : layout.left().size();
+        int h = 27 + count * 11 + (layout.notice() == null ? 0 : 13);
+        g.pose().pushMatrix();
+        g.pose().scale(SCALE, SCALE);
         IndustrialUi.panel(g, x, y, w, h);
         IndustrialUi.header(g, x, y, w);
         g.text(client.font, Component.translatable("hud.mmm.debug.title"), x + 7, y + 6, IndustrialUi.CYAN, false);
-        String mode = Component.translatable(expanded ? "hud.mmm.debug.expanded" : "hud.mmm.debug.compact").getString();
+        String mode = tr(expanded ? "expanded" : "compact");
         g.text(client.font, mode, x + w - 7 - client.font.width(mode), y + 6, IndustrialUi.MUTED, false);
-        int localY = y + 21, eventY = y + 21 + layout.used() * 11;
-        for (var row : layout.rows()) {
-            int lineY = row.column() == 0 ? localY : eventY;
-            int available = row.column() == 0 ? layout.localWidth() : w - 14;
-            g.text(client.font, client.font.plainSubstrByWidth(row.text(), Math.max(0, available)), x + 7, lineY, row.color(), false);
-            if (row.column() == 0) localY += 11; else eventY += 11;
+        drawRows(g, client, layout.left(), x + 7, y + 21, expanded ? 192 : w - 14);
+        if (expanded) drawRows(g, client, layout.right(), x + 220, y + 21, w - 227);
+        if (layout.notice() != null) {
+            String notice = client.font.plainSubstrByWidth(layout.notice(), w - 14);
+            g.text(client.font, notice, x + 7, y + 22 + count * 11, layout.noticeColor(), false);
         }
-        int readingY = layout.columns() ? y + 21 : localY;
-        int readingX = x + layout.readingX();
-        for (var row : layout.readings()) {
-            g.text(client.font, row.text(), readingX, readingY, row.color(), false);
-            readingY += 11;
+        g.pose().popMatrix();
+    }
+    private static void drawRows(GuiGraphicsExtractor g, Minecraft client, List<Line> rows, int x, int y, int width) {
+        for (var row : rows) {
+            int valueWidth = client.font.width(row.value());
+            String label = client.font.plainSubstrByWidth(row.label(), Math.max(0, width - valueWidth - 8));
+            g.text(client.font, label, x, y, row.value().isEmpty() ? row.color() : IndustrialUi.MUTED, false);
+            g.text(client.font, row.value(), x + Math.max(0, width - valueWidth), y, row.color(), false);
+            y += 11;
         }
     }
-    private static Layout buildLayout(Minecraft client, int w, int height) {
+    private static String tr(String key) { return Component.translatable("hud.mmm.debug." + key).getString(); }
+    private static Layout buildLayout() {
+        List<Line> left = new ArrayList<>(), right = new ArrayList<>();
+        left.add(new Line(tr("system"), "", IndustrialUi.CYAN));
+        left.add(new Line(tr("fps"), fps.substring(4), IndustrialUi.TEXT));
+        left.add(new Line(tr("frame"), frame.substring(6), IndustrialUi.TEXT));
+        left.add(new Line(tr("heap"), heap.substring(5), IndustrialUi.TEXT));
         var snapshots = DATA.snapshots();
-        var events = DATA.events();
-        List<Line> rows = new ArrayList<>();
-        int max = Math.max(0, (height - 46) / 11);
-        boolean columns = expanded && w >= 340;
-        int localWidth = columns ? 140 : w - 14;
-        int readingWidth = columns ? w - 164 : w - 14;
-        for (String local : List.of(fps, frame, heap)) if (rows.size() < max)
-            rows.add(new Line(local, IndustrialUi.CYAN, 0));
-        int localCount = rows.size();
-        List<Line> readings = new ArrayList<>();
-        int snapshotLimit = DebugLayout.readingLimit(max, localCount, columns, expanded, !events.isEmpty());
-        for (var row : snapshots) {
-            if (row.stale(System.nanoTime()) && readings.size() < snapshotLimit)
-                readings.add(new Line(row.source() + " · " + Component.translatable("hud.mmm.debug.stale").getString(), IndustrialUi.AMBER, 1));
-            for (String part : DebugLayout.wrap(row.text(), readingWidth, client.font::plainSubstrByWidth)) {
-                if (readings.size() >= snapshotLimit) break;
-                readings.add(new Line(part, row.stale(System.nanoTime()) ? IndustrialUi.MUTED : IndustrialUi.TEXT, 1));
+        if (expanded) {
+            left.add(new Line(tr("region"), "", IndustrialUi.CYAN));
+            right.add(new Line(tr("solver"), "", IndustrialUi.CYAN));
+            var row = snapshots.isEmpty() ? null : snapshots.getLast();
+            var s = row == null ? null : row.snapshot();
+            if (s == null || !s.selected()) left.add(new Line(tr("selection"), tr("none"), IndustrialUi.MUTED));
+            else {
+                int color = row.stale(System.nanoTime()) ? IndustrialUi.MUTED : IndustrialUi.TEXT;
+                left.add(new Line(tr("id"), s.region().substring(0, Math.min(8, s.region().length())), color));
+                right.add(new Line(tr("operator"), Component.translatable("screen.mmm.operator." + (s.paused() ? "paused" : "running")).getString(), color));
+                right.add(new Line(tr("state"), s.state() + (row.stale(System.nanoTime()) ? " (" + tr("stale") + ")" : ""), color));
+                left.add(new Line(tr("grid"), s.sizeX() + " x " + s.sizeY() + " x " + s.sizeZ(), color));
+                left.add(new Line(tr("tick"), Long.toString(s.tick()), color));
+                right.add(new Line(tr("step"), String.format(java.util.Locale.ROOT, "%.2f ms", s.stepMillis()), color));
+                right.add(new Line(tr("interval"), Integer.toString(s.interval()), color));
+                if (s.hasStats()) {
+                    right.add(new Line(tr("substeps"), Integer.toString(s.substeps()), color));
+                    right.add(new Line(tr("iterations"), Integer.toString(s.pressureIterations()), color));
+                    right.add(new Line(tr("residual"), String.format(java.util.Locale.ROOT, "%.4g", s.residual()), color));
+                    right.add(new Line(tr("volume_error"), String.format(java.util.Locale.ROOT, "%.4g", s.volumeError()), color));
+                    right.add(new Line(tr("mass_error"), String.format(java.util.Locale.ROOT, "%.4g", s.massError()), color));
+                }
             }
         }
-        int used = columns ? Math.max(localCount, readings.size()) : localCount + readings.size();
-        List<Line> eventLines = new ArrayList<>();
-        for (var row : events) {
-            int color = switch (row.level()) { case WARN -> IndustrialUi.AMBER; case ERROR -> IndustrialUi.FAULT; default -> IndustrialUi.TEXT; };
-            String text = row.time() + " " + row.source() + " [" + row.level() + "] " + row.text().replace('\n', ' ')
-                    + (row.repeats() > 1 ? " ×" + row.repeats() : "");
-            for (String part : DebugLayout.wrap(text, w - 14, client.font::plainSubstrByWidth)) {
-                eventLines.add(new Line(part, color, 2));
-            }
+        String notice = null;
+        int noticeColor = IndustrialUi.FAULT;
+        for (var event : DATA.events()) if (event.level() == DebugDiagnosticPayload.Level.ERROR && event.source().equals("simulation")
+                && System.nanoTime() - event.receivedNanos() < 15_000_000_000L) {
+            String id = event.id().startsWith("region:") ? event.id().substring(7) : event.id();
+            notice = tr("failure") + ": " + id.substring(0, Math.min(8, id.length()));
         }
-        int eventCapacity = Math.min(expanded ? max : 2, Math.max(0, max - used));
-        var page = DebugLayout.page(eventLines.size(), eventCapacity, expanded ? eventScroll : 0);
-        if (expanded) eventScroll = page.scroll();
-        rows.addAll(eventLines.subList(page.start(), page.end()));
-        return new Layout(List.copyOf(rows), List.copyOf(readings), used, page.end() - page.start(),
-                localWidth, columns ? 157 : 7, columns);
+        if (notice == null) for (var event : DATA.events())
+            if (event.source().equals("command") && System.nanoTime() - event.receivedNanos() < 5_000_000_000L) {
+                boolean failed = event.id().equals("failed");
+                notice = tr(failed ? "command_failed" : "command_complete") + (event.text().isEmpty() ? "" : ": " + event.text());
+                noticeColor = failed ? IndustrialUi.AMBER : IndustrialUi.CYAN;
+            }
+        return new Layout(List.copyOf(left), List.copyOf(right), notice, noticeColor);
     }
+
     private static void load() {
         if (!Files.exists(settings)) return;
         Properties values = new Properties();

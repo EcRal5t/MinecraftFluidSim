@@ -81,7 +81,7 @@ final class FluidRenderBackend implements AutoCloseable {
         }
         if (System.nanoTime() >= nextCostReport && draws + shadowDraws > 0) {
             var mainGpu = mainTiming.drain(); var shadowGpu = shadowTiming.drain();
-            MmmMod.LOGGER.info("MMM presentation: main={} shadow={} vertexBuilds={}/{} indexSorts={}/{} "
+            MmmMod.LOGGER.debug("MMM presentation: main={} shadow={} vertexBuilds={}/{} indexSorts={}/{} "
                     + "build={} us sort={} us upload={} us submit={} us vertexUpload={} B indexUpload={} B "
                     + "GPU main={} us max={} us samples={} shadow={} us max={} us samples={}",
                     draws, shadowDraws, main.builds, shadow.builds, main.sorts, shadow.sorts,

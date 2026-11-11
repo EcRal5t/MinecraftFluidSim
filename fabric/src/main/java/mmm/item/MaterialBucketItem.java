@@ -120,7 +120,7 @@ public final class MaterialBucketItem extends Item {
 					chemical.groups().size(), UnitFormat.amount(chemical.totalQuanta())).withStyle(ChatFormatting.GRAY));
 			for (ChemicalContents.Group group : chemical.groups()) {
 				tooltip.accept(Component.literal(group.materialId()
-						+ " · " + UnitFormat.volumeNanos(group.volumeNanos()))
+						+ ": " + UnitFormat.volumeNanos(group.volumeNanos()))
 						.withStyle(ChatFormatting.DARK_GRAY));
 				for (ChemicalContents.SpeciesAmount species : group.species()) {
 					tooltip.accept(Component.translatable("item.mmm.material_bucket.species",

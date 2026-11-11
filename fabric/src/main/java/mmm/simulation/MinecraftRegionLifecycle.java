@@ -499,7 +499,7 @@ public final class MinecraftRegionLifecycle {
 	private static Component lifecycleBlockers(List<LifecycleOperationPreview.Blocker> blockers) {
 		var result = Component.empty();
 		for (int index = 0; index < blockers.size(); index++) {
-			if (index > 0) result.append(Component.literal(" · "));
+			if (index > 0) result.append(Component.literal("\n"));
 			result.append(Component.translatable("screen.mmm.blocker."
 					+ blockers.get(index).name().toLowerCase(java.util.Locale.ROOT)));
 		}

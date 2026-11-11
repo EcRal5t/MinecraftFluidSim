@@ -78,26 +78,27 @@ public final class RegionDiagnosticsReport {
 	}
 
 	public String status(MinecraftServer server) {
-		return computeDescription.get() + " | " + statusDetails(server);
+		return "[execution]\n  backend = " + computeDescription.get() + "\n" + statusDetails(server);
 	}
+
 
 	private String statusDetails(MinecraftServer server) {
 		String takeoverLock = MinecraftTakeoverAdapter.lockDescription(server);
 		RegionCatalog.BudgetUsage usage = regions.usage();
 		FluidRegion region = regions.selected();
 		if (region == null) {
-			return "没有活动流体域 | regions 0/" + regions.limits().maximumRegions()
-					+ " | controller flag " + (controllerFeatureEnabled.getAsBoolean() ? "on" : "off")
-					+ ", bridge " + (worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off")
-					+ " | takeover lock " + takeoverLock
-					+ (operations.issues().isEmpty() ? "" : " | persistence issues " + operations.issues().size())
-					+ (ownershipIssues.get().isEmpty() ? "" : " | ownership issues " + ownershipIssues.get().size())
-					+ (debugFixtures.lastFailure() == null ? "" : " | " + debugFixtures.lastFailure());
+			return "[region]\n  state = 没有活动流体域\n[resources]\n  regions = 0/" + regions.limits().maximumRegions()
+					+ "\n[gates]\n  controller flag = " + (controllerFeatureEnabled.getAsBoolean() ? "on" : "off")
+					+ "\n  bridge = " + (worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off")
+					+ "\n[resources]\n  takeover lock = " + takeoverLock
+					+ (operations.issues().isEmpty() ? "" : "\n  persistence issues = " + operations.issues().size())
+					+ (ownershipIssues.get().isEmpty() ? "" : "\n  ownership issues = " + ownershipIssues.get().size())
+					+ (debugFixtures.lastFailure() == null ? "" : "\n  fixture failure = " + debugFixtures.lastFailure());
 		}
 		RegionCatalog.BudgetUsage selectedUsage = regions.usage();
 		if (!region.solverLoaded()) {
 			return String.format(
-					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %s, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
+					"[region]\n  state = UNLOADED/PAUSED\n  selected = %s\n[resources]\n  regions = %d/%d, reserved %d/%d cells\n[region]\n  controller = %s\n  availability = %s\n  origin = %s\n  grid = %dx%dx%d\n[resources]\n  checkpoint = %d, liquid %s, markers %d\n[gates]\n  controller = %s, bridge %s\n[resources]\n  takeover lock = %s%s",
 					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regions.limits().maximumRegions(),
 					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), region.footprint().minimumInterior().toShortString(),
 					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
@@ -105,7 +106,7 @@ public final class RegionDiagnosticsReport {
 					UnitFormat.volume(SolverUnitScale.forCellSize(region.solverConfig().cellSize()).cubicMeters(region.checkpointVolume())),
 					region.checkpointMarkerCount(), controllerFeatureEnabled.getAsBoolean() ? "on" : "off",
 					worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off", takeoverLock,
-					operations.issues().isEmpty() ? "" : " | persistence issues " + operations.issues().size());
+					operations.issues().isEmpty() ? "" : "\n  persistence issues = " + operations.issues().size());
 		}
 		FluidDomainContracts.StepStats lastStats = region.lastStats();
 		if (region.deviceResident()) return residentStatus(region);
@@ -132,10 +133,10 @@ public final class RegionDiagnosticsReport {
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		var activity = domain.activityStats();
 		String carrierViscosity = carrierViscositySummary(lastStats) + viscousStressSummary(lastStats)
-				+ String.format(" | activity groups %d, sleeping %d, active/sleeping cells %d/%d, waiting groups/cells %d/%d",
+				+ String.format("\n[fluid]\n  activity groups = %d, sleeping %d, active/sleeping cells %d/%d, waiting groups/cells %d/%d",
 						activity.groupCount(), activity.sleepingGroups(), activity.activeCells(), activity.sleepingCells(), activity.blockedGroups(), activity.blockedCells());
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells | %s | %s | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s (%.2f normalized cells) | liquid stocks %d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP(gauge) %s | collision partial/full %d/%d, last Δ%d, escaped %s%s | %s%s%s",
+				"[region]\n  state = %s%s\n  selected = %s\n[resources]\n  regions = %d/%d, reserved %d/%d cells\n[region]\n  source = %s\n  availability = %s\n  origin = %s\n  grid = %dx%dx%d\n[solver]\n  Minecraft interval = %d ticks, sim step %.6g s\n[fluid]\n  liquid = %s (%.2f normalized cells)\n  liquid stocks = %d in %d cells\n  visible = %d, dense %d\n[resources]\n  takeover = %d, lock %s\n[gates]\n  bridge = %s\n[fluid]\n  entities = %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s\n  maxP(gauge) = %s\n  collision partial/full = %d/%d, last Δ%d, escaped %s%s\n[solver]\n  %s%s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regions.limits().maximumRegions(),
@@ -155,7 +156,7 @@ public final class RegionDiagnosticsReport {
 				solids.partialCells(), solids.fullCells(),
 				collision.changedCells(), UnitFormat.volume(domain.unitScale().cubicMeters(collision.escapedCellVolume())),
 				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
-				(gas.isEmpty() ? "" : " | " + gas) + (thermal.isEmpty() ? "" : " | " + thermal),
+				(gas.isEmpty() ? "" : "\n[gas]\n  " + gas) + (thermal.isEmpty() ? "" : "\n[thermal]\n  " + thermal),
 				carrierViscosity);
 	}
 
@@ -164,7 +165,7 @@ public final class RegionDiagnosticsReport {
 		var inventory = region.inventorySummary();
 		var stats = region.lastStats();
 		StringBuilder text = new StringBuilder(String.format(
-				"%s%s | selected %s | GPU resident generation %d | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s, stocks %d | max speed %.6g m/s | gas %d nodes, %s std | granular %d parcels/%d deposits | entities %s/%d",
+				"[region]\n  state = %s%s\n  selected = %s\n[solver]\n  GPU resident generation = %d\n[region]\n  origin = %s\n  grid = %dx%dx%d\n[solver]\n  Minecraft interval = %d ticks, sim step %.6g s\n[fluid]\n  liquid = %s, stocks %d\n  max speed = %.6g m/s\n[gas]\n  inventory = %d nodes, %s std\n[resources]\n  granular = %d parcels/%d deposits\n[fluid]\n  entities = %s/%d",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "", region.id().toString().substring(0, 8),
 				region.solverGeneration(), region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(),
 				region.stepIntervalTicks(), region.solverConfig().timeStep(), UnitFormat.volume(inventory.liquidVolumeCubicMetres()),
@@ -172,26 +173,26 @@ public final class RegionDiagnosticsReport {
 				UnitFormat.volume(AirNetwork.cubicMeters(inventory.gasStandardVolumeNanos())),
 				inventory.granularParcelCount(), inventory.granularDepositCount(),
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities()));
-		if (stats != null) text.append(String.format(" | compute %.2f ms, substeps %d, PCG %d, residual %.4g",
+		if (stats != null) text.append(String.format("\n[solver]\n  compute = %.2f ms, substeps %d, PCG %d, residual %.4g",
 				region.lastStepMilliseconds(), stats.substeps(), stats.pressureIterations(), stats.pressureResidual()));
 		if (inventory.thermalBound()) {
-			text.append(String.format(" | thermal T=%.2f..%.2f K U=%.6g J audit=%s pending-work=%s",
+			text.append(String.format("\n[thermal]\n  T=%.2f..%.2f K U=%.6g J audit=%s pending-work=%s",
 					inventory.minimumTemperatureK(), inventory.maximumTemperatureK(), inventory.totalInternalEnergyJoules(),
 					region.thermalAuditClosed() ? "closed" : "FAILED", region.hasPendingPhaseMotionWork() ? "yes" : "no"));
 			var heat = region.display().thermal();
 			if (heat != null) for (var node : heat.gasNodes().stream().limit(4).toList()) {
-				text.append(String.format(" | gas node %d p=%+.0f Pa T=%.2f K", node.nodeId(),
+				text.append(String.format("\n[gas]\n  node %d p=%+.0f Pa T=%.2f K", node.nodeId(),
 						10.0 * node.gaugePressureDecaPa(), node.temperatureQ() / 16.0));
 			}
 		}
-		if (region.availabilityFailure() != null) text.append(" | ").append(region.availabilityFailure());
+		if (region.availabilityFailure() != null) text.append("\n[region]\n  availability = ").append(region.availabilityFailure());
 		return text.toString();
 	}
 
 	private static String viscousStressSummary(FluidDomainContracts.StepStats lastStats) {
 		if (lastStats == null || lastStats.viscosity().stressRows() == 0) return "";
 		var stats = lastStats.viscosity();
-		return String.format(" | viscosity bound %.3g /s, dissipated %.3g J, wall impulse [%.3g,%.3g,%.3g] kg·m/s",
+		return String.format("\n[solver]\n  viscosity bound = %.3g /s, dissipated %.3g J, wall impulse [%.3g,%.3g,%.3g] kg·m/s",
 				stats.spectralBoundPerSecond(), stats.dissipatedJoules(),
 				stats.boundaryImpulseX(), stats.boundaryImpulseY(), stats.boundaryImpulseZ());
 	}
@@ -201,7 +202,7 @@ public final class RegionDiagnosticsReport {
 		if (lastStats == null) return "";
 		FluidDomainContracts.CarrierViscosityStats stats = lastStats.carrierViscosity();
 		if (!stats.extrapolated()) return "";
-		return String.format(" | carrier-viscosity extrapolated %d cells (%s)", stats.extrapolatedCells(), stats.sample());
+		return String.format("\n[solver]\n  carrier-viscosity extrapolated = %d cells (%s)", stats.extrapolatedCells(), stats.sample());
 	}
 
 	public String chemistryInventory(ServerLevel level) {

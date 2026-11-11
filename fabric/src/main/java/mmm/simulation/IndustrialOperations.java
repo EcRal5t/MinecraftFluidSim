@@ -37,7 +37,7 @@ public final class IndustrialOperations {
         if(box.transferBusy()){player.sendSystemMessage(Component.literal("物料箱正在交接"));return InteractionResult.SUCCESS;}
         if(held.isEmpty() && player.isShiftKeyDown()) {
             box.selectNext();
-            player.sendSystemMessage(Component.literal("物料箱批次 " + (box.selected()+1) + " · " + describe(box.getItem(box.selected()))));
+            player.sendSystemMessage(Component.literal("物料箱批次 " + (box.selected()+1) + "\n" + describe(box.getItem(box.selected()))));
             return InteractionResult.SUCCESS;
         }
         var current=box.getItem(box.selected());
@@ -173,57 +173,121 @@ public final class IndustrialOperations {
     }
     public void tickSensor(ServerLevel level,ProcessSensorBlockEntity sensor){
         if(level.getGameTime()%4!=0)return;
+        sensor.pruneTrend(level.getGameTime());
         var first=sensor.first();var second=sensor.second();
         if(first==null){first=sensor.getBlockPos().relative(sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getOpposite());second=first;}
         var region=targets.regionAtBlock(level,first);
-        if(region==null||!region.solverLoaded()||region.availabilityFailure()!=null||targets.regionAtBlock(level,second)!=region){sensor.unavailable(mmm.api.sensor.ProcessSensorSnapshot.Status.UNAVAILABLE);return;}
-        sensor.history().region(region.id(),region.networkGeneration());
+        if(region==null||!region.solverLoaded()||region.availabilityFailure()!=null||targets.regionAtBlock(level,second)!=region){for (var metric : mmm.api.sensor.ProcessSensorSnapshot.Measure.values()) sensor.history(metric).breakSeries(); sensor.breakTrendHistories(); sensor.unavailable(mmm.api.sensor.ProcessSensorSnapshot.Status.UNAVAILABLE);return;}
+        for (var metric : mmm.api.sensor.ProcessSensorSnapshot.Measure.values()) sensor.history(metric).region(region.id(),region.networkGeneration());
         boolean active=!region.paused();
-        observeSensor(region,sensor,first,second,active);
+        boolean allMetrics=sensor.hasTrendObservers();
+        if(!allMetrics) for(var metric : mmm.api.sensor.ProcessSensorSnapshot.Measure.values()) if(metric!=sensor.measure()) sensor.history(metric).breakSeries();
+        observeSensor(region,sensor,first,second,active,allMetrics);
     }
     static void observeSensor(FluidRegion region,ProcessSensorBlockEntity sensor,BlockPos first,BlockPos second){
-        observeSensor(region,sensor,first,second,true);
+        observeSensor(region,sensor,first,second,true,sensor.hasTrendObservers());
     }
-    private static void observeSensor(FluidRegion region,ProcessSensorBlockEntity sensor,BlockPos first,BlockPos second,boolean record){
+    private static void observeSensor(FluidRegion region,ProcessSensorBlockEntity sensor,BlockPos first,BlockPos second,boolean record,boolean allMetrics){
         double h=region.solverConfig().cellSize();var origin=region.origin();
         int[] min={(int)Math.floor((Math.min(first.getX(),second.getX())-origin.getX())/h),(int)Math.floor((Math.min(first.getY(),second.getY())-origin.getY())/h),(int)Math.floor((Math.min(first.getZ(),second.getZ())-origin.getZ())/h)};
         int[] max={(int)Math.ceil((Math.max(first.getX(),second.getX())+1-origin.getX())/h),(int)Math.ceil((Math.max(first.getY(),second.getY())+1-origin.getY())/h),(int)Math.ceil((Math.max(first.getZ(),second.getZ())+1-origin.getZ())/h)};
-        if(sensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.FLOW){
-            var axis=sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getAxis();int a=axis==net.minecraft.core.Direction.Axis.X?0:axis==net.minecraft.core.Direction.Axis.Y?1:2;
-            max[a]=min[a]+1;var faces=new java.util.ArrayList<Integer>();
-            for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
-                int face=region.grid().faceAt(x,y,z,a);
-                if(face>=0){
-                    int left=region.grid().faceLeft(face),right=region.grid().faceRight(face);
-                    if((left>=0&&!region.groupAvailable(left))||(right>=0&&!region.groupAvailable(right))){sensor.unavailable(mmm.api.sensor.ProcessSensorSnapshot.Status.UNAVAILABLE);return;}
-                    faces.add(face);
-                }
-            }
-            if(faces.isEmpty()){sensor.unavailable(mmm.api.sensor.ProcessSensorSnapshot.Status.NO_SAMPLE);return;}
-            recordSensorSample(region,sensor,record,region.observeLiquidFlow(faces.stream().mapToInt(Integer::intValue).toArray())*1000);return;
-        }
-        double sum=0,weight=0;var host=sensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE?region.hostSnapshot():null;
-        for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
+        var metrics=mmm.api.sensor.ProcessSensorSnapshot.Measure.values();
+        var sums=new double[metrics.length]; var weights=new double[metrics.length];
+        var selected=sensor.trendKeys();
+        if(sensor.measure()!=mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE && !selected.contains(new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.PRESSURE))) sensor.history(mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE).breakSeries();
+        boolean pressureSelected=selected.contains(new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.PRESSURE));
+        boolean compositionSample=allMetrics && (selected.stream().anyMatch(key->key.metric().ordinal()>=mmm.network.ProcessTrendPayload.Metric.MASS.ordinal()) || (sensor.getLevel()==null || sensor.getLevel().getGameTime()%20==0));
+        var host=(pressureSelected || sensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE || compositionSample) ? region.hostSnapshot() : null;
+        boolean cellsAvailable=true;
+        for(int z=min[2];z<max[2] && cellsAvailable && (allMetrics || sensor.measure()!=mmm.api.sensor.ProcessSensorSnapshot.Measure.FLOW);z++)for(int y=min[1];y<max[1] && cellsAvailable;y++)for(int x=min[0];x<max[0];x++){
             int cell=region.grid().cell(x,y,z);if(cell<0)continue;
-            if(!region.groupAvailable(cell)){sensor.unavailable(mmm.api.sensor.ProcessSensorSnapshot.Status.UNAVAILABLE);return;}
+            if(!region.groupAvailable(cell)){cellsAvailable=false;break;}
             double openVolume=Integer.bitCount((~region.solidMicroMask(x,y,z))&255)*h*h*h/8;
             if(openVolume==0)continue;
-            var liquid=region.observeCellInventory(x,y,z);
-            switch(sensor.measure()){
-                case LEVEL->{sum+=liquid==null?0:liquid.liquidVolumeCubicMetres();weight+=Integer.bitCount((~region.solidMicroMask(x,y,z))&255)*h*h*h/8;}
-                case LIQUID_TEMPERATURE->{if(liquid!=null&&liquid.temperatureKelvin().isPresent()){sum+=liquid.temperatureKelvin().getAsDouble()*liquid.liquidMassKilograms();weight+=liquid.liquidMassKilograms();}}
-                case GAS_TEMPERATURE->{var carriers=region.observeCellCarriers(x,y,z);var gas=carriers==null?null:carriers.gas();if(gas!=null){double mass=gas.components().stream().mapToDouble(mmm.fluid.CellCarrierInventoryView.ComponentAmount::massKilograms).sum();sum+=gas.temperatureKelvin()*mass;weight+=mass;}}
-                case PRESSURE->{sum+=(host.pressure(x,y,z)+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA)*openVolume;weight+=openVolume;}
-                case FLOW->throw new IllegalStateException("Flow is sampled from accepted faces");
+            var liquid=(allMetrics || sensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL || sensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE) ? region.observeCellInventory(x,y,z) : null;
+            int level=mmm.api.sensor.ProcessSensorSnapshot.Measure.LEVEL.ordinal();
+            sums[level]+=liquid==null?0:liquid.liquidVolumeCubicMetres();
+            weights[level]+=openVolume;
+            int liquidTemp=mmm.api.sensor.ProcessSensorSnapshot.Measure.LIQUID_TEMPERATURE.ordinal();
+            if(liquid!=null && liquid.temperatureKelvin().isPresent()) {
+                sums[liquidTemp]+=liquid.temperatureKelvin().getAsDouble()*liquid.liquidMassKilograms(); weights[liquidTemp]+=liquid.liquidMassKilograms();
+            }
+            int gasTemp=mmm.api.sensor.ProcessSensorSnapshot.Measure.GAS_TEMPERATURE.ordinal();
+            var carriers=(allMetrics || sensor.measure()==mmm.api.sensor.ProcessSensorSnapshot.Measure.GAS_TEMPERATURE) ? region.observeCellCarriers(x,y,z) : null; var gas=carriers==null?null:carriers.gas();
+            if(gas!=null) { double mass=gas.components().stream().mapToDouble(mmm.fluid.CellCarrierInventoryView.ComponentAmount::massKilograms).sum(); sums[gasTemp]+=gas.temperatureKelvin()*mass; weights[gasTemp]+=mass; }
+            int pressure=mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE.ordinal();
+            if(host!=null) { sums[pressure]+=(host.pressure(x,y,z)+mmm.thermal.MixtureVolumeModel.REFERENCE_PRESSURE_PA)*openVolume; weights[pressure]+=openVolume; }
+        }
+        if(compositionSample && cellsAvailable) {
+            var grid=region.grid();
+            var composition=host.observeComposition(cell -> grid.x(cell)>=min[0] && grid.x(cell)<max[0] && grid.y(cell)>=min[1] && grid.y(cell)<max[1] && grid.z(cell)>=min[2] && grid.z(cell)<max[2]);
+            var values=new java.util.LinkedHashMap<mmm.network.ProcessTrendPayload.SeriesKey,Double>();
+            for(var row:composition.rows()) {
+                var phase=row.phase().name();
+                addTrendValue(values,row,phase,mmm.network.ProcessTrendPayload.Metric.MASS,row.massKilograms());
+                addTrendValue(values,row,phase,mmm.network.ProcessTrendPayload.Metric.AMOUNT,row.amountMoles());
+                if(row.phase()!=mmm.fluid.FluidComposition.Phase.GAS && !row.ion()) addTrendValue(values,row,phase,mmm.network.ProcessTrendPayload.Metric.VOLUME,row.volumeCubicMetres());
+                addTrendValue(values,row,phase,mmm.network.ProcessTrendPayload.Metric.TEMPERATURE,row.medianTemperatureK());
+            }
+            if(!composition.rows().isEmpty()) {
+                double mass=0,amount=0; boolean massKnown=true,amountKnown=true;
+                for(var row:composition.rows()) { if(Double.isFinite(row.massKilograms())) mass+=row.massKilograms(); else massKnown=false; if(Double.isFinite(row.amountMoles())) amount+=row.amountMoles(); else amountKnown=false; }
+                if(massKnown) values.put(new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.MASS),mass);
+                if(amountKnown) values.put(new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.AMOUNT),amount);
+            }
+            var catalog=new java.util.ArrayList<mmm.network.ProcessTrendPayload.SeriesKey>();
+            for(var metric:metrics) if(metric!=mmm.api.sensor.ProcessSensorSnapshot.Measure.FLOW && weights[metric.ordinal()]>0)
+                catalog.add(new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.fromMeasure(metric)));
+            for(var entry:values.entrySet()) if(entry.getKey().componentId().isEmpty() && catalog.size()<mmm.network.ProcessTrendPayload.MAX_CATALOG) catalog.add(entry.getKey());
+            for(var entry:values.entrySet()) if(!entry.getKey().componentId().isEmpty() && catalog.size()<mmm.network.ProcessTrendPayload.MAX_CATALOG) catalog.add(entry.getKey());
+            sensor.trendCatalog(catalog);
+            for(var key:selected) if(key.metric().ordinal()>=mmm.network.ProcessTrendPayload.Metric.MASS.ordinal()) {
+                var history=sensor.trendHistory(key); history.region(region.id(),region.networkGeneration());
+                var value=values.get(key); if(value==null) history.breakSeries();
+                else if(record) history.sample(region.sessionSimulationSeconds(),value); else history.samplePaused(region.sessionSimulationSeconds(),value);
+            }
+        } else if(!cellsAvailable) sensor.breakTrendHistories();
+        for(var metric:metrics) if(metric!=mmm.api.sensor.ProcessSensorSnapshot.Measure.FLOW && (allMetrics || metric==sensor.measure()) && (metric!=mmm.api.sensor.ProcessSensorSnapshot.Measure.PRESSURE || host!=null)) {
+            int i=metric.ordinal();
+            if(!cellsAvailable) unavailableSensor(sensor,metric,mmm.api.sensor.ProcessSensorSnapshot.Status.UNAVAILABLE);
+            else if(weights[i]>0) recordSensorSample(region,sensor,metric,record,sums[i]/weights[i]);
+            else unavailableSensor(sensor,metric,mmm.api.sensor.ProcessSensorSnapshot.Status.NO_SAMPLE);
+        }
+        var flow=mmm.api.sensor.ProcessSensorSnapshot.Measure.FLOW;
+        if(!allMetrics && sensor.measure()!=flow) return;
+        var axis=sensor.getBlockState().getValue(ProcessSensorBlock.FACING).getAxis(); int a=axis==net.minecraft.core.Direction.Axis.X?0:axis==net.minecraft.core.Direction.Axis.Y?1:2;
+        max[a]=min[a]+1; var faces=new java.util.ArrayList<Integer>();
+        for(int z=min[2];z<max[2];z++)for(int y=min[1];y<max[1];y++)for(int x=min[0];x<max[0];x++){
+            int face=region.grid().faceAt(x,y,z,a);
+            if(face>=0){
+                int left=region.grid().faceLeft(face),right=region.grid().faceRight(face);
+                if((left>=0&&!region.groupAvailable(left))||(right>=0&&!region.groupAvailable(right))){unavailableSensor(sensor,flow,mmm.api.sensor.ProcessSensorSnapshot.Status.UNAVAILABLE);return;}
+                faces.add(face);
             }
         }
-        if(weight>0)recordSensorSample(region,sensor,record,sum/weight);
-        else sensor.unavailable(mmm.api.sensor.ProcessSensorSnapshot.Status.NO_SAMPLE);
+        if(faces.isEmpty()) unavailableSensor(sensor,flow,mmm.api.sensor.ProcessSensorSnapshot.Status.NO_SAMPLE);
+        else {
+            recordSensorSample(region,sensor,flow,record,region.observeLiquidFlow(faces.stream().mapToInt(Integer::intValue).toArray())*1000);
+            if(allMetrics) {
+                var key=new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.FLOW);
+                var catalog=new java.util.ArrayList<>(sensor.trendCatalog());
+                if(!catalog.contains(key) && catalog.size()<mmm.network.ProcessTrendPayload.MAX_CATALOG) { catalog.add(key); sensor.trendCatalog(catalog); }
+            }
+        }
     }
-    private static void recordSensorSample(FluidRegion region,ProcessSensorBlockEntity sensor,boolean running,double value){
-        sensor.observe(value,region.id(),region.networkGeneration(),region.solverGeneration(),region.sessionSimulationSeconds(),running);
-        if(running)sensor.history().sample(region.sessionSimulationSeconds(),value);
-        else sensor.history().samplePaused(region.sessionSimulationSeconds(),value);
+    private static void addTrendValue(java.util.Map<mmm.network.ProcessTrendPayload.SeriesKey,Double> values,mmm.fluid.FluidComposition.Row row,String phase,mmm.network.ProcessTrendPayload.Metric metric,double value) {
+        if(Double.isFinite(value)) values.put(new mmm.network.ProcessTrendPayload.SeriesKey(row.id(),phase,metric,row.ion(),row.residualMass()),value);
+    }
+    private static void unavailableSensor(ProcessSensorBlockEntity sensor, mmm.api.sensor.ProcessSensorSnapshot.Measure metric, mmm.api.sensor.ProcessSensorSnapshot.Status status) {
+        sensor.history(metric).breakSeries(status.label());
+        if (metric == sensor.measure()) sensor.unavailable(status);
+    }
+    private static void recordSensorSample(FluidRegion region,ProcessSensorBlockEntity sensor,mmm.api.sensor.ProcessSensorSnapshot.Measure metric,boolean running,double value){
+        if (metric == sensor.measure()) sensor.observe(value,region.id(),region.networkGeneration(),region.solverGeneration(),region.sessionSimulationSeconds(),running);
+        var key=new mmm.network.ProcessTrendPayload.SeriesKey("","",mmm.network.ProcessTrendPayload.Metric.fromMeasure(metric));
+        if(metric!=sensor.measure() && !sensor.trendKeys().contains(key)) { sensor.history(metric).breakSeries(); return; }
+        if(running)sensor.history(metric).sample(region.sessionSimulationSeconds(),value);
+        else sensor.history(metric).samplePaused(region.sessionSimulationSeconds(),value);
     }
     public void tickPort(ServerLevel level,FluidPortBlockEntity port){
         if(port.mode()==FluidPortBlockEntity.Mode.STOPPED)return;
@@ -335,7 +399,7 @@ public final class IndustrialOperations {
     }
     static String describe(ItemStack item){
         if(item.isEmpty())return "空槽";
-        if(item.getItem() instanceof GasContainerItem){var contents=GasContainerItem.contents(item);return contents==null?"空气体批次":mmm.units.UnitFormat.volumeNanos(contents.inventory().standardVolumeNanos())+" · 标准体积";}
+        if(item.getItem() instanceof GasContainerItem){var contents=GasContainerItem.contents(item);return contents==null?"空气体批次":mmm.units.UnitFormat.volumeNanos(contents.inventory().standardVolumeNanos())+" (标准体积)";}
         if(item.getItem() instanceof GranularContainerItem){var contents=GranularContainerItem.unvalidatedContents(item);return contents==null?"空颗粒批次":mmm.units.UnitFormat.solidVolume(contents.totalSolidVolumeSvq());}
         long volume=MaterialBucketItem.volume(item);if(item.is(net.minecraft.world.item.Items.WATER_BUCKET))volume=1_000_000_000L;
         return volume>0?mmm.units.UnitFormat.volumeNanos(volume):"空液体批次";

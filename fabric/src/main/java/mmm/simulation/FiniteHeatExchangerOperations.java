@@ -97,8 +97,8 @@ public final class FiniteHeatExchangerOperations {
         player.sendSystemMessage(Component.literal(String.format(java.util.Locale.ROOT,"%.2f K",SurfaceThermalState.temperature(registry,device))));
         for(var surface:device.surfaces()){
             var definition=registry.surfaceMaterial(surface.materialId());
-            player.sendSystemMessage(Component.literal(surface.face()+" · "+surface.materialId()+" · "+mmm.units.Mass.kilograms(surface.loadingMassUnits())+" kg"));
-            surface.speciesQuanta().forEach((species,quanta)->player.sendSystemMessage(Component.literal(species+" · "+quanta/(double)mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL+" mol")));
+            player.sendSystemMessage(Component.literal(surface.face()+"\n"+surface.materialId()+"\n"+mmm.units.Mass.kilograms(surface.loadingMassUnits())+" kg"));
+            surface.speciesQuanta().forEach((species,quanta)->player.sendSystemMessage(Component.literal(species+"\n"+quanta/(double)mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL+" mol")));
             for(var reaction:definition.catalysis())player.sendSystemMessage(Component.literal(reaction.reactionId()));
         }
         return true;

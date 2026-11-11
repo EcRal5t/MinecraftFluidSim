@@ -7,8 +7,8 @@ import java.util.UUID;
 public record ProcessSensorSnapshot(Measure measure, Status status, Double value, UUID regionId,
                                     long regionIncarnation, long solverGeneration, double simulationSeconds) {
     public enum Measure {
-        LEVEL("液位 · 0—1", "1"), LIQUID_TEMPERATURE("液体温度 · K", "K"), GAS_TEMPERATURE("气体温度 · K", "K"),
-        PRESSURE("绝对压力 · Pa", "Pa"), FLOW("液体流量 · L/s", "L/s");
+        LEVEL("液位 (0—1)", "1"), LIQUID_TEMPERATURE("液体温度 (K)", "K"), GAS_TEMPERATURE("气体温度 (K)", "K"),
+        PRESSURE("绝对压力 (Pa)", "Pa"), FLOW("液体流量 (L/s)", "L/s");
         private final String label, unit;
         Measure(String label,String unit){this.label=label;this.unit=unit;}
         public String label(){return label;}
@@ -39,6 +39,6 @@ public record ProcessSensorSnapshot(Measure measure, Status status, Double value
         return new ProcessSensorSnapshot(measure,status,null,null,0,0,0);
     }
     public String display() {
-        return measure.label()+" · "+status.label()+(value==null?"":" · "+String.format(Locale.ROOT,"%.4g",value));
+        return measure.label() + (value == null ? "" : ": " + String.format(Locale.ROOT,"%.4g", value)) + "\n" + status.label();
     }
 }

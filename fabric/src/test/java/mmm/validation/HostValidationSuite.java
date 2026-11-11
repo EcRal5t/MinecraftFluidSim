@@ -30,6 +30,7 @@ public final class HostValidationSuite {
             mmm.simulation.persistence.WorldCapabilityStartupValidation.main(new String[0]);
         });
         checks.put("protocol", () -> {
+            mmm.fluid.LiquidCellInventoryValidation.main(new String[0]);
             mmm.network.FluidNetworkProtocolValidation.main(new String[0]);
             mmm.simulation.SampleAnalysisValidation.main(new String[0]);
             mmm.client.SampleComparisonValidation.main(new String[0]);

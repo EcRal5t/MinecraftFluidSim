@@ -17,10 +17,10 @@ public final class DebugDiagnostics {
         return true;
     }
 
-    public static void snapshot(ServerPlayer player, String id, String text) {
+    public static void snapshot(ServerPlayer player, DebugDiagnosticPayload.Snapshot snapshot) {
         if (ServerPlayNetworking.canSend(player, DebugDiagnosticPayload.TYPE))
             ServerPlayNetworking.send(player, new DebugDiagnosticPayload(DebugDiagnosticPayload.Kind.SNAPSHOT,
-                    DebugDiagnosticPayload.Level.INFO, dimension(player), "solver", id, text));
+                    DebugDiagnosticPayload.Level.INFO, dimension(player), "solver", "selected-region", "", snapshot));
     }
 
     static java.util.List<String> split(String text) {
@@ -50,7 +50,7 @@ public final class DebugDiagnostics {
     public static void operators(ServerLevel level, String id, String text) {
         for (ServerPlayer player : level.players()) {
             if (canInspect(player))
-                event(player, DebugDiagnosticPayload.Level.ERROR, "simulation", id, text);
+                event(player, DebugDiagnosticPayload.Level.ERROR, "simulation", id, "");
         }
     }
 }

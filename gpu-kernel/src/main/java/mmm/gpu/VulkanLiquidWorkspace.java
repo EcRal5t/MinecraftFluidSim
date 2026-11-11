@@ -43,15 +43,8 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
         final long ambientMassUnits;
         String capacityStage="source geometry";
         mmm.world.MovingBodyFluidCoupling.Result bodyResult(VulkanRegionStorage.Candidate candidate){
-            if(transport==null||transport.entity==null)return mmm.world.MovingBodyFluidCoupling.Result.NONE;
-            var bytes=ByteBuffer.allocate(Math.multiplyExact(VulkanEntityBodyCoupling.BODY_RESULT_BYTES,targetBodyState.bodies().size())).order(ByteOrder.LITTLE_ENDIAN);
-            if(bytes.hasRemaining())candidate.read(transport.entity.column(VulkanEntityBodyCoupling.Field.BODY_RESULTS).offset(),bytes);
-            var ledger=ByteBuffer.allocate(Math.toIntExact(transport.entityWork.result().bytes())).order(ByteOrder.LITTLE_ENDIAN);
-            candidate.read(transport.entityWork.result().offset(),ledger);
-            int sign=ledger.getInt(0),count=ledger.getInt(8);var value=java.math.BigInteger.ZERO;
-            for(int i=count-1;i>=0;i--)value=value.shiftLeft(32).add(java.math.BigInteger.valueOf(Integer.toUnsignedLong(ledger.getInt(16+4*i))));
-            double work=sign==0?0.0:new mmm.units.SignedDyadic(sign<0?value.negate():value,ledger.getInt(4)).toDouble();
-            return transport.entity.result(bytes.flip(),region.bodyConfiguration(targetBodyState),work);
+            return transport==null||transport.entity==null ? mmm.world.MovingBodyFluidCoupling.Result.NONE
+                    : transport.entity.readResult(candidate,region.bodyConfiguration(targetBodyState),transport.entityWork);
         }
         VulkanLiquidWorkspace(VulkanLiquidRegion region,VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions) {
             this(region,liquid,definitions,region.granularConfiguration==null?0:region.granularConfiguration.contactCapacity(),0,0,
@@ -116,7 +109,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
         long total = align(multigridColumn.offset() + multigridColumn.bytes());
         sections = new VulkanLiquidWorkspaceSections(this);
         if(definitions==null){
-            mixture=liquidOnlyMixture(total);
+            mixture=sections.liquidOnlyMixture(total);
             transport=null;
             total=mixture.endOffset();
         } else {
@@ -139,11 +132,6 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
 
         private void configureExterior(VulkanLiquidGeometry kernel){
             kernel.setExterior(region.gasConfiguration==null||region.gasConfiguration.sealedExterior(),mmm.units.Mass.kilograms(ambientMassUnits));
-        }
-        private VulkanMixtureState.Layout liquidOnlyMixture(long base){
-            int cells=liquid.cellCount(),cellWord=word(geometry.get(GeometryField.CELLS));
-            return VulkanMixtureState.layout(new VulkanMixtureState.Inputs(cells,cellWord,4,cellWord+2,4,cellWord+4,4,
-                    null,region.requestCellSize,cellWord),base,liquid.alignment());
         }
         void recordMixtureGeometry(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,double duration,boolean reuseGeometry){
             int sx=liquid.sizeX(),sy=liquid.sizeY(),sz=liquid.sizeZ();
@@ -654,7 +642,7 @@ final class VulkanLiquidWorkspace implements AutoCloseable {
             gas=region.gasConfiguration==null?null:sections.new GasSection(volumes,granular==null?solidsBase:granular.endOffset,
                     sourceEntity!=null?sourceEntity.word(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?word(geometry.get(GeometryField.OCCUPIED_SOLID)):granular.geometry.word(VulkanGranularGeometry.Field.OCCUPIED_SVQ));
             if(gas!=null)gas.transport.bindTargetOccupation(word(geometry.get(GeometryField.FIXED_MASKS)),word(entity!=null?entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ):granular==null?geometry.get(GeometryField.OCCUPIED_SOLID):granular.geometry.column(VulkanGranularGeometry.Field.OCCUPIED_SVQ)));
-            mixture=gas==null?liquidOnlyMixture(granular==null?solidsBase:granular.endOffset):gas.mixture;
+            mixture=gas==null?sections.liquidOnlyMixture(granular==null?solidsBase:granular.endOffset):gas.mixture;
             long mixtureEnd=gas==null?mixture.endOffset():gas.endOffset;
             sourceMixture=new VulkanLiquidStateLayout.Column(align(mixtureEnd),mixture.states().count(),8);
             long sourceMixtureEnd=align(sourceMixture.offset()+sourceMixture.bindingBytes());

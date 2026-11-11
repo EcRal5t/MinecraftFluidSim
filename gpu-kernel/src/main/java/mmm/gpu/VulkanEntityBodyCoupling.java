@@ -169,6 +169,16 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
                     new Chunk(column(Field.INVERSE_MASS).offset(),data.slice(8+120*count,8*count)),
                     new Chunk(column(Field.RESPONSE_AXIS).offset(),data.slice(8+128*count,4*count)),
                     new Chunk(column(Field.BODY_OFFSETS).offset(),data.slice(8+132*count,4*(count+1))));}
+        mmm.world.MovingBodyFluidCoupling.Result readResult(VulkanRegionStorage.Candidate candidate,Configuration config,VulkanEnergyLedger.Layout workLedger){
+            var bytes=ByteBuffer.allocate(Math.multiplyExact(BODY_RESULT_BYTES,config.bodies().bodies().size())).order(ByteOrder.LITTLE_ENDIAN);
+            if(bytes.hasRemaining())candidate.read(column(Field.BODY_RESULTS).offset(),bytes);
+            var ledger=ByteBuffer.allocate(Math.toIntExact(workLedger.result().bytes())).order(ByteOrder.LITTLE_ENDIAN);
+            candidate.read(workLedger.result().offset(),ledger);
+            int sign=ledger.getInt(0),count=ledger.getInt(8);var value=java.math.BigInteger.ZERO;
+            for(int i=count-1;i>=0;i--)value=value.shiftLeft(32).add(java.math.BigInteger.valueOf(Integer.toUnsignedLong(ledger.getInt(16+4*i))));
+            double work=sign==0?0.0:new mmm.units.SignedDyadic(sign<0?value.negate():value,ledger.getInt(4)).toDouble();
+            return result(bytes.flip(),config,work);
+        }
         mmm.world.MovingBodyFluidCoupling.Result result(ByteBuffer buffer,Configuration config,double work){
             var b=buffer.slice().order(ByteOrder.LITTLE_ENDIAN);double ix=0,iy=0,iz=0,volume=0;var impulses=new java.util.ArrayList<mmm.world.MovingBodyFluidCoupling.BodyImpulse>();
             for(int body=0;body<config.bodies().bodies().size();body++){int off=Double.BYTES*BODY_RESULT_STRIDE*body;double x=b.getDouble(off),y=b.getDouble(off+Double.BYTES*BodyResult.IMPULSE_Y.ordinal()),z=b.getDouble(off+Double.BYTES*BodyResult.IMPULSE_Z.ordinal());

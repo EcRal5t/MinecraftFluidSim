@@ -20,6 +20,7 @@ public final class LiquidCellInventoryValidation {
 		bulkVolumeReplacement();
 		collisionPreservesGeometricTail();
 		chemicalTailRetainsComposition();
+        compositionProjectionUsesAuthoritativeStocks();
 		preparedRowsAndRecoveryAreAtomic();
 		targetEnergyClosesAtStoredOwners();
 		explicitMechanicalHeatIsOneAtomicCandidate();
@@ -175,6 +176,68 @@ public final class LiquidCellInventoryValidation {
 				&& domain.totalMassUnits()==0 && domain.liquidCells.physicalSize()==0
 				&& domain.liquidCells.stocks().getFirst().mixture().equals(mixture),"Chemical geometric tail lost species or signed residual");
 	}
+
+    private static void compositionProjectionUsesAuthoritativeStocks() {
+        var definitions = TestFluidDefinitions.load();
+        var chemistry = definitions.chemistry();
+        var domain = new HostFluidState(3, 3, 3,
+                new FluidSolverConfig(.5F, 0, .05F, 120, 1e-5F, .002F), definitions);
+        domain.materialRegistry = new FluidMaterialRegistry(List.of(definitions.material().entry(BuiltinFluidMaterials.WATER).material()));
+        domain.bindChemistry(chemistry);
+        var pure = ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 1000L), 0);
+        var mixed = ChemicalMixtureRecord.fromStableAmounts(chemistry,
+                Map.of(BuiltinChemicalDefinitions.H2O, 500L, BuiltinChemicalDefinitions.ETHANOL, 200L), 0);
+        var a = new LiquidCellInventory.Key(12, 0, 255);
+        var b = new LiquidCellInventory.Key(13, 0, 255);
+        domain.liquidCells.planAdditions(List.of(
+                new LiquidCellInventory.Stock(a, SignedDyadic.of(.25), pure.massUnits(chemistry), pure, 0),
+                new LiquidCellInventory.Stock(b, SignedDyadic.of(.5), mixed.massUnits(chemistry), mixed, 0))).commit();
+        var rows = domain.observeComposition().rows();
+        var water = rows.stream().filter(row -> row.id().equals(BuiltinChemicalDefinitions.H2O)
+                && row.phase() == FluidComposition.Phase.LIQUID).findFirst().orElseThrow();
+        var ethanol = rows.stream().filter(row -> row.id().equals(BuiltinChemicalDefinitions.ETHANOL)).findFirst().orElseThrow();
+        require(rows.size() == 2 && Double.isNaN(water.volumeCubicMetres()) && Double.isNaN(ethanol.volumeCubicMetres()),
+                "Mixed liquid projection fabricated component volume or duplicated the carrier");
+        require(Math.abs(water.massKilograms() + ethanol.massKilograms() - mmm.units.Mass.kilograms(domain.totalMassUnits())) < 1e-12,
+                "Projected species mass did not close to authoritative liquid stock");
+        var projector = new FluidCompositionProjector(chemistry);
+        projector.portion(BuiltinChemicalDefinitions.H2O, FluidComposition.Phase.LIQUID,
+                pure.massUnits(chemistry), .25, List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.H2O, 1000)), 290);
+        projector.portion(BuiltinChemicalDefinitions.H2O, FluidComposition.Phase.GAS,
+                pure.massUnits(chemistry), .5, List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.H2O, 1000)), 350);
+        long waterMass = pure.massUnits(chemistry);
+        projector.portion("test:residual", FluidComposition.Phase.COHERENT,
+                waterMass + 100, .75, List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.H2O, 1000)), 300);
+        var statistics = new FluidCompositionProjector(chemistry);
+        for (double temperature : new double[]{280, 300, 310})
+            statistics.portion(BuiltinChemicalDefinitions.H2O, FluidComposition.Phase.GAS,
+                    waterMass, .5, List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.H2O, 1000)), temperature);
+        var statistic = statistics.result().rows().get(0);
+        require(statistic.minimumTemperatureK() == 280 && statistic.maximumTemperatureK() == 310
+                        && statistic.medianTemperatureK() == 300 && Math.abs(statistic.amountMoles() - .003) < 1e-12,
+                "Composition did not preserve gas amount and observed weighted median");
+        var ionProjector = new FluidCompositionProjector(chemistry);
+        long ionMass = chemistry.speciesMassUnits(chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS), 1000);
+        ionProjector.portion(BuiltinChemicalDefinitions.NA_PLUS, FluidComposition.Phase.LIQUID, ionMass, .1,
+                List.of(new FluidCompositionProjector.Species(BuiltinChemicalDefinitions.NA_PLUS, 1000)), 300);
+        require(ionProjector.result().rows().get(0).ion()
+                        && Double.isNaN(ionProjector.result().rows().get(0).volumeCubicMetres()),
+                "Charged species lost ion identity or gained a volume");
+        require(domain.observeComposition(cell -> false).rows().isEmpty(), "Composition filter included excluded cells");
+        var phases = projector.result().rows();
+        require(phases.size() == 4 && phases.stream().anyMatch(row -> row.phase() == FluidComposition.Phase.LIQUID && row.volumeCubicMetres() == .25)
+                && phases.stream().anyMatch(row -> row.phase() == FluidComposition.Phase.GAS && row.volumeCubicMetres() == .5),
+                "Pure species volume or phase identity was lost");
+        var residualSpecies = phases.stream().filter(row -> row.phase() == FluidComposition.Phase.COHERENT
+                && row.id().equals(BuiltinChemicalDefinitions.H2O)).findFirst().orElseThrow();
+        var residualCarrier = phases.stream().filter(row -> row.phase() == FluidComposition.Phase.COHERENT
+                && row.id().equals("test:residual")).findFirst().orElseThrow();
+        require(!residualSpecies.residualMass() && residualCarrier.residualMass()
+                        && residualSpecies.massKilograms() == mmm.units.Mass.kilograms(waterMass)
+                        && residualCarrier.massKilograms() == mmm.units.Mass.kilograms(100)
+                        && Double.isNaN(residualSpecies.volumeCubicMetres()),
+                "Singleton residual was attributed to a known species");
+    }
 
 	private static void sharedFluxPreservesAllQuantities() {
 		var chemistry = mmm.fluid.TestFluidDefinitions.load().chemistry();

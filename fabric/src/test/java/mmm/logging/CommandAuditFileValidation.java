@@ -15,6 +15,11 @@ public final class CommandAuditFileValidation {
 		Path root = Files.createTempDirectory("mmm-command-log-").toAbsolutePath().normalize();
 		Path log = root.resolve("logs/mmm-commands.log");
 		Path blocker = root.resolve("not-a-directory");
+        if (!MmmCommandLog.failureSummary(List.of(new CommandAuditFile.Line("FAILURE", "  invalid input\nlong report")))
+                .equals("invalid input")) throw new AssertionError("failure summary first line");
+        if (MmmCommandLog.failureSummary(List.of(new CommandAuditFile.Line("FAILURE", "x".repeat(140)))).length() != 100)
+            throw new AssertionError("failure summary bounded");
+
 		try {
 			CommandAuditFile.append(log, new CommandAuditFile.Entry(
 					Instant.parse("2026-08-18T14:00:00Z"), "Ecisral", "/mmmgpu status",
