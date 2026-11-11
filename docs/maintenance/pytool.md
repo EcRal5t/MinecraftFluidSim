@@ -6,6 +6,10 @@
   - 用途：统计当前生产 Java 文件和行数，列出超过 600/1000 行的类
   - 运行方式：`uv run pytool/arch_baseline.py`
 
+- **[doc_links.py](../../pytool/doc_links.py)**
+  - 用途：检查 Markdown 相对链接的目标文件与标题锚点，默认扫描 `docs/` 与 `README.md`，发现问题时返回 1
+  - 运行方式：`uv run pytool/doc_links.py docs/architecture docs/maintenance docs/roadmap docs/gameplay docs/README.md README.md`
+
 - **[unused_imports.py](../../pytool/unused_imports.py)**
   - 用途：用正则检查指定文件中可能未使用的 import
   - 运行方式：`uv run pytool/unused_imports.py <file.java> [...]`
