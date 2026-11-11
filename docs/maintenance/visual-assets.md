@@ -28,7 +28,7 @@ MMM 在客户端通过 Fabric `ModelLoadingPlugin` 和 `QuadEmitter` 实现连�
 
 边框宽度统一为 2 像素，各象限沿原 UV 取样。只连接同种绝热玻璃，位于邻块前方的绝热玻璃会保留转折轮廓；与原版玻璃相接仍保留材料边界。图集随资源重载更新。绝热板和设备外壳的接缝有实体含义，保留各自面板边框。
 
-参考本地 Continuity `origin/26.2/dev`（`d15d4421ace78f3b5ba65f46ce2764ebfeda5c9e`）的模型接入和紧凑连接纹理思路，MMM 仅实现自身玻璃需要的模型。Continuity 的资源包规则仍由 Continuity 管理。
+连接纹理采用五张贴图的紧凑象限合成方案，MMM 在客户端自主实现该模型加载，不依赖外部模组或特定资源包规则。
 
 交付方块贴图位于 `fabric/src/main/resources/assets/mmm/textures/block/`，统一采用 32×32 像素正交贴图规范。绝热材料保留两像素边框；玻璃连接变体由同一张玻璃的边条和角区提取，保证配色与线宽一致，中心保持完全透明。
 

@@ -285,6 +285,7 @@ external sink 使用物品保存的 raw energy，舍入差单列 thermal roundof
 创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 保留玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。
 
 
+<a id="有限换热器安装与拆卸"></a>
 ## 有限设备与固定表面装拆
 
 `FiniteHeatExchangerOperations` 组织区域有限设备、世界方块与物品的共同事务。区域 HEAD 保存热库存及表面组分，`FiniteDeviceJournalStore` 保存操作身份、提交代、完整物品前后态和对应世界位置。有限换热器安装后替换围墙槽位，拆卸后恢复围墙并交回实际设备物品；表面材料装填与取回使用同一事务，附着面及吸附量保存在墙载体中。

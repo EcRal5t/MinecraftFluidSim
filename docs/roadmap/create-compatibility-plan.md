@@ -2,7 +2,7 @@
 
 当前已交付 Minecraft 26.2 / Fabric 的物料箱自动化、测点只读展示、规定平移和原位装配／拆解交接接口。MMM 与 Create 分别拥有自己的状态和运行规则，联动层负责转换和交接；本项目不引入 Create 的方块、动力网络或应力规则。现阶段没有可用的 Create 26.2 依赖，验证使用正式 MMM 接口、冻结的 Create 源码和仅测试侧的等价提供器。各阶段完成情况记录在[实施计划](solver-consolidation-plan.md)，验证入口记录在[验证指南](../maintenance/validation.md)。
 
-源码参考为 Fabricators-of-Create/Create 的 `mc1.21.1/fabric/dev` 开发分支，[提交 `7f1f67b6`](https://github.com/Fabricators-of-Create/Create/tree/7f1f67b6ecbbde512e8d35404f3621a6875ce838)；另查阅 `mc1.20.1/fabric/dev` 的[提交 `4c3fe779`](https://github.com/Fabricators-of-Create/Create/tree/4c3fe779d135d592548e4cb09da04d742d2637b7)。这些是源码参考，26.2 移植后需重新核对名称、时序、单位和行为。1.21.1 源码位于本地 `build/upstream/CreateFabric121/src/main/java/com/simibubi/create/`，不参与本项目构建。
+方案分析以 Fabricators-of-Create/Create 开发分支（Create 1.21.1）的接口与行为模型为参照，待 Create 发布 26.2 正式适配版本后最终核对时序与交互。MMM 自身代码不依赖外部构建产物。
 
 ## 接入矩阵
 

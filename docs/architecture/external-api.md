@@ -109,7 +109,7 @@ Query API 提供宏观状态查询（体积、质量、密度、温度、材料�
 
 `measure` 和 `unit()` 标明物理量：液位为 0—1 的无量纲比例，液体温度和气体温度为 K，压力为绝对 Pa，液体流量为 L/s。`RUNNING` 和 `PAUSED` 携带实际数值、区域 UUID、网络实例代次、求解代次和仿真秒数；`WAITING`、`UNAVAILABLE` 和 `NO_SAMPLE` 不携带数值与区域身份。状态和缺值共同表达测量是否可用，数值零保持实际测量含义。
 
-方块初始数据和更新包携带有界摘要，曲线历史另按需传输。状态、量纲、读数或区域实例变化即时同步；稳定读数仅时间或求解代次变化时最多每 20 tick 同步一次。摘要和历史属于会话状态，方块存档保存测点配置与红石输出。加载后摘要从 `WAITING` 开始，已保存的红石输出在首次新观测或不可用处理时通过正常 `signal` 路径更新邻居。重配测量或范围会清除旧值、身份和对应历史。
+方块初始数据和更新包携带有界摘要，曲线历史另按需传输。状态、量纲、读数或区域实例变化即时同步；稳定读数仅时间或求解代次变化时最多每 20 tick 同步一次。摘要和历史属于会话状态，方块存档保存测点配置与红石输出。加载后摘要从 `WAITING` 开始，已保存的红石输出在首次新观测或不可用处理时通过正常 `signal` 路径更新邻居。重配测量或范围会清除旧值、身份和对应历史。多人观察以独立客户端状态对象分别保存基准和打开请求，各客户端保持独立会话标识与请求序号。
 
 接口：[ProcessSensorSnapshot](../../api/src/main/java/mmm/api/sensor/ProcessSensorSnapshot.java)、[ProcessSensorBlockEntity](../../fabric/src/main/java/mmm/block/ProcessSensorBlockEntity.java)、[ProcessSensorSnapshotCodec](../../fabric/src/main/java/mmm/sensor/ProcessSensorSnapshotCodec.java)。
 

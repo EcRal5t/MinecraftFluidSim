@@ -1,7 +1,7 @@
 # 流体展示参考
 
 修改入口为 `FluidSnapshotPublisher`、`ClientRegionSnapshotStore`、`MaterialSurfaceGeometry` 和 `FluidRenderBackend`。
-当前完整职责链与代码索引见[设计书](system-overview.md#client)，待实施要求集中在[实施计划](../roadmap/solver-consolidation-plan.md#其他未完成事项)。
+当前完整职责链与代码索引见[设计书](system-overview.md#client)，待实施要求集中在[实施计划](../roadmap/solver-consolidation-plan.md#客户端展示与测量)。
 本文维护已落地的数据归属、当前渲染行为和适配所依据的外部接口。
 
 ## 输入与显色归属
@@ -30,16 +30,18 @@
 ## Iris 26.2 接口依据
 
 当前展示管线以 Iris 1.11.2 和 Sodium 0.9.1（对应 Minecraft 26.2）为基准实现。
-Iris 公开 API `IrisApi.assignPipeline(RenderPipeline, IrisProgram)` 将 `IrisProgram.TRANSLUCENT` 经 `ProgramId.fromAPI` 映射到 `gbuffers_water`，匹配时需核对管线顶点格式。
-阴影集成与材质上下文依赖 Iris 内部接口。对这些内部接口的反射调用与版本兼容适配集中封装在 `IrisFluidCompatibility` 与 `IrisFluidShadowMixin` 中。
+Iris 公开 API `IrisApi.assignPipeline(RenderPipeline, IrisProgram)` 将 `IrisProgram.TRANSLUCENT` 经 `ProgramId.fromAPI` 映射到 `gbuffers_water`，匹配时需核对管线顶点格式；诊断管线通过 `assignPipeline(..., BASIC)` 注册。
 
-兼容实现通过反射探测已安装的 Iris，依赖仍为可选：未安装 Iris 时平稳回退到原生透明渲染；若内部接口不匹配，抛出包含具体调用位置与异常原因的诊断信息。`IrisPipelines.copyPipeline(TRANSLUCENT_TERRAIN, materialPipeline)` 同时复制主画面和阴影程序映射，使水与其他材料沿 `gbuffers_water`／`shadow_water` 的材质分支执行；诊断管线通过公开的 `assignPipeline(..., BASIC)` 注册。
+Iris 属于可选运行时依赖，主展示管线不直接引用其编译期类。阴影阶段集成与材质上下文注入依赖 Iris 的未公开内部接口，模组将这些接口访问与版本适配逻辑集中封装在两处：
+1. **反射桥接（`IrisFluidCompatibility`）**：负责动态探测与调用 Iris 内部接口。未安装 Iris 时平稳回退至原生透明渲染；若内部接口不匹配，抛出包含具体调用位置与异常原因的诊断信息。
+   - 管线程序映射：调用 `IrisPipelines.copyPipeline(TRANSLUCENT_TERRAIN, materialPipeline)`，复制主画面与阴影程序映射，使水与其他材料沿 `gbuffers_water`／`shadow_water` 材质分支执行；
+   - 材质映射查询：从 `WorldRenderingSettings.getBlockStateIds()` 动态读取当前光影包的方块状态映射。水使用原版水状态，汞使用铁块状态，油及其他材料使用白色染色玻璃状态；表面颜色与纹理仍由各自材料决定。光影切换后下一次绘制重新读取；
+   - 顶点材质上下文：通过 `BlockSensitiveBufferBuilder` 顶点缓冲扩展接口，在每个表面提交前调用 `beginBlock` 注入材质 ID 与方块中心属性，供 Iris 自动扩展材质、纹理中心、切线与法线数据。
+2. **阴影阶段切面注入（`IrisFluidShadowMixin`）**：通过 `@Pseudo` Mixin 切入 Iris 内部阴影渲染器（`ShadowRenderer.renderShadows`），在透明区块组绘制完毕后，使用相同的流体材料网格与主相机坐标提交顶点。Iris 的 `MixinGlCommandEncoder` 在阴影阶段维持阴影视口和帧缓冲区，实际目标由阴影程序接管，后端通过标准 Blaze3D 渲染通道完成提交。
 
-`IrisFluidShadowMixin` 在 `ShadowRenderer.renderShadows` 的透明区块组绘制之后，使用同一材料网格与主相机坐标提交顶点。Iris 的 `MixinGlCommandEncoder` 在阴影阶段保持阴影视口和帧缓冲区，实际目标由阴影程序接管；后端通过标准 Blaze3D 渲染通道提交。
-
-`WorldRenderingSettings.getBlockStateIds()` 提供当前光影包的方块状态分类映射，`BlockSensitiveBufferBuilder` 提供顶点材料上下文。兼容实现从当前映射读取分类：水使用原版水状态，汞使用铁块状态，油及其他材料使用白色染色玻璃状态；表面颜色与纹理仍由各自材料决定。光影切换后下一次绘制读取新映射。`BLOCK` 顶点由 Iris 自动扩展，补充材质、纹理中心、切线与方块中心属性；每个表面通过 `beginBlock` 设置材料上下文。材料与颗粒顶点、方块中心坐标共同减去相机的区段锚点，模型矩阵补偿剩余相机偏移；主画面、阴影和透明排序共用这一坐标约定。
-`CommonUniforms.isEyeInWater` 从相机 `getFluidInCamera()` 读取浸没状态；动态液面绘制与相机介质查询需要共同接入。
-`FluidCameraMixin` 通过已接受几何的 `materialAt` 查询，将水内相机设为 `FogType.WATER`，同时供原版雾效与 Iris 使用。原版熔岩、细雪及水的已有判定优先；油、汞当前采用空气介质信号和各自表面外观。
+材料与颗粒顶点、方块中心坐标共同减去相机的区段锚点，模型矩阵补偿剩余相机偏移；主画面、阴影和透明排序共用这一坐标约定。
+`CommonUniforms.isEyeInWater` 从相机 `getFluidInCamera()` 读取浸没状态；动态液面绘制与相机介质查询共同接入。
+`FluidCameraMixin` 通过已接受几何的 `materialAt` 查询，将水内相机设为 `FogType.WATER`，同时供原版雾效与 Iris 使用。原版熔岩、细雪及水的判定优先；油、汞当前采用空气介质信号和各自表面外观。
 
 ## 光影包的几何与材质假设
 
@@ -62,5 +64,5 @@ Complementary 的附加高度位移按 `fract(worldPos.y + 0.005)` 判断顶点�
 ## 验证入口
 
 协议与几何沿 `protocol,materials`，离线展示成本沿 `presentation`；画面、光影生命周期和实际兼容组合见[展示验证](../maintenance/validation.md#fluid-presentation)。
-源码接口检查只能说明接入依据，游戏加载、渲染效果及成本分别记录实际证据。
+真实光影渲染效果与性能开销见[展示验证](../maintenance/validation.md#fluid-presentation)。
 运行时每十秒记录主画面与阴影绘制次数、顶点重建与索引排序次数、构建／排序／上传／提交累计 CPU 耗时和上传字节数。`FluidRenderTiming` 使用设备时间戳异步读取主画面与阴影的 GPU 绘制均值、最大值和样本数；未完成的查询保留到后续帧，满环时跳过采样。
